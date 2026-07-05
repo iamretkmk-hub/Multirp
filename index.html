@@ -665,7 +665,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.41</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -954,6 +954,12 @@
             <label class="switchLbl"><input type="checkbox" id="setNarrOn"><span class="sl"></span></label>
           </div>
           <div><label>Narrator voice id (Inworld — blank = the call voice)</label><input class="fld" id="setNarrVoice" placeholder="e.g. Ashley"></div>
+          <div><label>🎙 Mic patience (ms of silence before your speech is sent — raise if it cuts you into two messages)</label><input type="number" id="setNmPatience" min="800" max="8000" step="100" placeholder="3000"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
+            <label style="margin:0">🔥 Heat of the moment <span class="desc" style="display:block;font-weight:400">After your turn, the scene keeps going on its own for N replies — each one a NEW beat that advances the moment (typing and 🎙 voice alike). Speak or send anything to cut in and stop the burst.</span></label>
+            <label class="switchLbl"><input type="checkbox" id="setHeatOn"><span class="sl"></span></label>
+          </div>
+          <div><label>Heat burst length (replies per turn, 2–10)</label><input type="number" id="setHeatN" min="2" max="10" step="1" placeholder="5"></div>
           <div><label>Default dub voice</label>
             <select class="fld" id="setTtsVoice"></select>
           </div>
@@ -1680,7 +1686,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   rewritePrompt:"sm_rewriteprompt",vidPrompt:"sm_vidprompt",moviePrompt:"sm_movieprompt",style:"sm_style",ratio:"sm_ratio",vidDur:"sm_viddur",vidRes:"sm_vidres",vidSound:"sm_vidsound",movieSegs:"sm_moviesegs",
   memModel:"sm_memmodel",memBuild:"sm_membuild",memEval:"sm_memeval",memMinImp:"sm_memminimp",gistBuild:"sm_gistbuild",poiGossip:"sm_poigossip",queryGen:"sm_querygen",ranker:"sm_ranker",
   gmOn:"sm_gmon",gmEvery:"sm_gmevery",gmSensitivity:"sm_gmsens",gmModel:"sm_gmmodel",gmJudge:"sm_gmjudge",gmAuthor:"sm_gmauthor",daySummaryPrompt:"sm_daysummary",relGenPrompt:"sm_relgenprompt",baseInstruction:"sm_baseinstr",payloadLayouts:"sm_payloadlayouts",blockTpls:"sm_blocktpls",
-  autoRpOn:"sm_autorpon",narrOn:"sm_narron",narrVoice:"sm_narrvoice",playerNarratePrompt:"sm_playernarrate",playerNarrateModel:"sm_playernarratemodel",userPersonality:"sm_userpersonality",userStyle:"sm_userstyle",
+  autoRpOn:"sm_autorpon",narrOn:"sm_narron",narrVoice:"sm_narrvoice",nmPatience:"sm_nmpatience",heatOn:"sm_heaton",heatN:"sm_heatn",playerNarratePrompt:"sm_playernarrate",playerNarrateModel:"sm_playernarratemodel",userPersonality:"sm_userpersonality",userStyle:"sm_userstyle",
   routerPlayer:"sm_routerplayer",routerChar:"sm_routerchar",mcChainCap:"sm_mcchaincap",mcModel:"sm_mcmodel",rpRotation:"sm_rprotation",rpRotIdx:"sm_rprotidx",formatRules:"sm_formatrules",presencePrompt:"sm_presenceprompt",presenceOff:"sm_presenceoff",
   sceneOn:"sm_sceneon",sceneSetup:"sm_scenesetup",sceneWriter:"sm_scenewriter",sceneMin:"sm_scenemin",sceneMax:"sm_scenemax",
   confrontJudge:"sm_confrontjudge",confrontOn:"sm_confronton",overtureJudge:"sm_overturejudge",
@@ -4016,6 +4022,11 @@ function loadState(){
     // deliberately NOT persisted — reloading must never auto-open the microphone.
     narrOn:store.get(K.narrOn,false),
     narrVoice:store.raw(K.narrVoice,""),
+    // v19.5 — narration-mic patience (ms of silence before an utterance is committed) and the
+    // Heat-of-the-moment burst mode (N back-to-back scene-advancing replies per player turn).
+    nmPatience:parseInt(store.raw(K.nmPatience,"3000"),10)||3000,
+    heatOn:store.get(K.heatOn,false),
+    heatN:parseInt(store.raw(K.heatN,"5"),10)||5,
     playerNarratePrompt:store.raw(K.playerNarratePrompt,DEFAULT_PLAYER_NARRATE),
     playerNarrateModel:store.raw(K.playerNarrateModel,"deepseek/deepseek-v3.2"),
     userPersonality:store.raw(K.userPersonality,""),
@@ -6015,8 +6026,10 @@ async function nmStart(){
   const lang=(state.callSttLang||"tr").trim();
   const params=new URLSearchParams({
     model:(state.callDgModel||"nova-3"),language:lang,encoding:"linear16",sample_rate:"16000",channels:"1",
-    interim_results:"true",vad_events:"true",endpointing:String(state.callEndpoint||400),
-    utterance_end_ms:String(state.callUttEnd||1800),smart_format:"true",punctuate:"true"
+    // v19.5: narration mode has its OWN patience (state.nmPatience), independent of live calls —
+    // roleplay speech has thinking pauses that a phone call doesn't; the call settings stay snappy.
+    interim_results:"true",vad_events:"true",endpointing:String(Math.min(1000,Math.round((+state.nmPatience||3000)/3))),
+    utterance_end_ms:String(+state.nmPatience||3000),smart_format:"true",punctuate:"true"
   });
   let ws; try{ ws=new WebSocket("wss://api.deepgram.com/v1/listen?"+params.toString(),["token",key]); }
   catch(e){ nmStop(); toast("Deepgram connect failed"); return false; }
@@ -6028,6 +6041,7 @@ async function nmStart(){
     const alt=m.channel&&m.channel.alternatives&&m.channel.alternatives[0];
     const txt=(alt&&alt.transcript||"").trim(); if(!txt) return;
     if(m.is_final){ nm._finalBuf=((nm._finalBuf||'')+' '+txt).trim(); }
+    else if(nm._pendTimer){ clearTimeout(nm._pendTimer); nm._pendTimer=setTimeout(nmFlush,1200); }   // user resumed speaking → hold the merge window
     if(m.speech_final) nmCommit();
   };
   ws.onclose=()=>{ if(nm.on){ /* auto-reconnect once the tab is still in the mode */ setTimeout(()=>{ if(nm.on){ nm.ws=null; nmStart(); } },1200); } };
@@ -6042,17 +6056,34 @@ function nmStop(){
   try{ nm.src&&nm.src.disconnect(); }catch(_){}
   try{ nm.ctx&&nm.ctx.close(); }catch(_){}
   try{ nm.stream&&nm.stream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  if(nm._pendTimer){clearTimeout(nm._pendTimer);nm._pendTimer=null;} nm._pend="";
   nm.ws=null;nm.keep=null;nm.proc=null;nm.src=null;nm.ctx=null;nm.stream=null;nm._finalBuf="";
   reflectNarrMode();
 }
+/* v19.5 — MERGE BUFFER. Deepgram commits an utterance on a pause; a thinking pause mid-sentence
+   used to produce two back-to-back player turns → two LLM replies. Commits now land in a pending
+   buffer and are sent after a short merge window (1.2s, extended while you keep speaking), so a
+   quick continuation folds into ONE turn. A commit arriving while a turn is still converting is
+   BUFFERED and retried (previously it was silently DROPPED). Full cancel-and-regenerate of an
+   in-flight reply was considered and rejected: aborting mid-generation touches all three reply
+   paths + streaming + postTurn side effects; the merge window removes the cause instead. */
 function nmCommit(){
   const full=(nm._finalBuf||'').trim(); if(!full) return;
   const now=performance.now();
   if(nm._lastText===full && (now-(nm._lastAt||0))<2500){ nm._finalBuf=''; return; }   // dupe guard
   nm._lastText=full; nm._lastAt=now; nm._finalBuf='';
+  nm._pend=((nm._pend||'')+' '+full).trim();
+  if(nm._pendTimer)clearTimeout(nm._pendTimer);
+  nm._pendTimer=setTimeout(nmFlush,1200);
+}
+function nmFlush(){
+  nm._pendTimer=null;
+  const text=(nm._pend||'').trim(); if(!text)return;
   const inp=document.getElementById('chatInput');
-  if(!inp||inp.disabled) return;   // a turn is already converting — drop rather than double-send
-  inp.value=full; _spokenVerbatim=true;
+  if(!inp){ nm._pend=''; return; }
+  if(inp.disabled){ nm._pendTimer=setTimeout(nmFlush,700); return; }   // a turn is converting → hold, don't drop
+  nm._pend='';
+  inp.value=text; _spokenVerbatim=true;
   sendMessage();
 }
 async function dubMessage(mid){
@@ -11732,8 +11763,8 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     recent_memories:["mem_recent_header"],distant_memories:["mem_distant_header"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
-    final_guardrails:["rails_header","rail_voice","rail_single_multi","rail_single_solo","rail_dialogue","rail_beat","rail_question","rail_consistent_known","rail_consistent_stranger"],
-    spoken_delivery:["spoken_delivery"]
+    final_guardrails:["heat_advance","rails_header","rail_voice","rail_single_multi","rail_single_solo","rail_dialogue","rail_beat","rail_question","rail_consistent_known","rail_consistent_stranger"],
+    spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
   const SCOPE={world:"universe",genre_voice:"universe",characters:"chat",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",player:"chat",game_system:"chat",distant_memories:"chat",recent_memories:"chat",scene_now:"chat",trackers:"chat",calendar:"chat"};
   [PAYLOAD_DEFS.solo.blocks,PAYLOAD_DEFS.multi.blocks].forEach(bl=>{
@@ -11867,6 +11898,13 @@ const ENGINE_PAYLOAD_DEFS=[
    ABOVE this object (referenced at definition time). Backticks/${ inside values must be
    escaped (template literal). */
 const BLOCK_TPL_DEFAULTS={
+  // v19.5 — shown INSTEAD of spoken_delivery right after a voice session ends, while the recent
+  // history still carries voice markup the model would otherwise imitate.
+  voice_format_reset:`## FORMAT RESET — THE VOICE SESSION IS OVER
+Recent replies were written for a voice session: [bracketed delivery tags] inside quotes and/or a narration-block-then-dialogue-only shape. That session has ENDED. Ignore that formatting in the history — it is stale. Write normally per the format rules: NO bracketed delivery tags anywhere, narration woven naturally with dialogue.`,
+  // v19.5 — appended to the guardrails for each Heat-of-the-moment continuation beat.
+  heat_advance:`## HEAT OF THE MOMENT — CONTINUATION {{round}} of {{total}}
+{{user}} stays silent; the scene keeps moving on its own. ADVANCE it: a new beat — an action, a reaction, an escalation, a consequence, a shift — that did not exist yet. NEVER restate, summarize, or paraphrase anything already written; every sentence must add something new. Do not stall and do not hand the turn back to {{user}} with a question unless it genuinely drives the moment. End mid-momentum so the next beat can pick it up.`,
   // v19.4 — appended to the format block ONLY while narration voice / narration mode is active.
   // It deliberately OVERRIDES the "one short narration beat" limit above it for this session shape.
   narr_shape:`## NARRATION MODE — STRICT OUTPUT SHAPE (this session is voice-narrated; overrides the narration limits above)
@@ -12145,6 +12183,14 @@ function tagLastForTarget(history){
    - injected: { recent, distant } — RECENT memories are emitted here in the tail. */
 /* v19.2: SPOKEN_DELIVERY_BLOCK const retired — the text lives in BLOCK_TPL_DEFAULTS.spoken_delivery. */
 
+/* v19.5 — did the recent replies carry voice-session markup? ([tag] inside quotes, or the strict
+   narration-block-first shape). Checked over the last 3 assistant messages. */
+function _recentVoiceMarkup(chat){
+  try{
+    const rec=(chat.messages||[]).filter(m=>m.role==='assistant'&&!m.sysError&&!m.dayMarker&&m.content).slice(-3);
+    return rec.some(m=>/"[^"\n]*\[[^\]\n]{2,28}\][^"\n]*"/.test(m.content) || /^\s*\*[^*\n][^*]*\*\s*\n+\s*"/.test(m.content));
+  }catch(e){ return false; }
+}
 function buildTailBlocks(opts){
   const {chat,selfName,selfId,targetName,targetId,multi,injected}=opts||{};
   const B={};
@@ -12301,6 +12347,15 @@ function buildTailBlocks(opts){
   // INSIDE the quotes so extractDialogue carries them to the TTS.
   if(state.autoSpeak && (state.ttsEngine||"xai")==="xai"){
     B.spoken_delivery=blkTpl("spoken_delivery");
+  }else if(chat && _recentVoiceMarkup(chat)){
+    // v19.5: voicing is OFF but the last replies still carry voice markup — without an explicit
+    // counter-order the model imitates its own recent history and the tags/shape never go away.
+    // Reuses the spoken_delivery block slot (already in every payload order). Self-decaying: once
+    // clean replies push the marked ones out of the detection window, this stops rendering.
+    B.spoken_delivery=blkTpl("voice_format_reset");
+  }
+  if(chat && chat._heatBeat){
+    B.final_guardrails+=`\n\n${fillTpl(blkTpl("heat_advance"),{round:chat._heatBeat.round,total:chat._heatBeat.total,user:state.user})}`;
   }
 
   return B;
@@ -12320,9 +12375,11 @@ function curChat(){
      video in the chat. Tapping the pin toggles it (and re-enables auto-gen on unpin).
    - Portrait keeps inline images; the rail is hidden by CSS but the pin still freezes
      auto-gen and shows a small sticky pinned banner above the list. */
+let _heatSeq=0,_heatBusy=false,_heatNoImg=false;   // v19.5 heat-of-the-moment burst state
 function autoImgActive(){
   if(!state.autoImg) return false;
   if(state.narrMode) return false;   // v19.4: 🎙 narration mode never waits on image generation
+  if(_heatNoImg) return false;       // v19.5: no auto image on non-final heat beats (no waiting mid-burst)
   const c=state.chats&&state.curChat?state.chats[state.curChat]:null;
   if(c&&c.pinnedMid){
     // Only treat the pin as active if the pinned message still actually holds media. After a
@@ -13407,6 +13464,7 @@ async function sendMessage(){
     return;
   }
 
+  _heatSeq++;   // v19.5: any player turn (typed or spoken) cancels a running heat burst
   // ----- AUTO-RP: rewrite the player's terse input into a short in-voice turn before sending. -----
   // Runs only when the toggle is on. Best-effort: if it fails or returns nothing, the raw text is
   // used. The input is locked with a hint while it converts so the player sees it's working.
@@ -13532,6 +13590,7 @@ async function sendMessage(){
     await runPresenceTracker(chat);
     maybeBuildMemory(chat);
     postTurn(chat);
+    maybeHeatBursts(chat);   // v19.5
   }catch(err){
     typing.remove();
     chat.messages.push({mid:newMid(),role:"assistant",speaker:(present[0]||{name:"Narrator"}).name,content:"⚠️ "+(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
@@ -13926,6 +13985,7 @@ async function runMultiCharTurn(chat,playerText){
       const solo=cast[0];
       await playCharacterTurn(chat,solo,state.user);
       maybeBuildMemory(chat);postTurn(chat);
+      maybeHeatBursts(chat);   // v19.5
       return;
     }
     const roster=cast.map(c=>{
@@ -14016,10 +14076,40 @@ async function runMultiCharTurn(chat,playerText){
     }
     maybeBuildMemory(chat);
     postTurn(chat);
+    maybeHeatBursts(chat);   // v19.5
   }catch(err){
     chat.messages.push({mid:newMid(),role:"assistant",speaker:curPersona().name,content:"⚠️ "+(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
     persistChats();appendNewBubbles();
   }finally{document.getElementById('sendBtn').disabled=false;}
+}
+/* v19.5 — 🔥 HEAT OF THE MOMENT: after the player's turn resolves, the scene continues on its
+   own for N-1 more beats (Settings: heatOn/heatN). Each beat: pick the present character who has
+   spoken LONGEST AGO (round-robin-ish, keeps a scene moving between people), stamp
+   chat._heatBeat={round,total} (transient `_` field — never persisted; read by buildTailBlocks →
+   heat_advance guardrail: advance, never repeat), and run a normal playCharacterTurn — so voicing,
+   reveal, presence and refusal handling all behave exactly like an ordinary reply. Auto images are
+   suppressed on non-final beats (_heatNoImg) so the burst never waits on generation.
+   CANCELLATION: sendMessage bumps _heatSeq on every player turn (typed or 🎙 spoken) — an in-flight
+   burst notices and stops before its next beat. Hooked at all three chain-end sites. */
+function maybeHeatBursts(chat){ if(state.heatOn&&!_heatBusy&&chat) runHeatBursts(chat).catch(()=>{}); }
+async function runHeatBursts(chat){
+  if(!state.heatOn||_heatBusy||!chat)return;
+  const total=Math.max(2,Math.min(10,+state.heatN||5));
+  const mySeq=_heatSeq;
+  _heatBusy=true;
+  try{
+    for(let round=2;round<=total;round++){
+      if(mySeq!==_heatSeq||!state.heatOn)break;   // the player cut in, or the toggle went off
+      const cast=presentCast(chat); if(!cast.length)break;
+      const lastIdx={};
+      chat.messages.slice(-30).forEach((m,i)=>{ if(m.role==='assistant'&&m.speaker){ const p=cast.find(c=>c.name===m.speaker); if(p)lastIdx[p.id]=i; } });
+      const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
+      chat._heatBeat={round:String(round),total:String(total)};
+      _heatNoImg=(round<total);
+      try{ await playCharacterTurn(chat,next,state.user); }
+      finally{ delete chat._heatBeat; _heatNoImg=false; }
+    }
+  }finally{ _heatBusy=false; _heatNoImg=false; if(chat)delete chat._heatBeat; }
 }
 // One character produces one message, shown with its own name/avatar.
 async function playCharacterTurn(chat,p,addressed){
@@ -18863,6 +18953,9 @@ function syncSettingsUI(){
   {const e=document.getElementById('setTtsEngine'); if(e)e.value=state.ttsEngine||"xai";}
   {const e=document.getElementById('setNarrOn'); if(e)e.checked=!!state.narrOn;}
   {const e=document.getElementById('setNarrVoice'); if(e)e.value=state.narrVoice||'';}
+  {const e=document.getElementById('setNmPatience'); if(e)e.value=state.nmPatience||3000;}
+  {const e=document.getElementById('setHeatOn'); if(e)e.checked=!!state.heatOn;}
+  {const e=document.getElementById('setHeatN'); if(e)e.value=state.heatN||5;}
   {const e=document.getElementById('setAutoSpeak'); if(e)e.checked=!!state.autoSpeak;}
   {const aim=document.getElementById('setAtlasImgModel'); if(aim&&state.imgProvider==="atlascloud")aim.value=state.imgModel||'';}
   {const avm=document.getElementById('setAtlasVidModel'); if(avm&&state.vidProvider==="atlascloud")avm.value=state.vidModel||'';}
@@ -19005,6 +19098,9 @@ function saveSettings(notify){
   {const e=document.getElementById('setNarrOn'); if(e){state.narrOn=e.checked; store.set(K.narrOn,state.narrOn);}}
   if(!(state.autoSpeak||state.narrMode))_dubKill();   // v19.41: silence NOW, including queued jobs
   {const e=document.getElementById('setNarrVoice'); if(e){state.narrVoice=e.value.trim(); store.setRaw(K.narrVoice,state.narrVoice);}}
+  {const e=document.getElementById('setNmPatience'); if(e){let v=parseInt(e.value,10); if(!(v>=800&&v<=8000))v=3000; state.nmPatience=v; store.setRaw(K.nmPatience,String(v));}}
+  {const e=document.getElementById('setHeatOn'); if(e){state.heatOn=e.checked; store.set(K.heatOn,state.heatOn);}}
+  {const e=document.getElementById('setHeatN'); if(e){let v=parseInt(e.value,10); if(!(v>=2&&v<=10))v=5; state.heatN=v; store.setRaw(K.heatN,String(v));}}
   state.model=document.getElementById('setModel').value.trim()||"anthropic/claude-3.5-sonnet";
   {const e=document.getElementById('setRpRotation'); if(e){const v=e.value.trim(); if(v!==state.rpRotation){state.rpRotation=v; state.rpRotIdx=0; store.set(K.rpRotIdx,0);} store.setRaw(K.rpRotation,v);}}
   state.rewriter=document.getElementById('setRewriter').value.trim()||"openai/gpt-4o-mini";

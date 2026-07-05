@@ -665,7 +665,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.51</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -896,6 +896,8 @@
           <h3><svg class="ic"><use href="#i-video"/></svg> Animate — wan-2.5 options 🎬</h3>
           <div class="desc" style="margin-bottom:8px">These control the 🎬 Animate button (wan-2.5 image-to-video-fast). Audio is rendered from the prompt's sound description; the output video follows the scene image's own aspect ratio.</div>
           <div><label>Animate model</label><input class="fld" id="setSeedanceModel" placeholder="alibaba/wan-2.5/image-to-video-fast"></div>
+          <div class="kvline" style="padding:0 0 6px"><label>Voice-guided Animate <span class="desc" style="display:block;font-weight:400">Speak the line (xAI voice) and send it as the clip's audio track — wan-2.5 syncs the video to the dialogue. Lines with no dialogue animate as before. Long lines get cut at the clip length — use 10s for longer speech.</span></label>
+            <label class="switchLbl"><input type="checkbox" id="setAnimVoice"><span class="sl"></span></label></div>
           <div class="row">
             <div style="flex:1"><label>Duration</label>
               <select id="setSeedanceDur" style="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:14px">
@@ -1686,7 +1688,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   rewritePrompt:"sm_rewriteprompt",vidPrompt:"sm_vidprompt",moviePrompt:"sm_movieprompt",style:"sm_style",ratio:"sm_ratio",vidDur:"sm_viddur",vidRes:"sm_vidres",vidSound:"sm_vidsound",movieSegs:"sm_moviesegs",
   memModel:"sm_memmodel",memBuild:"sm_membuild",memEval:"sm_memeval",memMinImp:"sm_memminimp",gistBuild:"sm_gistbuild",poiGossip:"sm_poigossip",queryGen:"sm_querygen",ranker:"sm_ranker",
   gmOn:"sm_gmon",gmEvery:"sm_gmevery",gmSensitivity:"sm_gmsens",gmModel:"sm_gmmodel",gmJudge:"sm_gmjudge",gmAuthor:"sm_gmauthor",daySummaryPrompt:"sm_daysummary",relGenPrompt:"sm_relgenprompt",baseInstruction:"sm_baseinstr",payloadLayouts:"sm_payloadlayouts",blockTpls:"sm_blocktpls",
-  autoRpOn:"sm_autorpon",narrOn:"sm_narron",narrVoice:"sm_narrvoice",nmPatience:"sm_nmpatience",heatOn:"sm_heaton",heatN:"sm_heatn",playerNarratePrompt:"sm_playernarrate",playerNarrateModel:"sm_playernarratemodel",userPersonality:"sm_userpersonality",userStyle:"sm_userstyle",
+  autoRpOn:"sm_autorpon",narrOn:"sm_narron",narrVoice:"sm_narrvoice",nmPatience:"sm_nmpatience",heatOn:"sm_heaton",heatN:"sm_heatn",animVoice:"sm_animvoice",playerNarratePrompt:"sm_playernarrate",playerNarrateModel:"sm_playernarratemodel",userPersonality:"sm_userpersonality",userStyle:"sm_userstyle",
   routerPlayer:"sm_routerplayer",routerChar:"sm_routerchar",mcChainCap:"sm_mcchaincap",mcModel:"sm_mcmodel",rpRotation:"sm_rprotation",rpRotIdx:"sm_rprotidx",formatRules:"sm_formatrules",presencePrompt:"sm_presenceprompt",presenceOff:"sm_presenceoff",
   sceneOn:"sm_sceneon",sceneSetup:"sm_scenesetup",sceneWriter:"sm_scenewriter",sceneMin:"sm_scenemin",sceneMax:"sm_scenemax",
   confrontJudge:"sm_confrontjudge",confrontOn:"sm_confronton",overtureJudge:"sm_overturejudge",
@@ -4027,6 +4029,7 @@ function loadState(){
     nmPatience:parseInt(store.raw(K.nmPatience,"3000"),10)||3000,
     heatOn:store.get(K.heatOn,false),
     heatN:parseInt(store.raw(K.heatN,"5"),10)||5,
+    animVoice:store.get(K.animVoice,true),   // v19.6: 🎬 Animate sends the line's TTS as wan-2.5's audio track
     playerNarratePrompt:store.raw(K.playerNarratePrompt,DEFAULT_PLAYER_NARRATE),
     playerNarrateModel:store.raw(K.playerNarrateModel,"deepseek/deepseek-v3.2"),
     userPersonality:store.raw(K.userPersonality,""),
@@ -5684,7 +5687,7 @@ async function atlasVideo(prompt,imageUrl,negative,rule){
    infinite via atlasVideo). The state fields keep their old K keys (seedanceModel/Dur/Res)
    to avoid a storage migration; loadState maps a stored bytedance/seedance* model id to
    the new default one time. seedanceAspect/Audio/CamFixed are retired (ignored if stored). */
-async function wanAnimateVideo(prompt,imageUrl){
+async function wanAnimateVideo(prompt,imageUrl,opts){
   const model=state.seedanceModel||"alibaba/wan-2.5/image-to-video-fast";
   const dur=(+state.seedanceDur===10)?10:5;                                  // wan-2.5: 5 | 10 only
   const res=(state.seedanceRes==="1080p")?"1080p":"720p";                    // wan-2.5: 720p | 1080p only
@@ -5695,12 +5698,16 @@ async function wanAnimateVideo(prompt,imageUrl){
     model,
     image:img,
     prompt:(typeof prompt==="string"?prompt:String(prompt||"")),
-    negative_prompt:"blur, distortion, artifacts, watermark, text",
+    // v19.6: the routed video rule's own negative wins; the generic string is the fallback.
+    negative_prompt:(opts&&opts.negative&&String(opts.negative).trim())||"blur, distortion, artifacts, watermark, text",
     resolution:res,
     duration:dur,
     enable_prompt_expansion:false,
     seed:-1
   };
+  // v19.6 voice-guided Animate: an audio URL (the line's TTS) makes wan-2.5 sync the clip to the
+  // actual spoken dialogue instead of inventing its own audio from the prompt.
+  if(opts&&opts.audio) body.audio=opts.audio;
   return await atlasGenerate("video",body,"Video generation (wan-2.5 Animate)",null);
 }
 
@@ -14597,14 +14604,31 @@ async function animateScene(mid){
     ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",_isExplicit?240:160),dbg:"Video motion prompt writer"});
     const vidPrompt=motion.trim().replace(/^["']|["']$/g,"");
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}
-    const baseNeg="blur, distortion, artifacts, watermark, text";
+    const baseNeg=(_vidRule&&_vidRule.negative&&_vidRule.negative.trim())||"blur, distortion, artifacts, watermark, text";
+    // v19.6 — VOICE-GUIDED ANIMATE (Settings toggle, default on): speak the line (xAI TTS, cached
+    // on m.ttsUrl like the 🔊/lip-sync paths) and hand the mp3 URL to wan-2.5's `audio` input so
+    // the clip is generated IN SYNC with the actual dialogue. No dialogue in the line → no audio
+    // track → wan renders its own audio from the prompt exactly as before. TTS failure is
+    // best-effort: the video still generates, just unguided.
+    let _voiceUrl="";
+    if(state.animVoice!==false){
+      const _dial=extractDialogue(msg.content||"");
+      if(_dial){
+        try{
+          setStat("Recording the voice…");
+          const _vp=(msg.speakerId&&state.personas.find(x=>x.id===msg.speakerId))||
+                    (msg.name&&state.personas.find(x=>x.name===msg.name))||null;
+          _voiceUrl=msg.ttsUrl||await atlasTTS(_dial,ttsVoiceFor(_vp),state.ttsLang||"tr",setStat);
+          if(_voiceUrl)msg.ttsUrl=_voiceUrl;
+        }catch(e){ _voiceUrl=""; }
+      }
+    }
     let videoUrl;
-    // ANIMATE runs on wan-2.5 image-to-video-fast (v19.3; was Seedance). No LoRA routing here —
-    // the LoRA rules (state.vidRules) apply to the MOVIE path only. wan-2.5 renders audio natively
-    // from the prompt's diegetic sound description, and the output follows the input image's own
-    // aspect, so neither an audio flag nor an aspect parameter is sent.
-    setStat("Generating video on wan-2.5 (audio from the prompt)… (~1 min)");
-    videoUrl=await wanAnimateVideo(vidPrompt,msg.img);
+    // ANIMATE runs on wan-2.5 image-to-video-fast. No LoRA routing here — the LoRA rules apply to
+    // the MOVIE path only. Output follows the input image's own aspect, so no aspect parameter.
+    setStat(_voiceUrl?"Generating video on wan-2.5 (synced to the spoken line)… (~1 min)"
+                     :"Generating video on wan-2.5 (audio from the prompt)… (~1 min)");
+    videoUrl=await wanAnimateVideo(vidPrompt,msg.img,{audio:_voiceUrl,negative:baseNeg});
     // Keep the durable, embeddable remote URL as the primary source. A direct <video src=remote>
     // plays without CORS on https hosts; the render path will blob-recover only if it errors.
     // (Eagerly blob-fetching here failed on CDNs without CORS headers and discarded the URL that
@@ -14701,7 +14725,7 @@ async function movieScene(mid){
     const segmentsKw=injectLoraKeyword(segments,movieLoraRule);   // keyword now leads EVERY segment
     if(movieLoraRule&&movieLoraRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=movieLoraRule.label;}
     setStat(`Generating ${segments.length}-shot movie on AtlasCloud at 480p… (this takes longer than Animate)`);
-    const baseNeg="blur, distortion, artifacts, watermark, text";
+    const baseNeg=(movieLoraRule&&movieLoraRule.negative&&movieLoraRule.negative.trim())||"blur, distortion, artifacts, watermark, text";   // v19.6: per-rule negative
     const videoUrl=await atlasVideo(segmentsKw,msg.img,baseNeg,movieRule);
     msg.videoSrc=httpsMedia(videoUrl);
     msg.video=msg.videoSrc;
@@ -18410,7 +18434,9 @@ function renderRules(kind){
           <div style="flex:1"><label>LoRA scale</label><input type="number" data-k="loraScale" step="0.05" min="0" max="2" value="${r.loraScale!=null?esc(String(r.loraScale)):'1'}" placeholder="1"></div>
           <div style="flex:1"><label>Trigger keyword (auto-added to prompt)</label><input type="text" data-k="keyword" value="${esc(r.keyword||'')}" placeholder="e.g. m15510n4ry"></div>
         </div>
-        <div class="kvline" style="padding:6px 0 0"><label>Explicit scene (adds the SOUND section to the motion writer)</label>
+        <div><label>Negative prompt (this scene type — used by 🎬 Animate and 🎞️ Movie)</label>
+          <input type="text" data-k="negative" value="${esc(r.negative||'')}" placeholder="blur, distortion, artifacts, watermark, text"></div>
+          <div class="kvline" style="padding:6px 0 0"><label>Explicit scene (adds the SOUND section to the motion writer)</label>
           <label class="switchLbl"><input type="checkbox" data-k="explicit" ${r.explicit?'checked':''}><span class="sl"></span></label></div>
         <label>Per-scene motion prompt (injected into the motion writer when this rule is chosen — NOT shown to the router)</label>
         <select data-tpl="1" style="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:13px;margin-bottom:4px">
@@ -18513,7 +18539,7 @@ function addRule(kind){
   const id=(kind==='img'?'r_':'rv_')+Date.now();
   if(kind==='vid'){
     rulesFor(kind).push({id,label:"New video rule",when:"Describe the scene/position this rule is for.",
-      loraPath:"",loraScale:1,keyword:"",explicit:false,motionStyle:"",soundStyle:"",
+      loraPath:"",loraScale:1,keyword:"",negative:"",explicit:false,motionStyle:"",soundStyle:"",
       loraHighPath:"",loraHighScale:1,loraLowPath:"",loraLowScale:1,enabled:true});
   }else{
     rulesFor(kind).push({id,label:"New rule",when:"Describe the kind of shot this model is best for.",
@@ -18959,6 +18985,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setNmPatience'); if(e)e.value=state.nmPatience||3000;}
   {const e=document.getElementById('setHeatOn'); if(e)e.checked=!!state.heatOn;}
   {const e=document.getElementById('setHeatN'); if(e)e.value=state.heatN||5;}
+  {const e=document.getElementById('setAnimVoice'); if(e)e.checked=(state.animVoice!==false);}
   {const e=document.getElementById('setAutoSpeak'); if(e)e.checked=!!state.autoSpeak;}
   {const aim=document.getElementById('setAtlasImgModel'); if(aim&&state.imgProvider==="atlascloud")aim.value=state.imgModel||'';}
   {const avm=document.getElementById('setAtlasVidModel'); if(avm&&state.vidProvider==="atlascloud")avm.value=state.vidModel||'';}
@@ -19104,6 +19131,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setNmPatience'); if(e){let v=parseInt(e.value,10); if(!(v>=800&&v<=8000))v=3000; state.nmPatience=v; store.setRaw(K.nmPatience,String(v));}}
   {const e=document.getElementById('setHeatOn'); if(e){state.heatOn=e.checked; store.set(K.heatOn,state.heatOn);}}
   {const e=document.getElementById('setHeatN'); if(e){let v=parseInt(e.value,10); if(!(v>=2&&v<=10))v=5; state.heatN=v; store.setRaw(K.heatN,String(v));}}
+  {const e=document.getElementById('setAnimVoice'); if(e){state.animVoice=e.checked; store.set(K.animVoice,state.animVoice);}}
   state.model=document.getElementById('setModel').value.trim()||"anthropic/claude-3.5-sonnet";
   {const e=document.getElementById('setRpRotation'); if(e){const v=e.value.trim(); if(v!==state.rpRotation){state.rpRotation=v; state.rpRotIdx=0; store.set(K.rpRotIdx,0);} store.setRaw(K.rpRotation,v);}}
   state.rewriter=document.getElementById('setRewriter').value.trim()||"openai/gpt-4o-mini";

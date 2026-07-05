@@ -692,7 +692,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.72</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3045,7 +3045,10 @@ Nudge the **existing scene** using one of these categories, always pulling from 
 
 Return **only** the narration text — **in Turkish, third person, MAXIMUM 1-2 short sentences**. No quotes, no labels, no JSON, no English.
 
-The narration should be vivid and sensory: what is seen, heard, felt, or noticed. It should feel like a natural, almost invisible continuation of the scene — as if the world was always going to do this.`;
+The narration should be vivid and sensory: what is seen, heard, felt, or noticed. It should feel like a natural, almost invisible continuation of the scene — as if the world was always going to do this.
+
+## ARRIVALS HAPPEN AT THE ENTRANCE
+When your beat brings a character to this location, they arrive at its ENTRANCE — never directly inside an inner or private area, and never aware of what is happening in one. Narrate only what is genuinely perceivable from where each person actually stands: someone in a back room hears at most a door, footsteps, a voice — not who arrived or why. Do not hand anyone knowledge their position does not give them. If the arrival is to matter, let the scene carry them deeper naturally; your beat only puts them at the threshold.`;
 
 /* ===== SCENE WRITER ===== takes over once a gamemaster event is live, advances it to resolution ===== */
 // Classifies a freshly-triggered event into a structured object the engine can run.
@@ -4538,6 +4541,7 @@ function loadState(){
   // HAVE that marker), so refresh again when the newer "unnamed figure" marker is missing.
   _refreshPipe("sceneWriter","You are the SCENE WRITER directing an active event","UNNAMED FIGURE ALREADY PHYSICALLY IN THE SCENE",DEFAULT_SCENE_WRITER);
   _refreshPipe("sceneSetup","## YOUR INPUTS","NOT a person event",DEFAULT_SCENE_SETUP);
+  _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","ARRIVALS HAPPEN AT THE ENTRANCE",DEFAULT_GM_AUTHOR);
   _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","A mention is NOT a reason to make someone arrive",DEFAULT_GM_AUTHOR);
   _refreshPipe("gmJudge","invisible GAMEMASTER observing an ongoing roleplay","Mentioning a person is not a trigger to summon",DEFAULT_GM_JUDGE);
   // Router-2 (character interjection) upgrade: add the "spoken about / undermining" override so a
@@ -7422,7 +7426,13 @@ function gmSummonCharacter(chat,name){
   if(!chat.presentIds)chat.presentIds=[];
   if(!chat.presentIds.includes(p.id))chat.presentIds.push(p.id);
   if(chat.worldPositions&&chat.locationId)chat.worldPositions[p.id]=chat.locationId; // they're here now
-  if(chat.locationId){ if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=curSubId(chat); } // into the player's area
+  // v19.71 — a summoned character arrives at the location's ENTRANCE, never inside the player's
+  // sub-area. Teleporting them into e.g. the gym lockers let them "walk in on" a private scene
+  // with zero build-up and full knowledge of it. Moving deeper is the scene's job (Scene Writer,
+  // presence cues, or their own choice) — the earshot model keeps them ignorant until then.
+  if(chat.locationId){ if(!chat.subPos)chat.subPos={};
+    const _loc=locById(chat.locationId);
+    chat.subPos[p.id]=(_loc&&entranceSubId(_loc))||curSubId(chat); }
   notePresence(chat,[p.name],[]);
   return p;
 }
@@ -11807,7 +11817,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     player:["player_intro","player_bg","player_look"],
     ooc:["ooc"],multi_format:["multi_format"],
     situation:["situation_leaving","situation_arriving"],
-    scene_now:["scene_header","scene_loc","scene_loc_sub","scene_subareas","scene_privacy","scene_present","scene_alone"],
+    scene_now:["scene_header","scene_loc","scene_loc_sub","scene_subareas","scene_privacy","scene_present","scene_alone","scene_apart"],
     private_intent:["intent_warm","intent_hostile"],
     recent_memories:["mem_recent_header"],distant_memories:["mem_distant_header"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply"],
@@ -11989,6 +11999,9 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   scene_privacy:`Privacy here: {{label}}.`,
   scene_present:`Also physically present with you: {{names}}.`,
   scene_alone:`You are alone with {{target}} right now.`,
+  // v19.71 — shown INSTEAD of scene_present/scene_alone when the VIEWER is in a different sub-area
+  // than everyone else (e.g. a fresh arrival standing at the entrance).
+  scene_apart:`You are at {{sub}}, apart from the others. You cannot see or hear what happens in the other areas — you only know what you could perceive from here.`,
   // --- tail: private intent ---
   intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now (a {{kind}} — {{aim}}). You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.`,
   intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
@@ -12263,14 +12276,30 @@ function buildTailBlocks(opts){
     // who else is physically here (besides this character)
     let othersHere="";
     try{
-      const present=presentCast(chat).filter(c=>c.id!==selfId).map(c=>c.name);
-      othersHere=present.length?present.join(", "):"";
+      // v19.71 — VIEWER-AWARE presence: the scene must be described from where THIS character
+      // stands, not from the player's spot. "With you" = same sub-area (earshot) only; the player
+      // counts when they share it. A GM arrival at the entrance is no longer told they are in the
+      // player's area with everyone else.
+      const _vSub=(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat);
+      const _pSubNow=curSubId(chat);
+      const _sameSub=id=>((chat.subPos&&chat.subPos[id])||_pSubNow)===_vSub;
+      // v19.72 — the presence list carries the VIEWER's OWN tie to each person ("Alev Alemdar —
+      // your wife"), so the social stakes of who is standing here are visible at the point of
+      // highest attention, not only in the relationship sheet far up the payload. Ties come from
+      // the viewer's own relationships map (their knowledge — nothing secret can leak), and are
+      // viewer-relative by construction. No tie on record → bare name, as before.
+      const _vp=selfId?(state.personas||[]).find(x=>x&&x.id===selfId):null;
+      const _withTie=(id,nm)=>{ try{ const e=_vp&&relSheetEntry(_vp,id);
+        const t=e&&e.tie?String(e.tie).trim().slice(0,40):""; return t?`${nm} — your ${t}`:nm; }catch(e){ return nm; } };
+      othersHere=presentCast(chat).filter(c=>c.id!==selfId&&_sameSub(c.id)).map(c=>_withTie(c.id,c.name)).join(", ");
+      _viewer={sub:_vSub,playerHere:(_vSub===_pSubNow),withTie:_withTie};
     }catch(e){}
+    let _viewer=null;
     let sn=`${blkTpl("scene_header")}\n${ssBits.join(", ")}.`;
     if(chat.location&&chat.location.trim()){
       const _here2=(()=>{try{return chat.locationId?locById(chat.locationId):null;}catch(e){return null;}})();
       let _curSubName="";
-      try{ if(_here2&&Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){ const _ps=subById(_here2,curSubId(chat)); if(_ps)_curSubName=_ps.name; } }catch(e){}
+      try{ if(_here2&&Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){ const _ps=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat)); if(_ps)_curSubName=_ps.name; } }catch(e){}
       const _where=chat.location.trim()+(_curSubName?fillTpl(blkTpl("scene_loc_sub"),{sub:_curSubName}):"");
       sn+=`\n${fillTpl(blkTpl("scene_loc"),{where:_where})}`;
     }
@@ -12281,7 +12310,7 @@ function buildTailBlocks(opts){
       if(here){
         ensureSublocations(here);
         if(Array.isArray(here.sublocations)&&here.sublocations.length>1){
-          const pSub=subById(here,curSubId(chat));
+          const pSub=subById(here,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat));   // v19.71: the VIEWER's area
           const areaList=here.sublocations.map(s=>`${s.name} — ${gossipLabel(areaGossipChance(here,s.id))}`).join("; ");
           sn+=`\n${fillTpl(blkTpl("scene_subareas"),{loc:here.name,areas:areaList,sub:(pSub?pSub.name:"Entrance"),target:(targetName||state.user)})}`;
         }else{
@@ -12289,7 +12318,23 @@ function buildTailBlocks(opts){
         }
       }
     }catch(e){}
-    sn+=othersHere?`\n${fillTpl(blkTpl("scene_present"),{names:othersHere})}`:`\n${fillTpl(blkTpl("scene_alone"),{target:(targetName||state.user)})}`;
+    // v19.71 — three presence cases from the VIEWER's earshot: (a) someone (incl. the player)
+    // shares their sub-area → list them; (b) nobody does → they are APART (never "alone with
+    // {{user}}" when the user is in another room); (c) player-view / no selfId → old behaviour.
+    {
+      const v=(typeof _viewer==="object"&&_viewer)||{sub:curSubId(chat),playerHere:true};
+      const names=[];
+      if(selfId&&v.playerHere)names.push(v.withTie?v.withTie("__user__",targetName||state.user):(targetName||state.user));
+      if(othersHere)names.push(othersHere);
+      const withList=selfId?names.join(", "):othersHere;
+      if(withList){ sn+=`\n${fillTpl(blkTpl("scene_present"),{names:withList})}`; }
+      else if(selfId&&!v.playerHere){
+        let _sn="the entrance";
+        try{ const _h=chat.locationId?locById(chat.locationId):null; const _s=_h&&subById(_h,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
+        sn+=`\n${fillTpl(blkTpl("scene_apart"),{sub:_sn})}`;
+      }
+      else { sn+=`\n${fillTpl(blkTpl("scene_alone"),{target:(targetName||state.user)})}`; }
+    }
     B.scene_now=sn;
     // v19.2 — trackers & calendar are their OWN movable blocks now (previously appended inside
     // SCENE RIGHT NOW with a plain newline; as separate blocks they join with the standard
@@ -13988,8 +14033,15 @@ function castHistory(chat,forP){
     // Show only the ones within the 2-day window — that yields "Emre left the beach · day ended · X
     // arrived at the pub", NOT the entire chat's narrator history. (This is the fix for "a character
     // sees every previous narrator output".)
-    if(m.dayMarker||m.presenceNote||(m.narratorEvent&&m.travelBeat)){
+    if(m.dayMarker||m.presenceNote){
       return dayOf[idx]>=minDay;
+    }
+    // v19.71 — travel-beat narration is scene PROSE, not a neutral marker: it can describe exactly
+    // what two people were doing as they entered a private area. A character who arrived LATER must
+    // not receive it (their own arrival presence-note already anchors where/when they came in).
+    // The player (forP null) and anyone present since the beat still see it — the anchor survives.
+    if(m.narratorEvent&&m.travelBeat){
+      return dayOf[idx]>=minDay && (!forP || idx>=arrivalCut);
     }
     // OTHER narrator events (GM beats, environmental nudges): ambient to the CURRENT scene only — a
     // character shouldn't carry the whole day's worth of unrelated GM narration into a fresh scene.
@@ -17660,7 +17712,10 @@ async function gamemasterReactions(chat){
   let turns=0,lastSpeaker=null;
   const spokenThisChain=new Set();   // no character reacts twice to the same event
   while(turns<cap){
-    const cast=presentCast(chat);
+    // v19.71 — EARSHOT pool, not the whole location: a character standing at the entrance (e.g. a
+    // fresh GM arrival) is "present" at the venue but cannot perceive a beat happening in an inner
+    // area, so they must not be picked to react to it. Same scoping the reply paths use.
+    const cast=inSceneCast(chat);
     const others=cast.filter(c=>c.id!==(lastSpeaker&&lastSpeaker.id) && !spokenThisChain.has(c.id));
     if(!others.length)break;
     let next=null,addr=state.user;

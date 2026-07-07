@@ -342,7 +342,9 @@
   .modal img{max-width:100%;max-height:78%;border-radius:8px;touch-action:pinch-zoom;}
   .modal .x{position:absolute;top:16px;right:20px;font-size:30px;color:#fff;cursor:pointer;background:none;border:none;}
   .modal .cap{color:#ddd;font-size:13px;margin-top:14px;text-align:center;max-width:600px;}
-  .editCard{max-width:540px;width:100%;max-height:90%;overflow-y:auto;}
+  .editCard{max-width:540px;width:100%;max-height:90%;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-bottom:14px;}
+  #calModal .desc{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;}
+  #calModal .card{overflow:visible;}
   a{color:var(--accent);}
   .hide{display:none!important;}
   .pcard{display:flex;gap:12px;align-items:center;}
@@ -721,7 +723,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.992</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.996</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7490,6 +7492,7 @@ function moveToSub(subId,companionIds){
     flushMemoryArc(chat).catch(()=>{});
   }
   persistChats();appendNewBubbles();updateChatHeader();applyLocationBackground();
+  maybeTriggerTaskArrival(chat,subId);   // v19.994: fire a bound task/quest on entering this sub-area
   toast(`Now in the ${s.name}`);
 }
 // ============================ CHARACTER SCHEDULES ============================
@@ -7675,10 +7678,20 @@ function offstageRoster(chat){
 
 // ============================ CALENDAR / PLANS ============================
 function chatCalendar(chat){ const c=chat||curChat(); if(!c)return []; if(!Array.isArray(c.calendar))c.calendar=[]; return c.calendar; }
+// v19.993 — announce a newly created quest/task on screen (player-only; present:[] so it never
+// enters any character's witnessed history — quests are calendar-only per v19.96).
+function _announceTaskLine(chat,label,title){
+  if(!chat||!title)return;
+  chat.messages.push({mid:newMid(),role:"assistant",narratorEvent:true,questNote:true,present:[],
+    content:`— Yeni ${label}: ${title} —`,img:null,imgState:"idle",vidState:"idle",video:null});
+  markChatDirty(chat); persistChats(); try{ appendNewBubbles(); }catch(e){}
+}
 function addCalendarEntry(chat,entry){
   const cal=chatCalendar(chat);
+  const _annTitle=entry&&entry.title, _annSrc=entry&&entry.source;
   cal.push(Object.assign({id:"cal_"+Date.now().toString(36)+Math.random().toString(36).slice(2,8),kind:"meeting",done:false,source:"manual"},entry));
   persistChats();
+  if(_annTitle && _annSrc!=="world") _announceTaskLine(chat,"plan",_annTitle);
 }
 // Significant-word overlap for calendar dedup. Strips common English + Turkish filler words,
 // then compares the remaining content words. Two titles describing the same commitment (even
@@ -7816,7 +7829,7 @@ async function checkDuePlans(chat){
   const e=chatCalendar(chat).find(x=>!x.done && !x.prompted && planDueNow(chat,x) && _planIncludesUser(x));   // v19.8: user-less plans belong to the world pulse executor
   if(!e)return;
   e.prompted=true; persistChats();
-  const whoStr=e.who?` with ${e.who}`:"";
+  const whoStr=e.who?` (${e.who} ile)`:"";
   const locName=e.locationId?(locById(e.locationId)||{}).name:(e.where||"");
   const atStr=locName?` at ${locName}`:"";
   const go=confirm(`📅 It's time for: "${e.title}"${whoStr}${atStr}.\n\nDo you attend? (You'll travel there now.)`);
@@ -7835,7 +7848,7 @@ async function checkDuePlans(chat){
   }else{
     // No resolved location — just narrate that the meeting time has arrived in place.
     chat.messages.push({mid:newMid(),role:"assistant",narratorEvent:true,
-      content:`The time for ${e.title} has arrived${whoStr}.`,
+      content:`${e.title} vakti geldi${whoStr}.`,
       present:presentIds(chat).slice(),img:null,imgState:"idle",vidState:"idle",video:null});
     persistChats(); appendNewBubbles();
   }
@@ -7960,34 +7973,156 @@ function openCalendar(){
   m.addEventListener('click',e=>{if(e.target===m)_calClose();});
   document.body.appendChild(m);
 }
+/* v19.994 — TASK/PLAN creation with location · sub-area · character sections. Any of the three
+   that does not exist is created SILENTLY in the background (per user request): a new location
+   (with an Entrance sub-area), a new sub-area on it, or a minimal resident character. The task is
+   bound to them; entering the bound sub-area later fires the arrival trigger (maybeTriggerTaskArrival). */
+function _ensureLocationByName(uni,name){
+  name=String(name||"").trim(); if(!uni||!name)return null;
+  uni.locations=uni.locations||[];
+  const _k=name.toLocaleLowerCase("tr");   // v19.994: Turkish-aware (İ→i, I→ı) so casing never dupes
+  let loc=uni.locations.find(l=>l&&l.name&&l.name.toLocaleLowerCase("tr")===_k);
+  if(loc)return loc;
+  const id="loc_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+  loc={id,name,description:"",type:"poi",sublocations:[{id:id+"_entrance",name:"Entrance",entrance:true}],residents:[]};
+  uni.locations.push(loc); persistUniverses();
+  return loc;
+}
+function _ensureSublocationByName(loc,name){
+  if(!loc)return null; ensureSublocations(loc);
+  name=String(name||"").trim();
+  if(!name) return subById(loc,entranceSubId(loc))||loc.sublocations[0];
+  const _k=name.toLocaleLowerCase("tr");
+  let s=loc.sublocations.find(x=>x&&x.name&&x.name.toLocaleLowerCase("tr")===_k);
+  if(s)return s;
+  s={id:newSubId(),name}; loc.sublocations.push(s); persistUniverses();
+  return s;
+}
+function _ensureCharacterByName(uni,name,locId){
+  name=String(name||"").trim(); if(!uni||!name)return null;
+  const _k=name.toLocaleLowerCase("tr");
+  let p=(state.personas||[]).find(x=>x&&x.universeId===uni.id&&x.name&&x.name.toLocaleLowerCase("tr")===_k);
+  if(p)return p;
+  const pid="p_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4);
+  p={id:pid,universeId:uni.id,name,avatar:"",personality:`A figure of ${uni.name||"this world"}.`,
+     traits:"",goals:"",backstory:"",style:"",look:"",instructions:"",interject:"",image:null};
+  state.personas.push(p);
+  if(locId){ const loc=(uni.locations||[]).find(l=>l&&l.id===locId); if(loc){ loc.residents=(loc.residents||[]).concat(pid); persistUniverses(); } }
+  persistPersonas();
+  return p;
+}
 function addCalManual(){
   const chat=curChat(); if(!chat)return;
-  const kindStr=prompt("Type? 1=Meeting  2=Promise  3=Conditional  4=Other","1");
-  if(kindStr===null)return;
-  const kind=({"1":"meeting","2":"promise","3":"conditional","4":"custom"})[kindStr.trim()]||"meeting";
-  const title=prompt(kind==="meeting"?"Meeting / plan:":kind==="promise"?"The promise (e.g. 'We'll be friends forever'):":kind==="conditional"?"What's promised (e.g. 'I'll call you'):":"Note to remember:");
-  if(!title||!title.trim())return;
   const today=chat.gameDay||1;
-  let day=null, locationId=null, where="", condition="";
-  if(kind==="meeting"){
-    const offStr=prompt("On which day? (a number, or +N for N days from now):",String(today));
-    if(offStr===null)return;
-    day=today; const t=offStr.trim();
-    if(t.startsWith("+"))day=today+(parseInt(t.slice(1),10)||0);
-    else if(/^\d+$/.test(t))day=parseInt(t,10);
-    const locs=curLocations();
-    if(locs.length){
-      const list=locs.map((l,i)=>`${i+1}. ${l.name}`).join("\n");
-      const pick=prompt(`Where? Enter a number (or leave blank):\n\n${list}`,"");
-      if(pick!==null && pick.trim()!==""){ const idx=parseInt(pick.trim(),10)-1; if(idx>=0&&idx<locs.length){ locationId=locs[idx].id; where=locs[idx].name; } }
-    }
-  }else if(kind==="conditional"){
-    const cond=prompt("Condition that triggers it (e.g. '{{user}} goes to the marina'):","");
-    if(cond!==null)condition=cond.trim();
-  }
-  const who=prompt("Who's involved? (character name, or leave blank)","")||"";
-  addCalendarEntry(chat,{kind,title:title.trim(),day,period:null,who:who.trim(),where,locationId,condition,source:"manual"});
+  const locs=curLocations();
+  const locOpts=locs.map(l=>`<option value="${esc(l.name)}">`).join("");
+  const charOpts=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)).map(p=>`<option value="${esc(p.name)}">`).join("");
+  const ex=document.getElementById('calAddModal'); if(ex)ex.remove();
+  const inpCss="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:14px";
+  const m=document.createElement('div'); m.id="calAddModal"; m.className="modal show";
+  m.innerHTML=`<div class="card editCard" style="max-width:460px">
+    <h3 style="margin-top:0">New task / plan</h3>
+    <label>Type</label>
+    <select id="caKind" style="${inpCss}">
+      <option value="meeting">Meeting / plan</option><option value="promise">Promise</option><option value="conditional">Conditional</option><option value="custom">Note</option></select>
+    <label style="margin-top:8px">What is it?</label>
+    <input type="text" id="caTitle" style="${inpCss}" placeholder="e.g. Meet the courier about the sealed letter">
+    <div id="caDayWrap"><label style="margin-top:8px">Day (a number, or +N from now)</label><input type="text" id="caDay" style="${inpCss}" value="${today}"></div>
+    <label style="margin-top:8px">Location <span class="desc" style="font-weight:400">— type a new name to create it silently</span></label>
+    <input type="text" id="caLoc" list="caLocList" style="${inpCss}" placeholder="(optional)"><datalist id="caLocList">${locOpts}</datalist>
+    <label style="margin-top:8px">Sub-area <span class="desc" style="font-weight:400">— where inside the location</span></label>
+    <input type="text" id="caSub" list="caSubList" style="${inpCss}" placeholder="(optional)"><datalist id="caSubList"></datalist>
+    <label style="margin-top:8px">Character <span class="desc" style="font-weight:400">— who appears there; a new name is created silently</span></label>
+    <input type="text" id="caChar" list="caCharList" style="${inpCss}" placeholder="(optional)"><datalist id="caCharList">${charOpts}</datalist>
+    <div id="caCondWrap" style="display:none"><label style="margin-top:8px">Condition that triggers it</label><input type="text" id="caCond" style="${inpCss}" placeholder="e.g. {{user}} goes to the marina"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn sec small" onclick="document.getElementById('calAddModal').remove()">Cancel</button>
+      <button class="btn small" onclick="saveCalManual()">Save</button>
+    </div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)m.remove(); });
+  document.body.appendChild(m);
+  const kindSel=m.querySelector('#caKind');
+  const refreshKind=()=>{ const k=kindSel.value; m.querySelector('#caDayWrap').style.display=(k==="meeting")?"":"none"; m.querySelector('#caCondWrap').style.display=(k==="conditional")?"":"none"; };
+  kindSel.onchange=refreshKind; refreshKind();
+  const locInp=m.querySelector('#caLoc');
+  const refreshSubs=()=>{ const nm=locInp.value.trim().toLocaleLowerCase("tr"); const loc=locs.find(l=>l.name.toLocaleLowerCase("tr")===nm); const dl=m.querySelector('#caSubList'); dl.innerHTML=(loc&&Array.isArray(loc.sublocations))?loc.sublocations.map(s=>`<option value="${esc(s.name)}">`).join(""):""; };
+  locInp.oninput=refreshSubs; refreshSubs();
+}
+function saveCalManual(){
+  const chat=curChat(); if(!chat)return;
+  const uni=universeById(chat.universeId);
+  const gv=id=>{const e=document.getElementById(id);return e?e.value.trim():"";};
+  const kind=gv('caKind')||"meeting";
+  const title=gv('caTitle'); if(!title){ toast("Give the task a name"); return; }
+  const today=chat.gameDay||1;
+  let day=today;
+  if(kind==="meeting"){ const t=gv('caDay'); if(t.startsWith("+"))day=today+(parseInt(t.slice(1),10)||0); else if(/^\d+$/.test(t))day=parseInt(t,10)||today; }
+  const condition=kind==="conditional"?gv('caCond'):"";
+  let locationId=null, where="", subId=null, subName="", charId=null, charName="";
+  const locName=gv('caLoc');
+  if(locName && uni){ const loc=_ensureLocationByName(uni,locName); if(loc){ locationId=loc.id; where=loc.name;
+    const sName=gv('caSub'); if(sName){ const s=_ensureSublocationByName(loc,sName); if(s){ subId=s.id; subName=s.name; } } } }
+  const cName=gv('caChar');
+  if(cName && uni){ const p=_ensureCharacterByName(uni,cName,locationId); if(p){ charId=p.id; charName=p.name; } }
+  addCalendarEntry(chat,{kind,title,day,period:null,who:charName,where,locationId,subId,subName,charId,charName,condition,source:"manual"});
+  const modal=document.getElementById('calAddModal'); if(modal)modal.remove();
   openCalendar(); updateCalendarBadge();
+  const made=[where,subName,charName].filter(Boolean);
+  toast("Task saved"+(made.length?" — "+made.join(" · "):""));
+}
+/* v19.994 — ARRIVAL TRIGGER. Entering a sub-area that has an active task bound to it fires ONCE:
+   a short Turkish GM narration sets the moment, the bound character is brought into the scene at
+   this sub-area, and they open with a task-aware line (the quest target, or a guide toward it).
+   The player then continues the scene normally. `e._arrived` guards against re-firing. */
+async function maybeTriggerTaskArrival(chat,subId){
+  try{
+    if(!chat||!chat.locationId||!state.key)return;
+    // 1) a calendar TASK bound to this sub-area (v19.994)
+    const task=chatCalendar(chat).find(e=>e&&!e.done&&!e._arrived&&e.locationId===chat.locationId&&e.subId===subId);
+    if(task){ task._arrived=true; persistChats(); await _fireArrival(chat,subId,{title:task.title,charId:task.charId,charName:task.charName}); return; }
+    // 2) an authored codex QUEST bound to this sub-area (v19.995). Fired once per chat; startActive:false quests wait.
+    const uni=universeById(chat.universeId);
+    const gq=(uni&&uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
+    chat._questArrived=chat._questArrived||{};
+    const qhit=gq.find(q=>q&&q.locationId===chat.locationId&&q.subId===subId&&q.startActive!==false&&!chat._questArrived[q.id||q.title]);
+    if(qhit){ chat._questArrived[qhit.id||qhit.title]=true; markChatDirty(chat); persistChats(); await _fireArrival(chat,subId,{title:qhit.title,charId:qhit.charId,charName:qhit.charName}); }
+  }catch(e){}
+}
+// v19.995 — shared arrival beat for a bound task OR quest {title, charId?, charName?}: a Turkish GM
+// narration, the bound character brought into the scene AT this sub-area, and a task-aware opening line.
+async function _fireArrival(chat,subId,item){
+  try{
+    const loc=locById(chat.locationId); const sub=subById(loc,subId);
+    let p=null;
+    if(item.charId) p=(state.personas||[]).find(x=>x&&x.id===item.charId);
+    if(!p && item.charName){ const _k=String(item.charName).toLocaleLowerCase("tr"); p=(state.personas||[]).find(x=>x&&x.universeId===chat.universeId&&x.name&&x.name.toLocaleLowerCase("tr")===_k); }
+    if(p && isActiveChar(p) && !charBarredHere(chat,p)){
+      if(!chat.presentIds)chat.presentIds=[];
+      if(!chat.presentIds.includes(p.id)){
+        chat.presentIds.push(p.id);
+        if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=subId;
+        if(chat.worldPositions)chat.worldPositions[p.id]=chat.locationId;
+        notePresence(chat,[p.name],[]);
+      }
+    } else { p=null; }
+    const sys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, where this awaits: "${item.title}".${p?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title});
+    const narr=String(out||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");
+    if(narr){
+      chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,present:presentIds(chat).slice(),content:narr,img:null,imgState:"idle",vidState:"idle",video:null});
+      markChatDirty(chat); persistChats(); appendNewBubbles();
+    }
+    if(p){
+      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived. You are here about this: "${item.title}". Open the moment — greet ${state.user} and draw them into it, either as the person it concerns or as someone leading them to it. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user}.`;
+      const cout=await chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
+      const line=String(cout||"").trim();
+      if(line){
+        const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:line,present:presentIds(chat).slice(),img:null,imgState:"idle",vidState:"idle",video:null};
+        chat.messages.push(msg); markChatDirty(chat); persistChats(); appendNewBubbles();
+        if(state.autoSpeak){ try{ autoSpeakMsg(msg,p); }catch(e){} }
+      }
+    }
+  }catch(e){}
 }
 function toggleCalDone(id){ const chat=curChat(); const e=chatCalendar(chat).find(x=>x.id===id); if(e){e.done=!e.done;persistChats();openCalendar();updateCalendarBadge();} }
 function delCalEntry(id){ const chat=curChat(); chat.calendar=chatCalendar(chat).filter(x=>x.id!==id); persistChats(); openCalendar(); updateCalendarBadge(); }
@@ -9362,12 +9497,14 @@ async function genLocations(){
   toast("Generating locations…");
   // v19.91: pass the editor's LIVE location names (incl. unsaved ones) so nothing is recreated,
   // and let active quests demand their missing places (dungeon, lair, venue) inside the generator.
-  const locs=await generateLocations(uni,6,_ueLocs.map(l=>l&&l.name).filter(Boolean));
+  const locs=await generateLocations(uni,_ueLocs);   // v19.996: operate on the LIVE editor list (phased homes → POIs)
   if(locs&&locs.length){
     _ueLocs=_ueLocs.concat(locs);
     renderLocEditor();
-    toast(`Added ${locs.length} location${locs.length===1?"":"s"} — Save to keep`);
-  }else{ toast("Couldn't generate locations"); }
+    const isHome=locs[0]&&locs[0].type==='home';
+    const label=isHome?(locs.length===1?"home":locs.length+" homes"):(locs.length+" point"+(locs.length===1?"":"s")+" of interest");
+    toast(`Added ${isHome&&locs.length===1?"a home":label} — Save to keep`);
+  }else{ toast("Nothing to add (or generation failed) — try again"); }
 }
 async function genAllSchedules(){
   const uni=editingUniverse||universeById(state.curUniverse);
@@ -10553,69 +10690,61 @@ function relMovedToday(chat,fromId,day){
 // Generate a set of locations for a universe from its setting + cast. Returns an array of
 // location objects (with residents linked by name) or null. Used as a fallback in the
 // universe generator and by the "Generate locations" button for existing universes.
-async function generateLocations(uni,count,existingNames){
+async function generateLocations(uni,liveLocs){
   if(!uni||!state.key)return null;
-  const cast=state.personas.filter(p=>p.universeId===uni.id);
-  const castList=cast.map(c=>`- ${c.name}: ${(c.personality||"").slice(0,80)}`).join("\n");
-  const n=Math.max(3,Math.min(10,count||6));
-  // v19.91 (quest support): existing places must never be recreated, and ACTIVE QUESTS get their
-  // missing venues — a quest that says "slay the wretch of Karanlık İn" needs that place to exist.
-  const _have=[...new Set([].concat(existingNames||[], (uni.locations||[]).map(l=>l&&l.name)).filter(Boolean))];
-  const _quests=(uni.gameData&&Array.isArray(uni.gameData.quests)?uni.gameData.quests:[]).slice(0,12)
-    .map(q=>`- ${q.title}${q.desc?": "+String(q.desc).slice(0,140):""}${Array.isArray(q.steps)&&q.steps.length?" | steps: "+q.steps.slice(0,4).join("; ").slice(0,200):""}`).join("\n");
-  // v19.95 — PLAN-DRIVEN generation: one home per still-homeless character, then either every
-  // quest venue (if quests exist) or exactly 5 world-fitting POIs. Stops the "irrelevant places"
-  // problem by giving the model an explicit, ordered plan instead of "make N varied places".
-  const _homed=new Set();
-  (uni.locations||[]).forEach(l=>{ if(l&&Array.isArray(l.residents))l.residents.forEach(id=>_homed.add(id)); });
-  const homeless=cast.filter(c=>!_homed.has(c.id));
-  const homelessList=homeless.map(c=>c.name).join(", ");
-  const _hasQuests=!!_quests;
-  const _targetCount=Math.min(30, homeless.length + (_hasQuests?14:5) + 2);
-  const sys=`You design the LOCATIONS for a roleplay world. Follow this plan EXACTLY and in order.
-
-STEP 1 — HOMES: Create exactly ONE home for EACH of these characters, with that character as the sole resident, fitting their personality, wealth and standing in this world:
-${homelessList||"(none — every character already has a home; create no new homes in this step)"}
-
-STEP 2 — THE REST:
-${_hasQuests
-  ? "Active quests are listed below. Create every DISTINCT place those quests need to be playable — the dungeon to enter, the lair to raid, the shop or estate to visit, the meeting spot. Let the quests decide what exists; do NOT invent unrelated places."
-  : "There are NO active quests. After the homes, create exactly FIVE additional points of interest that fit THIS world and give the cast somewhere to gather, work and clash — for example a market, a club, a temple, a workplace, a landmark. No residents."}
-
-Every place MUST clearly belong to THIS world's setting, tone and geography — never generic filler that could come from any other story. Never recreate a place already listed as existing.
-
-Each place also has 2-4 logical SUB-AREAS (private zones inside it) — e.g. a home might have a Living Room, Kitchen, Bedroom; a club might have a Dance Floor, VIP Booth, Bar, Toilets. The FIRST sub-area MUST be the entry point everyone arrives at (an "Entrance", "Foyer", "Front Door", "Lobby", or whatever fits). Sub-areas give privacy: people in different areas can't overhear each other.
-
-Return ONLY strict JSON, an array:
-[{"name":"place name","description":"1-2 sentences of what it is and its mood","type":"home or poi","resident":"EXACT name of a character who lives here, or empty for a point of interest","sublocations":["Entrance","Lounge","Toilet"]}]
-Each home's resident is set by the EXACT character name from Step 1; points of interest have an empty resident. The first sublocation is always the arrival point. Output ONLY the JSON array, no commentary.`;
+  const cast=state.personas.filter(p=>p&&p.universeId===uni.id&&isActiveChar(p));
+  const locs=Array.isArray(liveLocs)?liveLocs:((uni.locations)||[]);   // live editor list when given, else persisted
+  /* v19.996 — PRESS-DRIVEN location creation. The CODE decides the batch, the LLM only fills it:
+       • any character without a HOME → build homes (ALL of them while still in the home-only phase;
+         just ONE at a time once POIs already exist, so a late-added character gets a home first);
+       • everyone has a home → 5 points of interest per press.
+     Descriptions are kept short (for the deterministic image-location injection). Quests no longer
+     drive location creation — the quest/task editors bind to whatever locations exist (v19.994/5). */
+  const homed=new Set();
+  locs.forEach(l=>{ if(l&&l.type==='home'&&Array.isArray(l.residents))l.residents.forEach(id=>homed.add(id)); });
+  const homeless=cast.filter(c=>!homed.has(c.id));
+  const poiExists=locs.some(l=>l&&l.type!=='home');
+  const have=[...new Set(locs.map(l=>l&&l.name).filter(Boolean))];
+  let mode, batchChars=[];
+  if(homeless.length>0){ mode='homes'; batchChars = poiExists ? homeless.slice(0,1) : homeless.slice(); }
+  else { mode='pois'; }
+  const world=`WORLD: ${uni.name||""} — ${(uni.setting||"").slice(0,600)}`;
+  const haveLine=have.length?`\nEXISTING PLACES (never recreate any of these): ${have.join(", ")}`:"";
+  let sys, expected;
+  if(mode==='homes'){
+    expected=batchChars.length;
+    sys=`You design HOME locations for a roleplay world. Create exactly ONE home for EACH character below, in the SAME order, as a JSON array. Each home fits that character's personality, wealth and standing in this world.\n\n`
+      +`CHARACTERS (one home each):\n${batchChars.map((c,i)=>`${i+1}. ${c.name}: ${(c.personality||"").slice(0,90)}`).join("\n")}\n\n`
+      +`${world}${haveLine}\n\n`
+      +`Each home object:\n- "name": the home's name, fitting the world and distinct.\n- "resident": the EXACT character name whose home this is.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details (style, setting, mood). No backstory.\n- "sublocations": 2-4 areas inside; the FIRST is the arrival point (e.g. "Front Door", "Foyer"), then rooms (Living Room, Bedroom, Kitchen…).\n\nReturn ONLY a JSON array of ${expected} home object(s). No commentary.`;
+  }else{
+    expected=5;
+    sys=`You design POINTS OF INTEREST for a roleplay world — public places the cast gathers, works and clashes (a market, a club, a temple, a workplace, a landmark). Create exactly 5, as a JSON array, all fitting THIS world.\n\n`
+      +`${world}${haveLine}\n\n`
+      +`Each place object:\n- "name": fitting the world, distinct.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details. No backstory.\n- "sublocations": 2-4 areas; the FIRST is the arrival point (Entrance/Lobby/Gate…). No residents.\n\nReturn ONLY a JSON array of 5 objects. No commentary.`;
+  }
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`World setting:\n${uni.setting||"(none)"}\n\nCast:\n${castList||"(none yet)"}${_have.length?`\n\nEXISTING LOCATIONS (do NOT recreate any of these — only NEW places):\n${_have.join(", ")}`:""}${_quests?`\n\nACTIVE QUESTS (every distinct place these quests need that is not in the existing list MUST be among your locations — dungeons, lairs, venues; give each a fitting type and mood):\n${_quests}`:""}`}
-    ],state.bioModel,{temp:fnTemp("unigen",0.8),max:fnTok("unigen",3600),frequency_penalty:0,presence_penalty:0,dbg:"Location generator"});
+    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Generate the JSON array now."}],
+      state.bioModel,{temp:fnTemp("unigen",0.85),max:fnTok("unigen",2600),frequency_penalty:0,presence_penalty:0,dbg:"Location generator ("+mode+")"});
   }catch(e){ return null; }
   const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return null;
-  const nameToId={}; cast.forEach(p=>nameToId[p.name.toLowerCase()]=p.id);
   const clean=s=>typeof s==="string"?s.trim():"";
-  return arr.slice(0,Math.max(10,_targetCount)).map(l=>{
-    const id="loc_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
-    // Build sublocations: first is the entrance, rest are extra areas. Always guarantee an entrance.
+  const nameToId={}; cast.forEach(p=>nameToId[p.name.toLocaleLowerCase("tr")]=p.id);
+  return arr.slice(0,expected).map((l,i)=>{
+    const id="loc_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4)+i;
     let subs=[];
     if(Array.isArray(l.sublocations)){
-      l.sublocations.map(clean).filter(Boolean).forEach((nm,i)=>{
-        subs.push(i===0?{id:id+"_entrance",name:nm,entrance:true}:{id:newSubId(),name:nm});
-      });
+      l.sublocations.map(clean).filter(Boolean).forEach((nm,si)=>{ subs.push(si===0?{id:id+"_entrance",name:nm,entrance:true}:{id:newSubId(),name:nm}); });
     }
     if(!subs.some(s=>s.entrance))subs.unshift({id:id+"_entrance",name:"Entrance",entrance:true});
-    return {
-      id,
-      name:clean(l.name), description:clean(l.description),
-      type:(clean(l.type).toLowerCase()==='home')?'home':'poi',
-      residents:(l.resident && nameToId[String(l.resident).toLowerCase()])?[nameToId[String(l.resident).toLowerCase()]]:[],
-      image:null, travelPeriods:null, sublocations:subs
-    };
+    let residents=[];
+    if(mode==='homes'){
+      const cid=(l.resident&&nameToId[String(l.resident).toLocaleLowerCase("tr")]) || (batchChars[i]&&batchChars[i].id);
+      if(cid)residents=[cid];
+    }
+    return { id, name:clean(l.name), description:clean(l.description).slice(0,140),
+      type:mode==='homes'?'home':'poi', residents, image:null, travelPeriods:null, sublocations:subs };
   }).filter(l=>l.name);
 }
 // One-shot universe generator: brief + count → a full universe object with characters.
@@ -13167,16 +13296,19 @@ function applyPresence(chat,enterNames,exitNames){
   entered.forEach(nm=>{const p=byName(nm);if(p&&chat.justLeft)delete chat.justLeft[p.id];});
   return {entered,exited};
 }
-// Drop a subtle system line into the chat noting who left/arrived.
+// v19.993 — Turkish time-of-day labels for on-screen narrator/presence lines (display-only).
+const PERIOD_TR={Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"};
+function _periodTR(p){ return PERIOD_TR[p]||String(p||"").toLowerCase(); }
+// Drop a subtle system line into the chat noting who left/arrived (Turkish).
 function notePresence(chat,entered,exited){
   const parts=[];
   // Stamp WHERE and WHEN so the note reads e.g. "Defne has arrived at Cafe Derya, in the morning".
   const locName=(chat&&chat.location)||"";
   const period=chat?chatPeriod(chat):"";
-  const when=period?`, in the ${period.toLowerCase()}`:"";
-  const atLoc=locName?` at ${locName}`:"";
-  if(exited.length)parts.push(`${exited.join(", ")} ${exited.length>1?"have":"has"} left${atLoc}${when}`);
-  if(entered.length)parts.push(`${entered.join(", ")} ${entered.length>1?"have":"has"} arrived${atLoc}${when}`);
+  // v19.993 — parenthetical place/time avoids Turkish case-suffix (vowel-harmony) bugs on names.
+  const tail=(locName||period)?` (${[locName, period&&_periodTR(period)].filter(Boolean).join(", ")})`:"";
+  if(exited.length)parts.push(`${exited.join(", ")} ayrıldı${tail}`);
+  if(entered.length)parts.push(`${entered.join(", ")} geldi${tail}`);
   if(!parts.length)return;
   // Resolve names → ids so the witness/scene logic can act on a presence change structurally
   // (not by parsing the display text). enteredIds in particular lets a freshly-arrived character's
@@ -15830,7 +15962,7 @@ async function endDay(){
   }
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",dayMarker:true,
     dayFrom:day,dayTo:day+1,narration,
-    content:`🌙 Day ${day} ends. Day ${day+1} begins.`,
+    content:`— ${day}. gün sona erdi. ${day+1}. gün başladı. —`,
     img:null,imgState:"idle",vidState:"idle",video:null});
   persistChats();appendNewBubbles();updateChatHeader();
   toast(`Day ${day} ended → now Day ${day+1}`);
@@ -17003,7 +17135,7 @@ function applyGameResult(chat,j,gs){
     if(j.new_quest&&j.new_quest.title&&g.quests.filter(q=>q.status==="active").length<4){
       const id="q_"+Date.now().toString(36);
       g.quests.push({id,title:String(j.new_quest.title).slice(0,80),desc:String(j.new_quest.desc||"").slice(0,200),status:"active",progress:"",reward:String(j.new_quest.reward||"").slice(0,80)});
-      notes.push(`📜 New quest: ${j.new_quest.title}`); gameLog(chat,`New quest: ${j.new_quest.title}`); changed=true; } }
+      notes.push(`New quest: ${j.new_quest.title}`); gameLog(chat,`New quest: ${j.new_quest.title}`); _announceTaskLine(chat,"görev",j.new_quest.title); changed=true; } }
   // v24 — per-character gear deltas. Hard validation: PRESENT characters only (a referee cannot
   // reach into offstage pockets), ≤2 characters/turn, ≤2 items each way, items canonicalized
   // against the items DB, inventory ≤20, skills ≤6 deduped.
@@ -17694,6 +17826,22 @@ function renderGameDbCard(u){
     if([...sel.options].some(o=>o.value===cur))sel.value=cur; }
 }
 function _gdbUni(){ return universeById(currentUniverseId()); }
+// v19.995 — bind an authored quest to a location/sub-area/character, creating any missing silently.
+function saveQuestBinding(idx){
+  const u=_gdbUni(); if(!u||!u.gameData||!Array.isArray(u.gameData.quests))return;
+  const q=u.gameData.quests[idx]; if(!q)return;
+  const gv=id=>{const e=document.getElementById(id);return e?e.value.trim():"";};
+  const locName=gv("qbLoc"+idx), subName=gv("qbSub"+idx), charName=gv("qbChar"+idx);
+  if(!q.id)q.id="q_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4);
+  q.locationId=null;q.subId=null;q.subName="";q.where="";q.charId=null;q.charName="";
+  if(locName){ const loc=_ensureLocationByName(u,locName); if(loc){ q.locationId=loc.id; q.where=loc.name;
+    if(subName){ const s=_ensureSublocationByName(loc,subName); if(s){ q.subId=s.id; q.subName=s.name; } } } }
+  if(charName){ const p=_ensureCharacterByName(u,charName,q.locationId); if(p){ q.charId=p.id; q.charName=p.name; } }
+  persistUniverses();
+  const made=[q.where,q.subName,q.charName].filter(Boolean);
+  toast(made.length?("Bound: "+made.join(" · ")):"Binding cleared");
+  viewCodexTable("quests");
+}
 async function gdbGenerate(){
   const u=_gdbUni(); if(!u){toast("Open a universe first");return;}
   const brief=(document.getElementById('gdbBrief')?.value||"").trim();
@@ -17723,7 +17871,29 @@ function viewCodexTable(key){
   let ov=document.getElementById('codexOverlay'); if(ov)ov.remove();
   ov=document.createElement('div'); ov.id='codexOverlay';
   ov.style.cssText="position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:18px";
-  const lines=rows.map(r=>"• "+cols.map(k=>{const v=r&&r[k];return v==null?"":(typeof v==="object"?JSON.stringify(v):String(v));}).filter(Boolean).join(" · ")).join("<br>");
+  let lines;
+  if(key==="quests"){
+    // v19.995 — interactive: bind each authored quest to a Location · Sub-area · Character. Any that
+    // don't exist are created silently (same helpers as calendar tasks). Entering the bound sub-area
+    // then fires the quest (maybeTriggerTaskArrival → _fireArrival).
+    const _ic="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:7px 9px;font-size:13px;margin-top:5px";
+    const _locOpts=(u.locations||[]).map(l=>`<option value="${esc(l.name)}">`).join("");
+    const _charOpts=(state.personas||[]).filter(p=>p&&p.universeId===u.id&&isActiveChar(p)).map(p=>`<option value="${esc(p.name)}">`).join("");
+    lines=rows.map((q,idx)=>{
+      const bLoc=(q.where)||(q.locationId&&((u.locations||[]).find(l=>l.id===q.locationId)||{}).name)||"";
+      return `<div class="card" style="padding:10px;margin-bottom:10px">
+        <b>${esc(q.title||"(untitled)")}</b>
+        ${q.desc?`<div class="desc" style="white-space:pre-wrap;word-break:break-word">${esc(q.desc)}</div>`:""}
+        <div class="desc" style="margin-top:7px;font-weight:600;color:var(--accent)">Bind to a place — created silently if new</div>
+        <input type="text" id="qbLoc${idx}" list="qbLocList" placeholder="Location" value="${esc(bLoc)}" style="${_ic}">
+        <input type="text" id="qbSub${idx}" placeholder="Sub-area (e.g. the back room)" value="${esc(q.subName||"")}" style="${_ic}">
+        <input type="text" id="qbChar${idx}" list="qbCharList" placeholder="Character who appears" value="${esc(q.charName||"")}" style="${_ic}">
+        <button class="btn small" style="margin-top:7px" onclick="saveQuestBinding(${idx})">Save binding</button>
+      </div>`;
+    }).join("")+`<datalist id="qbLocList">${_locOpts}</datalist><datalist id="qbCharList">${_charOpts}</datalist>`;
+  } else {
+    lines=rows.map(r=>"• "+cols.map(k=>{const v=r&&r[k];return v==null?"":(typeof v==="object"?JSON.stringify(v):String(v));}).filter(Boolean).join(" · ")).join("<br>");
+  }
   ov.innerHTML=`<div style="background:var(--bg2,#17171c);border:1px solid var(--line,#2a2a33);border-radius:16px;max-width:640px;width:100%;max-height:82vh;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line,#2a2a33)"><b style="flex:1">${esc(name)} — ${rows.length} rows</b><button class="btn sec small" onclick="document.getElementById('codexOverlay').remove()">✕</button></div>
     <div style="padding:16px;overflow:auto;font-size:13px;line-height:1.7">${lines||'<span class="desc">(empty)</span>'}</div></div>`;

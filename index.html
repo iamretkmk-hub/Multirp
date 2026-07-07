@@ -375,6 +375,7 @@
   .charCard.add .cc-plus small{display:block;font-size:12px;margin-top:4px;}
   /* removed (dead) character: kept on record but out of play */
   .charCard.removed{filter:grayscale(.85) brightness(.6);border-color:rgba(255,80,80,.4);}
+  .charCard.latent{filter:grayscale(.55) brightness(.72);border-color:rgba(150,150,170,.4);}
   .charCard.removed .cc-img{opacity:.7;}
   .charCard .cc-dead-badge{position:absolute;top:7px;left:7px;z-index:3;font-size:11px;font-weight:600;letter-spacing:.02em;color:#fff;background:rgba(150,20,20,.85);backdrop-filter:blur(4px);padding:3px 8px;border-radius:999px;}
   .charCard .cc-revive{position:absolute;bottom:48px;left:50%;transform:translateX(-50%);z-index:4;border:none;border-radius:999px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;background:linear-gradient(135deg,#b32be0,#7b2ff7);color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.4);}
@@ -723,7 +724,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.996</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v19.9993</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2944,7 +2945,7 @@ For each item return an object:
 - "title": short label (e.g. 'Meet Aria at the cafe', 'Friends forever', 'Call Mara if I go to the marina').
 - "who": character name(s) involved, or empty.
 - "importance": 0.0-1.0 (emit only if >= 0.6).
-- For "meeting" also include: "dayOffset" (whole days from today: 0=today,1=tomorrow,3=in three days,7=next week), "period" (Morning/Midday/Afternoon/Evening/Night or null), "where" (place name or empty).
+- For "meeting" also include: "dayOffset" (whole days from today: 0=today,1=tomorrow,3=in three days,7=next week), "period" (Morning/Midday/Afternoon/Evening/Night or null), "where" (place name or empty), "subArea" (a specific spot inside the place, or empty), and "entityType" ("npc" if it centres on a PERSON to meet/deal with, or "mob" if on a THREAT/creature to face or defeat; default "npc"), and "doer" — who is responsible for carrying it out: "{{user}}" if the player committed to do it, or a CHARACTER's exact name if a character took it on (default "{{user}}").
 - For "conditional" also include: "condition" (the trigger in plain words, e.g. "{{user}} goes to the marina").
 - For "promise"/"custom", day/period/where may be omitted.
 
@@ -4598,6 +4599,7 @@ function loadState(){
   _refreshPipe("sceneWriter","You are the SCENE WRITER directing an active event","UNNAMED FIGURE ALREADY PHYSICALLY IN THE SCENE",DEFAULT_SCENE_WRITER);
   _refreshPipe("sceneSetup","## YOUR INPUTS","NOT a person event",DEFAULT_SCENE_SETUP);
   _refreshPipe("relGenPrompt","You define {{char}}'s RELATIONSHIPS","AUTHORITATIVE source for who",DEFAULT_RELGEN);
+  _refreshPipe("calPrompt","FUTURE EVENTS TRACKER for a roleplay","doer",DEFAULT_CAL);
   _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","ARRIVALS HAPPEN AT THE ENTRANCE",DEFAULT_GM_AUTHOR);
   _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","A mention is NOT a reason to make someone arrive",DEFAULT_GM_AUTHOR);
   _refreshPipe("gmJudge","invisible GAMEMASTER observing an ongoing roleplay","Mentioning a person is not a trigger to summon",DEFAULT_GM_JUDGE);
@@ -7798,6 +7800,10 @@ async function runCalendarEngine(chat){
         kind, title, who,
         day, period:(kind==="meeting"?(p.period||null):null),
         where:(kind==="meeting"?String(p.where||"").trim():""), locationId:loc?loc.id:null,
+        subArea:String(p.subArea||"").trim(), character:who, charName:who,
+        entityType:(p.entityType==="mob"?"mob":"npc"),
+        doer:subUser(String(p.doer||state.user).trim())||state.user,
+        _needsBind:(kind==="meeting" && !!String(p.where||"").trim()),
         condition:(kind==="conditional"?String(p.condition||"").trim():""),
         importance, done:false, prompted:false, source:"auto"});
       added++;
@@ -8074,18 +8080,88 @@ function saveCalManual(){
    a short Turkish GM narration sets the moment, the bound character is brought into the scene at
    this sub-area, and they open with a task-aware line (the quest target, or a guide toward it).
    The player then continues the scene normally. `e._arrived` guards against re-firing. */
+/* v19.9992 — ARRIVAL RECONCILIATION (Phase 5). Entering a bound sub-area does NOT auto-reveal a
+   latent entity — it drops a one-time HINT so the player chooses to engage:
+     • MOB bound here → "a threat waits — /challenge <name>" (routes to the dice engine).
+     • LATENT NPC → "someone could be found here — /seek <name>".
+     • a KNOWN (non-latent) character → the existing auto-arrival (_fireArrival) is unchanged.
+   /seek and /challenge still work anytime; the hint is only a nudge, fired once per arrival. */
+function _hintLine(chat,text){
+  if(!chat||!text)return;
+  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,present:[],
+    content:text,img:null,imgState:"idle",vidState:"idle",video:null});
+  markChatDirty(chat); persistChats(); appendNewBubbles();
+}
+function _boundMobHere(chat){
+  if(!chat||!chat.locationId)return null;
+  const u=universeById(chat.universeId);
+  const mobs=(u&&u.gameData&&u.gameData.mobs)||[];
+  const sid=curSubId(chat);
+  return mobs.find(m=>m&&m.locationId===chat.locationId&&m.subId&&m.subId===sid)
+      || mobs.find(m=>m&&m.locationId===chat.locationId) || null;
+}
+async function _arriveBound(chat,subId,item){
+  try{
+    if(item.entityType==="mob"){
+      const nm=String(item.charName||"").trim();
+      _hintLine(chat, nm?`Burada tehlikeli biri seziliyor: ${nm}. Yüzleşmek için "/challenge ${nm}" yaz.`
+                        :`Burada bir tehlike seziliyor. Yüzleşmek için "/challenge" yaz.`);
+      return;
+    }
+    let p=null;
+    if(item.charId) p=(state.personas||[]).find(x=>x&&x.id===item.charId);
+    if(!p && item.charName){ const _k=String(item.charName).toLocaleLowerCase("tr"); p=(state.personas||[]).find(x=>x&&x.universeId===chat.universeId&&x.name&&x.name.toLocaleLowerCase("tr")===_k); }
+    if(p && p.latent){
+      _hintLine(chat, `Burada birinin bulunabileceğini seziyorsun: ${p.name}. Onu bulmak için "/seek ${p.name}" yaz.`);
+      return;
+    }
+    await _fireArrival(chat,subId,item);
+  }catch(e){}
+}
+/* v19.997 — LATENT NPCs. Created half-done and hidden from play (isActiveChar excludes them); a
+   latent NPC is bound to a location via boundLocId (or residency). The player reveals one with
+   /seek <name> (or bare /seek when there is only one here) — random entry never reveals them. */
+function _latentNpcsHere(chat){
+  if(!chat||!chat.locationId)return [];
+  const loc=locById(chat.locationId);
+  const resIds=new Set((loc&&loc.residents)||[]);
+  return (state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&p.latent&&!p.removed
+    && (p.boundLocId===chat.locationId || resIds.has(p.id)));
+}
+async function revealLatentNpc(chat,p){
+  if(!chat||!p)return;
+  toast(`${p.name}…`);
+  try{
+    if(state.key && ((String(p.personality||"").length<40) || !lookProse(p.look))){
+      const uni=universeById(chat.universeId);
+      const sys=`You flesh out a roleplay character from a short sketch, consistent with the world. Return ONLY JSON: {"personality":"2-4 sentences","look":"English visual appearance for image generation (hair, build, face, clothing)","backstory":"1-3 sentences","style":"how they speak","goals":"what they want"}.`;
+      const usr=`WORLD: ${uni?uni.name:""} — ${(uni&&uni.setting||"").slice(0,700)}\n\nSKETCH:\nName: ${p.name}\n${p.instructions?"Role/hook: "+p.instructions+"\n":""}${p.personality?"Notes: "+p.personality:""}`;
+      const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.bioModel,{temp:fnTemp("mem",0.8),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Reveal NPC — "+p.name});
+      const j=parseJSON(out);
+      if(j&&typeof j==="object"){
+        if(j.personality)p.personality=String(j.personality).slice(0,600);
+        if(j.backstory)p.backstory=String(j.backstory).slice(0,600);
+        if(j.style)p.style=String(j.style).slice(0,300);
+        if(j.goals)p.goals=String(j.goals).slice(0,300);
+        if(j.look && !lookProse(p.look))p.look=String(j.look).slice(0,400);
+      }
+    }
+  }catch(e){}
+  p.latent=false; p.boundLocId=null; persistPersonas();
+  await _fireArrival(chat,curSubId(chat),{title:"", charId:p.id, charName:p.name});
+}
 async function maybeTriggerTaskArrival(chat,subId){
   try{
     if(!chat||!chat.locationId||!state.key)return;
     // 1) a calendar TASK bound to this sub-area (v19.994)
     const task=chatCalendar(chat).find(e=>e&&!e.done&&!e._arrived&&e.locationId===chat.locationId&&e.subId===subId);
-    if(task){ task._arrived=true; persistChats(); await _fireArrival(chat,subId,{title:task.title,charId:task.charId,charName:task.charName}); return; }
+    if(task){ task._arrived=true; persistChats(); await _arriveBound(chat,subId,{title:task.title,charId:task.charId,charName:task.charName,entityType:task.entityType}); return; }
     // 2) an authored codex QUEST bound to this sub-area (v19.995). Fired once per chat; startActive:false quests wait.
     const uni=universeById(chat.universeId);
     const gq=(uni&&uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
     chat._questArrived=chat._questArrived||{};
     const qhit=gq.find(q=>q&&q.locationId===chat.locationId&&q.subId===subId&&q.startActive!==false&&!chat._questArrived[q.id||q.title]);
-    if(qhit){ chat._questArrived[qhit.id||qhit.title]=true; markChatDirty(chat); persistChats(); await _fireArrival(chat,subId,{title:qhit.title,charId:qhit.charId,charName:qhit.charName}); }
+    if(qhit){ chat._questArrived[qhit.id||qhit.title]=true; markChatDirty(chat); persistChats(); await _arriveBound(chat,subId,{title:qhit.title,charId:qhit.charId,charName:qhit.charName,entityType:qhit.entityType}); }
   }catch(e){}
 }
 // v19.995 — shared arrival beat for a bound task OR quest {title, charId?, charName?}: a Turkish GM
@@ -8105,7 +8181,7 @@ async function _fireArrival(chat,subId,item){
         notePresence(chat,[p.name],[]);
       }
     } else { p=null; }
-    const sys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, where this awaits: "${item.title}".${p?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    const sys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
     const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title});
     const narr=String(out||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");
     if(narr){
@@ -8113,7 +8189,7 @@ async function _fireArrival(chat,subId,item){
       markChatDirty(chat); persistChats(); appendNewBubbles();
     }
     if(p){
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived. You are here about this: "${item.title}". Open the moment — greet ${state.user} and draw them into it, either as the person it concerns or as someone leading them to it. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user}.`;
+      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"`:` and has sought you out`}. Open the moment — greet ${state.user} and draw them into it, either as the person it concerns or as someone leading them to it. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user}.`;
       const cout=await chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
       const line=String(cout||"").trim();
       if(line){
@@ -9987,12 +10063,12 @@ function renderPersonas(){
   const uid=state.curUniverse;
   const el=document.getElementById('personaList');el.innerHTML="";
   personasInUniverse(uid).forEach(p=>{
-    const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":"");
+    const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":(p.latent?" latent":""));
     const desc=p.personality||p.scenario||p.backstory||"";
     const visual=p.image
       ? `<img class="cc-img" src="${p.image}" alt="">`
       : `<div class="cc-emoji">${esc(p.avatar||"🎭")}</div>`;
-    const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">☠️ removed</div>`:"";
+    const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">removed</div>`:(p.latent?`<div class="cc-dead-badge" title="Undiscovered — /seek to reveal">undiscovered</div>`:"");
     const reviveBtn=p.removed?`<button class="cc-revive" title="Revive" data-revive>Revive</button>`:"";
     c.innerHTML=`
       ${visual}
@@ -13135,7 +13211,7 @@ async function maybeShowRecap(chat){
 // intent. This single predicate is the one place that decides "can still participate". It is applied
 // at the runtime roots (curCast, presentIds, offstage placement, GM summon) — NOT in the editor's
 // personasInUniverse, so the removed card stays visible and revivable in the character list.
-function isActiveChar(p){ return !!p && !p.removed; }
+function isActiveChar(p){ return !!p && !p.removed && !p.latent; }   // v19.997: latent NPCs are hidden from ALL play until /seek reveals them
 function curCast(){
   const chat=state.curChat&&state.chats[state.curChat];
   const uid=(chat&&chat.universeId)||state.curUniverse;
@@ -14396,7 +14472,7 @@ function handleOOC(chat,text){
     persistChats();appendNewBubbles();
   }else if(cmd==="challenge"||cmd==="fight"||cmd==="duel"){
     // v23 — start a dice challenge vs a PRESENT character or a bestiary creature.
-    if(!arg){toast("Usage: /challenge Name (a present character or a bestiary creature)");return;}
+    if(!arg){ const bm=_boundMobHere(chat); if(bm){ startChallenge(chat,{mob:bm}); return; } toast("Usage: /challenge Name (a present character or a bestiary creature)"); return; }
     const u=universeById((chat&&chat.universeId)||state.curUniverse);
     const pp=presentCast(chat).find(c=>c.name.toLowerCase()===arg.toLowerCase())
           ||presentCast(chat).find(c=>c.name.toLowerCase().includes(arg.toLowerCase()));
@@ -14487,6 +14563,20 @@ function handleOOC(chat,text){
     if(!p){ toast(`No character named "${nm}" in this universe`); return; }
     if(!body){ toast("Write a message after the colon"); return; }
     sendTextMessage(chat,p,body);
+  }else if(cmd==="seek"||cmd==="find"||cmd==="lookfor"){
+    const here=_latentNpcsHere(chat);
+    if(!here.length){ toast("There's no one to seek out here"); return; }
+    let target=null;
+    if(arg){ const k=arg.toLocaleLowerCase("tr"); target=here.find(c=>c.name.toLocaleLowerCase("tr")===k)||here.find(c=>c.name.toLocaleLowerCase("tr").includes(k)); }
+    else if(here.length===1){ target=here[0]; }
+    if(!target){ toast("Who? People you sense here: "+here.map(c=>c.name).join(", ")); return; }
+    revealLatentNpc(chat,target);
+  }else if(cmd==="hide"){
+    const p=findByName(arg)||(state.personas||[]).find(c=>c&&c.universeId===chat.universeId&&c.name.toLocaleLowerCase("tr")===String(arg).toLocaleLowerCase("tr"));
+    if(!p){ toast(`No character named "${arg}"`); return; }
+    p.latent=true; if(chat.locationId)p.boundLocId=chat.locationId; persistPersonas();
+    if(chat.presentIds){ chat.presentIds=chat.presentIds.filter(id=>id!==p.id); persistChats(); }
+    toast(`${p.name} is now hidden here — /seek them to reveal`); appendNewBubbles();
   }else if(cmd==="who"||cmd==="here"){
     const here=presentCast(chat).map(c=>c.name);
     toast(here.length?("Here: "+here.join(", ")):"Nobody is nearby");
@@ -15302,16 +15392,18 @@ async function illustrate(mid,replyText,force){
     // restored and modernized; the style is chosen in Settings → Image style and previewed there.
     const _styleTail=styleTail();   // v25 user-defined; empty when no styles exist
     let finalPrompt=rewritten.trim().replace(/^["\']|["\']$/g,"");
-    if(_styleTail && !finalPrompt.toLowerCase().includes(_styleTail.slice(0,18).toLowerCase())){
-      finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_styleTail;
-    }
+    // v19.9993 — render/quality style is appended AFTER the deterministic block below (see end).
     // v19.98 — DETERMINISTIC location + time-of-day lighting (+ POV appearance) appended in code.
     {
       const _locC=_imgLocationClause(chat);
       const _litC=_imgLightingClause(chat);
       const _povC=(rule&&rule.pov)?_imgPovAppearance(speaker):"";
-      const _det=[_locC,_litC,_povC].filter(Boolean).join(", ");
+      const _det=[_povC,_locC,_litC].filter(Boolean).join(", ");
       if(_det) finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_det;
+    }
+    // v19.9993 — RENDER STYLE (quality) LAST: character leads, style tail never outweighs the subject.
+    if(_styleTail && !finalPrompt.toLowerCase().includes(_styleTail.slice(0,18).toLowerCase())){
+      finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_styleTail;
     }
     const baseNeg="low quality, blurry, deformed, bad anatomy, extra limbs, watermark, text, signature";
 
@@ -16857,6 +16949,9 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
   // ---- LIVING UNIVERSE: OFFSTAGE INTENT & AGENCY (layer 4) ---- characters form charged motives
   // from the day, fester them offstage, recruit allies, and when one is ready it surfaces as a
   // confrontation (which no-ops if a confrontation already fired above — they won't stack).
+  try{ bindPendingTasks(chat); }catch(e){}   // v19.9991: resolve task place + entity
+  try{ await runBackgroundTasks(chat,day,uni); }catch(e){}   // v19.9991: characters work their own tasks offstage (may fail)
+  // v19.999: bind roleplay-generated tasks to a place + create the NPC/Mob
   try{ await runIntentEngine(chat,day,uni); }catch(e){ try{ console.warn("[runIntentEngine] engine bailed:",e); }catch(_){} }
 
   // Refresh any open views that show this data.
@@ -17827,19 +17922,130 @@ function renderGameDbCard(u){
 }
 function _gdbUni(){ return universeById(currentUniverseId()); }
 // v19.995 — bind an authored quest to a location/sub-area/character, creating any missing silently.
+/* v19.998 — turn each bound quest into its world entity. NPC → a LATENT half-done persona bound to
+   the quest's location (revealed later by /seek); an existing same-name active character is bound
+   instead of hidden. MOB → a boss-tier bestiary entry bound to the location. Idempotent via
+   q.entityCreated. Bestiary stays for combat; this is the quest-driven creator. */
+/* v19.999 — at End Day, resolve every roleplay-detected task that still needs binding: silently
+   create/resolve its location + sub-area, then create the bound NPC (latent) or Mob via the shared
+   _createBoundEntity. Runs in endDayBackground, after the intent engine. */
+/* v19.9991 — BACKGROUND TASK COMPLETION (Phase 4). Tasks whose DOER is a non-player active
+   character are worked offstage at End Day, like a world-pulse beat, with a REAL chance to fail
+   (1d6: 3+ succeeds, 1-2 fails). Success marks the task done; failure leaves it pending (so the
+   player can still step in) and flags _bgFailed. The outcome is narrated to the player via
+   _pushWorldEvent. Player-doer tasks (arrival-triggered) are never touched. Gated by state.pulseOn
+   (the offstage engine) — capped per day so it can't spam. */
+async function runBackgroundTasks(chat,day,uni){
+  try{
+    if(!state.pulseOn||!chat||!state.key)return;
+    uni=uni||universeById(chat.universeId); if(!uni)return;
+    const meName=String(state.user||"").toLocaleLowerCase("tr");
+    const isChar=nm=>{ const k=String(nm||"").toLocaleLowerCase("tr"); if(!k||k===meName||k==="{{user}}")return null;
+      return (state.personas||[]).find(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&p.name&&p.name.toLocaleLowerCase("tr")===k)||null; };
+    const cal=chatCalendar(chat);
+    const todo=[];
+    for(const e of cal){
+      if(!e||e.done||e._bgResolved===day)continue;
+      const doer=isChar(e.doer); if(!doer)continue;   // only NON-PLAYER character doers
+      todo.push({e,doer});
+    }
+    if(!todo.length)return;
+    let ran=0; const cap=Math.max(1,Math.min(3,+state.pulseMax||2));
+    for(const {e,doer} of todo){
+      if(ran>=cap)break;
+      e._bgResolved=day;
+      const success=rollDice("1d6")>=3;   // ~66% succeed, ~33% fail — a real chance to fail
+      const sys=`You narrate a brief OFFSTAGE outcome in a roleplay, in TURKISH. ${doer.name} spent time — away from ${state.user} — working on this on their own: "${String(e.title||"").slice(0,120)}". It ${success?"SUCCEEDED":"FAILED"}. Write ONE short, vivid third-person beat (1-2 sentences)${success?"":" showing what went wrong"}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`;
+      let j=null;
+      try{
+        const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate it."}],state.bioModel,{temp:fnTemp("mem",0.85),max:fnTok("mem",260),frequency_penalty:0,presence_penalty:0,dbg:"BG task — "+e.title});
+        j=parseJSON(out);
+      }catch(err){}
+      const headline=(j&&j.headline)||(success?(doer.name+" görevi tamamladı"):(doer.name+" başarısız oldu"));
+      const body=(j&&j.event)||(success?`${doer.name}, "${e.title}" işini kendi başına halletti.`:`${doer.name}, "${e.title}" işini denedi ama başaramadı.`);
+      _pushWorldEvent(chat,headline,body);
+      if(success){ e.done=true; e._bgFailed=false; }
+      else{ e._bgFailed=true; }   // stays pending; the player can still act on it
+      ran++;
+    }
+    if(ran)persistChats();
+  }catch(e){}
+}
+function bindPendingTasks(chat){
+  try{
+    const uni=universeById(chat.universeId); if(!uni)return;
+    const cal=chatCalendar(chat); let n=0;
+    cal.forEach(e=>{
+      if(!e||e.done||!e._needsBind)return;
+      if(e.where){ const loc=_ensureLocationByName(uni,e.where); if(loc){ e.locationId=loc.id; e.where=loc.name;
+        if(e.subArea){ const s=_ensureSublocationByName(loc,e.subArea); if(s){ e.subId=s.id; e.subName=s.name; } } } }
+      const who=e.character||e.charName||e.who;
+      if(e.locationId && who){
+        const r=_createBoundEntity(uni,{title:e.title,desc:e.title,charName:who,entityType:e.entityType||"npc",locationId:e.locationId,subId:e.subId,sourceId:e.id,where:e.where});
+        if(r.charId)e.charId=r.charId; if(!e.charName)e.charName=who;
+      }
+      e._needsBind=false; n++;
+    });
+    if(n){ persistUniverses(); persistPersonas(); persistChats(); }
+  }catch(err){}
+}
+/* v19.999 — single source that turns a bound quest OR task into its world entity.
+   spec: {title, desc, charName, entityType, locationId, subId, sourceId, where}.
+   NPC → existing same-name active char is bound (made:"bound"); else a LATENT half-done persona
+   (made:"npc", revealed later by /seek). MOB → a boss-tier bestiary row (made:"mob"). */
+function _createBoundEntity(uni,spec){
+  const type=spec.entityType||"npc";
+  if(type==="mob"){
+    uni.gameData=uni.gameData||{}; uni.gameData.mobs=uni.gameData.mobs||[];
+    uni.gameData.mobs.push({name:String(spec.charName||("Guardian of "+(spec.title||"the objective"))).slice(0,60),
+      hp:300,rank:"boss",xp:200,drops:[],locationId:spec.locationId||null,subId:spec.subId||null,questId:spec.sourceId||null,boss:true,desc:String(spec.title||"").slice(0,140)});
+    return {made:"mob",charId:null};
+  }
+  if(!spec.charName)return {made:null,charId:null};
+  const k=String(spec.charName).toLocaleLowerCase("tr");
+  const existing=(state.personas||[]).find(p=>p&&p.universeId===uni.id&&!p.removed&&p.name&&p.name.toLocaleLowerCase("tr")===k);
+  if(existing)return {made:"bound",charId:existing.id};
+  const pid="p_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4)+Math.floor(Math.random()*99);
+  const p={id:pid,universeId:uni.id,name:String(spec.charName).slice(0,60),avatar:"",
+    personality:`A figure connected to: ${spec.title||"an objective"}.`,traits:"",goals:"",backstory:"",style:"",look:"",
+    instructions:`Bound to "${spec.title||""}"${spec.where?" at "+spec.where:""}. ${String(spec.desc||"").slice(0,120)}`,
+    interject:"",image:null,latent:true,boundLocId:spec.locationId||null};
+  state.personas.push(p);
+  const loc=(uni.locations||[]).find(l=>l&&l.id===spec.locationId);
+  if(loc)loc.residents=(loc.residents||[]).concat(pid);
+  return {made:"npc",charId:pid};
+}
+function createQuestEntities(){
+  const u=_gdbUni(); if(!u||!u.gameData||!Array.isArray(u.gameData.quests)){ toast("No quests to build from"); return; }
+  u.gameData.mobs=u.gameData.mobs||[];
+  let npcs=0, mobs=0, bound=0;
+  for(const q of u.gameData.quests){
+    if(!q||!q.locationId||q.entityCreated)continue;
+    const r=_createBoundEntity(u,{title:q.title,desc:q.desc,charName:q.charName,entityType:q.entityType||"npc",locationId:q.locationId,subId:q.subId,sourceId:q.id,where:q.where});
+    if(r.made==="mob")mobs++; else if(r.made==="npc"){ q.charId=r.charId; npcs++; } else if(r.made==="bound"){ q.charId=r.charId; bound++; }
+    q.entityCreated=true;
+  }
+  persistPersonas(); persistUniverses();
+  const parts=[]; if(npcs)parts.push(`${npcs} latent NPC${npcs===1?"":"s"}`); if(mobs)parts.push(`${mobs} mob${mobs===1?"":"s"}`); if(bound)parts.push(`${bound} bound to existing`);
+  toast(parts.length?("Created: "+parts.join(" · ")):"Nothing new to create — bind quests first");
+  viewCodexTable("quests");
+}
 function saveQuestBinding(idx){
   const u=_gdbUni(); if(!u||!u.gameData||!Array.isArray(u.gameData.quests))return;
   const q=u.gameData.quests[idx]; if(!q)return;
   const gv=id=>{const e=document.getElementById(id);return e?e.value.trim():"";};
   const locName=gv("qbLoc"+idx), subName=gv("qbSub"+idx), charName=gv("qbChar"+idx);
+  const entityType=((document.getElementById("qbType"+idx)||{}).value)||"npc";
   if(!q.id)q.id="q_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4);
-  q.locationId=null;q.subId=null;q.subName="";q.where="";q.charId=null;q.charName="";
+  // v19.998 — binding RECORDS the place + name + type; the entity itself is created later by
+  // createQuestEntities (a latent NPC or a Mob). Re-binding a quest resets its created flag.
+  q.locationId=null;q.subId=null;q.subName="";q.where="";q.charId=null;q.charName="";q.entityType=entityType;q.entityCreated=false;
   if(locName){ const loc=_ensureLocationByName(u,locName); if(loc){ q.locationId=loc.id; q.where=loc.name;
     if(subName){ const s=_ensureSublocationByName(loc,subName); if(s){ q.subId=s.id; q.subName=s.name; } } } }
-  if(charName){ const p=_ensureCharacterByName(u,charName,q.locationId); if(p){ q.charId=p.id; q.charName=p.name; } }
+  if(charName){ q.charName=charName.slice(0,60); }
   persistUniverses();
-  const made=[q.where,q.subName,q.charName].filter(Boolean);
-  toast(made.length?("Bound: "+made.join(" · ")):"Binding cleared");
+  const made=[q.where,q.subName,q.charName,entityType.toUpperCase()].filter(Boolean);
+  toast(made.length?("Bound: "+made.join(" · ")+" — now press Create entities"):"Binding cleared");
   viewCodexTable("quests");
 }
 async function gdbGenerate(){
@@ -17879,7 +18085,7 @@ function viewCodexTable(key){
     const _ic="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:7px 9px;font-size:13px;margin-top:5px";
     const _locOpts=(u.locations||[]).map(l=>`<option value="${esc(l.name)}">`).join("");
     const _charOpts=(state.personas||[]).filter(p=>p&&p.universeId===u.id&&isActiveChar(p)).map(p=>`<option value="${esc(p.name)}">`).join("");
-    lines=rows.map((q,idx)=>{
+    lines=`<button class="btn small" style="margin-bottom:10px;width:100%" onclick="createQuestEntities()">Create bound entities (NPCs &amp; Mobs)</button>`+rows.map((q,idx)=>{
       const bLoc=(q.where)||(q.locationId&&((u.locations||[]).find(l=>l.id===q.locationId)||{}).name)||"";
       return `<div class="card" style="padding:10px;margin-bottom:10px">
         <b>${esc(q.title||"(untitled)")}</b>
@@ -17887,8 +18093,9 @@ function viewCodexTable(key){
         <div class="desc" style="margin-top:7px;font-weight:600;color:var(--accent)">Bind to a place — created silently if new</div>
         <input type="text" id="qbLoc${idx}" list="qbLocList" placeholder="Location" value="${esc(bLoc)}" style="${_ic}">
         <input type="text" id="qbSub${idx}" placeholder="Sub-area (e.g. the back room)" value="${esc(q.subName||"")}" style="${_ic}">
-        <input type="text" id="qbChar${idx}" list="qbCharList" placeholder="Character who appears" value="${esc(q.charName||"")}" style="${_ic}">
-        <button class="btn small" style="margin-top:7px" onclick="saveQuestBinding(${idx})">Save binding</button>
+        <input type="text" id="qbChar${idx}" list="qbCharList" placeholder="Character / creature name" value="${esc(q.charName||"")}" style="${_ic}">
+        <select id="qbType${idx}" style="${_ic}"><option value="npc"${q.entityType!=="mob"?" selected":""}>NPC — a person (created hidden; /seek to meet)</option><option value="mob"${q.entityType==="mob"?" selected":""}>MOB — a boss/creature to fight</option></select>
+        <button class="btn small" style="margin-top:7px" onclick="saveQuestBinding(${idx})">Save binding${q.entityCreated?" (created)":""}</button>
       </div>`;
     }).join("")+`<datalist id="qbLocList">${_locOpts}</datalist><datalist id="qbCharList">${_charOpts}</datalist>`;
   } else {

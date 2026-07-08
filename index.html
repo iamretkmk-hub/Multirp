@@ -716,7 +716,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v20.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v20.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -5989,6 +5989,35 @@ let _diaryReadText="";   // text of the diary page currently open (for Read alou
 let _dubAudio=null;      // shared <audio> for xAI mp3 playback
 let _dubCtx=null;        // shared AudioContext for one-shot Inworld PCM playback
 let _dubSources=[];
+/* v20.7 — AUTOPLAY UNLOCK. Mobile browsers block programmatic audio until the user has made a
+   gesture (tap/click/key). Auto-speak fires from an async callback AFTER the reply arrives, which
+   is NOT a gesture, so the very first _dubAudio.play() rejects and (previously) was swallowed —
+   TTS synthesized fine (debug showed status ok + a valid mp3 URL) but nothing was ever heard.
+   Fix: on the FIRST real user gesture, create the shared <audio> and prime it (muted play/pause)
+   and resume the AudioContext, both INSIDE the gesture so the browser marks them unlocked. Every
+   later programmatic play() is then permitted. One-time; the listeners remove themselves. */
+let _audioUnlocked=false;
+function _unlockAudio(){
+  if(_audioUnlocked)return;
+  _audioUnlocked=true;
+  try{
+    if(!_dubAudio){ _dubAudio=new Audio(); _dubAudio.preload="auto"; }
+    // Prime the element within the gesture: a muted play()/pause() satisfies the autoplay gate.
+    _dubAudio.muted=true;
+    const p=_dubAudio.play&&_dubAudio.play();
+    if(p&&p.then){ p.then(()=>{ try{_dubAudio.pause(); _dubAudio.muted=false; }catch(_){} })
+                    .catch(()=>{ _dubAudio.muted=false; }); }
+    else { try{_dubAudio.pause();}catch(_){} _dubAudio.muted=false; }
+  }catch(_){ }
+  try{
+    if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(_dubCtx.state==="suspended") _dubCtx.resume().catch(()=>{});
+  }catch(_){ }
+  ["pointerdown","touchend","click","keydown"].forEach(ev=>document.removeEventListener(ev,_unlockAudio,true));
+}
+function _wireAudioUnlock(){
+  ["pointerdown","touchend","click","keydown"].forEach(ev=>document.addEventListener(ev,_unlockAudio,true));
+}
 function _stopDub(){
   if(_dubAudio){try{_dubAudio.pause();}catch(_){}_dubAudio.src="";}
   _dubSources.forEach(s=>{try{s.stop();}catch(_){}}); _dubSources=[];
@@ -5996,7 +6025,15 @@ function _stopDub(){
 function _playDubUrl(url){
   _stopDub();
   if(!_dubAudio){ _dubAudio=new Audio(); _dubAudio.preload="auto"; }
-  _dubAudio.src=httpsMedia(url); _dubAudio.play&&_dubAudio.play().catch(()=>{});
+  _dubAudio.muted=false;
+  _dubAudio.src=httpsMedia(url);
+  const p=_dubAudio.play&&_dubAudio.play();
+  if(p&&p.catch) p.catch(err=>{
+    // Autoplay still blocked (no gesture yet this load) — surface it ONCE instead of silent failure.
+    if(err&&(err.name==="NotAllowedError"||err.name==="AbortError")){
+      if(!_audioUnlocked && typeof toast==="function") toast("Tap the screen once to enable audio, then it will play.");
+    }
+  });
 }
 // v19.4 — awaitable playback (resolves on ended/error) + _dubActive flag while ANY dub audio is
 // live: the narration-mode open mic drops frames while this is true (half-duplex), so the
@@ -8037,8 +8074,39 @@ function calendarContextLine(chat,selfName){
   return "FUTURE EVENTS & COMMITMENTS (the characters are aware of and remember these; reference them naturally, hold each other to them, honor promises/conditions, and hold whoever broke an unkept plan accountable): "+parts.join(" · ");
 }
 function _calClose(){ const m=document.getElementById('calModal'); if(m)m.remove(); }
-/* v20.5 (Stage 3) — the old in-calendar Tasks/Quests section (_calTasksSection) was removed with the
-   ARPG systems. Quests now live in their own modal (openQuestsModal, from the universe card). */
+/* v20.6 — READ-ONLY active-quests section for the calendar. Reads the STANDALONE quest store
+   (universe.gameData.quests), NOT the deleted chat.game runtime. Shows active (startActive && !done)
+   quests grouped by arc, with bound location and NPC-reveal state. Purely informational — quest
+   creation/management stays in the Quests modal (openQuestsModal). */
+function _calQuestsSection(chat){
+  try{
+    const u=universeById(chat&&chat.universeId); if(!u)return "";
+    const gd=(u.gameData&&typeof u.gameData==="object")?u.gameData:{};
+    const quests=Array.isArray(gd.quests)?gd.quests:[];
+    const active=quests.filter(q=>q && !q.done && q.startActive!==false);
+    if(!active.length)return "";
+    // group by arc, preserving first-seen order
+    const arcs={}; const order=[];
+    active.forEach(q=>{ const a=q.arc||"Quests"; if(!arcs[a]){arcs[a]=[];order.push(a);} arcs[a].push(q); });
+    const rowFor=q=>{
+      const locName=(q.locationId&&locById(q.locationId))?locById(q.locationId).name:(q.location||"");
+      const npcNm=q.charName||q.npcName||"";
+      const npcP=q.npcId?(state.personas||[]).find(p=>p&&p.id===q.npcId):null;
+      const npcState=npcP?(npcP.latent?"undiscovered":"met"):(npcNm?"not yet created":"");
+      const meta=[locName?"📍 "+esc(locName):"", npcNm?"👤 "+esc(npcNm)+(npcState?" · "+npcState:""):""].filter(Boolean).join(" · ");
+      return `<div class="card" style="padding:8px">
+        <div style="min-width:0"><b>${esc(q.title||"(untitled)")}</b>
+        ${q.desc?`<div class="desc">${esc(String(q.desc).slice(0,160))}${String(q.desc).length>160?"…":""}</div>`:""}
+        ${meta?`<div class="desc" style="margin-top:3px">${meta}</div>`:""}</div></div>`;
+    };
+    let html=`<div class="desc" style="margin:10px 0 4px;font-weight:600;color:var(--accent2)">${icon("compass")} Active quests</div>`;
+    for(const a of order){
+      html+=`<div class="desc" style="margin:6px 0 3px;opacity:.75">${esc(a)}</div>`;
+      html+=arcs[a].map(rowFor).join("");
+    }
+    return html;
+  }catch(e){ return ""; }
+}
 function openCalendar(){
   const chat=curChat(); if(!chat)return;
   _calClose();
@@ -8080,6 +8148,7 @@ function openCalendar(){
   m.innerHTML=`<button class="x" onclick="_calClose()">×</button>
    <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Future Events — Day ${today}, ${esc(chatPeriod(chat))}</h3>
    ${rows}
+   ${_calQuestsSection(chat)}
    <button class="btn small" style="margin-top:10px" onclick="addCalManual()">＋ Add event</button>
    <button class="btn sec small" style="margin-top:6px" onclick="_calClose()">Close</button></div>`;
   m.addEventListener('click',e=>{if(e.target===m)_calClose();});
@@ -8280,16 +8349,24 @@ async function _fireArrival(chat,subId,item){
         notePresence(chat,[p.name],[]);
       }
     } else { p=null; }
-    const sys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title});
-    const narr=String(out||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");
+    // v20.7 — FASTER ARRIVAL. The narration and the character's entrance line no longer run
+    // sequentially (two round-trips); they are dispatched CONCURRENTLY and posted in order once both
+    // return, so the NPC speaks after a single round-trip. The character line is grounded in their
+    // authored tie to the player (see quest NPC bios) so they don't open as a stranger.
+    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    const narrP=chatCompletion([{role:"system",content:narrSys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
+    let lineP=Promise.resolve("");
+    if(p){
+      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"`:` and has sought you out`}. Open the moment — greet ${state.user} and draw them into it, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user}.`;
+      lineP=chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name}).catch(()=>"");
+    }
+    const [nout,cout]=await Promise.all([narrP,lineP]);
+    const narr=String(nout||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");
     if(narr){
       chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,present:presentIds(chat).slice(),content:narr,img:null,imgState:"idle",vidState:"idle",video:null});
       markChatDirty(chat); persistChats(); appendNewBubbles();
     }
     if(p){
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"`:` and has sought you out`}. Open the moment — greet ${state.user} and draw them into it, either as the person it concerns or as someone leading them to it. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user}.`;
-      const cout=await chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
       const line=String(cout||"").trim();
       if(line){
         const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:line,present:presentIds(chat).slice(),img:null,imgState:"idle",vidState:"idle",video:null};
@@ -10514,7 +10591,10 @@ async function generateBio(brief,context,opts){
         : normalizeLook(clean(j.look)),
     instructions:clean(j.instructions),
     interject:clean(j.interject),
-    routine:clean(j.routine)
+    routine:clean(j.routine),
+    // v20.7 — optional player-relationship fields (used by quest NPC creation; other callers ignore).
+    userTie:clean(j.userTie),
+    userRelationship:clean(j.userRelationship)
   };
 }
 // Generate a per-period location schedule for a character from their routine + the universe's
@@ -16301,6 +16381,11 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
   // is settled when those passes read the calendar. Best-effort.
   try{ await reconcileCalendarDay(chat,day,uni); }catch(e){}
 
+  // ---- QUEST RECONCILE (v20.7) ---- with the day's memories complete, mark accomplished quests
+  // done (which unlocks the next in the arc). LLM-judged; a manual button in the Quests modal is the
+  // fallback if it misses. Best-effort.
+  try{ await reconcileQuestsForDay(chat,day,uni); }catch(e){}
+
   // ---- DIARIES ---- one private entry per participating character, from the day's MEMORIES.
   // Diaries and the relationship pass don't depend on each other, so we kick the relationship
   // pass off in parallel and let diaries run alongside it.
@@ -16773,16 +16858,84 @@ async function generateQuestArc(u,brief){
     if(!qq||!qq.name)return;
     gd.quests.push({
       id:"q_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5)+added,
-      arc, title:String(qq.name).slice(0,90), desc:String(qq.desc||"").slice(0,800),
+      arc, seq:added, title:String(qq.name).slice(0,90), desc:String(qq.desc||"").slice(0,800),
       location:String(qq.location||"").slice(0,60), subArea:String(qq.subArea||"").slice(0,60),
       npcName:String(qq.npc||"").slice(0,60),
       locationId:null, subId:null, npcId:null, entityType:"npc",
-      startActive:true, done:false, entityCreated:false
+      // v20.7 — SEQUENTIAL GATING: only the FIRST quest of the arc starts active; the rest wait
+      // (startActive:false) until the previous one is marked done (see _activateNextQuest).
+      startActive:(added===0), done:false, entityCreated:false
     });
     added++;
   });
   persistUniverses();
   return {arc, added};
+}
+/* v20.7 — SEQUENTIAL QUEST PROGRESSION. Quests in an arc are gated by `seq`: only seq 0 starts
+   active; completing a quest activates the NEXT undone quest in the SAME arc. Completion is either
+   LLM-judged at day-end (reconcileQuestsForDay, mirrors the calendar reconciler) or manual
+   (questMarkDone button in the Quests modal). No ARPG referee is involved. */
+function _activateNextQuest(uni,arc){
+  const quests=(uni&&uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
+  // the next not-done, not-yet-active quest in this arc, by seq order
+  const pool=quests.filter(q=>q&&q.arc===arc&&!q.done)
+    .sort((a,b)=>((a.seq??1e9)-(b.seq??1e9)));
+  const next=pool.find(q=>q.startActive===false);
+  if(next){ next.startActive=true; return next; }
+  return null;
+}
+// Mark ONE quest done (by id) and unlock the next in its arc. Returns {quest, next} or null.
+function questMarkDone(qid,opts){
+  const uni=_questsUni(); if(!uni)return null;
+  const quests=(uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
+  const q=quests.find(x=>x&&x.id===qid); if(!q||q.done)return null;
+  q.done=true; q.completedDay=(opts&&opts.day)|| (curChat()&&curChat().gameDay) || null;
+  if(opts&&opts.result)q.result=String(opts.result).slice(0,240);
+  const next=_activateNextQuest(uni,q.arc);
+  persistUniverses();
+  return {quest:q,next};
+}
+// v20.7 — DAY-END QUEST RECONCILER. Mirrors reconcileCalendarDay: reads the day's memories (all
+// characters) and decides which ACTIVE quests were accomplished today, marking them done (which
+// unlocks the next in the arc). Completion needs memory evidence; unsure → stays active.
+async function reconcileQuestsForDay(chat,day,uni){
+  try{
+    if(!chat||!state.key)return;
+    uni=uni||universeById(chat.universeId); if(!uni)return;
+    const quests=(uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
+    const active=quests.filter(q=>q&&!q.done&&q.startActive!==false);
+    if(!active.length)return;
+    // gather the day's memories across all owners in this universe, deduped + capped
+    const seen=new Set(); const mems=[];
+    for(const m of state.memory){
+      if(m.gameDay!==day || m.source==="diary")continue;
+      if(m.universeId && m.universeId!==uni.id)continue;
+      const t=memInjectText(m); if(!t)continue;
+      const key=t.slice(0,80).toLowerCase(); if(seen.has(key))continue; seen.add(key);
+      mems.push(`- ${t}`); if(mems.length>=60)break;
+    }
+    if(!mems.length)return;
+    const qList=active.map(q=>`#${q.id} [${q.arc}] ${q.title}: ${String(q.desc||"").slice(0,160)}`).join("\n");
+    const sys=`You judge which ACTIVE quests in a roleplay were ACCOMPLISHED today, using ONLY the memories as evidence. A quest is "done" only if the memories clearly show its objective was achieved. If unsure, it stays pending (omit it). Never mark done on a hunch. Return ONLY a JSON array: [{"id":"<the quest id>","result":"<one past-tense sentence of what happened>"}] — include ONLY completed quests, or [] if none.`;
+    const usr=`Day ${day} just ended.\n\nMEMORIES FORMED TODAY (all characters):\n${mems.join("\n")}\n\nACTIVE QUESTS:\n${qList}\n\nReturn the JSON array of quests COMPLETED today.`;
+    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",360),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
+    const arr=parseJSON(out);
+    if(!Array.isArray(arr)||!arr.length)return;
+    let changed=false;
+    for(const r of arr){
+      if(!r)continue;
+      const id=String(r.id||"").replace(/^#/,"");
+      const res=questMarkDone(id,{day,result:String(r.result||"").trim()});
+      if(res){
+        changed=true;
+        // narrate the completion so it's visible, and hint that the next quest opened
+        const line=res.quest.result?`— ${res.quest.result} —`:`— ${res.quest.title} tamamlandı —`;
+        chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,
+          content:line,present:presentIds(chat).slice(),img:null,imgState:"idle",vidState:"idle",video:null});
+      }
+    }
+    if(changed){ persistChats(); try{ appendNewBubbles(); }catch(e){} }
+  }catch(e){ try{ console.warn("[reconcileQuestsForDay] bailed:",e); }catch(_){} }
 }
 /* v20.5 (Stage 3) — removed ARPG: genQuestArc (old) */
 
@@ -16792,7 +16945,14 @@ async function generateQuestArc(u,brief){
 // (materializes each quest's named place + sub-area) and Create NPCs (writes a FULL hidden bio per
 // quest character via generateBio, revealed later by /seek or arrival).
 function _questsUni(){ return universeById(currentUniverseId()); }
-function _closeQuestsModal(){ const m=document.getElementById('questsModal'); if(m)m.remove(); }
+// v20.7 — manual completion from the Quests modal (fallback when the day-end LLM reconciler misses).
+function questMarkDoneUI(qid){
+  const res=questMarkDone(qid);
+  if(!res){ toast("Couldn't mark that quest"); return; }
+  const nextMsg=res.next?` · unlocked: ${res.next.title}`:"";
+  toast(`Quest done${nextMsg}`);
+  openQuestsModal();
+}function _closeQuestsModal(){ const m=document.getElementById('questsModal'); if(m)m.remove(); }
 function openQuestsModal(){
   const u=_questsUni(); if(!u){ toast("Open a universe first"); return; }
   _closeQuestsModal();
@@ -16807,16 +16967,28 @@ function openQuestsModal(){
     body=`<div class="desc">No quests yet. Describe an arc focus below and create one — it will design a set of connected quests with their own locations and characters.</div>`;
   }else{
     body=arcNames.map(a=>{
-      const rows=arcs[a].map(({q})=>{
+      // render quests in sequence order so the arc reads 1→N
+      const inArc=arcs[a].map(x=>x.q).sort((p,q)=>((p.seq??1e9)-(q.seq??1e9)));
+      const rows=inArc.map(q=>{
         const locName=(q.locationId&&locById(q.locationId))?locById(q.locationId).name:(q.location||"");
         const npcNm=q.charName||q.npcName||"";
         const npcP=q.npcId?(state.personas||[]).find(p=>p&&p.id===q.npcId):null;
         const npcState=npcP?(npcP.latent?"hidden":"revealed"):(npcNm?"not created":"");
         const meta=[locName?icon("pin")+" "+esc(locName):"", npcNm?icon("user")+" "+esc(npcNm)+(npcState?` · ${npcState}`:""):""].filter(Boolean).join(" · ");
-        return `<div class="card" style="padding:8px">
-          <b>${esc(q.title||"(untitled)")}</b>
-          ${q.desc?`<div class="desc">${esc(q.desc)}</div>`:""}
-          ${meta?`<div class="desc" style="margin-top:4px">${meta}</div>`:""}</div>`;
+        // status: done / active (playable now) / locked (waiting on an earlier quest)
+        const status=q.done?`<span style="color:var(--good)">done</span>`
+                    :(q.startActive!==false?`<span style="color:var(--accent2)">active</span>`
+                    :`<span style="opacity:.5">locked</span>`);
+        const doneBtn=(!q.done && q.startActive!==false)
+          ? `<button class="btn sec small" title="Mark this quest done (unlocks the next)" onclick="questMarkDoneUI('${q.id}')">✓ done</button>` : "";
+        return `<div class="card" style="padding:8px;${q.done?'opacity:.6':''}">
+          <div class="kvline" style="padding:0;align-items:flex-start">
+            <div style="min-width:0"><b style="${q.done?'text-decoration:line-through':''}">${esc(q.title||"(untitled)")}</b> <span class="desc">· ${status}</span>
+              ${q.desc?`<div class="desc">${esc(q.desc)}</div>`:""}
+              ${meta?`<div class="desc" style="margin-top:4px">${meta}</div>`:""}
+              ${q.done&&q.result?`<div class="desc" style="color:var(--good);opacity:.8">✓ ${esc(q.result)}</div>`:""}</div>
+            <div style="flex-shrink:0">${doneBtn}</div>
+          </div></div>`;
       }).join("");
       return `<div class="desc" style="margin:10px 0 4px;font-weight:600;color:var(--accent)">${icon("compass")} ${esc(a)}</div>${rows}`;
     }).join("");
@@ -16824,7 +16996,7 @@ function openQuestsModal(){
   const inpCss="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:14px";
   const m=document.createElement('div'); m.id="questsModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_closeQuestsModal()">×</button>
-   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch">
+   <div class="card editCard" style="max-height:88vh;height:auto;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0;flex:0 1 auto">
      <h3>${icon("compass")} Quests — ${esc(u.name||"")}</h3>
      <label>Arc focus</label>
      <textarea id="qmBrief" style="${inpCss};min-height:60px" placeholder="e.g. the Lilith arc — gaining forbidden power; or: a blackmail plot closing in on the family"></textarea>
@@ -16896,18 +17068,36 @@ async function questCreateNpcs(){
         existing.questIds=Array.from(new Set([...(existing.questIds||[]),q.id]));
         bound++; continue;
       }
-      const brief=`Name: ${name}. A character tied to the quest "${q.title||""}"${q.where||q.location?` at ${q.where||q.location}`:""}. ${String(q.desc||"").slice(0,300)} Build them as a full, world-consistent character who fits this arc.`;
+      // v20.7 — the quest NPC is BY DESIGN tied to this quest and, through it, to the player. Tell the
+      // generator so the character knows OF {{user}} and carries the quest's premise from THEIR side
+      // (expecting them, hunting them, holding what they seek, etc.). We also ask for an explicit
+      // user-tie + one-line relationship, which we store as an AUTHORED relationships["__user__"] entry
+      // — this both gives them player-knowledge AND suppresses the "you don't know them / stranger"
+      // payload block (which is gated off when an authored tie to __user__ exists).
+      const playerName=u.userName||state.user||"the player";
+      const brief=`Name: ${name}. A character at the CENTRE of the quest "${q.title||""}"${q.where||q.location?` at ${q.where||q.location}`:""}.\n`+
+        `QUEST (their side of it): ${String(q.desc||"").slice(0,400)}\n`+
+        `THE PLAYER is ${playerName}. This character is tied to ${playerName} THROUGH this quest — they may be the person ${playerName} must find, an ally who guides them, a rival or target, or the holder of what ${playerName} seeks. They already KNOW OF ${playerName} in the way the quest implies (expecting them, hunting them, wary of them, waiting for them…), NOT a blank stranger.\n`+
+        `Build them as a full, world-consistent character who fits this arc, AND include in your JSON two extra fields: "userTie" (a few words: how they stand to ${playerName} — e.g. "quest-giver", "the target", "reluctant ally", "the rival", "the one who holds the key") and "userRelationship" (ONE sentence, from THIS character's point of view, on who ${playerName} is to them and why this quest brings them together).`;
       let card=null;
       try{ card=await generateBio(brief,null,{universe:u}); }catch(e){ card=null; }
       if(!card){ continue; }
       const pid="p_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4)+Math.floor(Math.random()*99);
+      // Authored tie to the player (suppresses the stranger block; gives them quest-grounded knowledge).
+      const userTie=String(card.userTie||"").trim().slice(0,40);
+      const userRel=String(card.userRelationship||"").trim().slice(0,300);
+      const rels={};
+      if(userTie||userRel){
+        rels["__user__"]={tie:userTie||"connected through the quest",
+          relationship:userRel||`${playerName} is bound up with ${name} through: ${String(q.title||"this quest")}.`};
+      }
       const p=Object.assign({
         id:pid, universeId:u.id, name:(card.name||name).slice(0,60),
         avatar:card.avatar||"", image:null,
         personality:card.personality||"", traits:card.traits||"", goals:card.goals||"",
         backstory:card.backstory||"", style:card.style||"",
         look:card.look||"", instructions:card.instructions||"", interject:card.interject||"",
-        routine:card.routine||"",
+        routine:card.routine||"", relationships:rels,
         latent:true, boundLocId:q.locationId||null, questIds:[q.id]
       });
       state.personas.push(p);
@@ -19836,6 +20026,7 @@ async function init(){
 }
 function init2(){
   syncSettingsUI();loadModels(false);
+  _wireAudioUnlock();   // v20.7 — prime audio playback on first user gesture (TTS autoplay unlock)
   applyUniverseProfile(state.curUniverse);   // resolve per-universe player identity on load
   // Pull full image/video history from IndexedDB (large quota). If legacy localStorage
   // images were loaded by loadState, persistImages() below writes them into IDB once,

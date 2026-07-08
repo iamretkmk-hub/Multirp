@@ -359,6 +359,20 @@
   #calModal .card{overflow:visible;}
   a{color:var(--accent);}
   .hide{display:none!important;}
+  /* ---- character page (per-character hub) ---- */
+  .cpHead{display:flex;gap:12px;align-items:center;margin-bottom:6px;}
+  .cpAvatar{width:64px;height:64px;border-radius:16px;overflow:hidden;flex-shrink:0;background:var(--surface);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
+  .cpAvatar img{width:100%;height:100%;object-fit:cover;border-radius:0;max-height:none;}
+  .cpAvatar .cpEmoji{font-size:34px;}
+  .cpField{margin:0 0 2px;}
+  .cpLabel{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:2px;}
+  .cpVal{font-size:13.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;}
+  .cpSection{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
+  .cpSection .subhead{margin-bottom:8px;}
+  .cpGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;}
+  .cpGrid .galCell{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--surface);}
+  .cpGrid .galCell img{width:100%;height:100%;object-fit:cover;cursor:pointer;max-height:none;border-radius:0;}
+  .cpVids{display:flex;flex-direction:column;gap:12px;}
   .pcard{display:flex;gap:12px;align-items:center;}
   .pcard .pav{font-size:36px;flex-shrink:0;}
   /* ---- modern character grid (chatbot-style cards) ---- */
@@ -5192,8 +5206,24 @@ async function hydrateMedia(){
       state.images=[...restored,...state.images];
     }
     if(vids&&vids.length){ state.videos=vids.sort((a,b)=>(a.date||0)-(b.date||0)); }
+    bindMediaToUniverse();
     const gal=document.getElementById('galleryGrid'); if(gal) renderGallery();
   }catch(e){ console.warn("hydrateMedia failed",e); }
+}
+// Make every diary, image and video UNIVERSE-bound (and keep them character-bound). New records are
+// already stamped at creation; this backfills legacy records that carry a characterId/ownerId but no
+// universeId by deriving the universe from that character. Media is stamped IN MEMORY only (running
+// each hydrate is deterministic and avoids persistVideos' 20-item cap eating history); diaries and
+// other memories are stamped and persisted (a full, lossless write). Idempotent.
+function bindMediaToUniverse(){
+  try{
+    const uOf=id=>{ const p=(state.personas||[]).find(x=>x&&x.id===id); return p?p.universeId:null; };
+    (state.images||[]).forEach(r=>{ if(r&&!r.universeId&&r.characterId){ const u=uOf(r.characterId); if(u)r.universeId=u; } });
+    (state.videos||[]).forEach(r=>{ if(r&&!r.universeId&&r.characterId){ const u=uOf(r.characterId); if(u)r.universeId=u; } });
+    let mn=0;
+    (state.memory||[]).forEach(m=>{ if(m&&!m.universeId&&m.ownerId){ const u=uOf(m.ownerId); if(u){m.universeId=u;mn++;} } });
+    if(mn && typeof persistMemory==="function")persistMemory();
+  }catch(e){}
 }
 
 /* ---- helpers ---- */
@@ -6588,7 +6618,7 @@ async function dubAsVideo(mid){
     const videoUrl=await atlasLipsync(m.imgSrc||m.img,audioUrl,setStat);
     if(!videoUrl)throw{friendly:"No video came back."};
     m.video=videoUrl; m.vidState="done";
-    state.videos.push({id:"vid_"+Date.now(),url:videoUrl,prompt:"(dubbed) "+ttsCleanText(m.content).slice(0,80),character:(p&&p.name)||m.name||"",date:Date.now(),dubbed:true});
+    state.videos.push({id:"vid_"+Date.now(),url:videoUrl,prompt:"(dubbed) "+ttsCleanText(m.content).slice(0,80),character:(p&&p.name)||m.name||"",characterId:(m.speakerId||(p&&p.id)||null),universeId:(curChat()&&curChat().universeId)||null,date:Date.now(),dubbed:true});
     if(typeof persistVideos==="function")persistVideos();
     markChatDirty&&markChatDirty(curChat()); persistChats(); refreshBubble(mid); updateStorage();
     toast("Dubbed video ready");
@@ -10666,7 +10696,10 @@ function renderPersonas(){
         toast(`${p.name} revived — back in play`);
         return;
       }
-      editPersona(p.id);
+      // The pencil goes straight to the editor; tapping the card opens the character page (profile
+      // + everything bound to them: diaries, images, videos).
+      if(ev.target.closest('[data-edit]')){ ev.stopPropagation(); editPersona(p.id); return; }
+      openCharacterPage(p.id);
     });
     el.appendChild(c);
   });
@@ -10675,6 +10708,107 @@ function renderPersonas(){
   add.innerHTML=`<div class="cc-plus">＋<small>New character</small></div>`;
   add.addEventListener('click',()=>editPersona(null));
   el.appendChild(add);
+}
+
+/* ===== CHARACTER PAGE ===== a per-character hub: their profile plus everything BOUND to them in
+   this universe — diaries, images and videos. Built as a scrollable modal (like the diary reader).
+   Opened by tapping a character card; the card's pencil still opens the editor directly. */
+let _charPageId=null;
+function _charPageClose(){ const m=document.getElementById('charPageModal'); if(m)m.remove(); _charPageId=null; }
+// Media (image/video record) belongs to persona p when its characterId matches, or — for legacy
+// records with no id — when p's name is in the comma-joined character field.
+function _mediaOfChar(r,p){
+  if(!r||!p)return false;
+  if(r.characterId)return r.characterId===p.id;
+  return String(r.character||"").split(",").map(s=>s.trim()).includes(p.name);
+}
+// True when a media/diary record belongs to the given universe (untagged legacy → treated as in).
+function _mediaInUni(r,uniId){
+  if(!r)return false;
+  if(r.universeId)return r.universeId===uniId;
+  if(r.characterId){ const q=(state.personas||[]).find(x=>x&&x.id===r.characterId); if(q)return q.universeId===uniId; }
+  return true;
+}
+function openCharacterPage(id){
+  const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p)return;
+  const uniId=p.universeId;
+  const uni=universeById(uniId)||curUniverseObj();
+  // Everything bound to this character IN THIS UNIVERSE.
+  const diaries=(state.memory||[]).filter(m=>m&&m.source==="diary"&&m.ownerId===p.id&&(!m.universeId||m.universeId===uniId));
+  const diaryDays=[...new Set(diaries.map(m=>m.gameDay||1))].sort((a,b)=>a-b);
+  const imgs=(state.images||[]).filter(r=>r&&r.url&&_mediaInUni(r,uniId)&&_mediaOfChar(r,p)).slice().reverse();
+  const vids=(state.videos||[]).filter(r=>r&&r.url&&_mediaInUni(r,uniId)&&_mediaOfChar(r,p)).slice().reverse();
+
+  const cover=p.image||p.diaryCover||null;
+  const look=(typeof lookProse==="function")?lookProse(p.look):"";
+  const field=(label,val)=>val&&String(val).trim()
+    ? `<div class="cpField"><div class="cpLabel">${label}</div><div class="cpVal">${esc(String(val).trim())}</div></div>` : "";
+  const rel=(p.relationshipsGen&&p.relationshipsGen.trim())||(p.socialGraph&&p.socialGraph.trim())||(p.socialGraphAuto&&p.socialGraphAuto.trim())||"";
+
+  // ---- Diaries block: book cards → the diary reader ----
+  let diaryHtml="";
+  if(diaryDays.length){
+    const dcover=p.diaryCover||p.image||null;
+    diaryHtml=`<div class="cpSection"><div class="subhead">${icon("book")} Diary <span class="desc">${diaryDays.length} day${diaryDays.length===1?"":"s"} · ${diaries.length} entr${diaries.length===1?"y":"ies"}</span></div>
+      <div class="bookGrid"><div class="bookCard" onclick="_charPageClose();openDiaryReader('${p.id}')">
+        <div class="bk-spine"></div>
+        ${dcover?`<img class="bk-img" src="${dcover}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
+        <div class="bk-grad"></div>
+        <div class="bk-info"><div class="bk-name">${esc(p.name)}</div><div class="bk-sub">Tap to read</div></div>
+      </div></div></div>`;
+  }
+  // ---- Images block: thumbnail grid → swipe viewer ----
+  let imgHtml="";
+  if(imgs.length){
+    const cells=imgs.map((r,i)=>`<div class="galCell"><img src="${r.url}" data-cpimg="${i}" alt=""></div>`).join("");
+    imgHtml=`<div class="cpSection"><div class="subhead">${icon("image")} Images <span class="desc">${imgs.length}</span></div><div class="grid cpGrid">${cells}</div></div>`;
+  }
+  // ---- Videos block ----
+  let vidHtml="";
+  if(vids.length){
+    const cells=vids.map(v=>{
+      const remote=(typeof httpsMedia==="function")?httpsMedia(v.url):v.url;
+      return `<div class="galVidWrap"><video src="${remote}" controls playsinline loop preload="metadata" referrerpolicy="no-referrer" style="width:100%;border-radius:12px;border:1px solid var(--border);background:#000"></video>${v.prompt?`<div class="desc" style="margin-top:4px">${esc(String(v.prompt).slice(0,120))}</div>`:""}</div>`;
+    }).join("");
+    vidHtml=`<div class="cpSection"><div class="subhead">${icon("film")} Videos <span class="desc">${vids.length}</span></div><div class="cpVids">${cells}</div></div>`;
+  }
+  const mediaEmpty=(!diaryDays.length&&!imgs.length&&!vids.length)
+    ? `<div class="desc" style="text-align:center;margin-top:6px">No diaries, images or videos bound to ${esc(p.name)} yet. They appear here as you play and generate media.</div>` : "";
+
+  _charPageClose();
+  _charPageId=id;
+  const m=document.createElement('div'); m.id="charPageModal"; m.className="modal show";
+  m.innerHTML=`
+    <button class="x" onclick="_charPageClose()">×</button>
+    <div class="card editCard">
+      <div class="cpHead">
+        <div class="cpAvatar">${cover?`<img src="${cover}" alt="">`:`<span class="cpEmoji">${esc(p.avatar||"🎭")}</span>`}</div>
+        <div style="flex:1;min-width:0">
+          <h3 style="margin:0">${esc(p.name)}${p.removed?` <span class="desc">(removed)</span>`:""}</h3>
+          <div class="desc" style="margin-top:2px">${uni?esc((uni.avatar||"🌌")+" "+uni.name):""}</div>
+        </div>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <button class="btn sec small" onclick="_charPageClose();editPersona('${p.id}')">${icon("edit")} Edit character</button>
+        ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${p.id}')">${icon("book")} Read diary</button>`:""}
+      </div>
+      ${field("Personality",p.personality)}
+      ${field("Backstory",p.backstory)}
+      ${field("Core traits",p.traits)}
+      ${field("Goals & ambitions",p.goals)}
+      ${field("Speaking style",p.style)}
+      ${field("Appearance",look)}
+      ${field("Relationships",rel)}
+      ${diaryHtml}${imgHtml}${vidHtml}${mediaEmpty}
+    </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)_charPageClose(); });
+  // Image thumbnails → the shared swipe viewer, scoped to THIS character's images.
+  const viewUrls=imgs.map(r=>r.url);
+  m.querySelectorAll('[data-cpimg]').forEach(el=>{
+    el.onclick=()=>{ const i=+el.getAttribute('data-cpimg')||0; const r=imgs[i];
+      openImgViewer(viewUrls,i,`${(r&&r.character)||p.name}${r&&r.prompt?" — "+r.prompt:""}`); };
+  });
+  document.body.appendChild(m);
 }
 // (Legacy) entry by character now just enters that character's universe chat
 // and brings them nearby — kept for any remaining callers.

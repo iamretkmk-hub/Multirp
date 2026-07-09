@@ -3002,8 +3002,15 @@ READ THEM HOLISTICALLY, NOT IN ISOLATION. The same beat means different things d
 
 These are STATES, not judgments. Do not factor in or re-score long-term trust, love, or respect — only the immediate reaction to the last few lines. Most ordinary beats move these only a little (±5 to ±15). A genuinely charged moment can move one sharply (±20 to ±40). If nothing notable happened for an axis, return 0 for it.
 
-You are given the character's current short-term values, their standing sentiment (context), and the recent moment. Return ONLY strict JSON of per-axis deltas:
-{"desire": <delta>, "comfort": <delta>, "fear": <delta>, "agitation": <delta>, "note": "<≤8-word reason, e.g. 'flustered by his closeness'>"}`;
+You are given the character's current short-term values, their standing sentiment (context), and the recent moment.
+
+The "note" is the most important part — it is read by the actor voicing this character and is meant to STEER their very next reply, so do NOT write a terse label. Write 1-2 vivid, present-tense sentences that (a) name what this character is feeling right now and what in the moment caused it, and (b) spell out how that feeling should visibly COLOR their next line: their tone, pace, word choice, and body language — what they lean into, what they hold back, what leaks out despite them. Make the behavioural impact concrete and playable.
+- Weak (do NOT do this): "flustered by his closeness".
+- Strong (do this): "His nearness has her flustered and off-balance; she keeps her answers clipped and half-turned away, a beat too quick, fighting down a smile she doesn't want him to see."
+- Strong: "The jab landed and she's simmering — her voice drops flat and precise, courtesy stretched thin over the anger, each word placed like she's deciding whether to let it show."
+
+Return ONLY strict JSON:
+{"desire": <delta>, "comfort": <delta>, "fear": <delta>, "agitation": <delta>, "note": "<1-2 sentences: the feeling right now AND how it should color their next reply's tone, pace, and body language>"}`;
 
 // W6 GUARD — the relationship CODE (blankRel, parsers, clamps, renderers) is data-driven over
 // REL_DIMS, so adding an axis scales automatically. The two tracker PROMPTS above are NOT: they
@@ -5409,6 +5416,22 @@ let _followAfterSend=false;
 let _progScrollUntil=0;
 function setScrollTop(list,v){ if(!list)return; _progScrollUntil=Date.now()+120; list.scrollTop=v; }
 function _isProgrammaticScroll(){ return Date.now() < _progScrollUntil; }
+// A single synchronous scroll-to-bottom lands "high above" the newest line whenever the just-
+// appended content lays out AFTER the write: an avatar/image loads, a narration wraps to more
+// lines, a font paints — so scrollHeight was momentarily too small and the pin fell short. A full
+// renderChat() already re-pins across several frames; the INCREMENTAL append + typing-indicator
+// paths only pinned once, which is the "a new message / an event jumps the chat high above" bug.
+// pinChatBottomSoon() keeps re-pinning to the true bottom for a short window as late content
+// settles. A deliberate user scroll-UP cancels it (see the chatList scroll listener).
+let _pinBottomUntil=0;
+function pinChatBottomSoon(){
+  const el=(typeof chatScrollEl==="function")?chatScrollEl():document.getElementById('chatList'); if(!el) return;
+  setScrollTop(el,el.scrollHeight); if(typeof hideNewMsgPill==="function")hideNewMsgPill();
+  _pinBottomUntil=Date.now()+450;
+  const run=()=>{ const l=(typeof chatScrollEl==="function")?chatScrollEl():document.getElementById('chatList');
+    if(l && _renderedChatId===state.curChat && Date.now()<_pinBottomUntil){ setScrollTop(l,l.scrollHeight); if(typeof hideNewMsgPill==="function")hideNewMsgPill(); } };
+  requestAnimationFrame(run); setTimeout(run,80); setTimeout(run,200); setTimeout(run,450);
+}
 function _drainPresentQueue(){
   if(_presentPlaying) return;
   const job=_presentQueue.shift();
@@ -5470,7 +5493,7 @@ function appendOneBubble(m){
   // sent were fine because _followAfterSend was set). Now a presented beat only pulls the view down
   // if you were already at the bottom or you sent this turn; otherwise it surfaces the "↓ New" pill.
   const _following = wasAtBottom || _followAfterSend;
-  if(_following){ setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
+  if(_following){ pinChatBottomSoon(); }
   else { showNewMsgPill(); }
 }
 
@@ -9273,9 +9296,14 @@ async function runShortTermRel(chat){
         if(delta){ o.st[k]=applyFastDelta(o.st[k],delta); touched=true; }
         else { o.st[k]=decayFast(o.st[k],baseline,0.18); }
       });
+      // Latest fast read, in full: the verbose "how it colors the next reply" note. Surfaced into
+      // the roleplay payload's RIGHT-NOW FEELING block so the momentary charge reaches the actor as
+      // playable behaviour, not just as intensity words. Sibling of o.st (never an axis key, so no
+      // clamp/decay touches it); goes stale-but-harmless once the fast axes decay (gated at injection).
+      if(touched && j.note && String(j.note).trim()){ o.stNote=String(j.note).trim().slice(0,300); o.stNoteDay=chat.gameDay||1; }
       // Log a compact episode for end-of-day consolidation (cap the log).
       if(touched){
-        o.episodes.push({day:chat.gameDay||1, d:REL_FAST.map(k=>Math.round(o.st[k])), note:(j.note||"").slice(0,60)});
+        o.episodes.push({day:chat.gameDay||1, d:REL_FAST.map(k=>Math.round(o.st[k])), note:(j.note||"").slice(0,180)});
         if(o.episodes.length>40)o.episodes=o.episodes.slice(-40);
         // Accumulate EVERY fast opinion generated during the day. The latest is what reaches the
         // roleplay payload (via o.st), but the whole day's set is kept here and handed to the
@@ -9285,7 +9313,7 @@ async function runShortTermRel(chat){
         o.dayOpinions.push({
           day:chat.gameDay||1,
           t:Date.now(),
-          note:(j.note||"").slice(0,80),
+          note:(j.note||"").slice(0,220),
           st:REL_FAST.reduce((acc,k)=>{acc[k]=Math.round(o.st[k]);return acc;},{})
         });
         if(o.dayOpinions.length>60)o.dayOpinions=o.dayOpinions.slice(-60);
@@ -12585,11 +12613,11 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     player:["player_intro","player_bg","player_look"],
     ooc:["ooc"],multi_format:["multi_format"],
     situation:["situation_leaving","situation_arriving"],
-    scene_now:["scene_header","scene_loc","scene_loc_sub","scene_subareas","scene_privacy","scene_present","scene_alone","scene_apart"],
+    scene_now:["scene_header","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_alone","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
     private_intent:["intent_warm","intent_hostile"],
     recent_memories:["mem_recent_header"],distant_memories:["mem_distant_header"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply"],
-    feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
+    feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
     final_guardrails:["heat_advance","rails_header","rail_voice","rail_single_multi","rail_single_solo","rail_dialogue","rail_beat","rail_question","rail_consistent_known","rail_consistent_stranger"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
@@ -12767,20 +12795,31 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   // --- head: multi-character path ---
   bio_intro_multi:`You are {{char}}, one character in a multi-character roleplay with {{user}}. Stay fully in character as {{char}} only. Never break character or mention being an AI. You speak and act ONLY as {{char}} — never voice {{user}}, the narrator, or any other character.`,
   others_header:`# OTHERS PRESENT (within earshot)`,
-  others_footer:`You may address {{user}} or any of them by name, but you only ever speak as {{char}}.`,
+  others_footer:`These people, together with {{user}}, are the ONLY people in this scene right now. You may address {{user}} or any of them by name, but you speak ONLY as {{char}} — never voice {{user}}, the narrator, or anyone else. Do not answer for another character, and do not bring in, reply to, or refer to anyone who isn't present as though they were here.`,
   situation_leaving:`# SITUATION\n{{char}} is leaving the scene right now. Give a brief parting beat — a final line, gesture, or exit consistent with why you're going. Keep it short.`,
   situation_arriving:`# SITUATION\n{{char}} has just entered the scene. Give a brief entrance beat — how you arrive and your first words or action as you join.`,
   // --- tail: scene ---
   scene_header:`# SCENE RIGHT NOW`,
   scene_loc:`>> YOUR CURRENT LOCATION: {{where}}. THIS IS WHERE YOU ARE RIGHT NOW. << (This location is authoritative for this turn — it overrides any usual or home location.)`,
   scene_loc_sub:` — specifically the {{sub}}`,
+  // Whose ground this is — home/host dynamics. Fires only when the current place has a resident.
+  scene_here_yours:`This place is YOUR home — you live here. You are on your own ground: everyone else present is a guest or visitor unless they're noted as living here too. Carry the ease, ownership, and small authority of someone in their own space.`,
+  scene_here_host:`This place is {{host}}'s home — {{host}} lives here and you do not. You are a guest/visitor on their ground, not your own. Let that show: it is {{host}}'s space and {{host}} is the host here.`,
   scene_subareas:`These are the sub-areas inside {{loc}} (and how private each is): {{areas}}.\nYou are in the {{sub}} with {{target}}. Each sub-area is its own earshot — people in another sub-area can't hear you here. If you want privacy you may suggest moving to a more private sub-area.`,
   scene_privacy:`Privacy here: {{label}}.`,
-  scene_present:`Also physically present with you: {{names}}.`,
-  scene_alone:`You are alone with {{target}} right now.`,
+  scene_present:`Physically present with you right now — and the ONLY people who can see or hear you — are: {{names}}. Speak and react only to those here. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot, so don't talk to them or act as if they can respond.`,
+  scene_alone:`You are alone with {{target}} right now — no one else is present or within earshot. Do not address or bring in anyone who isn't here.`,
   // v19.71 — shown INSTEAD of scene_present/scene_alone when the VIEWER is in a different sub-area
   // than everyone else (e.g. a fresh arrival standing at the entrance).
   scene_apart:`You are at {{sub}}, apart from the others. You cannot see or hear what happens in the other areas — you only know what you could perceive from here.`,
+  // --- tail: transition awareness — a blunt call-out of what changed since your last reply.
+  // Emitted at the TOP of SCENE RIGHT NOW only when something actually just changed; otherwise absent.
+  scene_changed_header:`⚠️ WHAT JUST CHANGED (this happened moments ago — react to it before anything else, and stay consistent with it):`,
+  scene_changed_loc:`You have just MOVED. You are now at {{loc}} — a moment ago you were at {{prev}}. Speak and act as someone who has only just arrived here: take in the new surroundings, and do NOT continue as if you were still at {{prev}}.`,
+  scene_changed_day:`Time has just JUMPED forward — it is now Day {{day}}, {{period}} ({{gap}}). Don't pick up mid-conversation as if no time passed; let the change of day and time show in what you say and do.`,
+  scene_changed_period:`Time has just moved on — it is now {{period}} (it was {{prev}} a moment ago). Let the new time of day register; don't act as though it were still {{prev}}.`,
+  scene_changed_arrived:`Just ARRIVED, now here with you: {{names}}. They were NOT here a moment ago — notice them and react; do not treat them as if they'd been present all along.`,
+  scene_changed_left:`Just LEFT the scene: {{names}}. They are gone now — do not speak to them, answer them, or act as if they can still hear you.`,
   // --- tail: private intent ---
   intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now (a {{kind}} — {{aim}}). You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.`,
   intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
@@ -12791,12 +12830,13 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   guidance_open:`# RESPONSE GUIDANCE\nYou are {{self}}. Continue the scene with your single next turn`,
   guidance_target:`, responding to {{target}}`,
   guidance_close:`. Advance the moment and leave room for {{who}} to react.`,
-  guidance_reply:`You are replying to {{target}}'s most recent message — the final line in the transcript above.`,
+  guidance_reply:`You are replying to {{target}}'s most recent message — the final line in the transcript above. Respond to what {{target}} actually just said or did. If that line was aimed at someone else, react as yourself to it rather than answering in the other person's place, and don't answer a question that wasn't put to you.`,
   // --- tail: feelings ---
   feel_header:`# HOW YOU FEEL TOWARD {{target_up}}\nThese are your private feelings — let them shape how you speak and act, but never state them outright.`,
   feel_lasting:`LASTING / CONSIDERED VIEW (your settled, filtered opinion — this is the real foundation and should govern your behaviour): {{desc}}`,
   feel_lasting_alt:`LASTING / CONSIDERED VIEW (your settled, filtered opinion — governs your behaviour): you {{considered}}.`,
-  feel_momentary:`RIGHT-NOW FEELING (a momentary, impulsive pull from this scene — it colors your tone and may tempt a small slip, but it must NOT override the lasting view above or push you out of character): you are {{momentary}} in this moment.`,
+  feel_momentary:`RIGHT-NOW FEELING — this is the live emotional charge you carry into THIS reply. It is momentary and impulsive, so it must NOT override the lasting view above or push you out of character — but it MUST visibly shape HOW you deliver this turn. Let it into your tone, your rhythm, your word choice, the set of your body — the same words land differently depending on this charge, and yours should carry it. Right now you are {{momentary}} in this moment. Do NOT name or explain the feeling; let it leak through delivery, never as a stated emotion.`,
+  feel_momentary_impact:`How it's pulling at you right now, and how it should read: {{impact}}\nCarry exactly that into your very next line — in the way you speak and hold yourself, shown through delivery, never announced.`,
   feel_tension_desire:`This heat isn't backed by deeper feeling — act on it and you'd likely feel a flush of regret or self-consciousness after.`,
   feel_tension_anger:`You're more provoked than the situation truly warrants — a sharp word may escape, and you might quietly regret the overreaction.`,
   feel_tension_fear:`The flash of fear sits oddly against how much you actually trust them — it may make you flinch or overreact, then feel foolish.`,
@@ -13021,6 +13061,56 @@ function tagLastForTarget(history){
   return out;
 }
 
+/* TRANSITION AWARENESS. Characters slip right after the scene shifts: they keep talking as if still
+   at the old place, ignore who just walked in or out, or miss that time jumped. Every generated
+   reply is stamped (stampStatus) with the day/period/location it happened in, so the LAST reply's
+   stamp is exactly "where the character last took stock". Comparing the CURRENT scene to that stamp
+   tells us what changed since; any presence notes dropped AFTER that reply are the arrivals/exits the
+   character hasn't acknowledged yet. We surface those deltas as a blunt, present-tense call-out placed
+   at the very top of the tail SCENE RIGHT NOW block — closest to generation, where compliance is
+   highest. Returns "" when nothing changed since the last reply, so a steady scene is never nagged.
+   Location moves are announced as a move (not as everyone "arriving", which SCENE RIGHT NOW already
+   covers), so arrivals are suppressed on a move. */
+function sceneChangeNotice(chat,selfId){
+  try{
+    if(!chat||!Array.isArray(chat.messages)||!chat.messages.length)return "";
+    // Baseline = the most recent real character reply (only those carry a .status stamp).
+    let bi=-1, base=null;
+    for(let i=chat.messages.length-1;i>=0;i--){ const m=chat.messages[i]; if(m&&m.status){ bi=i; base=m.status; break; } }
+    if(!base)return "";   // opening scene — SCENE RIGHT NOW already establishes it; nothing to contrast.
+    const lines=[];
+    const curLoc=(chat.location||"").trim(), prevLoc=(base.location||"").trim();
+    const curDay=chat.gameDay||1, prevDay=base.day||1;
+    const curPer=(typeof chatPeriod==="function")?chatPeriod(chat):"", prevPer=base.period||"";
+    const locChanged = !!(curLoc && prevLoc && curLoc!==prevLoc);
+    if(locChanged)lines.push(fillTpl(blkTpl("scene_changed_loc"),{loc:curLoc,prev:prevLoc}));
+    // Time: a day jump takes precedence over (and subsumes) a plain period change.
+    if(curDay>prevDay){
+      const d=curDay-prevDay, gap=d===1?"the next day":`${d} days later`;
+      lines.push(fillTpl(blkTpl("scene_changed_day"),{day:curDay,period:curPer,gap:gap}));
+    }else if(curPer && prevPer && curPer!==prevPer){
+      lines.push(fillTpl(blkTpl("scene_changed_period"),{period:curPer,prev:prevPer}));
+    }
+    // Presence: arrivals/exits recorded AFTER the last reply — i.e. not yet acknowledged. Someone who
+    // both left and returned (or vice-versa) in that span nets out.
+    const enter=new Set(), leave=new Set();
+    for(let i=bi+1;i<chat.messages.length;i++){ const m=chat.messages[i]; if(!m||!m.presenceNote)continue;
+      (m.enteredIds||[]).forEach(id=>enter.add(id));
+      (m.exitedIds||[]).forEach(id=>leave.add(id));
+    }
+    [...leave].forEach(id=>{ if(enter.has(id)){ enter.delete(id); leave.delete(id); } });
+    const nm=id=>{ if(id===selfId)return null; const c=resolveChar(id,chat); return (c&&c.name)?c.name:null; };
+    if(!locChanged){
+      const arr=[...enter].map(nm).filter(Boolean);
+      if(arr.length)lines.push(fillTpl(blkTpl("scene_changed_arrived"),{names:arr.join(", ")}));
+    }
+    const gone=[...leave].map(nm).filter(Boolean);
+    if(gone.length)lines.push(fillTpl(blkTpl("scene_changed_left"),{names:gone.join(", ")}));
+    if(!lines.length)return "";
+    return `${blkTpl("scene_changed_header")}\n`+lines.map(l=>`- ${l}`).join("\n");
+  }catch(e){ return ""; }
+}
+
 /* Build the single system message that goes AFTER the dialogue.
    opts: { chat, selfId, selfName, targetName, targetId, multi, injected }
    - targetId === "__user__" for the player, otherwise a character id (or null/unknown).
@@ -13084,6 +13174,20 @@ function buildTailBlocks(opts){
       try{ if(_here2&&Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){ const _ps=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat)); if(_ps)_curSubName=_ps.name; } }catch(e){}
       const _where=chat.location.trim()+(_curSubName?fillTpl(blkTpl("scene_loc_sub"),{sub:_curSubName}):"");
       sn+=`\n${fillTpl(blkTpl("scene_loc"),{where:_where})}`;
+      // Whose ground is this? If the current place has resident(s), anchor the host/guest dynamic so
+      // a character behaves like the owner in their own home and like a visitor in someone else's —
+      // part of "whose home they are in" continuity. Fires only when a resident tie actually exists.
+      try{
+        const _res=_here2?residentsOf(_here2):[];
+        if(_res.length){
+          if(selfId && _res.some(r=>r.id===selfId)){
+            sn+=`\n${blkTpl("scene_here_yours")}`;
+          }else{
+            const _host=_res.map(r=>r.name).filter(Boolean).join(" & ");
+            if(_host) sn+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_host})}`;
+          }
+        }
+      }catch(e){}
     }
     // Sub-areas (privacy) + how private each area / the venue is, so a character can reason about
     // discretion ("not here, too many ears — let's move to the back"). Mirrors the director context.
@@ -13117,6 +13221,9 @@ function buildTailBlocks(opts){
       }
       else { sn+=`\n${fillTpl(blkTpl("scene_alone"),{target:(targetName||state.user)})}`; }
     }
+    // If the scene just shifted (place/time/who's here), lead the block with a blunt call-out of
+    // exactly what changed since this character last spoke, so they react to it instead of drifting.
+    {const chg=sceneChangeNotice(chat,selfId); if(chg)sn=`${chg}\n\n${sn}`;}
     B.scene_now=sn;
     // v19.2 — trackers & calendar are their OWN movable blocks now (previously appended inside
     // SCENE RIGHT NOW with a plain newline; as separate blocks they join with the standard
@@ -13180,6 +13287,12 @@ function buildTailBlocks(opts){
       }
       if(momentary){
         fb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary})}`;
+        // The verbose, playable "how it colors your next reply" note from the latest fast read.
+        // Only while there's an actual live momentary lean (momentary non-empty) — once the fast
+        // axes decay back down, the note is stale and we stop surfacing it rather than clearing it.
+        if(o.stNote && o.stNote.trim()){
+          fb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
+        }
         const tension=relImpulseTension(o);
         if(tension==="desire") fb+=" "+blkTpl("feel_tension_desire");
         else if(tension==="anger") fb+=" "+blkTpl("feel_tension_anger");
@@ -13946,7 +14059,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(list)list.addEventListener('scroll',()=>{
     if(_isProgrammaticScroll()) return;        // ignore our own scrollTop writes (trim, follow, snap)
     if(_presentPlaying) return;                 // during an active turn roll, ignore layout-induced scrolls
-    if(isNearBottom(list)){hideNewMsgPill();} else {_followAfterSend=false;}
+    if(isNearBottom(list)){hideNewMsgPill();} else {_followAfterSend=false;_pinBottomUntil=0;}   // a real scroll-up cancels the bottom catch-up
   });
 });
 
@@ -13995,12 +14108,15 @@ function renderChat(){ return perf("renderChat",()=>{
   const _wantBottom = _forceBottomOnce || _wasFollowing;
   _forceBottomOnce=false;
   if(_wantBottom){ setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
-  else if(_anchorMid){
+  else {
     // Put the scrolled-up reader back on the exact line they were reading; surface the pill so
-    // they know new content landed below instead of yanking them to it (or to the top).
-    const _an=list.querySelector('[data-mid="'+_anchorMid+'"]');
-    if(_an) setScrollTop(list, _an.offsetTop - _anchorOff);
-    showNewMsgPill();
+    // they know new content landed below instead of yanking them to it. If we couldn't resolve
+    // that anchor (no captured mid, or the node fell out of the render window), land at the
+    // BOTTOM rather than leaving scrollTop at 0 — an unresolved anchor used to silently park the
+    // whole view at the very top (the "chat jumps high above" failure on a mid-scene rebuild).
+    const _an=_anchorMid?list.querySelector('[data-mid="'+_anchorMid+'"]'):null;
+    if(_an){ setScrollTop(list, _an.offsetTop - _anchorOff); showNewMsgPill(); }
+    else { setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
   }
   const _pin=()=>{ const el=document.getElementById('chatList'); if(el && _renderedChatId===state.curChat && _wantBottom && isNearBottom(el)){ setScrollTop(el,el.scrollHeight); } };
   requestAnimationFrame(_pin);
@@ -14053,7 +14169,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
     _renderedCount=Math.min(msgs.length,RENDER_WINDOW);
     // Only follow to the bottom if the user was already there (or just sent a message this turn);
     // otherwise keep their position and let them know new content arrived.
-    if(wasAtBottom||_followAfterSend){ setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
+    if(wasAtBottom||_followAfterSend){ pinChatBottomSoon(); }
     else { showNewMsgPill(); }
   }
   renderImageRail();
@@ -14503,7 +14619,7 @@ async function sendMessage(){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";{const _sp=present[0];typing.innerHTML=`<div class="meta">${avatarHTML(_sp)}${esc((_sp||{name:"…"}).name)}</div><div class="typing"><span></span><span></span><span></span></div>`;}
-  list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)setScrollTop(list,list.scrollHeight);
+  list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();
   document.getElementById('sendBtn').disabled=true;
 
   try{
@@ -14608,7 +14724,7 @@ async function sendTextMessage(chat,p,body){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div'); typing.className="bubble ai txtmsg";
   typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){ list.appendChild(typing); if(isNearBottom(list))setScrollTop(list,list.scrollHeight); }
+  if(list){ list.appendChild(typing); if(isNearBottom(list))pinChatBottomSoon(); }
   try{
     const bio=charBioBlock(p);
     let rel="";
@@ -15148,7 +15264,7 @@ async function playCharacterTurn(chat,p,addressed){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)setScrollTop(list,list.scrollHeight);}
+  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
   try{
     let injected={recent:[],distant:[]};
     if(state.mem && state.memory.length){
@@ -18645,11 +18761,15 @@ async function resolveActiveEvent(chat,how){
     const tid=ev.participant.charId;
     chat.presentIds=(chat.presentIds||[]).filter(x=>x!==tid);
     const t=(chat.tempChars||[]).find(x=>x.id===tid);
-    chat.activeEvent=null;persistChats();renderChat();updateChatHeader();
+    // Only ONE narration beat was appended — render it incrementally (follows the bottom if the
+    // reader is there, surfaces the "↓ New" pill otherwise). A full renderChat() here tore the
+    // window down and rebuilt it, which is what jumped the view off the newest line when an event
+    // resolved. (Presence changed too, but that never alters existing message bubbles.)
+    chat.activeEvent=null;persistChats();appendNewBubbles();updateChatHeader();
     if(t)setTimeout(()=>offerSaveTemp(chat.id,tid),400);
     return;
   }
-  chat.activeEvent=null;persistChats();renderChat();updateChatHeader();
+  chat.activeEvent=null;persistChats();appendNewBubbles();updateChatHeader();
 }
 
 // Offer to promote a temporary character into a permanent saved card.
@@ -18710,7 +18830,7 @@ async function playSingleReaction(chat,p,eventText){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)setScrollTop(list,list.scrollHeight);}
+  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
   try{
     let injected={recent:[],distant:[]};
     if(state.mem && state.memory.length){try{

@@ -11673,7 +11673,6 @@ async function generateLocations(uni,liveLocs){
   const homed=new Set();
   locs.forEach(l=>{ if(l&&l.type==='home'&&Array.isArray(l.residents))l.residents.forEach(id=>homed.add(id)); });
   const homeless=cast.filter(c=>!homed.has(c.id));
-  const poiExists=locs.some(l=>l&&l.type!=='home');
   const have=[...new Set(locs.map(l=>l&&l.name).filter(Boolean))];
   // v19.9997 — place-names the story's quests reference that don't exist yet (+ their sub-areas).
   const _gq=(uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
@@ -11682,18 +11681,26 @@ async function generateLocations(uni,liveLocs){
   const _existLower=new Set(locs.map(l=>l&&l.name&&l.name.toLocaleLowerCase("tr")));
   const questLocNames=Object.keys(questLocMap).filter(nm=>!_existLower.has(nm.toLocaleLowerCase("tr"))).slice(0,8);
   let mode, batchChars=[];
-  if(homeless.length>0){ mode='homes'; batchChars = poiExists ? homeless.slice(0,1) : homeless.slice(); }
+  // HOMES FIRST. Any character without a home gets one THIS press, with cohabitants grouped into
+  // ONE shared home. This covers the FIRST run (house the whole cast, grouped, then stop) and every
+  // later press where a newly-injected character still lacks a home (they're housed before anything
+  // else). Only once EVERYONE is housed does a press create new points of interest (5 at a time).
+  if(homeless.length>0){ mode='homes'; batchChars = homeless.slice(); }
   else if(questLocNames.length>0){ mode='quest'; }
   else { mode='pois'; }
   const world=`WORLD: ${uni.name||""} — ${(uni.setting||"").slice(0,600)}`;
   const haveLine=have.length?`\nEXISTING PLACES (never recreate any of these): ${have.join(", ")}`:"";
   let sys, expected;
   if(mode==='homes'){
-    expected=batchChars.length;
-    sys=`You design HOME locations for a roleplay world. Create exactly ONE home for EACH character below, in the SAME order, as a JSON array. Each home fits that character's personality, wealth and standing in this world.\n\n`
-      +`CHARACTERS (one home each):\n${batchChars.map((c,i)=>`${i+1}. ${c.name}: ${(c.personality||"").slice(0,90)}`).join("\n")}\n\n`
+    expected=batchChars.length;   // upper bound: at most one home per character (fewer when they share)
+    // Give the model each character's TIES so it can tell who belongs under one roof (a family, a
+    // couple, a household, roommates) from who lives alone.
+    const tieOf=c=>{ const sg=(c.socialGraph||c.socialGraphAuto||"").trim(); const bs=(c.backstory||"").trim();
+      return [sg&&`ties: ${sg.slice(0,180)}`, bs&&`background: ${bs.slice(0,110)}`].filter(Boolean).join(" | "); };
+    sys=`You assign HOME locations for a roleplay world. Read the characters and their ties, then group everyone who would LOGICALLY LIVE TOGETHER — a family under one roof, a married or cohabiting couple, a shared household, roommates, a lord and their live-in household — and give each such group ONE shared home. A character with no one to live with gets their own home. EVERY character below must end up assigned to exactly one home.\n\n`
+      +`CHARACTERS TO HOUSE:\n${batchChars.map((c,i)=>`${i+1}. ${c.name}${c.personality?` — ${(c.personality||"").slice(0,80)}`:""}${tieOf(c)?` (${tieOf(c)})`:""}`).join("\n")}\n\n`
       +`${world}${haveLine}\n\n`
-      +`Each home object:\n- "name": the home's name, fitting the world and distinct.\n- "resident": the EXACT character name whose home this is.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details (style, setting, mood). No backstory.\n- "sublocations": 2-4 areas inside; the FIRST is the arrival point (e.g. "Front Door", "Foyer"), then rooms (Living Room, Bedroom, Kitchen…).\n\nReturn ONLY a JSON array of ${expected} home object(s). No commentary.`;
+      +`Each home object:\n- "name": the household's home name, fitting the world and distinct from existing places.\n- "residents": a JSON array of the EXACT character names who live in this home — ONE name for someone who lives alone, or SEVERAL for a shared household.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details (style, setting, mood). No backstory.\n- "sublocations": 2-4 areas inside; the FIRST is the arrival point (e.g. "Front Door", "Foyer"), then rooms (Living Room, Bedroom, Kitchen…).\n\nReturn ONLY a JSON array of home objects — ONE PER HOUSEHOLD, so FEWER than ${batchChars.length} when people share. Every one of the ${batchChars.length} characters must appear in exactly one home's "residents" list. No commentary.`;
   }else if(mode==='quest'){
     expected=questLocNames.length;
     sys=`You build the specific PLACES the story's quests take place in. Create ONE for EACH place below, in the SAME order, as a JSON array, fitting THIS world.\n\n`
@@ -11714,6 +11721,7 @@ async function generateLocations(uni,liveLocs){
   const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return null;
   const clean=s=>typeof s==="string"?s.trim():"";
   const nameToId={}; cast.forEach(p=>nameToId[p.name.toLocaleLowerCase("tr")]=p.id);
+  const homelessIds=new Set(batchChars.map(c=>c.id));   // only house characters who actually lack a home
   return arr.slice(0,expected).map((l,i)=>{
     const id="loc_"+Date.now().toString(36)+Math.random().toString(36).slice(2,4)+i;
     let subs=[];
@@ -11723,12 +11731,14 @@ async function generateLocations(uni,liveLocs){
     if(!subs.some(s=>s.entrance))subs.unshift({id:id+"_entrance",name:"Entrance",entrance:true});
     let residents=[];
     if(mode==='homes'){
-      const cid=(l.resident&&nameToId[String(l.resident).toLocaleLowerCase("tr")]) || (batchChars[i]&&batchChars[i].id);
-      if(cid)residents=[cid];
+      // Grouped homes: "residents" is an array of names (a shared household). Accept a legacy single
+      // "resident" too. Map each to its character id; dedupe.
+      const names=Array.isArray(l.residents)?l.residents:(l.resident?[l.resident]:[]);
+      residents=[...new Set(names.map(nm=>nameToId[String(nm||"").toLocaleLowerCase("tr")]).filter(id=>id&&homelessIds.has(id)))];
     }
     return { id, name:clean(l.name), description:clean(l.description).slice(0,140),
       type:mode==='homes'?'home':'poi', residents, image:null, travelPeriods:null, sublocations:subs };
-  }).filter(l=>l.name);
+  }).filter(l=>l.name && (l.type!=='home' || (l.residents&&l.residents.length)));   // a home with no matched resident is junk
 }
 // One-shot universe generator: brief + count → a full universe object with characters.
 // Returns {universe, characters[], userName/userLook/userBio} or null. Never throws.
@@ -12150,10 +12160,15 @@ async function generateBatchBios(brief,count,opts){
   const user=parts.join("\n\n———\n\n");
   let out;
   try{
+    // Batch needs FAR more output than a single card — {{count}} full cards in one JSON. Size the
+    // budget to the request and never let the small "mem" token cap (user-set, often ~2000) starve
+    // it: a truncated batch is unparseable JSON and silently yields zero cards. We take the LARGER of
+    // the configured cap and what the batch actually needs, then bound it so it can't run away.
+    const batchTok=Math.min(8000,Math.max(fnTok("mem",0)||0, 1500+count*750));
     out=await chatCompletion([
       {role:"system",content:sys.replace(/\{\{count\}\}/g,String(count))},
       {role:"user",content:user}
-    ],authoringModel(),{temp:fnTemp("mem",0.9),max:fnTok("mem",Math.min(4000,900+count*500)),dbg:"Batch character generator ×"+count});
+    ],authoringModel(),{temp:fnTemp("mem",0.9),max:batchTok,dbg:"Batch character generator ×"+count});
   }catch(e){ return []; }
   const j=parseJSON(out);
   const arr=Array.isArray(j)?j:(j&&Array.isArray(j.characters)?j.characters:null);

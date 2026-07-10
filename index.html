@@ -1925,7 +1925,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Relationships + freeform trackers
   relOn:"sm_relon",relPrompt:"sm_relprompt",relShortPrompt:"sm_relshortprompt",stInterval:"sm_stinterval",trackOn:"sm_trackon",trackPrompt:"sm_trackprompt",voiceCheckOn:"sm_voicecheckon",voiceCheckPrompt:"sm_voicecheckprompt",
   // Locations / travel / calendar
-  locModel:"sm_locmodel",travelPrompt:"sm_travelprompt",charMovePrompt:"sm_charmoveprompt",textReplyPrompt:"sm_textreplyprompt",textProactivePrompt:"sm_textproactiveprompt",textsOn:"sm_textson",travelTime:"sm_traveltime",calOn:"sm_calon",calPrompt:"sm_calprompt",calReconcile:"sm_calreconcile",
+  locModel:"sm_locmodel",travelPrompt:"sm_travelprompt",charMovePrompt:"sm_charmoveprompt",textReplyPrompt:"sm_textreplyprompt",textProactivePrompt:"sm_textproactiveprompt",textVisitPrompt:"sm_textvisitprompt",textsOn:"sm_textson",travelTime:"sm_traveltime",calOn:"sm_calon",calPrompt:"sm_calprompt",calReconcile:"sm_calreconcile",
   // Voice calls (Stage 2)
   dgKey:"sm_dgkey",ttsRelay:"sm_ttsrelay",callModel:"sm_callmodel",callVoice:"sm_callvoice",callDgModel:"sm_calldgmodel",
   callSttLang:"sm_callsttlang",callTtsModel:"sm_callttsmodel",callTtsLang:"sm_callttslang",callDelivery:"sm_calldelivery",callRate:"sm_callrate",
@@ -3152,6 +3152,17 @@ If they text: write it as a real phone text in THEIR voice and in {{user}}'s lan
 Return ONLY strict JSON:
 \`\`\`json
 { "text": true|false, "message": "the text they send, in {{user}}'s language — or null if text is false", "why": "one short phrase: what pulled them to text (internal, not shown)" }
+\`\`\``;
+
+// Judge: after {{user}} left {{char}}'s text unanswered all day, would {{char}} actually GO IN PERSON
+// to find them? Deliberately biased toward NO — showing up uninvited is a strong, uncommon move.
+const DEFAULT_TEXT_VISIT=`You decide whether {{char}}, after {{user}} left their text unanswered all day, would actually GET UP AND GO find {{user}} in person — or just let it sit.
+
+Showing up uninvited over an unanswered text is a STRONG, uncommon move. The DEFAULT is NO: most people wait, text again, or let it go cold rather than turn up at someone's door. Say YES only when it truly fits WHO THIS CHARACTER IS and how they feel: someone anxious, devoted, obsessive, possessive, hot-tempered, or extremely close might come. Someone proud, aloof, avoidant, self-protective, busy, or not-that-invested does NOT — they hold back, sulk, or move on. Weigh how close they actually are and what has been going on between them. Decide strictly as THAT person, not as a generic reaction.
+
+Return ONLY strict JSON:
+\`\`\`json
+{ "visit": true|false, "why": "one short phrase — why they would or wouldn't go (internal, not shown)" }
 \`\`\``;
 
 const DEFAULT_CAL=`You are a FUTURE EVENTS TRACKER for a roleplay. You read the latest exchange and extract things that bind the characters or {{user}} to the FUTURE so they aren't forgotten — and you check whether any already-tracked CONDITION was just met. You are given the current in-game day and time.
@@ -4526,6 +4537,7 @@ function loadState(){
     charMovePrompt:store.raw(K.charMovePrompt,DEFAULT_CHAR_MOVE),
     textReplyPrompt:store.raw(K.textReplyPrompt,DEFAULT_TEXT_REPLY),
     textProactivePrompt:store.raw(K.textProactivePrompt,DEFAULT_TEXT_PROACTIVE),
+    textVisitPrompt:store.raw(K.textVisitPrompt,DEFAULT_TEXT_VISIT),
     textsOn:store.get(K.textsOn,true),
     travelTime:+store.raw(K.travelTime,1),
     calOn:store.get(K.calOn,true),
@@ -7204,6 +7216,8 @@ const PROMPT_REGISTRY=[
    hint:"Layered onto the full roleplay-style payload when a character replies to the player's text: dialogue only, no narration/inner thoughts. Use {{user}}, {{char}}."},
   {key:"textProactivePrompt", label:"Proactive text judge", def:()=>DEFAULT_TEXT_PROACTIVE, json:true,
    hint:"Decides whether a character texts the player unprompted (and what), from their feelings + memories + events. Returns {text, message, why}. Use {{user}}, {{char}}."},
+  {key:"textVisitPrompt", label:"Text no-reply visit judge", def:()=>DEFAULT_TEXT_VISIT, json:true,
+   hint:"Decides whether a character left on read would come find the player IN PERSON — biased toward no, dependent on who they are. Returns {visit, why}. Use {{user}}, {{char}}."},
   {key:"calPrompt", label:"Future-events detector", def:()=>DEFAULT_CAL, json:true,
    hint:"Extracts dated meetings, conditionals (incl. threats/ultimatums with a consequence), standing no-date vows and notes from conversation as JSON — and reports open conditions the exchange just met."},
   {key:"calReconcile", label:"End-of-day calendar reconciler", def:()=>DEFAULT_CAL_RECONCILE, json:true,
@@ -13105,6 +13119,9 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"text_proactive",label:"Proactive Text Judge",desc:"Decides whether a character texts the player unprompted, and composes it — from their feelings, memories and any event.",blocks:[
     {kind:"prompt",promptKey:"textProactivePrompt"},
     {kind:"dyn",label:"Character, feelings, memories, event",scope:"chat",desc:"Who they are, how they feel about the player (fast + slow), recent memories, any background event, and whether a prior text went unanswered."}]},
+  {key:"text_visit",label:"Text No-Reply Visit Judge",desc:"After the player leaves a text on read, decides whether that character would come find them in person — biased toward no, per who they are.",blocks:[
+    {kind:"prompt",promptKey:"textVisitPrompt"},
+    {kind:"dyn",label:"Character, feelings, closeness, memories",scope:"chat",desc:"Who they are, how they feel about the player, how close they are, and recent memories."}]},
   {key:"voice_check",label:"Voice Check",desc:"Flags out-of-character replies. Returns {ok, note}.",blocks:[
     {kind:"prompt",promptKey:"voiceCheckPrompt"},
     {kind:"dyn",label:"The reply being checked",scope:"chat",desc:"The character's latest reply against their card."}]},
@@ -15541,20 +15558,13 @@ function maybeProactiveTextTick(chat){
 // Day-end: a text the player left on read is FELT. Plant the sender a memory of being ignored and
 // nudge their in-the-moment axes (a touch more agitated, less comfortable) — colored by how they
 // already feel — so tomorrow they may text again, sharper, or act on it.
-// A character left on read who still CARES enough goes to FIND the player in person — scheduled as a
-// visit that the arrival engine (checkPromisedArrivals) walks in on a following day. `who` names BOTH
-// the character AND the player so it reads as a "comes to you" plan (checkPromisedArrivals owns it),
-// not an offstage user-less one (which the world pulse would resolve). locationId stays null so they
-// arrive wherever the player is. Returns true if a visit was newly scheduled.
-function _scheduleTextVisit(chat,p,day,o){
+// Mechanical scheduler ONLY (the decision is made by _judgeTextVisit). Books a visit the arrival
+// engine (checkPromisedArrivals) walks in on a following day. `who` names BOTH the character AND the
+// player so it reads as a "comes to you" plan (checkPromisedArrivals owns it), not an offstage
+// user-less one (which the world pulse would resolve). locationId stays null so they arrive wherever
+// the player is. Returns true if a visit was newly booked.
+function _scheduleTextVisit(chat,p,day,warm){
   if(!state.textsOn||!state.calOn||!chat||!p)return false;
-  const aff=o.affection||0, des=(o.st&&o.st.desire)||0, agi=(o.st&&o.st.agitation)||0;
-  // Only if they feel strongly enough to chase it in person: fond/worried, drawn to you, or stung but
-  // not hateful. The genuinely cold or hostile don't come — they cut off (and _evaluateArrival, which
-  // re-checks at arrival time, would refuse them anyway).
-  const warm = aff>=20 || des>=40;
-  const cares = warm || (agi>=48 && aff>=-25);
-  if(!cares)return false;
   const cal=chatCalendar(chat);
   const nm=p.name.toLowerCase();
   if(cal.some(e=>!e.done && e.source==="text_visit" && String(e.who||"").toLowerCase().includes(nm)))return false; // one pending visit per char
@@ -15567,9 +15577,27 @@ function _scheduleTextVisit(chat,p,day,o){
     done:false, prompted:false, source:"text_visit"});
   return true;
 }
-function reconcileTextsDay(chat,day){
+// Would THIS character actually come find the player in person over a text left on read? A real
+// per-character judgment (biased toward no), so it DEPENDS on who they are — not a flat axis cutoff.
+async function _judgeTextVisit(chat,p,o){
+  try{
+    const feel=[relTag(o),relConsideredProse(o),relMomentaryProse(o)].filter(Boolean).join("; ");
+    const e=relSheetEntry(p,"__user__");
+    const fam=o.familiarity||0;
+    const closeness=`How close they are: ${fam>=45?"very close / intimate":fam>=20?"fairly close":"not close"}.`;
+    const mems=memoriesOf(p.id).slice(-4).map(m=>"- "+memText(m).slice(0,140)).join("\n");
+    const sys=fillTpl(up("textVisitPrompt"),{user:state.user,char:p.name});
+    const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n${e&&(e.tie||e.relationship)?`Relationship: ${[e.tie,e.relationship].filter(Boolean).join(" — ")}\n`:""}${closeness}\n\n# Recent memories\n${mems||"(none)"}\n\n${state.user} left ${p.name}'s text unanswered all day. Would ${p.name} go find them in person tomorrow? Return the JSON.`;
+    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.gmModel,{temp:fnTemp("gm",0.4),max:fnTok("gm",110),dbg:"Text visit judge — "+p.name});
+    const j=parseJSON(out)||{};
+    return !!j.visit;
+  }catch(e){ return false; }
+}
+async function reconcileTextsDay(chat,day){
   if(!chat)return;
   const done=new Set(); let changed=false, scheduled=false;
+  // Collect the left-on-read characters first (sync mood + memory), then judge visits (async).
+  const candidates=[];
   (chat.messages||[]).slice().reverse().forEach(m=>{
     if(!(m.textMsg&&m.role==="assistant")||!m.speakerId||done.has(m.speakerId))return;
     const pid=m.speakerId; const th=textThreadMsgs(chat,pid);
@@ -15580,13 +15608,34 @@ function reconcileTextsDay(chat,day){
     const o=relObj(chat,pid,"__user__"); const aff=o.affection||0;
     const mood=aff>=25?"kırgın ama merak içinde":aff<=-15?"öfkeli":"tedirgin";
     try{ o.st.agitation=clampRel((o.st.agitation||0)+8); o.st.comfort=clampRel((o.st.comfort||0)-6); if(aff<=-15)o.st.agitation=clampRel(o.st.agitation+6); }catch(e){}
-    // If they feel strongly enough, they'll come find the player in person next day.
-    let cameToo=false; try{ cameToo=_scheduleTextVisit(chat,p,day,o); if(cameToo)scheduled=true; }catch(e){}
-    try{ state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:pid,character:p.name,
-      content:`${state.user}'a mesaj attım ama gün boyu cevap vermedi — ${mood}.`+(cameToo?` Yarın kendim gidip bulacağım.`:""),type:"EXPERIENCE",emotion:(aff<=-15?"angry":"concerned"),
-      importance:cameToo?0.7:0.6,tags:["text","ignored"],date:Date.now(),gameDay:day,source:"text_noreply",universeId:chat.universeId,chatId:chat.id}); }catch(e){}
+    candidates.push({p,pid,o,aff,mood});
     changed=true;
   });
+  // VISIT DECISION — genuinely selective, so not every ignored text turns into a visit:
+  //  · cheap pre-gate: only judge those with SOME pull AND some closeness (skip obvious no's, save calls)
+  //  · then a per-character LLM judge (biased toward no) decides based on who they actually are
+  //  · caps: at most a few judge calls and 2 booked visits per day, so it never floods
+  let judged=0, visits=0;
+  for(const c of candidates){
+    if(judged>=4 || visits>=2)break;
+    const {p,o,aff}=c;
+    const des=(o.st&&o.st.desire)||0, agi=(o.st&&o.st.agitation)||0, fam=o.familiarity||0;
+    const preGate=(aff>=15||des>=35||agi>=45) && (fam>=10||aff>=25);   // could plausibly chase
+    if(!preGate)continue;
+    judged++;
+    let go=false; try{ go=await _judgeTextVisit(chat,p,o); }catch(e){}
+    if(!go)continue;
+    const warm=(aff>=20||des>=40);
+    let booked=false; try{ booked=_scheduleTextVisit(chat,p,day,warm); }catch(e){}
+    if(booked){ visits++; scheduled=true; c.cameToo=true; }
+  }
+  // Memories — note the ignored text, and (if they decided to) that they're coming in person.
+  for(const c of candidates){
+    try{ state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:c.pid,character:c.p.name,
+      content:`${state.user}'a mesaj attım ama gün boyu cevap vermedi — ${c.mood}.`+(c.cameToo?` Yarın kendim gidip bulacağım.`:""),
+      type:"EXPERIENCE",emotion:(c.aff<=-15?"angry":"concerned"),
+      importance:c.cameToo?0.7:0.6,tags:["text","ignored"],date:Date.now(),gameDay:day,source:"text_noreply",universeId:chat.universeId,chatId:chat.id}); }catch(e){}
+  }
   if(changed){ persistChats(); persistMemory(); if(scheduled){ try{ updateCalendarBadge(); }catch(e){} } }
 }
 function handleOOC(chat,text){
@@ -18170,7 +18219,7 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
 
   // ---- TEXTS: a message the player left on read all day is felt (memory + a mood nudge), then a
   // charged character may fire off a text as the day closes.
-  try{ reconcileTextsDay(chat,day); }catch(e){}
+  try{ await reconcileTextsDay(chat,day); }catch(e){}
   try{ await maybeProactiveText(chat,{force:true}); }catch(e){}
 
   // ---- LIVING UNIVERSE: CONFRONTATION (layer 3) ---- if a character now holds a strong, unresolved
@@ -21694,7 +21743,7 @@ function saveSettings(notify){
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
-  store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.setRaw(K.calReconcile,state.calReconcile);
+  store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.setRaw(K.textVisitPrompt,state.textVisitPrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.setRaw(K.calReconcile,state.calReconcile);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);
   store.setRaw(K.gmJudge,state.gmJudge);store.setRaw(K.gmAuthor,state.gmAuthor);store.setRaw(K.daySummaryPrompt,state.daySummaryPrompt);
   store.set(K.sceneOn,state.sceneOn);store.setRaw(K.sceneSetup,state.sceneSetup);store.setRaw(K.sceneWriter,state.sceneWriter);store.setRaw(K.sceneMin,state.sceneMin);store.setRaw(K.sceneMax,state.sceneMax);

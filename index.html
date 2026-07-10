@@ -13163,6 +13163,42 @@ function buildSystemPromptBlocks(injectedMemories){
   return B;
 }
 
+/* SCENE-WRITER BRIEFING for a character an event is bringing into the scene.
+   When the Gamemaster/Scene Writer drives a character in, they're triggered to speak on the very
+   turn they arrive — but castHistory cuts at their arrival, so the GM event beat and the Scene
+   Writer's entrance narration (both posted BEFORE the arrival presence-note) fall outside their
+   history. Left as-is, the newcomer opens context-blind: no idea why or how they came to be here.
+   This hands them the Scene Writer's own info for the active event — the triggering narration, the
+   unresolved tension (summary), their intent (for a confrontation/overture), and the beats that
+   brought them in — as a PRIVATE director's note so their entrance is grounded. Returns "" when
+   there is no active event to brief (ordinary turns are untouched). */
+function sceneWriterBriefing(chat,p){
+  const ev=chat&&chat.activeEvent;
+  if(!ev||ev.resolved)return "";
+  // Scene-writer beats posted since this event began (the entrance line and any advances). They
+  // sit before the newcomer's arrival cut, so their own history has already dropped them. Prefer
+  // the event's start marker; fall back to the current physical scene for older saves without it.
+  const msgs=chat.messages||[];
+  let from=(typeof ev._startMsg==="number")?ev._startMsg:0;
+  if(typeof ev._startMsg!=="number"){
+    for(let i=msgs.length-1;i>=0;i--){ if(msgs[i]&&msgs[i].travelBeat){ from=i+1; break; } }
+  }
+  const beats=[];
+  for(let i=Math.max(0,from);i<msgs.length;i++){ const m=msgs[i]; if(m&&(m.sceneBeat||m.gmBeat)&&m.content)beats.push(String(m.content).trim()); }
+  const lines=[];
+  const trig=(ev.trigger||"").trim();
+  const why=(ev.summary||"").trim();
+  if(trig)lines.push(`What just happened that pulls you in: ${trig}`);
+  if(why && why!==trig)lines.push(`The unresolved tension drawing you here: ${why}`);
+  const intent=(ev.kind==="confrontation"||ev.kind==="overture")?(ev.intent||"").trim():"";
+  if(intent && intent!==why && intent!==trig)lines.push(`What you have come to do: ${intent}`);
+  if(beats.length)lines.push(`How your arrival is unfolding:\n`+beats.map(b=>`- ${b}`).join("\n"));
+  if(!lines.length)return "";
+  return `# WHY & HOW YOU'RE HERE — scene context (private: never quote, read aloud, or narrate this as exposition)\n`+
+         `You are not appearing from nowhere — you know why and how you came to be here. Let this ground your entrance and your first words.\n`+
+         lines.join("\n");
+}
+
 /* Build a system prompt for ONE character (p) who is part of a group scene.
    Used by the turn router so each character responds individually as themselves,
    while being aware of the others present. */
@@ -13230,6 +13266,11 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed){
     B.situation=fillTpl(blkTpl("situation_leaving"),{char:p.name});
   }else if(addressed==="arriving"){
     B.situation=fillTpl(blkTpl("situation_arriving"),{char:p.name});
+    // Give an event-driven newcomer the Scene Writer's context for why/how they're here — the
+    // entrance narration and driving tension castHistory cut off at their arrival — so their
+    // first line isn't context-blind.
+    const brief=sceneWriterBriefing(chat,p);
+    if(brief)B.situation+=`\n\n${brief}`;
   }
 
   return B;
@@ -18515,7 +18556,10 @@ async function setupActiveEvent(chat,eventText){
     const evMin=(j.type==="character" && sceneEmpty)?1:baseMin;
     const ev={summary:j.summary||eventText,type:j.type||"environment",turn:0,
       minTurns:evMin,maxTurns:Math.max(evMin,state.sceneMax||8),
-      resolved:false,participant:null};
+      resolved:false,participant:null,
+      // Scene-writer briefing for an arriving character reads these: the GM narration that fired
+      // the event, and where its beats begin in the transcript.
+      trigger:eventText,_startMsg:(chat.messages||[]).length};
     if(j.type==="character" && j.participant && validCharName(j.participant.name)){
       const pn=String(j.participant.name).trim();
       // match a real card (cast or full persona list); else create a temp character.
@@ -18617,6 +18661,7 @@ function startConfrontation(chat,opts){
     evidence, conviction:startConv, floor, ceiling,
     type:"character", turn:0, minTurns:evMin, maxTurns:Math.max(evMin,state.sceneMax||8),
     resolved:false,
+    _startMsg:(chat.messages||[]).length,   // where the scene-writer briefing collects this event's beats
     participant:{name:accuser.name,charId:accuser.id,temp:!!accuser.temp,approaching:true}
   };
   chat.activeEvent=ev;
@@ -18719,6 +18764,7 @@ function startOverture(chat,opts){
     evidence, conviction:startConv, floor, ceiling,
     type:"character", turn:0, minTurns:evMin, maxTurns:Math.max(evMin,state.sceneMax||8),
     resolved:false,
+    _startMsg:(chat.messages||[]).length,   // where the scene-writer briefing collects this event's beats
     participant:{name:offerer.name,charId:offerer.id,temp:!!offerer.temp,approaching:true}
   };
   chat.activeEvent=ev;

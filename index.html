@@ -1918,7 +1918,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Relationships + freeform trackers
   relOn:"sm_relon",relPrompt:"sm_relprompt",relShortPrompt:"sm_relshortprompt",stInterval:"sm_stinterval",trackOn:"sm_trackon",trackPrompt:"sm_trackprompt",voiceCheckOn:"sm_voicecheckon",voiceCheckPrompt:"sm_voicecheckprompt",
   // Locations / travel / calendar
-  locModel:"sm_locmodel",travelPrompt:"sm_travelprompt",travelTime:"sm_traveltime",calOn:"sm_calon",calPrompt:"sm_calprompt",calReconcile:"sm_calreconcile",
+  locModel:"sm_locmodel",travelPrompt:"sm_travelprompt",charMovePrompt:"sm_charmoveprompt",travelTime:"sm_traveltime",calOn:"sm_calon",calPrompt:"sm_calprompt",calReconcile:"sm_calreconcile",
   // Voice calls (Stage 2)
   dgKey:"sm_dgkey",ttsRelay:"sm_ttsrelay",callModel:"sm_callmodel",callVoice:"sm_callvoice",callDgModel:"sm_calldgmodel",
   callSttLang:"sm_callsttlang",callTtsModel:"sm_callttsmodel",callTtsLang:"sm_callttslang",callDelivery:"sm_calldelivery",callRate:"sm_callrate",
@@ -3095,6 +3095,25 @@ Do NOT speak or decide for {{user}}. Do NOT resolve any ongoing tension. End on 
 - Understand the intention and the tone then write it how it should be written in Turkish.
 
 Output ONLY the narration text, 2-4 sentences, third person. No JSON, no labels, no dialogue, in Turkish.`;
+
+// Short movement narration for a CHARACTER (not the player) entering, leaving, or moving areas.
+// Deliberately terser than the player's DEFAULT_TRAVEL — it's a connective beat, not a set-piece.
+const DEFAULT_CHAR_MOVE=`You are the NARRATOR of a roleplay, writing a SHORT beat for a character (not {{user}}) who is moving through the world.
+
+You are given: the character, where they were, where they are moving to (with what kind of place it is), whether they are ARRIVING / LEAVING / crossing to another area, WHY they are moving right now, and the current time.
+
+Write ONE brief beat that shows the move concretely: where they came from, where they went, and — lightly — why (let the reason color the movement; do not explain it as a report). Ground it in the actual places named. Keep it much shorter than a full travel scene.
+
+Rules:
+- Third person, about the moving character only. NEVER speak, act, or decide for {{user}} or anyone else.
+- No dialogue. No inner monologue. Just the movement and its immediate texture.
+- Do NOT resolve any tension or start a conversation — this only gets them in or out of the frame.
+- If the origin or destination is genuinely unknown, imply it naturally ("bir yerlerden", "dışarı doğru") rather than inventing a specific place.
+
+# LANGUAGE
+- Write in perfect, natural Turkish. Do NOT translate word-for-word from English — capture the intent and write it as it should read in Turkish.
+
+Output ONLY the narration, 1-2 short sentences, third person, in Turkish. No JSON, no labels, no names in a "Name:" prefix.`;
 
 const DEFAULT_CAL=`You are a FUTURE EVENTS TRACKER for a roleplay. You read the latest exchange and extract things that bind the characters or {{user}} to the FUTURE so they aren't forgotten — and you check whether any already-tracked CONDITION was just met. You are given the current in-game day and time.
 
@@ -4465,6 +4484,7 @@ function loadState(){
     voiceCheckPrompt:store.raw(K.voiceCheckPrompt,DEFAULT_VOICECHECK),
     locModel:store.raw(K.locModel,""),
     travelPrompt:store.raw(K.travelPrompt,DEFAULT_TRAVEL),
+    charMovePrompt:store.raw(K.charMovePrompt,DEFAULT_CHAR_MOVE),
     travelTime:+store.raw(K.travelTime,1),
     calOn:store.get(K.calOn,true),
     calPrompt:store.raw(K.calPrompt,DEFAULT_CAL),
@@ -7136,6 +7156,8 @@ const PROMPT_REGISTRY=[
    hint:"Flags out-of-character replies. Returns {ok, note}."},
   {key:"travelPrompt", label:"Travel narration", def:()=>DEFAULT_TRAVEL, json:false,
    hint:"Narrates a journey between places. Use {{user}}."},
+  {key:"charMovePrompt", label:"Character move narration", def:()=>DEFAULT_CHAR_MOVE, json:false,
+   hint:"Short beat when a CHARACTER enters, leaves, or crosses to another area — where from, where to, and why. Shorter than the player's travel narration. Use {{user}}."},
   {key:"calPrompt", label:"Future-events detector", def:()=>DEFAULT_CAL, json:true,
    hint:"Extracts dated meetings, conditionals (incl. threats/ultimatums with a consequence), standing no-date vows and notes from conversation as JSON — and reports open conditions the exchange just met."},
   {key:"calReconcile", label:"End-of-day calendar reconciler", def:()=>DEFAULT_CAL_RECONCILE, json:true,
@@ -8107,7 +8129,8 @@ function charactersAtLocation(chat,locId){
 }
 // GM movement: bring a named character INTO the current scene, or send a present one AWAY.
 // Returns the brought-in persona (so they can speak) or null.
-function gmSummonCharacter(chat,name){
+// `narration` (optional) — a pre-built move beat to show instead of the terse "geldi" note.
+function gmSummonCharacter(chat,name,narration){
   if(!name||!chat)return null;
   let p=state.personas.find(x=>x.universeId===chat.universeId && x.name.toLowerCase()===String(name).toLowerCase());
   if(!p)return null;
@@ -8123,17 +8146,45 @@ function gmSummonCharacter(chat,name){
   if(chat.locationId){ if(!chat.subPos)chat.subPos={};
     const _loc=locById(chat.locationId);
     chat.subPos[p.id]=(_loc&&entranceSubId(_loc))||curSubId(chat); }
-  notePresence(chat,[p.name],[]);
+  notePresence(chat,[p.name],[],narration);
   return p;
 }
-function gmSendCharacter(chat,name){
+function gmSendCharacter(chat,name,narration){
   if(!name||!chat)return;
   const p=presentCast(chat).find(x=>x.name.toLowerCase()===String(name).toLowerCase());
   if(!p)return;
   chat.presentIds=(chat.presentIds||[]).filter(id=>id!==p.id);
   if(chat.companionLock)delete chat.companionLock[p.id]; // no longer tagging along
   if(chat.worldPositions)chat.worldPositions[p.id]=null; // they went elsewhere
-  notePresence(chat,[],[p.name]);
+  notePresence(chat,[],[p.name],narration);
+}
+// Build a compact "why" for a user-initiated summon/send from what the app knows about the character
+// OUTSIDE the immediate exchange: their standing/plans (calendar) and a recent memory or two. This is
+// the reason source the request asks for when the PLAYER pulls a character in or sends them off.
+function summonWhyContext(chat,p){
+  if(!chat||!p)return "";
+  const bits=[];
+  try{
+    const cal=(typeof calendarContextLine==="function")?calendarContextLine(chat,p.name):"";
+    if(cal)bits.push(cal.slice(0,300));
+  }catch(e){}
+  try{
+    const mems=(typeof memoriesOf==="function")?memoriesOf(p.id):[];
+    const recent=mems.filter(m=>m&&m.content).slice(-3).map(m=>String(m.content).slice(0,120));
+    if(recent.length)bits.push("Recent for "+p.name+": "+recent.join(" · "));
+  }catch(e){}
+  return bits.join("\n").slice(0,500);
+}
+// Async convenience: narrate a user-initiated summon (dir "enter") or send-off (dir "exit") using
+// memories+calendar as the reason, then apply it. Falls back to a silent terse note on failure.
+async function summonCharacterNarrated(chat,name){
+  const p=state.personas.find(x=>x.universeId===chat.universeId && x.name.toLowerCase()===String(name).toLowerCase());
+  const why=p?summonWhyContext(chat,p):"";
+  const hereLocObj=chat.locationId?locById(chat.locationId):null;
+  const narr=p?await narrateCharMove(chat,p,{dir:"enter",fromName:charPlaceName(chat,p),
+    toName:(hereLocObj&&hereLocObj.name)||(chat&&chat.location)||"",
+    toDesc:(hereLocObj&&hereLocObj.description)||"", why}):"";
+  return gmSummonCharacter(chat,name,narr);
 }
 // Offstage characters who could plausibly be summoned (for GM context).
 function offstageRoster(chat){
@@ -8445,7 +8496,10 @@ function planDueNow(chat,e){
 // On yes, travel to the meeting's location (with a narration) and mark it done.
 async function checkDuePlans(chat){
   if(!state.calOn||!chat)return;
-  const e=chatCalendar(chat).find(x=>!x.done && !x.prompted && planDueNow(chat,x) && _planIncludesUser(x));   // v19.8: user-less plans belong to the world pulse executor
+  // A meeting set at the player's CURRENT location needs no travel — checkPromisedArrivals brings the
+  // other party in instead — so don't prompt "travel there?" for it.
+  const e=chatCalendar(chat).find(x=>!x.done && !x.prompted && planDueNow(chat,x) && _planIncludesUser(x)
+     && !(x.locationId && x.locationId===chat.locationId));   // v19.8: user-less plans belong to the world pulse executor
   if(!e)return;
   e.prompted=true; persistChats();
   const whoStr=e.who?` (${e.who} ile)`:"";
@@ -8471,6 +8525,86 @@ async function checkDuePlans(chat){
       present:presentIds(chat).slice(),img:null,imgState:"idle",vidState:"idle",video:null});
     persistChats(); appendNewBubbles();
   }
+}
+// A promised character COMES TO the player: when a due meeting is set at the player's CURRENT
+// location (or has no place) and names an offstage character, that character walks in — rather than
+// the player travelling to them (checkDuePlans still owns meetings that are elsewhere). A firm plan
+// is honoured; an uncertain one is weighed against the character's fast/slow relationship axes and a
+// quick memory scan, and if they'd avoid it they don't show — leaving a player-only note and a
+// private memory (the "promised something invisible to the player" case). Returns true only when a
+// character was actually brought in and given their opening line (so postTurn can stop there).
+function _evaluateArrival(chat,p){
+  // "Maybe → decide": read the character's standing (slow) and in-the-moment (fast) axes toward the
+  // player, plus a light memory scan, and decide whether they show. Firm/positive → they come.
+  try{
+    const o=relObj(chat,p.id,"__user__");
+    const aff=o.affection||0, trust=o.trust||0;
+    const fear=(o.st&&o.st.fear)||0;
+    if(aff<=-45 && trust<=-20) return {come:false, reason:`${state.user}'a karşı mesafeli olduğu için`};
+    if(fear>=60) return {come:false, reason:"gelmeye çekindiği için"};
+    // Recent memory carrying a rupture, and they don't feel warmly → they stay away.
+    const neg=/(kavga|tartış|ihanet|kırıl|aldat|nefret|kork|küs|terk)/i;
+    const recent=(memoriesOf(p.id)||[]).slice(-6).map(m=>String(m&&(m.content||m.text)||""));
+    if(aff<0 && recent.some(t=>neg.test(t))) return {come:false, reason:"aralarındaki gerginlik yüzünden"};
+  }catch(e){}
+  return {come:true};
+}
+function _plantNoShowMemory(chat,p,e,reason){
+  try{
+    const content=`${state.user} ile "${e.title}" için buluşacaktım ama gitmedim${reason?" — "+reason:""}.`;
+    if((memoriesOf(p.id)||[]).some(m=>{const t=(typeof memText==="function")?memText(m):(m&&m.content);return t&&String(t).toLowerCase()===content.toLowerCase();}))return;
+    state.memory.push({ id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+      ownerId:p.id, character:p.name, content, type:"EXPERIENCE", emotion:"conflicted",
+      importance:0.6, tags:["no_show","calendar"], location:(chat&&chat.location)||"",
+      date:Date.now(), gameDay:(typeof curGameDay==="function"?curGameDay():(chat&&chat.gameDay)||1),
+      source:"calendar_noshow",
+      universeId:(chat&&chat.universeId)||state.curUniverse||null, chatId:(chat&&chat.id)||null });
+    persistMemory();
+  }catch(e2){}
+}
+async function checkPromisedArrivals(chat){
+  if(!state.calOn||!chat||!state.sceneOn)return false;   // scene engine off → no autonomous walk-ins
+  if(chat.dnd)return false;                               // Do Not Disturb silences arrivals
+  if(chat.activeEvent && !chat.activeEvent.resolved)return false;   // never crash a live event
+  const here=chat.locationId||null;
+  // Due, user-inclusive meetings AT the player's current location (or place-less) that name an
+  // offstage character who could come. Meetings elsewhere stay with checkDuePlans (player travels).
+  const due=chatCalendar(chat).filter(e=>!e.done && planDueNow(chat,e) && _planIncludesUser(e)
+     && (e.kind||"meeting")==="meeting"
+     && (!e.locationId || e.locationId===here)
+     && String(e.who||"").trim());
+  if(!due.length)return false;
+  let acted=false;
+  for(const e of due){
+    // Resolve named participants → offstage, present-able personas.
+    const named=_pulsePersonasByName(chat,e.who);
+    const comers=named.filter(p=>p && isActiveChar(p) && !presentIds(chat).includes(p.id) && !charBarredHere(chat,p));
+    if(!comers.length){ continue; }   // nobody to bring (already here / barred) — leave for checkDuePlans/day-end
+    e.done=true; e.prompted=true; persistChats(); updateCalendarBadge();
+    const p=comers[0];   // one arrival per plan — never a crowd
+    const decision=_evaluateArrival(chat,p);
+    if(!decision.come){
+      // They chose not to come — invisible to the scene except for a player-only note + their memory.
+      try{ _calNotice(chat,`${p.name} gelmedi${decision.reason?" — "+decision.reason:""}`); }catch(_){}
+      _plantNoShowMemory(chat,p,e,decision.reason);
+      continue;
+    }
+    // They come to the player. Narrate the arrival (the plan is the "why"), place them, and let them
+    // open with one line — they came specifically to meet the player.
+    const hereLocObj=here?locById(here):null;
+    const why=`They had a plan with ${state.user}: "${e.title}"${e.period?` (${e.period})`:""}. The time has come, so they arrive to meet ${state.user}.`;
+    let narr="";
+    try{ narr=await narrateCharMove(chat,p,{dir:"enter",fromName:charPlaceName(chat,p),
+      toName:(hereLocObj&&hereLocObj.name)||(chat&&chat.location)||"",
+      toDesc:(hereLocObj&&hereLocObj.description)||"", why}); }catch(_){}
+    const brought=gmSummonCharacter(chat,p.name,narr);
+    persistChats();appendNewBubbles();updateChatHeader();
+    if(brought){
+      acted=true;
+      try{ await playCharacterTurn(chat,brought,"arriving"); }catch(_){}
+    }
+  }
+  return acted;
 }
 function updateCalendarBadge(){
   const due=plansDue(curChat()).length;
@@ -12912,6 +13046,9 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"travel",label:"Travel Narrator",desc:"Narrates the journey between places.",blocks:[
     {kind:"prompt",promptKey:"travelPrompt"},
     {kind:"dyn",label:"Destination + companions",scope:"chat",desc:"Where you're going and who comes along."}]},
+  {key:"char_move",label:"Character Move Narrator",desc:"Short beat when a character enters, leaves, or crosses to another area — where from, where to, and why. Shorter than the player's travel narration.",blocks:[
+    {kind:"prompt",promptKey:"charMovePrompt"},
+    {kind:"dyn",label:"Who moved, from/to, and why",scope:"chat",desc:"The character, the origin and destination places, the reason (recent exchange, an event, a plan), and the time."}]},
   {key:"voice_check",label:"Voice Check",desc:"Flags out-of-character replies. Returns {ok, note}.",blocks:[
     {kind:"prompt",promptKey:"voiceCheckPrompt"},
     {kind:"dyn",label:"The reply being checked",scope:"chat",desc:"The character's latest reply against their card."}]},
@@ -13929,7 +14066,10 @@ function applyPresence(chat,enterNames,exitNames){
 const PERIOD_TR={Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"};
 function _periodTR(p){ return PERIOD_TR[p]||String(p||"").toLowerCase(); }
 // Drop a subtle system line into the chat noting who left/arrived (Turkish).
-function notePresence(chat,entered,exited){
+// `narration` (optional) — a short travel beat (from narrateCharMove) to show INSTEAD of the terse
+// "X geldi/ayrıldı" line. The structural presenceNote (enteredIds/exitedIds → arrival cut, witness
+// scoping) is untouched; only the visible content and its rendering change (moveNarr → prose style).
+function notePresence(chat,entered,exited,narration){
   const parts=[];
   // Stamp WHERE and WHEN so the note reads e.g. "Defne has arrived at Cafe Derya, in the morning".
   const locName=(chat&&chat.location)||"";
@@ -13945,10 +14085,65 @@ function notePresence(chat,entered,exited){
   const nameToId=n=>{ const c=(curCast()||[]).concat(chat.tempChars||[]).find(x=>x&&x.name&&x.name.toLowerCase()===String(n).toLowerCase()); return c?c.id:null; };
   const enteredIds=(entered||[]).map(nameToId).filter(Boolean);
   const exitedIds=(exited||[]).map(nameToId).filter(Boolean);
+  const narr=(narration||"").trim();
   chat.messages.push({mid:newMid(),role:"assistant",presenceNote:true,sysError:true,
     present:presentIds(chat).slice(),   // v19.82: who could perceive this (stamped for future witnessed-scoping; the filter currently uses the arrival cut)
-    content:"— "+parts.join(" · ")+" —", enteredIds, exitedIds,
+    content: narr ? narr : "— "+parts.join(" · ")+" —",
+    moveNarr: narr?true:false,          // renderer shows narrated moves as prose, terse notes as a subtle line
+    terse: "— "+parts.join(" · ")+" —", // keep the plain marker for any logic that scans note text
+    enteredIds, exitedIds,
     img:null,imgState:"idle",vidState:"idle",video:null});
+}
+// Where a character physically is right now, as a place NAME (best-effort) — for move narration.
+// Prefers their live world position, then their home/residency, else "" (unknown → narrated vaguely).
+function charPlaceName(chat,p){
+  try{
+    if(!p)return "";
+    const pos=(chat&&chat.worldPositions)||{};
+    const wp=pos[p.id];
+    if(wp){ const l=locById(wp); if(l&&l.name)return l.name; }
+    const home=curLocations().find(l=>Array.isArray(l.residents)&&l.residents.includes(p.id));
+    if(home&&home.name)return home.name;
+  }catch(e){}
+  return "";
+}
+// Generate a SHORT Turkish movement beat for a character. `dir` ∈ "enter" | "exit" | "submove".
+// `why` is a compact reason string (recent exchange, an event summary, a due plan). Returns "" on
+// any failure so callers cleanly fall back to the terse presence note.
+async function narrateCharMove(chat,mover,opts){
+  opts=opts||{};
+  if(!chat||!mover||!state.key)return "";
+  try{
+    const dir=opts.dir||"enter";
+    const fromName=(opts.fromName||"").trim();
+    const toName=(opts.toName||"").trim();
+    const toDesc=(opts.toDesc||"").trim();
+    const why=(opts.why||"").trim();
+    const period=chatPeriod(chat);
+    const dirLine = dir==="exit"   ? `${mover.name} is LEAVING the scene.`
+                  : dir==="submove"? `${mover.name} is crossing to another area within the same place.`
+                  :                  `${mover.name} is ARRIVING into the scene.`;
+    const who=mover.name+((mover.personality)?` — ${String(mover.personality).slice(0,90)}`:"");
+    const ctx=[
+      `Character on the move: ${who}`,
+      dirLine,
+      fromName?`Coming from: ${fromName}`:`Coming from: (unknown — imply it, don't invent a place)`,
+      toName?`Going to: ${toName}${toDesc?` — ${toDesc}`:""}`:(dir==="exit"?`Going to: (out of the scene / elsewhere)`:``),
+      why?`Why they are moving now: ${why}`:``,
+      `Time: Day ${chat.gameDay||1}, ${period}`
+    ].filter(Boolean).join("\n");
+    const sys=fillTpl(up("charMovePrompt"),{user:state.user});
+    const out=await chatCompletion([
+      {role:"system",content:sys},
+      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in Turkish."}
+    ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
+    let beat=(out||"").trim().replace(/^["']|["']$/g,"");
+    // Strip an accidental "Name:" prefix and any code fences / reasoning.
+    beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
+    const pref=mover.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    beat=beat.replace(new RegExp("^\\s*"+pref+"\\s*:\\s*","i"),"").trim();
+    return beat;
+  }catch(e){ return ""; }
 }
 /* v19.91 — visual-only clear: hides everything currently on screen without touching any data.
    Chosen over chat virtualization (dropped by request): one render filter, zero risk to the
@@ -14472,11 +14667,18 @@ function stampStatus(chat,msg){
 }
 function bubble(m){
   if(!m.mid) m.mid=newMid();
-  // Presence notes (someone left/arrived) render as a subtle centered italic line.
+  // Presence notes (someone left/arrived) render as a subtle centered italic line — but a NARRATED
+  // move (moveNarr) is a short travel beat, so it renders as slightly fuller centered prose.
   if(m.presenceNote){
     const d=document.createElement('div');d.dataset.mid=m.mid;
-    d.style.cssText="text-align:center;color:var(--muted);font-size:12px;font-style:italic;margin:10px 0;opacity:.75";
-    d.textContent=m.content;return d;
+    if(m.moveNarr){
+      d.style.cssText="text-align:center;color:var(--text);font-size:13.5px;font-style:italic;margin:12px auto;max-width:88%;line-height:1.5;opacity:.9";
+      d.innerHTML=md(_dispText(m.content));
+    }else{
+      d.style.cssText="text-align:center;color:var(--muted);font-size:12px;font-style:italic;margin:10px 0;opacity:.75";
+      d.textContent=m.content;
+    }
+    return d;
   }
   // Gamemaster narrator events render as centered ambient narration.
   if(m.narratorEvent){
@@ -15039,18 +15241,24 @@ function handleOOC(chat,text){
     const p=findByName(arg);
     if(!p){toast(`No character named "${arg}" in this universe`);return;}
     if(presentIds(chat).includes(p.id)){toast(`${p.name} is already here`);return;}
-    chat.presentIds.push(p.id);
-    notePresence(chat,[p.name],[]);
-    persistChats();appendNewBubbles();updateChatHeader();
-    // SILENT ARRIVAL — see manualPresence(): announced by the presence note, no forced entrance line.
+    // SILENT ARRIVAL — no forced entrance line — but narrated: the arrival beat (memories + calendar
+    // as the "why") is written async, then the character is placed. Falls back to a terse note.
+    (async()=>{ try{ await summonCharacterNarrated(chat,p.name); }
+      catch(e){ gmSummonCharacter(chat,p.name); }
+      persistChats();appendNewBubbles();updateChatHeader(); })();
   }else if(cmd==="leave"||cmd==="send"||cmd==="dismiss"){
     if(!arg){toast("Usage: /leave Name");return;}
     const p=findByName(arg)||(chat.tempChars||[]).find(t=>t.name.toLowerCase().includes(arg.toLowerCase()));
     if(!p){toast(`No one named "${arg}" is here`);return;}
     if(!presentIds(chat).includes(p.id)){toast(`${p.name} isn't here`);return;}
-    chat.presentIds=chat.presentIds.filter(x=>x!==p.id);
-    notePresence(chat,[],[p.name]);
-    persistChats();appendNewBubbles();updateChatHeader();
+    // Narrate the send-off (memories + calendar as the "why"), then remove them.
+    (async()=>{
+      const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:(chat&&chat.location)||"",why:summonWhyContext(chat,p)});
+      chat.presentIds=chat.presentIds.filter(x=>x!==p.id);
+      if(chat.worldPositions)chat.worldPositions[p.id]=null;
+      notePresence(chat,[],[p.name],narr);
+      persistChats();appendNewBubbles();updateChatHeader();
+    })();
   }else if(cmd==="remove"||cmd==="kill"||cmd==="dead"){
     // PERMANENT: mark the character dead/removed. The card is KEPT (history, relationships, memories
     // stay on record) but isActiveChar() now returns false for them everywhere, so they no longer
@@ -15731,8 +15939,16 @@ async function runPresenceTracker(chat){
         const prev=charSubId(chat,p.id); if(prev===sid)continue;
         chat.subPos[p.id]=sid;
         const sName=(subById(hereLoc,sid)||{}).name||"another area";
+        const prevName=(subById(hereLoc,prev)||{}).name||"";
+        // RP-triggered area move → the recent exchange is the "why". Narrate it short; fall back to
+        // the terse stage direction if the model fails.
+        const narr=await narrateCharMove(chat,p,{dir:"submove",
+          fromName:prevName?`${hereLoc.name} — ${prevName}`:hereLoc.name,
+          toName:`${hereLoc.name} — ${sName}`, why:castConvoText(chat,3).slice(-500)});
         chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
-          content:`— ${p.name} steps away to the ${sName} —`,img:null,imgState:"idle",vidState:"idle",video:null});
+          moveNarr:narr?true:false,
+          content: narr ? narr : `— ${p.name} steps away to the ${sName} —`,
+          img:null,imgState:"idle",vidState:"idle",video:null});
         persistChats();appendNewBubbles();updateChatHeader();
       }
     }
@@ -15751,8 +15967,12 @@ async function runPresenceTracker(chat){
     // EXITS: the character gets a parting beat WHILE still present, then leaves.
     for(const p of exit){
       await playCharacterTurn(chat,p,"leaving");    // they speak/act as they go
+      // RP-triggered exit → the recent exchange is the "why". Origin is here; destination is left
+      // vague (they head off — where to is usually unstated). Narrate before we clear their position.
+      const fromHere=(chat&&chat.location)||"";
+      const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:fromHere,why:castConvoText(chat,3).slice(-500)});
       applyPresence(chat,[],[p.name]);
-      notePresence(chat,[],[p.name]);
+      notePresence(chat,[],[p.name],narr);
       if(chat.worldPositions)chat.worldPositions[p.id]=null;  // they went elsewhere
       persistChats();appendNewBubbles();updateChatHeader();
       result.exited.push(p);result.lastBeat=p;
@@ -15762,8 +15982,15 @@ async function runPresenceTracker(chat){
     // them a bystander (forming a gist memory, not a full participant transcript), which is what the
     // gossip system feeds on. They speak when the player engages them or the router picks them.
     for(const p of enter){
+      // Where they came FROM — read their prior world position BEFORE we overwrite it below.
+      const cameFrom=charPlaceName(chat,p);
+      const hereLocObj=chat.locationId?locById(chat.locationId):null;
+      const toName=(hereLocObj&&hereLocObj.name)||(chat&&chat.location)||"";
+      // RP-triggered arrival → the recent exchange is the "why".
+      const narr=await narrateCharMove(chat,p,{dir:"enter",fromName:cameFrom,
+        toName, toDesc:(hereLocObj&&hereLocObj.description)||"", why:castConvoText(chat,3).slice(-500)});
       applyPresence(chat,[p.name],[]);
-      notePresence(chat,[p.name],[]);
+      notePresence(chat,[p.name],[],narr);
       if(chat.worldPositions&&chat.locationId)chat.worldPositions[p.id]=chat.locationId; // now here
       if(chat.locationId){ if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=curSubId(chat); } // join the player's area
       persistChats();appendNewBubbles();updateChatHeader();
@@ -17919,11 +18146,12 @@ function _mapCharGo(locId){
   if(!confirm("Travel to "+dest.name+"?"))return;
   travelTo(locId,[]);
 }
-function _mapCharBring(charId){
+async function _mapCharBring(charId){
   const chat=curChat(); const p=(state.personas||[]).find(x=>x.id===charId); if(!chat||!p)return;
   if(presentIds(chat).includes(p.id)){ toast(p.name+" is already here"); return; }
-  const brought=gmSummonCharacter(chat,p.name);
-  if(brought){ persistChats(); appendNewBubbles(); updateChatHeader(); _mapCharPopClose(); _mapRenderCanvas(); toast(p.name+" is here now"); }
+  _mapCharPopClose();
+  const brought=await summonCharacterNarrated(chat,p.name);
+  if(brought){ persistChats(); appendNewBubbles(); updateChatHeader(); _mapRenderCanvas(); toast(p.name+" is here now"); }
   else toast("Couldn't bring "+p.name);
 }
 function _mapCharCall(charId){
@@ -18388,8 +18616,13 @@ async function postTurn(chat){
   }
   if(state.calOn){
     runCalendarEngine(chat).catch(()=>{});
-    // A meeting may have come due this turn — ask the player (blocking) before the scene
-    // continues, so an accepted meeting can travel them before the next beat is generated.
+    // A promised character may be due to come TO the player at this very location — bring them in
+    // (blocking) and let them open. If one arrives and speaks, the turn is theirs; stop here so the
+    // Gamemaster doesn't also fire. Their arrival is decided against fast/slow relationship axes +
+    // memory, so a character who'd avoid the player simply no-shows (logged privately) instead.
+    try{ if(await checkPromisedArrivals(chat)){ maybeBuildMemory(chat); return; } }catch(e){ try{ console.warn("[checkPromisedArrivals] bailed:",e); }catch(_){} }
+    // A meeting elsewhere may have come due — ask the player (blocking) before the scene continues,
+    // so an accepted meeting can travel them before the next beat is generated.
     try{ await checkDuePlans(chat); }catch(e){ try{ console.warn("[checkDuePlans] bailed:",e); }catch(_){} }
   }
   if(chat.activeEvent && !chat.activeEvent.resolved && state.sceneOn){
@@ -21085,7 +21318,7 @@ function saveSettings(notify){
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
-  store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.setRaw(K.calReconcile,state.calReconcile);
+  store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.setRaw(K.calReconcile,state.calReconcile);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);
   store.setRaw(K.gmJudge,state.gmJudge);store.setRaw(K.gmAuthor,state.gmAuthor);store.setRaw(K.daySummaryPrompt,state.daySummaryPrompt);
   store.set(K.sceneOn,state.sceneOn);store.setRaw(K.sceneSetup,state.sceneSetup);store.setRaw(K.sceneWriter,state.sceneWriter);store.setRaw(K.sceneMin,state.sceneMin);store.setRaw(K.sceneMax,state.sceneMax);

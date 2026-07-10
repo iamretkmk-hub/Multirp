@@ -15541,9 +15541,35 @@ function maybeProactiveTextTick(chat){
 // Day-end: a text the player left on read is FELT. Plant the sender a memory of being ignored and
 // nudge their in-the-moment axes (a touch more agitated, less comfortable) — colored by how they
 // already feel — so tomorrow they may text again, sharper, or act on it.
+// A character left on read who still CARES enough goes to FIND the player in person — scheduled as a
+// visit that the arrival engine (checkPromisedArrivals) walks in on a following day. `who` names BOTH
+// the character AND the player so it reads as a "comes to you" plan (checkPromisedArrivals owns it),
+// not an offstage user-less one (which the world pulse would resolve). locationId stays null so they
+// arrive wherever the player is. Returns true if a visit was newly scheduled.
+function _scheduleTextVisit(chat,p,day,o){
+  if(!state.textsOn||!state.calOn||!chat||!p)return false;
+  const aff=o.affection||0, des=(o.st&&o.st.desire)||0, agi=(o.st&&o.st.agitation)||0;
+  // Only if they feel strongly enough to chase it in person: fond/worried, drawn to you, or stung but
+  // not hateful. The genuinely cold or hostile don't come — they cut off (and _evaluateArrival, which
+  // re-checks at arrival time, would refuse them anyway).
+  const warm = aff>=20 || des>=40;
+  const cares = warm || (agi>=48 && aff>=-25);
+  if(!cares)return false;
+  const cal=chatCalendar(chat);
+  const nm=p.name.toLowerCase();
+  if(cal.some(e=>!e.done && e.source==="text_visit" && String(e.who||"").toLowerCase().includes(nm)))return false; // one pending visit per char
+  const title = warm ? `${p.name}, cevap alamayınca ${state.user}'ı görmeye geliyor`
+                     : `${p.name}, cevapsız kalınca ${state.user}'dan hesap sormaya geliyor`;
+  cal.push({id:"cal_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+    kind:"meeting", title, who:`${p.name}, ${state.user}`,
+    day:(day||1)+1, period:null, where:"", locationId:null,
+    character:p.name, charName:p.name, doer:p.name, importance:0.72,
+    done:false, prompted:false, source:"text_visit"});
+  return true;
+}
 function reconcileTextsDay(chat,day){
   if(!chat)return;
-  const done=new Set(); let changed=false;
+  const done=new Set(); let changed=false, scheduled=false;
   (chat.messages||[]).slice().reverse().forEach(m=>{
     if(!(m.textMsg&&m.role==="assistant")||!m.speakerId||done.has(m.speakerId))return;
     const pid=m.speakerId; const th=textThreadMsgs(chat,pid);
@@ -15554,12 +15580,14 @@ function reconcileTextsDay(chat,day){
     const o=relObj(chat,pid,"__user__"); const aff=o.affection||0;
     const mood=aff>=25?"kırgın ama merak içinde":aff<=-15?"öfkeli":"tedirgin";
     try{ o.st.agitation=clampRel((o.st.agitation||0)+8); o.st.comfort=clampRel((o.st.comfort||0)-6); if(aff<=-15)o.st.agitation=clampRel(o.st.agitation+6); }catch(e){}
+    // If they feel strongly enough, they'll come find the player in person next day.
+    let cameToo=false; try{ cameToo=_scheduleTextVisit(chat,p,day,o); if(cameToo)scheduled=true; }catch(e){}
     try{ state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:pid,character:p.name,
-      content:`${state.user}'a mesaj attım ama gün boyu cevap vermedi — ${mood}.`,type:"EXPERIENCE",emotion:(aff<=-15?"angry":"concerned"),
-      importance:0.6,tags:["text","ignored"],date:Date.now(),gameDay:day,source:"text_noreply",universeId:chat.universeId,chatId:chat.id}); }catch(e){}
+      content:`${state.user}'a mesaj attım ama gün boyu cevap vermedi — ${mood}.`+(cameToo?` Yarın kendim gidip bulacağım.`:""),type:"EXPERIENCE",emotion:(aff<=-15?"angry":"concerned"),
+      importance:cameToo?0.7:0.6,tags:["text","ignored"],date:Date.now(),gameDay:day,source:"text_noreply",universeId:chat.universeId,chatId:chat.id}); }catch(e){}
     changed=true;
   });
-  if(changed){ persistChats(); persistMemory(); }
+  if(changed){ persistChats(); persistMemory(); if(scheduled){ try{ updateCalendarBadge(); }catch(e){} } }
 }
 function handleOOC(chat,text){
   const m=text.match(/^\/(\w+)\s*(.*)$/);

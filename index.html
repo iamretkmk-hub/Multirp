@@ -5143,6 +5143,8 @@ function _slimChat(c){
     if(o.img){
       o.hadImg=true;
       if(typeof o.img==="string" && /^https?:/.test(o.img)) o.imgSrc=o.img;
+      else if(o.imgSrc && !/^https?:/.test(o.imgSrc)) delete o.imgSrc;   // don't bloat the blob with base64
+      o.imgStored=true;   // bytes cached in IndexedDB (mimg:<mid>); rehydrated lazily on reload
       delete o.img;
     }
     if(o.video){o.hadVideo=true;o.video=null;}
@@ -14529,6 +14531,7 @@ function deleteMessage(mid){
   for(const id in state.chats){ const i=state.chats[id].messages.findIndex(x=>x.mid===mid); if(i>=0){owner=state.chats[id];oid=id;owner.messages.splice(i,1);break;} }
   if(!owner){toast("Message not found");return;}
   markChatDirty(owner);
+  try{ mediaDB.kvDelete("mimg:"+mid); }catch(e){}   // drop this message's cached scene-image bytes
   const node=document.querySelector('[data-mid="'+mid+'"]');
   if(node) node.remove(); else renderChat();
   persistChats();
@@ -14560,8 +14563,48 @@ function showPromptPopup(title,text){
   const cp=pop.querySelector('#ppCopy'); cp.onclick=()=>{ try{ navigator.clipboard.writeText(text||""); toast("Copied"); }catch(e){} };
   pop.classList.add('open');
 }
+// ===== PERSISTENT SCENE IMAGES =====
+// A message's inline image is stripped from the chat JSON on persist (base64 is heavy; even a remote
+// URL can later expire). To make EVERY static scene image survive reload we cache its actual bytes in
+// IndexedDB keyed by message id (mimg:<mid>): base64 is stored directly; a hosted URL is fetched to a
+// data URL best-effort (harmless if CORS blocks it — the URL still persists via imgSrc). On reload we
+// rehydrate lazily as each bubble renders, and fall back to the cached bytes if a remote URL 404s.
+function saveMsgImage(mid,url){
+  if(!mid||!url||typeof url!=="string")return;
+  try{
+    if(url.startsWith("data:")){ mediaDB.kvSet("mimg:"+mid,url); return; }
+    if(/^https?:/.test(url)){
+      fetch(url).then(r=>r&&r.ok?r.blob():null).then(b=>{ if(!b)return;
+        const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet("mimg:"+mid,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
+      }).catch(()=>{});
+    }
+  }catch(e){}
+}
+// Lazily restore a message's image from the byte cache when it isn't in memory (after reload). Tries
+// once per message; on miss it falls through to the normal "no image" UI. Re-renders when done.
+async function rehydrateMsgImage(m){
+  if(!m||m.img||m._imgHydrating||m._imgTried)return;
+  m._imgHydrating=true;
+  let data=null; try{ data=await mediaDB.kvGet("mimg:"+m.mid); }catch(e){}
+  m._imgHydrating=false; m._imgTried=true;
+  if(data){ m.img=data; m.imgState="done"; }
+  try{ refreshBubble(m.mid); }catch(e){}
+}
+// <img onerror> hook: a remote scene URL failed to load (expired/blocked) — swap in the cached bytes.
+async function imgFallback(mid,imgEl){
+  try{ const data=await mediaDB.kvGet("mimg:"+mid);
+    if(data){ const c=curChat(); const m=c&&(c.messages||[]).find(x=>x.mid===mid); if(m){m.img=data;} if(imgEl)imgEl.src=data; return; }
+  }catch(e){}
+  if(imgEl){ imgEl.style.display="none"; }
+}
 function sceneHTML(m){
   const mid=m.mid;
+  // Reload rehydration: the image was persisted (bytes in IndexedDB) but isn't in memory yet — pull
+  // it back and show a brief placeholder meanwhile. (Skips text messages and live loading/error.)
+  if(!m.img && !m._imgTried && (m.hadImg||m.imgStored) && m.imgState!=="loading" && m.imgState!=="error"){
+    rehydrateMsgImage(m);
+    return `<div class="scene loading"><div class="spin"></div>Restoring image…</div>`;
+  }
   const _c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
   const _pinned=!!(_c&&_c.pinnedMid===mid);
   const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${mid}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
@@ -14586,7 +14629,7 @@ function sceneHTML(m){
     else v=`<button class="btn sec small" title="Animate" onclick="animateScene('${mid}')">${icon("film")}</button> <button class="btn sec small" title="Movie" onclick="movieScene('${mid}')">${icon("reel")}</button> <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${mid}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${mid}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
     const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:(state.ratio||DEFAULT_FRAME);
     const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
-    return `<div class="scene"><img src="${m.img}" referrerpolicy="no-referrer" onclick="viewSceneImage('${mid}')">
+    return `<div class="scene"><img src="${m.img}" referrerpolicy="no-referrer" onerror="imgFallback('${mid}',this)" onclick="viewSceneImage('${mid}')">
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${v}${frameBtn}${pinBtn}</div></div>`;
   }
   // No image yet and not auto-illustrating -> offer a per-request generate button
@@ -14642,6 +14685,7 @@ function refreshBubble(mid){
     img.referrerPolicy="no-referrer";
     // Restore scroll only AFTER the image lays out (its height isn't known until loaded).
     img.onload=_restoreScroll;
+    img.onerror=()=>imgFallback(mid,img);   // remote URL died → swap in the cached bytes
     img.src=m.img;img.onclick=()=>viewSceneImage(mid);
     const bar=document.createElement('div');bar.className="sceneTools";bar.style.cssText="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
     const btn=document.createElement('button');btn.className="btn sec small";
@@ -15871,6 +15915,8 @@ async function illustrate(mid,replyText,force){
       }
     }finally{ _frameOverride=null; }
     msg.img=url;msg.imgSrc=url;msg.imgState="done";msg.imgPrompt=finalPrompt;
+    saveMsgImage(mid,url);   // cache the bytes so this scene image survives reload
+    msg.imgStored=true;
     // Tag the image with the persona whose speech produced it (same resolution as the continuity
     // key above). Player/narrator lines have no character id (null).
     const _charId=msg.characterId||(_spkKey!=="__narr__"?_spkKey:null);

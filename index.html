@@ -1154,9 +1154,11 @@
           <div><label>Condense when a character exceeds (memories)</label><input type="number" id="setCondenseThreshold" min="6" step="2" value="12"></div>
           <div><label>Keep verbatim if importance ≥ (0–1)</label><input type="number" id="setCondenseKeep" min="0" max="1" step="0.05" value="0.8"></div>
           <div><label>Memories merged per pass</label><input type="number" id="setCondenseBatch" min="3" step="1" value="6"></div>
-          <div class="desc" style="margin-top:8px"><svg class="ic"><use href="#i-brain"/></svg> <b>Two-tier recall.</b> Each turn the app injects a few <b>recent</b> (sharp, verbatim) memories and a few <b>distant</b> (condensed, fuzzier) ones under separate headings. Condensed memories become the distant pool.</div>
-          <div><label>Recent memories per turn</label><input type="number" id="setMemRecentCount" min="0" max="10" step="1" value="4"></div>
-          <div><label>Distant memories per turn</label><input type="number" id="setMemDistantCount" min="0" max="10" step="1" value="2"></div>
+          <div><label>Diary entries kept verbatim before condensing</label><input type="number" id="setDiaryCondenseKeep" min="2" max="60" step="1" value="7"></div>
+          <div class="desc">Diaries are the long-term memory, so they condense separately: the newest this many day-entries stay verbatim; older ones merge into period recollections (still shown as diary). The general condenser above never touches diaries.</div>
+          <div class="desc" style="margin-top:8px"><svg class="ic"><use href="#i-brain"/></svg> <b>Two-tier recall.</b> Each turn the app injects a few of the character's own memories from <b>earlier today</b> (chosen for relevance to what's being said now) plus a few <b>diary</b> entries from previous days, under separate headings. Raw memories drive the diaries; the diary is the long-term memory.</div>
+          <div><label>Today's memories per turn <span class="desc" style="display:inline">(from earlier today)</span></label><input type="number" id="setMemRecentCount" min="0" max="10" step="1" value="2"></div>
+          <div><label>Diary entries per turn <span class="desc" style="display:inline">(previous days)</span></label><input type="number" id="setMemDistantCount" min="0" max="10" step="1" value="2"></div>
           <div style="height:1px;background:var(--border);margin:10px 0"></div>
           <div><label>Messages of history sent per reply</label><input type="number" id="setHistTurns" min="2" max="200" step="1" value="20"></div>
           <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20.</div>
@@ -1899,7 +1901,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   imgRules:"sm_imgrules",vidRules:"sm_vidrules",imgModelMigration:"sm_imgmodelmig",routeOn:"sm_routeon",routerModel:"sm_routermodel",routerPrompt:"sm_routerprompt",steps:"sm_steps",
   fnCfg:"sm_fncfg",
   // Memory condenser (Stage 4)
-  condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",
+  condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",
   memRecentCount:"sm_memrecentcount",memDistantCount:"sm_memdistantcount",
   gossipOn:"sm_gossipon",gossipThreshold:"sm_gossipthresh",gossipMaxPerDay:"sm_gossipmax",gossipModel:"sm_gossipmodel",gossipPrompt:"sm_gossipprompt",
   intentOn:"sm_intenton",intentForm:"sm_intentform",intentTick:"sm_intenttick",intentMax:"sm_intentmax",contemplate:"sm_contemplate",
@@ -4414,7 +4416,9 @@ function loadState(){
     condenseThreshold:+store.raw(K.condenseThreshold,12),
     condenseKeep:+store.raw(K.condenseKeep,0.8),
     condenseBatch:+store.raw(K.condenseBatch,6),
-    memRecentCount:+store.raw(K.memRecentCount,4),
+    diaryCondenseKeep:+store.raw(K.diaryCondenseKeep,7),
+    diaryCondenseBatch:+store.raw(K.diaryCondenseBatch,4),
+    memRecentCount:+store.raw(K.memRecentCount,2),
     memDistantCount:+store.raw(K.memDistantCount,2),
     condensePrompt:store.raw(K.condensePrompt,DEFAULT_CONDENSE),
     gossipOn:store.get(K.gossipOn,true),
@@ -13019,8 +13023,8 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now (a {{kind}} — {{aim}}). You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.`,
   intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
-  mem_recent_header:`# YOUR RECENT DIARY\nEntries you wrote at the end of recent days — where you were, who was there, what happened, and how you felt. This is how you remember the last while; stay consistent with it:`,
-  mem_distant_header:`# YOUR OLDER DIARY\nEntries from further back — the gist of what came before. Background, less precise than the last few days:`,
+  mem_recent_header:`# EARLIER TODAY\nThings you already did, saw, or learned earlier today, before this moment — stay consistent with these:`,
+  mem_distant_header:`# YOUR DIARY\nEntries from previous days — how you remember what came before (older stretches are condensed). Treat as background you carry, not something to recite:`,
   // --- tail: guidance ---
   guidance_open:`# RESPONSE GUIDANCE\nYou are {{self}}. Continue the scene with your single next turn`,
   guidance_target:`, responding to {{target}}`,
@@ -17504,6 +17508,9 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
 
   if(state.mem && state.key){
     await writeDayDiaries(chat,day,uni,daySnapshot,fallbackName);
+    // Keep the diary tier bounded: merge each character's oldest day-diaries into period summaries
+    // once enough have accumulated (newest ~7 stay verbatim). Best-effort, gated by the condense toggle.
+    if(state.condenseOn){ for(const c of curCast()){ try{ await condenseDiaries(c.id,c.name); }catch(e){} } }
   }
   await relJob;
 
@@ -19341,7 +19348,10 @@ async function maybeCondenseMemories(ownerId,name){
   // consolidated (avoid re-summarizing summaries repeatedly).
   const keep=state.condenseKeep;
   const sorted=own.slice().sort((a,b)=>(a.date||0)-(b.date||0));
-  const candidates=sorted.filter(m=>(typeof m.importance==="number"?m.importance:0.5)<keep && m.type!=="CONSOLIDATED");
+  // NEVER consolidate DIARY entries here — diaries are the long-term memory the payload injects, and
+  // they have their own consolidation (condenseDiaries → period summaries that stay type DIARY). A
+  // diary swept into a CONSOLIDATED here would silently vanish from recall.
+  const candidates=sorted.filter(m=>(typeof m.importance==="number"?m.importance:0.5)<keep && m.type!=="CONSOLIDATED" && m.type!=="DIARY");
   if(candidates.length < Math.min(state.condenseBatch, 6)) return; // not enough to bother
   const batch=candidates.slice(0, state.condenseBatch);
   const listed=batch.map((m,i)=>`[${i}] ${memText(m)} | importance: ${m.importance} | day: ${m.gameDay||1} | tags: ${(m.tags||[]).join(", ")}`).join("\n");
@@ -19378,6 +19388,52 @@ async function maybeCondenseMemories(ownerId,name){
   state.memory.push(...consolidated);
   persistMemory();
   if(document.getElementById('screen-memory').classList.contains('active')) renderMemory();
+}
+// DIARY CONSOLIDATION — the long-term tier the payload injects is DIARY entries, so THIS is what must
+// stay bounded (the raw condenser above leaves diaries alone). Keep the newest `diaryCondenseKeep`
+// (default 7) day-diaries verbatim; once enough OLDER days have piled up, merge them (together with any
+// earlier period-summary) into one or a few "period recollection" entries — which stay type DIARY (with
+// a diarySpan) so they still surface in the older-diary slot. Best-effort; runs at End Day per character.
+async function condenseDiaries(ownerId,name){
+  if(!state.condenseOn)return;
+  const keep=Math.max(1,(state.diaryCondenseKeep!=null?state.diaryCondenseKeep:7));
+  const batch=Math.max(2,(state.diaryCondenseBatch!=null?state.diaryCondenseBatch:4));
+  const uni=state.curUniverse||null;
+  const diaries=state.memory.filter(m=>m.ownerId===ownerId && m.type==="DIARY" && (!m.universeId||!uni||m.universeId===uni));
+  if(diaries.length<=keep)return;
+  const sorted=diaries.slice().sort((a,b)=>(b.gameDay||0)-(a.gameDay||0)||(b.date||0)-(a.date||0)); // newest first
+  const older=sorted.slice(keep);                                   // everything past the verbatim window
+  const fresh=older.filter(m=>!m.diarySpan);                        // raw day-diaries that just aged out
+  if(fresh.length<batch)return;                                     // wait until enough new days accumulate
+  const listed=older.slice().sort((a,b)=>(a.gameDay||0)-(b.gameDay||0))
+    .map((m,i)=>`[${i}] Day ${m.gameDay||1}${Array.isArray(m.diarySpan)?`-${m.diarySpan[1]}`:""}: ${memText(m)}`).join("\n");
+  const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user});
+  let out;
+  try{
+    out=await chatCompletion([
+      {role:"system",content:sys},
+      {role:"user",content:`${name}'s older DIARY entries (oldest first) — merge them into 1-2 durable PERIOD recollections that keep who/where/what-changed and the lasting feelings, dropping day-to-day trivia:\n\n${listed}`}
+    ],state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Diary condenser · "+name});
+  }catch(e){ return; }
+  const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return;
+  const earliestDay=Math.min(...older.map(m=>m.gameDay||1));
+  const latestDay=Math.max(...older.map(m=>Array.isArray(m.diarySpan)?m.diarySpan[1]:(m.gameDay||1)));
+  const univ=(older.find(m=>m.universeId)||{}).universeId||uni||null;
+  const merged=arr.filter(j=>j&&j.content).map(j=>({
+    id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
+    content:String(j.content).trim(), location:j.location||"", emotion:j.emotion||"neutral",
+    importance:typeof j.importance_score==="number"?j.importance_score:0.6,
+    tags:Array.isArray(j.tags)?j.tags.map(t=>String(t).toLowerCase()):["diary","period"],
+    type:"DIARY", diarySpan:[earliestDay,latestDay], condensedFrom:older.length,
+    ownerId, character:name, date:Date.now(), gameDay:earliestDay, source:"diary_condenser",
+    universeId:univ, chatId:null
+  }));
+  if(!merged.length)return;
+  const olderIds=new Set(older.map(m=>m.id));
+  state.memory=state.memory.filter(m=>!olderIds.has(m.id));
+  state.memory.push(...merged);
+  persistMemory();
+  if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active')) renderMemory();
 }
 // Manual trigger: condense every character over threshold, a few passes each, until bounded.
 async function condenseAllNow(){
@@ -19502,22 +19558,20 @@ function isDistantMem(m){ return !!(m && m.type==="CONSOLIDATED"); }
    Each tier is queried independently with its own count, so the payload carries both granularities
    under separate headings. */
 async function retrieveMemories(userText,chat,ownerId){
-  const recCount=Math.max(0, state.memRecentCount!=null?state.memRecentCount:4);
-  const disCount=Math.max(0, state.memDistantCount!=null?state.memDistantCount:2);
-  // Scope to the responding character's OWN memories BEFORE ranking. Previously this ranked across
-  // the whole cast's pool and picked a global top-N, so a character with few memories got crowded
-  // out of the limited recent/distant slots by other characters' memories (and the per-character
-  // owner filter ran too late, on an already-truncated list). Filtering by owner up front gives each
-  // character their full budget against only their own memories.
-  // MEMORY MODEL: the roleplay payload no longer injects raw episodic memories. A character recalls
-  // the past through their own DIARY entries (which are themselves written from the day's memories).
-  // So retrieval here is DIARY-only, split into recent days (fresh) and older days (background). Raw
-  // memories still exist and drive diaries, relationships, gossip and intents — just not the payload.
-  const all=(ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories()).filter(m=>m.type==="DIARY");
+  const recCount=Math.max(0, state.memRecentCount!=null?state.memRecentCount:2);   // TODAY's own memories
+  const disCount=Math.max(0, state.memDistantCount!=null?state.memDistantCount:2);  // DIARY entries (past days)
+  // MEMORY MODEL — two tiers, both scoped to the responding character:
+  //  RECENT  = the character's OWN memories formed EARLIER TODAY (not diaries) — what they already did
+  //            or learned this day, before this moment. Ranked for relevance to the CURRENT line (the
+  //            query is built from the current speech + recent turns just below), so retrieval decides
+  //            which of today's earlier beats actually matter now.
+  //  DISTANT = the character's DIARY entries from PRIOR days — their long-term memory of what came
+  //            before (diaries are written from the day's memories; older ones are period-consolidated).
+  // Raw memories still drive relationships/gossip/intents; only the payload view changed.
+  const ownAll = ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories();
   const today=(chat&&chat.gameDay)||curGameDay();
-  const RECENT_DAYS=Math.max(1,(state.diaryRecentDays!=null?state.diaryRecentDays:7));
-  const recentPool=all.filter(m=>(today-(m.gameDay||0))<RECENT_DAYS);   // recent days' diaries (fresh)
-  const distantPool=all.filter(m=>(today-(m.gameDay||0))>=RECENT_DAYS); // older diaries (background)
+  const recentPool = ownAll.filter(m=>m.type!=="DIARY" && (m.gameDay||0)===today);  // earlier today (before now)
+  const distantPool = ownAll.filter(m=>m.type==="DIARY" && (m.gameDay||0)<today);   // prior-day diaries
 
   // Query string. Primary: an LLM-generated SEMANTIC query (genQuery, on the arc-tracker model) that
   // pulls out people/places/topics/unresolved threads — so retrieval finds topically-relevant memories
@@ -20755,7 +20809,8 @@ function syncSettingsUI(){
   document.getElementById('setCondenseThreshold').value=state.condenseThreshold;
   document.getElementById('setCondenseKeep').value=state.condenseKeep;
   document.getElementById('setCondenseBatch').value=state.condenseBatch;
-  {const e=document.getElementById('setMemRecentCount'); if(e)e.value=(state.memRecentCount!=null?state.memRecentCount:4);}
+  {const e=document.getElementById('setDiaryCondenseKeep'); if(e)e.value=(state.diaryCondenseKeep!=null?state.diaryCondenseKeep:7);}
+  {const e=document.getElementById('setMemRecentCount'); if(e)e.value=(state.memRecentCount!=null?state.memRecentCount:2);}
   {const e=document.getElementById('setMemDistantCount'); if(e)e.value=(state.memDistantCount!=null?state.memDistantCount:2);}
   {const e=document.getElementById('setGossipOn'); if(e)e.checked=state.gossipOn!==false;}
   {const e=document.getElementById('setGossipThreshold'); if(e)e.value=(state.gossipThreshold!=null?state.gossipThreshold:0.6);}
@@ -20911,6 +20966,7 @@ function saveSettings(notify){
   state.condenseThreshold=Math.max(6,+document.getElementById('setCondenseThreshold').value||12);
   state.condenseKeep=Math.min(1,Math.max(0,+document.getElementById('setCondenseKeep').value));
   state.condenseBatch=Math.max(3,+document.getElementById('setCondenseBatch').value||15);
+  {const e=document.getElementById('setDiaryCondenseKeep'); if(e)state.diaryCondenseKeep=Math.max(2,Math.min(60,+e.value||7));}
   {const e=document.getElementById('setMemRecentCount'); if(e)state.memRecentCount=Math.max(0,Math.min(10,+e.value||0));}
   {const e=document.getElementById('setMemDistantCount'); if(e)state.memDistantCount=Math.max(0,Math.min(10,+e.value||0));}
   {const e=document.getElementById('setGossipOn'); if(e)state.gossipOn=e.checked;}
@@ -20979,7 +21035,7 @@ function saveSettings(notify){
   store.set(K.autoImg,state.autoImg);store.setRaw(K.rewritePrompt,state.rewritePrompt);
   store.setRaw(K.offstageEvent,state.offstageEvent);store.setRaw(K.calExec,state.calExec);store.setRaw(K.goalPursuit,state.goalPursuit);store.set(K.goalPursuitOn,state.goalPursuitOn!==false);store.setRaw(K.latentNpc,state.latentNpc);store.setRaw(K.trackerGen,state.trackerGen);
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
-  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
+  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);

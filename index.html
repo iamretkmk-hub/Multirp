@@ -340,7 +340,6 @@
   .relBar::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.18);}
   .relBarFill{position:absolute;top:0;bottom:0;left:0;border-radius:3px;}
   .bubble.txtmsg{border:1px dashed rgba(var(--accent-rgb),.4);}
-  .bubble.txtmsg .meta::after{content:"";display:inline-block;width:13px;height:13px;margin-left:6px;vertical-align:-2px;opacity:.55;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M21%2015a2%202%200%200%201-2%202H7l-4%204V5a2%202%200%200%201%202-2h14a2%202%200%200%201%202%202z'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M21%2015a2%202%200%200%201-2%202H7l-4%204V5a2%202%200%200%201%202-2h14a2%202%200%200%201%202%202z'/%3E%3C/svg%3E") center/contain no-repeat;}
   .calBadge{position:absolute;top:-4px;right:-4px;background:var(--grad);color:#fff;font-size:9px;min-width:14px;height:14px;border-radius:7px;display:flex;align-items:center;justify-content:center;padding:0 3px;}
   .empty .big{font-size:48px;}
   .toast{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:11px 18px;border-radius:24px;font-size:14px;z-index:200;opacity:0;transition:.25s;pointer-events:none;max-width:88%;text-align:center;}
@@ -8454,7 +8453,7 @@ async function runCalendarEngine(chat){
       .map(e=>`- #${e.id}${e.negative?" [NEGATIVE — met when violated]":""} IF: ${e.condition} → ${e.title}${e.consequence?` (consequence: ${e.consequence})`:""}`)
       .slice(-20).join("\n");
     const msgs=[{role:"system",content:up("calPrompt")}];
-    recentExchangeMsgs(chat,6).forEach(m=>msgs.push(m));
+    recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${today}, ${chatPeriod(chat)}.\n\nALREADY TRACKED (do NOT re-emit these, nor any re-wording or translation of them):\n${openItems||"(none yet)"}\n\nOPEN CONDITIONS to check against this exchange:\n${openConds||"(none)"}\n\nBased ONLY on the exchange above, return {"new":[...], "triggered":[...]}: genuinely NEW future-binding items (meetings, conditionals, standing vows, custom), and any listed open condition this exchange clearly met or violated.`});
     const out=await chatCompletion(msgs,state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",360),dbg:"Future events tracker"});
     const parsed=parseJSON(out);
@@ -9579,12 +9578,23 @@ function tickTrackersForDay(chat){
 // Recent roleplay turns as SEPARATE message capsules (not one blob), so the tracker /
 // relationship / scene engines see each utterance as its own message — the same shape the
 // roleplay payload uses. Returns an array of {role, name, content}.
+// Shared recent-exchange window for the "living engines" (Gamemaster judge/author, Scene Writer
+// advance, Future events tracker). These jobs must all read the SAME slice of the roleplay in the
+// SAME shape, or they author events that don't fit what actually just happened. Keeping one number
+// here is what keeps their payloads aligned — change it in one place, they stay in step.
+const ENGINE_RECENT_TURNS=6;
 function recentExchangeMsgs(chat,n){
   const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
   return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg).slice(-(n||6))
     .map(m=>({role:m.role==='user'?'user':'assistant',
               name:sanitizeName(m.role==='user'?state.user:(m.speaker||fallback)),
               content:m.content}));
+}
+// Same recent exchange, flattened to "Name: line" text for the engines that embed it inside a
+// single user message (the Gamemaster). Uses recentExchangeMsgs so it inherits the exact same
+// filtering (no text messages) and naming as the object form the other engines push.
+function recentExchangeText(chat,n){
+  return recentExchangeMsgs(chat,n||ENGINE_RECENT_TURNS).map(m=>`${m.name}: ${m.content}`).join("\n");
 }
 
 // Messages belonging to the day that is currently ending: everything AFTER the last day marker
@@ -14710,7 +14720,7 @@ function renderChat(){ return perf("renderChat",()=>{
     const ci=msgs.findIndex(m=>m.mid===chat.clearedBeforeMid);
     if(ci>=0) start=Math.max(start,ci+1);
   }
-  for(let i=start;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid(); if(m.textMsg) continue; if(_presentPendingMids.has(m.mid)) continue; const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid); }
+  for(let i=start;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid(); if(_presentPendingMids.has(m.mid)) continue; const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid); }
   _renderedCount=msgs.length-start;
   // A full rebuild happens on chat-open/switch/restart/arrival — land at the latest line. Do it
   // now, then again on the next frame and once more shortly after: freshly-built bubbles (avatars,
@@ -14763,7 +14773,6 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
   }
   let appended=0;
   for(let i=firstNew;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid();
-    if(m.textMsg) continue;                        // text messages live in the per-character window, not the transcript
     if(_presentPendingMids.has(m.mid)) continue;   // committed to state but not yet its turn to show
     // The presentation queue owns any message still flagged _reveal (it was just pushed to state but
     // hasn't reached enqueuePresent yet, or is mid-roll). Rendering it here would paste it on screen
@@ -14813,7 +14822,7 @@ function avatarHTML(sp){
 // Only for real character lines (not narrator/system). Reads a snapshot saved on the message
 // when it was created; falls back to live state for older messages without one.
 function statusStripHTML(m){
-  if(!m||m.role!=='assistant'||m.narratorEvent||m.presenceNote||m.dayMarker||m.sysError||m.trackerBeat||m.gmBeat)return "";
+  if(!m||m.role!=='assistant'||m.narratorEvent||m.presenceNote||m.dayMarker||m.sysError||m.trackerBeat||m.gmBeat||m.textMsg)return "";
   const s=m.status;
   const chat=curChat();
   const day=s?s.day:(chat&&chat.gameDay)||1;
@@ -14889,6 +14898,9 @@ function bubble(m){
   const name=m.role==='user'?state.user:(m.speaker||(curCast()[0]&&curCast()[0].name)||"Narrator");
   const gmTag=m.gmBeat?` <span class="pill" style="font-size:10px;opacity:.7">${icon("film")}</span>`:"";
   const voiceTag=m.voiceFlag?` <span class="pill" style="font-size:9px;border-color:#E8A33D;color:#E8A33D" title="${esc(m.voiceFlag)}">${icon("warn")} voice</span>`:"";
+  // Text messages live in the phone window too, but they also render inline here so the story reads
+  // as one thread — clearly marked as a typed message, never mistaken for something said aloud.
+  const textTag=m.textMsg?` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="Sent as a phone text message">${icon("message")} text message</span>`:"";
   let avatar="",tempTag="";
   if(m.role==='assistant'){
     const sp=state.personas.find(x=>x.id===m.speakerId)||state.personas.find(x=>x.name===m.speaker);
@@ -14910,7 +14922,7 @@ function bubble(m){
             // copy was gated on media EXISTING AT RENDER TIME, but images land async via
             // refreshBubble (which never rebuilt the meta row), so the button effectively never showed.
   const actions=`<span class="msgActions">${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${m.mid}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${m.mid}')">${icon("trash")}</button></span>`;
-  b.innerHTML=`<div class="meta">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${actions}</div><div class="body">${_revealing?"":md(_dispText(m.content))}</div>`;
+  b.innerHTML=`<div class="meta">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${actions}</div><div class="body">${_revealing?"":md(_dispText(m.content))}</div>`;
   if(m.role==='assistant'){
     // For finished image/video use the safe DOM builder (handles huge base64 data URLs);
     // loading/error states are cheap strings.
@@ -15448,6 +15460,13 @@ async function buildTextReplySystem(chat,p){
     }
   }catch(e){}
   try{ const cl=calendarContextLine(chat,p.name); if(cl)parts.push(cl); }catch(e){}
+  // RECENT SCENE — the actual roleplay (narration + dialogue) this text sits on top of, so the reply
+  // reads as continuous with what just happened in person, not a reply in a vacuum. Same recent-
+  // exchange window the living engines share; a text is still typed words, but it KNOWS the scene.
+  try{
+    const scene=recentExchangeMsgs(chat,12).map(m=>`${m.name}: ${m.content}`).join("\n");
+    if(scene)parts.push(`# RECENT SCENE (the roleplay you and ${state.user} are living right now — narration and dialogue; your text should be consistent with this, but it is still a message typed on your phone, not spoken here)\n${scene}`);
+  }catch(e){}
   parts.push(`# NOW\nDay ${chat.gameDay||1}, ${chatPeriod(chat)}.`);
   const tn=_textTimingNote(chat,p.id); if(tn)parts.push(tn);
   if(presentIds(chat).includes(p.id))parts.push(`(You happen to be in the same place as ${state.user} right now — but this is still a text on your phone, so keep it to typed words.)`);
@@ -15457,6 +15476,7 @@ async function sendTextMessage(chat,p,body){
   const out=_stampText(chat,{mid:newMid(),role:"user",content:body,textMsg:true,textWith:p.id,textWithName:p.name,present:[]});
   chat.messages.push(out); markChatDirty(chat); persistChats();
   renderTextThread(p.id);
+  try{ appendNewBubbles(); }catch(e){}   // also thread it into the main story window (marked as a text)
   _textTyping(p,true);
   try{
     const sys=await buildTextReplySystem(chat,p);
@@ -15469,6 +15489,7 @@ async function sendTextMessage(chat,p,body){
     const msg=_stampText(chat,{mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:reply,textMsg:true,textWith:p.id,present:[],unread:(_openTextPid!==p.id),img:null,imgState:"idle",vidState:"idle",video:null});
     chat.messages.push(msg); markChatDirty(chat); persistChats();
     renderTextThread(p.id); updateTextBadges();
+    try{ appendNewBubbles(); }catch(e){}   // reply also appears inline in the main story window
     if(state.autoSpeak){ try{ autoSpeakMsg(msg,p); }catch(e){} }
     _notePlayerTexting(chat);                     // others in the room notice he's texting (not who/what)
     try{ maybeTextInvite(chat,p,body,reply); }catch(e){}
@@ -15597,6 +15618,7 @@ function deliverProactiveText(chat,p,message,why){
   const msg=_stampText(chat,{mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:message,textMsg:true,textWith:p.id,present:[],unread:(_openTextPid!==p.id),img:null,imgState:"idle",vidState:"idle",video:null});
   chat.messages.push(msg); markChatDirty(chat); persistChats();
   renderTextThread(p.id); updateTextBadges();
+  try{ appendNewBubbles(); }catch(e){}   // proactive text also appears inline in the main story window
   try{ toast(`📱 ${p.name}: yeni mesaj`); }catch(e){}
   try{
     state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:p.id,character:p.name,
@@ -18433,9 +18455,10 @@ function _mapAutoPos(i,n){ // golden-angle spiral inside the frame — stable pe
 function _mapTravel(locId){
   const chat=curChat(); const dest=locById(locId); if(!chat||!dest)return;
   if(chat.locationId===locId){ toast("You are already at "+dest.name); return; }
-  if(!confirm("Travel to "+dest.name+"?"))return;
   _mapClose();
-  travelTo(locId,[]);
+  // Route through the companion chooser so nearby characters can come along (same as the Travel
+  // menu). It handles the "nobody nearby → just go" case itself, so this always ends in a travel.
+  chooseCompanions(locId);
 }
 function openWorldMap(){
   const chat=curChat(); if(!chat)return;
@@ -18648,8 +18671,8 @@ function _mapLocPanel(locId){
 function _mapTravelFromPanel(locId){
   const dest=locById(locId); if(!dest)return;
   _mapCharPopClose(); _mapClose();
-  if(!confirm("Travel to "+dest.name+"?"))return;
-  travelTo(locId,[]);
+  // Offer to bring nearby characters along, same as the Travel menu / map tap.
+  chooseCompanions(locId);
 }
 // Portrait tap → that character's full story-state: slow/fast emotions (relationships) + living-engine
 // info (their standing/goals + their offstage intents). Reuses _renderPeRelationships into a target.
@@ -18687,8 +18710,8 @@ function _mapCharPopClose(){ const p=document.getElementById('mapCharPop'); if(p
 function _mapCharGo(locId){
   const dest=locById(locId); if(!dest)return;
   _mapCharPopClose(); _mapClose();
-  if(!confirm("Travel to "+dest.name+"?"))return;
-  travelTo(locId,[]);
+  // Same as the other map-travel paths: let nearby characters come along.
+  chooseCompanions(locId);
 }
 async function _mapCharBring(charId){
   const chat=curChat(); const p=(state.personas||[]).find(x=>x.id===charId); if(!chat||!p)return;
@@ -19221,10 +19244,11 @@ async function maybeGamemaster(chat,force){
   try{
     const cast=curCast();                       // whole universe roster (who could appear)
     const present=presentCast(chat);             // who is actually in the scene now
-    const fallbackName=(present[0]&&present[0].name)||(cast[0]&&cast[0].name)||"Narrator";
     const ctx=directorContext(chat,"gm");
-    const since=chat.messages.filter(m=>m.role!=='system'&&!m.sysError)
-      .slice(-4).map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
+    // Recent exchange — drawn from the SAME shared window as the Scene Writer and Future events
+    // tracker (see recentExchangeText). This excludes phone text messages, which used to leak into
+    // the Gamemaster's view of the scene and make it author events that didn't fit what was happening.
+    const since=recentExchangeText(chat);
     // STAGE-DIRECTION awareness: if any armed plan is waiting on a scene-condition (target alone, an
     // audience, the holder present), the GM may nudge the scene toward it. Empty in ordinary scenes,
     // so the GM behaves exactly as before when nothing is scheming. The GM never fires the plan or
@@ -19660,7 +19684,7 @@ async function runSceneWriter(chat){
     }
     const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)}];
     if(ctx)swMsgs.push({role:"user",name:"context",content:ctx});
-    recentExchangeMsgs(chat,4).forEach(m=>swMsgs.push(m));
+    recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>swMsgs.push(m));
     // The player's last line is ALREADY the final message in the recent-exchange block just pushed,
     // so we do NOT re-quote it here (that duplicated it in the payload and over-weighted it). We only
     // append the event-character status + the advance instruction.

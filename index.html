@@ -3235,7 +3235,7 @@ For each NEW meeting return an object:
 - "who": the counterpart character's EXACT name (the other party in the meeting).
 - "executor": "{{user}}" or a character's EXACT name — who acts to make it happen (rule 3 above).
 - "dayOffset": REQUIRED whole days from today (0 = today/tonight, 1 = tomorrow, ...).
-- "period": Morning/Midday/Afternoon/Evening/Night, or null.
+- "period": REQUIRED — the time of day. Pick the most fitting one from Morning/Midday/Afternoon/Evening/Night ("dinner"/"tonight" → Evening or Night, "breakfast"/"early" → Morning, "lunch" → Midday). Only use null if the time is genuinely impossible to guess.
 - "where": the place name where they meet (empty if unclear). "subArea": a specific spot inside it, or empty.
 - "certainty": "certain" or "likely".
 
@@ -8475,6 +8475,11 @@ async function runCalendarEngine(chat){
       if(p.dayOffset!=null && p.dayOffset!=="") day=today+(Number(p.dayOffset)||0);
       else { const inf=_calInferDayPeriod(title,today); if(inf.day!=null){ day=inf.day; period=period||inf.period; } }
       if(day==null)continue;                       // no concrete day → not a meeting we track
+      // Every meeting carries a TIME OF DAY. Sanitize the model's period, infer from the title, and
+      // fall back to the current period so a meeting is never left timeless (it would otherwise be
+      // "due" the whole day). This is what the calendar surfaces and what resolution schedules on.
+      if(period && PERIODS.indexOf(period)<0) period=null;
+      if(!period){ const inf2=_calInferDayPeriod(title,today); period=inf2.period||chatPeriod(chat); }
       const who=stripNarrator(subUser(p.who||""));
       // EXECUTOR — "user" or a character name (who acts to make the meeting happen).
       const executor=isUserName(p.executor)?"user":subUser(String(p.executor).trim());
@@ -15646,8 +15651,10 @@ async function maybeProactiveText(chat,opts){
     const feel=[relTag(o),relConsideredProse(o),relMomentaryProse(o)].filter(Boolean).join("; ");
     const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memText(m).slice(0,160)).join("\n");
     const th=textThreadMsgs(chat,p.id).slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    const cal=(()=>{ try{ return calendarContextLine(chat,p.name); }catch(_){ return ""; } })();
     const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name});
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n\n# Recent memories\n${mems||"(none)"}\n`
+      +(cal?`\n# Your meetings with ${state.user}\n${cal}\n`:"")
       +(opts.eventText?`\n# A background event just happened\n${opts.eventText}\n`:"")
       +(th?`\n# Your text thread so far\n${th}\n`:"")
       +(unanswered?`\n${state.user} has NOT replied to your last text.\n`:"")

@@ -2635,6 +2635,9 @@ const DEFAULT_INTENT_FORM=`You decide whether a character, after today, now priv
 CHARACTER: {{char}}
 THEIR NATURE: {{nature}}
 
+THEIR GOALS & AMBITIONS (what they are ALWAYS working toward — weigh these HEAVILY: a motive that advances a standing goal, or that today's events created an opening for, is far more likely to form and burns stronger. A character with a driving ambition is always half-looking for the move that serves it):
+{{goals}}
+
 WHAT STRUCK THEM TODAY (their own charged memories):
 {{day_memories}}
 
@@ -2654,6 +2657,8 @@ The "standing" is where the feeling sits now; the "swing" is how it moved today.
 
 ## Decide like a real person
 - Most days produce NO motive. People let things go. Only a real provocation, longing, opportunity, or a genuine shift in feeling creates something that will actually drive them. Return nothing if today wasn't enough.
+- A stated THREAT or ULTIMATUM the character made ("if you cross me, I'll…") IS a motive — capture it as a grievance/scheme/rivalry, with that condition as the trigger and the threatened act as the aim. A standing VOW they made ("I'll always protect you", "I'll never forgive them for this") is a loyalty/protection (warm) or a resentment (hostile) motive. Capture these here — they are the character's real, driving intent.
+- An opening to advance one of their GOALS & AMBITIONS is a valid spark ON ITS OWN, even without a fresh provocation — form an ambition (or the fitting kind) with the goal as its aim and this person as the means or the obstacle.
 - If something DID land, name the motive honestly across the FULL range — warm or hostile:
   - WARM: a COURTSHIP (wants to win them, romance them), a RECONCILIATION (wants to repair a rift), a LOYALTY or PROTECTION (will stand by / shield another), an ALLIANCE or FRIENDSHIP (wants them on their side, closer).
   - HOSTILE: a GRIEVANCE (wronged, insulted → wants payback or an accounting), a RIVALRY (wants to best or displace them), a RESENTMENT (a cold grudge festering), a SCHEME against them (wants to undermine).
@@ -3235,7 +3240,7 @@ For each NEW meeting return an object:
 - "who": the counterpart character's EXACT name (the other party in the meeting).
 - "executor": "{{user}}" or a character's EXACT name — who acts to make it happen (rule 3 above).
 - "dayOffset": REQUIRED whole days from today (0 = today/tonight, 1 = tomorrow, ...).
-- "period": Morning/Midday/Afternoon/Evening/Night, or null.
+- "period": REQUIRED — the time of day. Pick the most fitting one from Morning/Midday/Afternoon/Evening/Night ("dinner"/"tonight" → Evening or Night, "breakfast"/"early" → Morning, "lunch" → Midday). Only use null if the time is genuinely impossible to guess.
 - "where": the place name where they meet (empty if unclear). "subArea": a specific spot inside it, or empty.
 - "certainty": "certain" or "likely".
 
@@ -5052,6 +5057,14 @@ function loadState(){
   // mandatory meeting dates, and the CONDITION CHECK triggered-report. Refresh unmodified defaults.
   _refreshPipe("calPrompt","FUTURE EVENTS TRACKER for a roleplay","CONDITION CHECK",DEFAULT_CAL);
   _refreshPipe("calReconcile","reconcile a roleplay's FUTURE-EVENTS list","\"triggered\"",DEFAULT_CAL_RECONCILE);
+  // v22 — CALENDAR REDESIGN: the detector is now MEETINGS-only (exact day + executor + certainty) and
+  // the reconciler judges meetings only. Upgrade any stored OLDER default (which still says "FUTURE
+  // EVENTS TRACKER" / "FUTURE-EVENTS list") to the new model, else existing installs keep the old
+  // 4-kind tracker and this whole redesign silently doesn't apply to them.
+  _refreshPipe("calPrompt","FUTURE EVENTS TRACKER for a roleplay","MEETINGS TRACKER",DEFAULT_CAL);
+  _refreshPipe("calReconcile","reconcile a roleplay's FUTURE-EVENTS list","MEETINGS list",DEFAULT_CAL_RECONCILE);
+  // v22 — intent formation now weighs GOALS & AMBITIONS as a first-class input.
+  _refreshPipe("intentForm","WHAT STRUCK THEM TODAY","GOALS & AMBITIONS",DEFAULT_INTENT_FORM);
   // v21.2 — SkyrimNet-derived prompt craft baked into the defaults: character embodiment (base),
   // richer diary writing, and memory density/relevance guidance. Refresh unmodified stored copies.
   _refreshPipe("baseInstruction","You are playing a real person","EMBODY YOUR CHARACTER",DEFAULT_BASE_INSTRUCTION);
@@ -8475,6 +8488,11 @@ async function runCalendarEngine(chat){
       if(p.dayOffset!=null && p.dayOffset!=="") day=today+(Number(p.dayOffset)||0);
       else { const inf=_calInferDayPeriod(title,today); if(inf.day!=null){ day=inf.day; period=period||inf.period; } }
       if(day==null)continue;                       // no concrete day → not a meeting we track
+      // Every meeting carries a TIME OF DAY. Sanitize the model's period, infer from the title, and
+      // fall back to the current period so a meeting is never left timeless (it would otherwise be
+      // "due" the whole day). This is what the calendar surfaces and what resolution schedules on.
+      if(period && PERIODS.indexOf(period)<0) period=null;
+      if(!period){ const inf2=_calInferDayPeriod(title,today); period=inf2.period||chatPeriod(chat); }
       const who=stripNarrator(subUser(p.who||""));
       // EXECUTOR — "user" or a character name (who acts to make the meeting happen).
       const executor=isUserName(p.executor)?"user":subUser(String(p.executor).trim());
@@ -13059,7 +13077,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     ooc:["ooc"],multi_format:["multi_format"],
     situation:["situation_leaving","situation_arriving"],
     scene_now:["scene_header","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_alone","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
-    private_intent:["intent_warm","intent_hostile"],
+    private_intent:["intent_warm","intent_hostile","intent_aim_warm","intent_aim_cool"],
     recent_memories:["mem_recent_header"],distant_memories:["mem_distant_header"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
@@ -13280,6 +13298,10 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   // --- tail: private intent ---
   intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now (a {{kind}} — {{aim}}). You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.`,
   intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
+  // v22 — SELF-AWARENESS of a plan whose target isn't in the room (or is the player). Keeps the holder
+  // goal-driven and consistent with their own intent across scenes and texts, without exposing a scheme.
+  intent_aim_warm:`# WHAT YOU QUIETLY WANT\nPrivately, you are working toward something with {{target}}: {{aim}} (a {{kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
+  intent_aim_cool:`# WHAT YOU QUIETLY WANT\nPrivately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
   mem_recent_header:`# EARLIER TODAY\nThings you already did, saw, or learned earlier today, before this moment — stay consistent with these:`,
   mem_distant_header:`# YOUR DIARY\nEntries from previous days — how you remember what came before (older stretches are condensed). Treat as background you carry, not something to recite:`,
@@ -13759,6 +13781,17 @@ function buildTailBlocks(opts){
         const warm=(it.valence==="warm");
         const line = fillTpl(blkTpl(warm?"intent_warm":"intent_hostile"),{target:tName,kind:it.kind,aim:it.aim});
         B.private_intent=line;
+      }else{
+        // AWARENESS: no present-target coloring fired, but this character may still be nursing a plan
+        // (target absent, or the player). Surface it softly so they stay goal-driven and consistent
+        // across scenes — warm intents get pursued, schemes are held close, neither is exposed.
+        const own=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent" && i.aim);
+        if(own.length){
+          const it=own.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
+          const tName=it.targetId==="__user__"?state.user:(it.targetName||"someone");
+          const warm=(it.valence==="warm");
+          B.private_intent=fillTpl(blkTpl(warm?"intent_aim_warm":"intent_aim_cool"),{target:tName,kind:it.kind,aim:it.aim});
+        }
       }
     }
   }catch(e){}
@@ -15392,6 +15425,17 @@ async function buildTextReplySystem(chat,p){
   { let pb=`# WHO ${state.user} IS\nThe person you're texting.`;
     if(state.userBio&&state.userBio.trim())pb+=`\n${state.userBio.trim()}`;
     parts.push(pb); }
+  // AWARENESS of your own private plan (living engine) — so a text can quietly serve it.
+  try{
+    if(state.intentOn!==false && Array.isArray(chat.intents)){
+      const own=chat.intents.filter(i=>i && i.holderId===p.id && i.status!=="spent" && i.aim);
+      if(own.length){
+        const it=own.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
+        const tName=it.targetId==="__user__"?state.user:(it.targetName||"someone");
+        parts.push(fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm":"intent_aim_cool"),{target:tName,kind:it.kind,aim:it.aim}));
+      }
+    }
+  }catch(e){}
   try{
     if(state.mem && state.memory.length){
       const q=textThreadMsgs(chat,p.id).slice(-4).map(m=>m.content).join("\n")||state.user;
@@ -15646,8 +15690,10 @@ async function maybeProactiveText(chat,opts){
     const feel=[relTag(o),relConsideredProse(o),relMomentaryProse(o)].filter(Boolean).join("; ");
     const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memText(m).slice(0,160)).join("\n");
     const th=textThreadMsgs(chat,p.id).slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    const cal=(()=>{ try{ return calendarContextLine(chat,p.name); }catch(_){ return ""; } })();
     const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name});
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n\n# Recent memories\n${mems||"(none)"}\n`
+      +(cal?`\n# Your meetings with ${state.user}\n${cal}\n`:"")
       +(opts.eventText?`\n# A background event just happened\n${opts.eventText}\n`:"")
       +(th?`\n# Your text thread so far\n${th}\n`:"")
       +(unanswered?`\n${state.user} has NOT replied to your last text.\n`:"")
@@ -17578,7 +17624,7 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
     const out=await chatCompletion([
       {role:"system",content:fillTpl(up("contemplate"),{
         holder:holder.name,
-        nature:holder.personality?String(holder.personality).slice(0,200):"ordinary",
+        nature:(holder.personality?String(holder.personality).slice(0,200):"ordinary")+(holder.goals&&String(holder.goals).trim()?` | driven by: ${String(holder.goals).slice(0,200)}`:""),
         kind:it.kind, valence:it.valence||"hostile", target:it.targetName||nameById(it.targetId)||state.user,
         aim:it.aim||"", trigger:it.trigger||"", strength:String((it.strength||0.6).toFixed(2)),
         allies, leverage, world })},
@@ -17998,7 +18044,8 @@ async function runIntentEngine(chat,day,uni){
       const out=await chatCompletion([
         {role:"system",content:fillTpl(up("intentForm"),{
           user:state.user, char:holder.name,
-          nature:(holder.personality?String(holder.personality).slice(0,200):"ordinary")+(holder.goals?` | driven by: ${String(holder.goals).slice(0,200)}`:""),
+          nature:(holder.personality?String(holder.personality).slice(0,220):"ordinary"),
+          goals:(holder.goals&&String(holder.goals).trim())?String(holder.goals).slice(0,300):"(no stated goals — judge from nature and events)",
           day_memories:mems, relationships:relBlock, roster:rosterList })},
         {role:"user",content:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}
       ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
@@ -18671,17 +18718,22 @@ function _mapCharState(charId){
   // Living-engine intents owned by this character.
   const kindIcon={grievance:icon("bolt"),ambition:icon("crown"),desire:icon("heart"),loyalty:icon("shield"),scheme:icon("dagger")};
   const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment",spent:"resolved / faded",active:"active"};
-  const intents=(Array.isArray(chat.intents)?chat.intents:[]).filter(it=>it && it.holderId===p.id);
-  let engine="";
-  if(intents.length){
-    engine=`<div class="desc" style="margin:8px 0 2px">Living engine — what's driving them:</div>`+
-      intents.map(it=>{
-        const ic=kindIcon[it.kind]||"•";
-        const tgt=it.targetName||(it.targetId==="__user__"?(state.user||"you"):"");
-        const line=it.aim||it.trigger||"";
-        return `<div class="mapIntent">${ic} <b>${esc(it.kind||"drive")}</b>${tgt?` → ${esc(tgt)}`:""} <span class="desc">(${esc(statusLbl[it.status]||it.status||"")})</span>${line?`<div class="desc">${esc(String(line).slice(0,160))}</div>`:""}</div>`;
-      }).join("");
-  }
+  const intents=(Array.isArray(chat.intents)?chat.intents:[]).filter(it=>it && it.holderId===p.id && it.status!=="spent");
+  const intentRows=intents.map(it=>{
+    const ic=kindIcon[it.kind]||"•";
+    const tgt=it.targetName||(it.targetId==="__user__"?(state.user||"you"):"");
+    const line=it.aim||it.trigger||"";
+    return `<div class="mapIntent">
+      <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
+        <div style="min-width:0">${ic} <b>${esc(it.kind||"drive")}</b>${tgt?` → ${esc(tgt)}`:""} <span class="desc">(${esc(statusLbl[it.status]||it.status||"")}${it.strength!=null?" · "+Math.round(it.strength*100)+"%":""})</span>${line?`<div class="desc">${esc(String(line).slice(0,200))}</div>`:""}</div>
+        <div style="display:flex;gap:3px;flex-shrink:0">
+          <button class="btn sec small" title="Edit" onclick="editIntent('${esc(p.id)}','${esc(it.id)}')">${icon("edit")}</button>
+          <button class="btn danger sec small" title="Delete" onclick="deleteIntent('${esc(p.id)}','${esc(it.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
+        </div></div></div>`;
+  }).join("");
+  const engine=`<div class="desc" style="margin:10px 0 2px">Living engine — what's driving them (edit if something's off):</div>`
+    +(intentRows||`<div class="desc" style="opacity:.7">Nothing brewing right now.</div>`)
+    +`<button class="btn sec small" style="margin-top:6px" onclick="editIntent('${esc(p.id)}','')">＋ Add a drive</button>`;
   const pop=document.createElement('div'); pop.id="mapStatePop"; pop.className="mapCharPop";
   pop.innerHTML=`<div class="mapCharPopCard" style="max-width:440px;max-height:86vh;overflow-y:auto">
     <div class="mapPopHead">${av}<div style="flex:1"><div class="mapPopName">${esc(p.name)}</div><div class="desc">Story state</div></div>
@@ -18695,6 +18747,83 @@ function _mapCharState(charId){
   _renderPeRelationships(p, document.getElementById('mapStateRel'));
 }
 function _mapStateClose(){ const p=document.getElementById('mapStatePop'); if(p)p.remove(); }
+// ---- Manual EDIT of a character's living-engine intent (fix a wrong plan, or hand-author one) ----
+const INTENT_KINDS=["courtship","reconciliation","loyalty","protection","alliance","friendship","grievance","rivalry","resentment","scheme","ambition","desire"];
+const INTENT_STATUSES=["brewing","ready","armed","spent"];
+function deleteIntent(charId,intentId){
+  const chat=curChat(); if(!chat||!Array.isArray(chat.intents))return;
+  if(!confirm("Remove this drive?"))return;
+  chat.intents=chat.intents.filter(i=>!(i&&i.id===intentId&&i.holderId===charId));
+  persistChats(); _mapStateClose(); _mapCharState(charId);
+}
+function editIntent(charId,intentId){
+  const chat=curChat(); const holder=(state.personas||[]).find(x=>x.id===charId); if(!chat||!holder)return;
+  const it=intentId?(chat.intents||[]).find(i=>i&&i.id===intentId):null;
+  const uid=chat.universeId;
+  const others=(state.personas||[]).filter(pp=>pp&&pp.universeId===uid&&isActiveChar(pp)&&pp.id!==charId);
+  const curTgt=it?(it.targetId==="__user__"?state.user:(it.targetName||"")):"";
+  const inpCss="width:100%;background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;font-size:14px";
+  const ex=document.getElementById('intentEditModal'); if(ex)ex.remove();
+  const m=document.createElement('div'); m.id="intentEditModal"; m.className="modal show";
+  const warmKinds=new Set(["courtship","reconciliation","loyalty","protection","alliance","friendship","desire"]);
+  m.innerHTML=`<div class="card editCard" style="max-width:460px">
+    <h3 style="margin-top:0">${it?"Edit drive":"New drive"} — ${esc(holder.name)}</h3>
+    <input type="hidden" id="ieChar" value="${esc(charId)}"><input type="hidden" id="ieId" value="${esc(intentId||"")}">
+    <label>Kind</label>
+    <select id="ieKind" style="${inpCss}">${INTENT_KINDS.map(k=>`<option${it&&it.kind===k?" selected":""}>${k}</option>`).join("")}</select>
+    <label style="margin-top:8px">Direction</label>
+    <select id="ieVal" style="${inpCss}">
+      <option value="warm"${it&&it.valence==="warm"?" selected":""}>warm — toward them</option>
+      <option value="hostile"${it&&it.valence==="hostile"?" selected":""}>hostile — against them</option>
+      <option value="self_serving"${it&&it.valence==="self_serving"?" selected":""}>self-serving — using them</option>
+    </select>
+    <label style="margin-top:8px">Toward whom</label>
+    <input type="text" id="ieTarget" list="ieTargetList" style="${inpCss}" placeholder="a character, or ${esc(state.user||"you")}" value="${esc(curTgt)}">
+    <datalist id="ieTargetList"><option value="${esc(state.user||"you")}">${others.map(pp=>`<option value="${esc(pp.name)}">`).join("")}</datalist>
+    <label style="margin-top:8px">What they want (aim)</label>
+    <input type="text" id="ieAim" style="${inpCss}" placeholder="what they're trying to make happen" value="${esc(it?it.aim||"":"")}">
+    <label style="margin-top:8px">Strength — ${it&&it.strength!=null?Math.round(it.strength*100):60}%</label>
+    <input type="range" id="ieStr" min="0" max="100" step="5" value="${it&&it.strength!=null?Math.round(it.strength*100):60}" style="width:100%" oninput="this.previousElementSibling.textContent='Strength — '+this.value+'%'">
+    <label style="margin-top:8px">Stage</label>
+    <select id="ieStatus" style="${inpCss}">${INTENT_STATUSES.map(s=>`<option${(it?it.status:"brewing")===s?" selected":""}>${s}</option>`).join("")}</select>
+    <div class="desc" style="margin-top:6px;opacity:.7">"armed" means it will act the moment its scene condition is met. "brewing" simmers offstage.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn sec small" onclick="document.getElementById('intentEditModal').remove()">Cancel</button>
+      <button class="btn small" onclick="saveIntentEdit()">Save</button>
+    </div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)m.remove(); });
+  document.body.appendChild(m);
+  // keep kind and direction loosely in sync as a hint (does not force)
+  const kindSel=m.querySelector('#ieKind'), valSel=m.querySelector('#ieVal');
+  kindSel.onchange=()=>{ if(warmKinds.has(kindSel.value)&&valSel.value!=="warm")valSel.value="warm"; else if(!warmKinds.has(kindSel.value)&&valSel.value==="warm")valSel.value="hostile"; };
+}
+function saveIntentEdit(){
+  const chat=curChat(); if(!chat)return; if(!Array.isArray(chat.intents))chat.intents=[];
+  const gv=id=>{const e=document.getElementById(id);return e?e.value.trim():"";};
+  const charId=gv('ieChar'), intentId=gv('ieId');
+  const holder=(state.personas||[]).find(x=>x.id===charId); if(!holder)return;
+  const kind=gv('ieKind')||"grievance", valence=gv('ieVal')||"hostile", aim=gv('ieAim');
+  const strength=Math.max(0,Math.min(1,(parseInt(gv('ieStr'),10)||60)/100));
+  const status=INTENT_STATUSES.includes(gv('ieStatus'))?gv('ieStatus'):"brewing";
+  // Resolve the target → player, a real character, or a free name.
+  const tRaw=gv('ieTarget'); const tLow=tRaw.toLowerCase();
+  let targetId=null, targetName=tRaw;
+  if(!tRaw || tLow===String(state.user||"").toLowerCase() || tLow==="you" || tLow==="player"){ targetId="__user__"; targetName=state.user; }
+  else { const tp=(state.personas||[]).find(pp=>pp&&pp.universeId===chat.universeId&&pp.name&&pp.name.toLowerCase()===tLow); if(tp){ targetId=tp.id; targetName=tp.name; } }
+  const today=chat.gameDay||1;
+  const existing=intentId?chat.intents.find(i=>i&&i.id===intentId):null;
+  if(existing){ Object.assign(existing,{kind,valence,targetId,targetName,aim,strength,status}); }
+  else {
+    chat.intents.push({ id:"intent_"+Date.now()+Math.random().toString(36).slice(2,5),
+      holderId:charId, holderName:holder.name, targetId, targetName,
+      kind, valence, trigger:"(hand-authored)", aim, strength,
+      allies:[], status, born:today, lastTick:today });
+  }
+  persistChats();
+  const modal=document.getElementById('intentEditModal'); if(modal)modal.remove();
+  _mapStateClose(); _mapCharState(charId);
+  toast("Drive saved");
+}
 function _mapCharPopClose(){ const p=document.getElementById('mapCharPop'); if(p)p.remove(); }
 function _mapCharGo(locId){
   const dest=locById(locId); if(!dest)return;

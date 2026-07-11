@@ -18430,6 +18430,9 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
     // Keep the diary tier bounded: merge each character's oldest day-diaries into period summaries
     // once enough have accumulated (newest ~7 stay verbatim). Best-effort, gated by the condense toggle.
     if(state.condenseOn){ for(const c of curCast()){ try{ await condenseDiaries(c.id,c.name); }catch(e){} } }
+    // Diaries are written; refresh the tab now (rather than only at the end of the long living-world
+    // pipeline below) so it populates the moment you open it after End Day.
+    try{ const ds=document.getElementById('screen-diary'); if(ds&&ds.classList.contains('active'))renderDiary(); }catch(_){}
   }
   await relJob;
 
@@ -18478,6 +18481,34 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
   if(diaryScreen&&diaryScreen.classList.contains('active'))renderDiary();
 }
 
+// Parse a diary model reply into {content, ...}. The diary is the app's longest, most multi-line
+// JSON output (a header line + several prose entries), and models routinely emit RAW newlines inside
+// the "content" string — which makes strict JSON.parse fail, so the entry was generated but silently
+// dropped (the "diary in the debug log but nothing in the tab" bug). This salvages the content:
+//   1) strict parse (handles well-formed output),
+//   2) escape literal newlines INSIDE quoted strings, then re-parse,
+//   3) regex-grab the "content" field,
+//   4) treat a non-JSON reply as the diary body itself.
+function _parseDiaryOut(out){
+  const j0=parseJSON(out);
+  if(j0 && typeof j0.content==="string" && j0.content.trim()) return j0;
+  const raw=String(out||"");
+  try{
+    let t=raw.replace(/[“”]/g,'"').replace(/<think>[\s\S]*?<\/think>/gi,"")
+            .replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
+    const m0=t.match(/\{[\s\S]*\}/);
+    if(m0){
+      const fixed=m0[0].replace(/"(?:[^"\\]|\\.)*"/g, s=>s.replace(/[\r\n]+/g,"\\n"));
+      const j2=JSON.parse(fixed);
+      if(j2 && typeof j2.content==="string" && j2.content.trim()) return j2;
+    }
+  }catch(_){}
+  const m=raw.match(/"content"\s*:\s*"([\s\S]*?)"\s*(?:,\s*"[a-z_]+"\s*:|\}\s*$)/i);
+  if(m && m[1].trim()) return {content:m[1].replace(/\\n/g,"\n").replace(/\\"/g,'"').trim()};
+  const bare=raw.replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
+  if(bare && !/^[{[]/.test(bare)) return {content:bare};   // model returned prose, not JSON
+  return null;
+}
 // Write one diary entry per participating character, sourced from the memories they formed today
 // (not the raw transcript). A character with no memories of the day has nothing to reflect on.
 async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
@@ -18499,7 +18530,7 @@ async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
         {role:"system",content:sys},
         {role:"user",content:`Day ${day} — ${c.name}'s diary. The memories ${c.name} formed today:\n\n${memList}`}
       ],state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",500),dbg:"Diary · "+c.name});
-      const j=parseJSON(out);
+      const j=_parseDiaryOut(out);
       if(j&&j.content){
         state.memory.push({
           id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),

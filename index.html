@@ -3217,7 +3217,7 @@ Return ONLY strict JSON:
 { "visit": true|false, "why": "one short phrase — why they would or wouldn't go (internal, not shown)" }
 \`\`\``;
 
-const DEFAULT_CAL=`You are a MEETINGS TRACKER for a roleplay. You read the latest exchange and extract ONLY concrete, scheduled MEETINGS — a specific plan for {{user}} and a character to be in the same place at a specific future time. You are given the current in-game day and time.
+const DEFAULT_CAL=`You are a MEETINGS TRACKER for a roleplay. You read the latest exchange and extract ONLY concrete, scheduled MEETINGS — a specific plan for two people to be in the same place at a specific future time. The two people are EITHER {{user}} and a character, OR two characters (not {{user}}) who agree to meet each other. You are given the current in-game day and time.
 
 A MEETING requires ALL THREE of these, or you emit NOTHING for it:
 1. A CONCRETE plan to meet — "come to the cafe tomorrow evening", "I'll drop by your place tonight", "let's meet at the gala in three days". Not a vague wish, not small talk.
@@ -3225,6 +3225,7 @@ A MEETING requires ALL THREE of these, or you emit NOTHING for it:
 3. A clear EXECUTOR — who takes the action to make it happen:
    - A CHARACTER agreed to come to {{user}} → "executor" is that character's exact name; the meeting is at {{user}}'s place or the named place.
    - {{user}} said they will go to a character → "executor" is "{{user}}".
+   - TWO CHARACTERS agreed to meet each other ({{user}} not involved) → "executor" is whichever character travels or hosts (either name if unclear); the meeting is at the named place or one of their homes.
 
 CERTAINTY — did the COUNTERPART (the other party, NOT whoever proposed it) actually AGREE?
 - "certain": ONLY when the counterpart gave a clear, explicit yes in THIS exchange ("Yes, I'll be there", "See you tomorrow", "Deal"). Their OWN words must confirm it. A confident proposal by one side is NOT agreement.
@@ -3237,7 +3238,8 @@ CONSOLIDATION: each distinct meeting appears AT MOST ONCE. You are shown the ALR
 
 For each NEW meeting return an object:
 - "title": short label (e.g. 'Meet Aria at the cafe', 'Visit Mara at home').
-- "who": the counterpart character's EXACT name (the other party in the meeting).
+- "who": the OTHER party's EXACT name. For a {{user}} meeting, the counterpart character. For a character-to-character meeting, BOTH characters' exact names, comma-separated.
+- "parties": "user" if {{user}} is one of the two people, or "chars" if the meeting is between two characters and {{user}} is NOT involved.
 - "executor": "{{user}}" or a character's EXACT name — who acts to make it happen (rule 3 above).
 - "dayOffset": REQUIRED whole days from today (0 = today/tonight, 1 = tomorrow, ...).
 - "period": REQUIRED — the time of day. Pick the most fitting one from Morning/Midday/Afternoon/Evening/Night ("dinner"/"tonight" → Evening or Night, "breakfast"/"early" → Morning, "lunch" → Midday). Only use null if the time is genuinely impossible to guess.
@@ -5066,6 +5068,9 @@ function loadState(){
   // v22.x — meetings: acceptance must come from the COUNTERPART (no one-sided "agreed"), and possessive
   // places ("my place"/"your place") are kept verbatim for the app's home resolver. Refresh defaults.
   _refreshPipe("calPrompt","MEETINGS TRACKER for a roleplay","the COUNTERPART (the other party, NOT whoever proposed",DEFAULT_CAL);
+  // v22.x — meetings can now be character-to-character (two NPCs, no {{user}}); they execute offstage
+  // via the world-pulse calendar executor and land as a narrated event. Refresh default installs.
+  _refreshPipe("calPrompt","MEETINGS TRACKER for a roleplay","OR two characters (not {{user}})",DEFAULT_CAL);
   // v22 — intent formation now weighs GOALS & AMBITIONS as a first-class input.
   _refreshPipe("intentForm","WHAT STRUCK THEM TODAY","GOALS & AMBITIONS",DEFAULT_INTENT_FORM);
   // v21.2 — SkyrimNet-derived prompt craft baked into the defaults: character embodiment (base),
@@ -8527,6 +8532,13 @@ async function runCalendarEngine(chat){
       const who=stripNarrator(subUser(p.who||""));
       // EXECUTOR — "user" or a character name (who acts to make the meeting happen).
       const executor=isUserName(p.executor)?"user":subUser(String(p.executor).trim());
+      // PARTIES — does the meeting involve {{user}}, or is it two characters (no user)? A char↔char
+      // meeting resolves OFFSTAGE via the world-pulse calendar executor (a narrated "X and Y met"
+      // beat), not the player-facing resolver. Trust the model's "parties", but never call it char↔char
+      // if the user is actually named as executor or among the participants.
+      const _whoHasUser=(()=>{ const un=String(state.user||"").toLowerCase().trim(); if(!un)return false;
+        return String(who||"").toLowerCase().split(/\s*,\s*/).some(n=>n===un||n.includes(un)); })();
+      const withUser = executor==="user" || _whoHasUser || String(p.parties||"").toLowerCase()!=="chars";
       const certainty=(p.certainty==="likely")?"likely":"certain";
       // dedup: same/similar title within ±1 day, or same counterpart same day.
       const dup=cal.some(e=>{
@@ -8538,9 +8550,13 @@ async function runCalendarEngine(chat){
       });
       if(dup)continue;
       const _cp=(_pulsePersonasByName(chat,who)||[])[0]||null;
-      const loc=_resolvePlanLoc(chat,p.where,executor,_cp);
+      // Location: a {{user}} meeting uses the possessive/home resolver (my place / your place); a
+      // char↔char meeting has no user home to anchor on, so bind to the named place, else the first
+      // participant's home (the executor prompt also tolerates an unknown place).
+      const loc=withUser ? _resolvePlanLoc(chat,p.where,executor,_cp)
+                         : (locByName(p.where)||(_cp?homeLocOf(_cp):null));
       const entry={id:"cal_"+Date.now().toString(36)+Math.random().toString(36).slice(2,8),
-        kind:"meeting", title, who, executor,
+        kind:"meeting", title, who, executor, withUser,
         day, period,
         where:String(p.where||"").trim(), locationId:loc?loc.id:null,
         subArea:String(p.subArea||"").trim(), character:who, charName:who,
@@ -8548,7 +8564,9 @@ async function runCalendarEngine(chat){
         certainty, probability:null,
         done:false, prompted:false, source:"auto"};
       cal.push(entry); added++;
-      if(certainty==="likely" && who)newLikely.push(entry);
+      // Attendance estimation is player-meeting-only (it scores the counterpart vs {{user}}); char↔char
+      // meetings resolve by narration, so they skip it.
+      if(withUser && certainty==="likely" && who)newLikely.push(entry);
     }
     if(added){ persistChats(); updateCalendarBadge(); }
     // For each new "likely" meeting, ask the model how likely the counterpart is to attend —
@@ -17801,6 +17819,9 @@ function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
    Gates: state.pulseOn, state.pulseMax events/day (calendar execution always runs — a due plan is
    a commitment), one pair attempt per day (pulseTried), never anyone currently in the scene. */
 function _planIncludesUser(e){
+  // A meeting explicitly flagged char↔char (two NPCs, no player) resolves OFFSTAGE via the world-pulse
+  // calendar executor — never through the player-facing resolver. Check this before the executor test.
+  if(e && e.withUser===false) return false;
   // New-model meetings are ALWAYS between the player and one character (executor field present), so
   // they always include the player — the world-pulse executor must never treat one as a user-less plan
   // (resolveDueMeetings owns all meeting resolution now).
@@ -19391,6 +19412,10 @@ async function postTurn(chat){
     runCalendarEngine(chat).catch(()=>{});
     // Persuasion: if the player just worked on an uncertain upcoming meeting, re-score its chance.
     adjustAttendance(chat).catch(()=>{});
+    // Character-to-character meetings resolve offstage via the world-pulse calendar executor (a narrated
+    // "X and Y met" beat). maybeWorldPulse already runs it when World Pulse is on; if it's off, still fire
+    // due char↔char plans here so calendar commitments between NPCs aren't silently skipped.
+    if(!state.pulseOn){ runCalendarExecutor(chat,null).catch(()=>{}); }
     // A due meeting resolves per its executor + certainty — a character walks in at the entrance, the
     // player is prompted to travel, or a no-show is logged with the right memory. If it consumes the
     // turn (an arrival or a travel), stop here so the Gamemaster doesn't also fire.

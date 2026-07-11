@@ -8453,7 +8453,8 @@ async function runCalendarEngine(chat){
       .map(e=>`- #${e.id}${e.negative?" [NEGATIVE — met when violated]":""} IF: ${e.condition} → ${e.title}${e.consequence?` (consequence: ${e.consequence})`:""}`)
       .slice(-20).join("\n");
     const msgs=[{role:"system",content:up("calPrompt")}];
-    recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>msgs.push(m));
+    // Include recent phone texts alongside the spoken scene — a plan made over text is still a plan.
+    recentExchangeMsgsWithTexts(chat,ENGINE_RECENT_TURNS+4).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${today}, ${chatPeriod(chat)}.\n\nALREADY TRACKED (do NOT re-emit these, nor any re-wording or translation of them):\n${openItems||"(none yet)"}\n\nOPEN CONDITIONS to check against this exchange:\n${openConds||"(none)"}\n\nBased ONLY on the exchange above, return {"new":[...], "triggered":[...]}: genuinely NEW future-binding items (meetings, conditionals, standing vows, custom), and any listed open condition this exchange clearly met or violated.`});
     const out=await chatCompletion(msgs,state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",360),dbg:"Future events tracker"});
     const parsed=parseJSON(out);
@@ -9596,6 +9597,17 @@ function recentExchangeMsgs(chat,n){
 function recentExchangeText(chat,n){
   return recentExchangeMsgs(chat,n||ENGINE_RECENT_TURNS).map(m=>`${m.name}: ${m.content}`).join("\n");
 }
+// Like recentExchangeMsgs but KEEPS phone texts (labelled), for the Calendar / Future-events
+// detector — a plan made over text ("meet me tomorrow") is just as binding as one said aloud. The
+// room engines (Gamemaster, Scene Writer) deliberately do NOT use this: a private text must never
+// spawn a spoken-room event.
+function recentExchangeMsgsWithTexts(chat,n){
+  const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
+  return chat.messages.filter(m=>m.role!=='system'&&!m.sysError).slice(-(n||ENGINE_RECENT_TURNS))
+    .map(m=>({role:m.role==='user'?'user':'assistant',
+              name:sanitizeName(m.role==='user'?state.user:(m.speaker||fallback)),
+              content:(m.textMsg?`(text message${m.role==='user'&&m.textWithName?" to "+m.textWithName:""}) `:"")+m.content}));
+}
 
 // Messages belonging to the day that is currently ending: everything AFTER the last day marker
 // (dayMarker messages are dropped in by endDay when a day advances). Falls back to the whole
@@ -9613,11 +9625,15 @@ function dayExchangeFor(dayMsgs,witnessId,fallbackName){
   const mapped=dayMsgs.filter(m=>{
     if(m.role==='system'||m.sysError)return false;
     if(m.narratorEvent||m.dayMarker||m.presenceNote) return true;   // ambient world content
+    // Phone texts are private to the two people on the thread — the texted character (and the
+    // player) LIVED them just like spoken dialogue, so they count for THAT character's day (used
+    // by daily relationships & diaries). They belong to no one else's day.
+    if(m.textMsg) return m.textWith===witnessId || m.speakerId===witnessId;
     if(Array.isArray(m.present)) return m.present.includes(witnessId);
     return true;
   }).map(m=>({role:m.role==='user'?'user':'assistant',
               name:sanitizeName(m.role==='user'?state.user:(m.speaker||fallbackName||"Narrator")),
-              content:m.content}));
+              content:(m.textMsg?"(text message) ":"")+m.content}));
   // Bound the payload so a very long day can't overflow the model's context (or cost). We keep a
   // generous window — much larger than a normal turn's histTurns — but still capped. The most
   // recent interactions carry the most weight for how the character feels now, so keep the tail.
@@ -15493,7 +15509,50 @@ async function sendTextMessage(chat,p,body){
     if(state.autoSpeak){ try{ autoSpeakMsg(msg,p); }catch(e){} }
     _notePlayerTexting(chat);                     // others in the room notice he's texting (not who/what)
     try{ maybeTextInvite(chat,p,body,reply); }catch(e){}
+    // Texts function like dialogue for the reasoning engines: scan the exchange for future plans
+    // (calendar) and let it settle into the character's memory. Both are fire-and-forget.
+    try{ if(state.calOn) runCalendarEngine(chat).catch(()=>{}); }catch(e){}
+    try{ rememberTextExchange(chat,p); }catch(e){}
   }catch(err){ _textTyping(p,false); toast(p.name+": "+((err&&err.friendly)||"text failed")); }
+}
+// Text messages create memories, just like a spoken exchange does — so the living engine (feelings,
+// intents, world-pulse, diaries) reasons from what was said over text too. Throttled per thread so a
+// long back-and-forth forms a few evolving memories rather than one per message, and deduped.
+async function rememberTextExchange(chat,p){
+  if(!state.mem||!state.key||!chat||!p)return;
+  const th=textThreadMsgs(chat,p.id);
+  if(th.length<3)return;                                  // too little to be worth a memory yet
+  chat._textMemLen=chat._textMemLen||{};
+  if(th.length-(chat._textMemLen[p.id]||0)<3)return;      // wait for a few new lines since the last one
+  chat._textMemLen[p.id]=th.length; markChatDirty(chat);
+  try{
+    const convo=th.slice(-10).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
+      `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`;
+    const out=await chatCompletion([
+      {role:"system",content:sys},
+      {role:"user",content:`Text conversation ${p.name} had with ${state.user}:\n\n${convo}`}
+    ],state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
+    const j=parseJSON(out);
+    if(!j||!j.content)return;
+    const importance=typeof j.importance_score==="number"?j.importance_score:0.4;
+    if(importance<(state.memMinImp||0))return;
+    const mem={
+      id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
+      content:String(j.content).trim(),
+      location:"", people:Array.isArray(j.people)?j.people.map(x=>String(x).trim()).filter(Boolean):[state.user],
+      emotion:j.emotion||"neutral", feelings:j.feelings?String(j.feelings).trim():"",
+      details:Array.isArray(j.details)?j.details.map(x=>String(x).trim()).filter(Boolean):[],
+      importance, tags:(Array.isArray(j.tags)?j.tags.map(t=>String(t).toLowerCase()):[]).concat("text"),
+      type:j.type||"EXPERIENCE",
+      ownerId:p.id, character:p.name, date:Date.now(), gameDay:chat.gameDay||1, source:"text",
+      universeId:(chat&&chat.universeId)||null, chatId:(chat&&chat.id)||null
+    };
+    if(!memoriesOf(p.id).some(m=>memText(m).toLowerCase()===mem.content.toLowerCase())){
+      state.memory.push(mem); persistMemory();
+      if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory();
+    }
+  }catch(e){}
 }
 // Privacy: when the player texts while others are physically present, they SEE that he's on his phone
 // texting someone — never who, never what. Throttled so it isn't spammed every message.
@@ -20134,8 +20193,9 @@ async function maybeBuildMemory(chat){
   }
   const ev=chat.memEvent;
 
-  // The exchange the tracker judges: the last few real dialogue lines.
-  const recent=chat.messages.filter(m=>!(m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote)).slice(-6);
+  // The exchange the tracker judges: the last few real dialogue lines. Phone texts are excluded —
+  // they are not part of the spoken-scene arc and get their own memory path (rememberTextExchange).
+  const recent=chat.messages.filter(m=>!(m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.textMsg)).slice(-6);
   if(recent.length<2)return;
   const exchange=recent.map(m=>`${m.role==='user'?state.user:(m.speaker||"?")}: ${m.content}`).join("\n");
 

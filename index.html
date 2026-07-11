@@ -3226,9 +3226,9 @@ A MEETING requires ALL THREE of these, or you emit NOTHING for it:
    - A CHARACTER agreed to come to {{user}} → "executor" is that character's exact name; the meeting is at {{user}}'s place or the named place.
    - {{user}} said they will go to a character → "executor" is "{{user}}".
 
-CERTAINTY — did the other party actually AGREE?
-- "certain": a clear yes — they accepted ("Yes, I'll be there", "See you tomorrow", "Deal").
-- "likely": a plan was floated but the answer was soft or absent — no clear yes and no clear no ("maybe", "we'll see", "I'll try to", or they never really answered). Emit it as "likely".
+CERTAINTY — did the COUNTERPART (the other party, NOT whoever proposed it) actually AGREE?
+- "certain": ONLY when the counterpart gave a clear, explicit yes in THIS exchange ("Yes, I'll be there", "See you tomorrow", "Deal"). Their OWN words must confirm it. A confident proposal by one side is NOT agreement.
+- "likely": a plan was floated, invited, or ONE side declared it ("I'll wait for you at my place tonight") but the counterpart's answer was soft, absent, or not yet given ("maybe", "we'll see", "I'll try", or they never answered). Whenever there is ANY doubt, use "likely" — never upgrade a one-sided plan to "certain".
 - A clear NO / refusal → emit NOTHING. There is no meeting.
 
 BE STRICT. Most exchanges contain no meeting at all — an empty list is the normal, correct outcome. Ignore vague intentions, routine errands ("I'll grab you a coffee"), politeness, and anything without a definite day and a real plan to meet. Do NOT track threats, vows, conditions, secrets, or debts — those are not meetings.
@@ -3241,7 +3241,7 @@ For each NEW meeting return an object:
 - "executor": "{{user}}" or a character's EXACT name — who acts to make it happen (rule 3 above).
 - "dayOffset": REQUIRED whole days from today (0 = today/tonight, 1 = tomorrow, ...).
 - "period": REQUIRED — the time of day. Pick the most fitting one from Morning/Midday/Afternoon/Evening/Night ("dinner"/"tonight" → Evening or Night, "breakfast"/"early" → Morning, "lunch" → Midday). Only use null if the time is genuinely impossible to guess.
-- "where": the place name where they meet (empty if unclear). "subArea": a specific spot inside it, or empty.
+- "where": where they meet. Keep possessive phrasing EXACTLY as said — "my place", "your place", "your room", "my house" — the app resolves whose home that is; otherwise give the named place (empty if unclear). "subArea": a specific spot inside it, or empty.
 - "certainty": "certain" or "likely".
 
 Return ONLY JSON in this shape: {"new":[...]} — the array may be empty. (A bare JSON array is also accepted.)`;
@@ -5063,6 +5063,9 @@ function loadState(){
   // 4-kind tracker and this whole redesign silently doesn't apply to them.
   _refreshPipe("calPrompt","FUTURE EVENTS TRACKER for a roleplay","MEETINGS TRACKER",DEFAULT_CAL);
   _refreshPipe("calReconcile","reconcile a roleplay's FUTURE-EVENTS list","MEETINGS list",DEFAULT_CAL_RECONCILE);
+  // v22.x — meetings: acceptance must come from the COUNTERPART (no one-sided "agreed"), and possessive
+  // places ("my place"/"your place") are kept verbatim for the app's home resolver. Refresh defaults.
+  _refreshPipe("calPrompt","MEETINGS TRACKER for a roleplay","the COUNTERPART (the other party, NOT whoever proposed",DEFAULT_CAL);
   // v22 — intent formation now weighs GOALS & AMBITIONS as a first-class input.
   _refreshPipe("intentForm","WHAT STRUCK THEM TODAY","GOALS & AMBITIONS",DEFAULT_INTENT_FORM);
   // v21.2 — SkyrimNet-derived prompt craft baked into the defaults: character embodiment (base),
@@ -8451,6 +8454,34 @@ function _whoOverlap(a,b){
   if(!A.length||!B.length)return false;
   return A.some(x=>B.some(y=>x===y||x.includes(y)||y.includes(x)));
 }
+// The location a persona calls home = the place that lists them as a resident.
+function homeLocOf(p){ if(!p)return null; return curLocations().find(l=>Array.isArray(l.residents)&&l.residents.includes(p.id))||null; }
+// The player's designated home for this universe (Universe editor → "Your home"). Null if unset.
+function playerHomeLoc(chat){
+  try{ const uni=universeById((chat&&chat.universeId))||curUniverseObj(); const id=uni&&uni.playerHomeLocId;
+    return id?(curLocations().find(l=>l.id===id)||null):null; }catch(_){ return null; }
+}
+// Resolve a meeting's free-text "where" to a concrete location, understanding POSSESSIVES the plain
+// name matcher throws away: "my place/room/house" → the PLAYER's home; "your/their place" or the
+// counterpart's name → THAT character's home. Falls back to a fuzzy name match, then — when only a
+// generic "place" (or nothing) was said — to the executor's implied home (a character coming to the
+// player lands at the player's home; the player going to a character lands at the character's home).
+function _resolvePlanLoc(chat,where,executor,counterpart){
+  const raw=String(where||"").trim(), low=raw.toLowerCase();
+  const un=String(state.user||"").toLowerCase();
+  const cn=(counterpart&&counterpart.name)?counterpart.name.toLowerCase():"";
+  const homeWord = low==="" || /\b(place|home|house|room|apartment|flat|ev|oda)\b/.test(low);
+  const firstPerson  = /\b(my|mine|benim|evim|odam)\b/.test(low) || (un&&low.includes(un));
+  const secondPerson = /\b(your|yours|senin|his|her|their)\b/.test(low) || (cn&&low.includes(cn));
+  if(firstPerson && !secondPerson){ const h=playerHomeLoc(chat); if(h)return h; }
+  if(secondPerson && counterpart){ const h=homeLocOf(counterpart); if(h)return h; }
+  const named=locByName(raw); if(named)return named;
+  if(homeWord){
+    if(executor && executor!=="user"){ const h=playerHomeLoc(chat); if(h)return h; }
+    if(executor==="user" && counterpart){ const h=homeLocOf(counterpart); if(h)return h; }
+  }
+  return null;
+}
 async function runCalendarEngine(chat){
   if(!state.calOn||!chat||!state.key)return;
   try{
@@ -8506,13 +8537,14 @@ async function runCalendarEngine(chat){
         return false;
       });
       if(dup)continue;
-      const loc=locByName(p.where||"");
+      const _cp=(_pulsePersonasByName(chat,who)||[])[0]||null;
+      const loc=_resolvePlanLoc(chat,p.where,executor,_cp);
       const entry={id:"cal_"+Date.now().toString(36)+Math.random().toString(36).slice(2,8),
         kind:"meeting", title, who, executor,
         day, period,
         where:String(p.where||"").trim(), locationId:loc?loc.id:null,
         subArea:String(p.subArea||"").trim(), character:who, charName:who,
-        _needsBind:!!String(p.where||"").trim(),
+        _needsBind:(!loc && !!String(p.where||"").trim()),
         certainty, probability:null,
         done:false, prompted:false, source:"auto"};
       cal.push(entry); added++;
@@ -8670,6 +8702,29 @@ function _plantNoShowMemory(chat,p,e,reason,variant){
 // probability). Handles both directions — a character coming to the player, or the player going to a
 // character — and always plants the right memory when it doesn't happen. Arrival is always the
 // location's ENTRANCE. Runs each turn from postTurn; returns true when it consumed the turn.
+// Narrate a meeting's no-show as a REAL in-scene Narrator beat (the player sees it and can react),
+// instead of only a silent toast. Model-written in the scene's own language when a key is present,
+// with a plain templated fallback. Always pushes exactly one narrator beat.
+async function narrateMeetingOutcome(chat,e,p){
+  const name=p?p.name:((e&&e.who)||"they");
+  const where=((e&&e.locationId&&locById(e.locationId))||{}).name||(e&&e.where)||"";
+  let line="";
+  try{
+    if(state.key){
+      const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
+      const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
+      const out=await chatCompletion(
+        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks."},{role:"user",content:ask}],
+        state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
+      line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
+    }
+  }catch(_){}
+  if(!line) line=`${state.user} waited${where?` at ${where}`:""}, but ${name} never came.`;
+  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,
+    content:`— ${line} —`,present:presentIds(chat).slice(),
+    img:null,imgState:"idle",vidState:"idle",video:null});
+  persistChats(); try{ appendNewBubbles(); }catch(_){} try{ updateChatHeader(); }catch(_){}
+}
 async function resolveDueMeetings(chat){
   if(!state.calOn||!chat)return false;
   if(chat.dnd)return false;                                          // Do Not Disturb silences meetings
@@ -8715,9 +8770,9 @@ async function resolveDueMeetings(chat){
       }
       e.done=true; persistChats(); updateCalendarBadge();
       if(roll(e.probability)) return await arriveCounterpart();
-      try{ _calNotice(chat,`${p?p.name:"They"} didn't come to "${e.title}"`); }catch(_){}
       if(p)_plantNoShowMemory(chat,p,e,"they chose not to go","declined");
-      return false;
+      await narrateMeetingOutcome(chat,e,p);   // inline narrated result — they never came
+      return true;
     }
     // Certain: the character comes no matter what.
     e.done=true; persistChats(); updateCalendarBadge();
@@ -8739,8 +8794,8 @@ async function resolveDueMeetings(chat){
   if(locId&&locObj&&locId!==here) await travelTo(locId,[]);
   if(e.certainty==="likely" && !roll(e.probability)){
     // The player went, but the character never showed.
-    try{ _calNotice(chat,`${p?p.name:"They"} never came to "${e.title}"`); }catch(_){}
     if(p)_plantNoShowMemory(chat,p,e,"they didn't come","declined");
+    await narrateMeetingOutcome(chat,e,p);   // inline narrated result — they never came
     return true;
   }
   // The meeting is on: make sure the character is in the scene (arrive at the entrance if needed).

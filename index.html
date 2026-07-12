@@ -779,7 +779,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v22.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v22.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -15751,6 +15751,17 @@ function deliverProactiveText(chat,p,message,why){
     persistMemory();
   }catch(e){}
 }
+// Does this text read as a sign-off / farewell — a natural end to the exchange, after which silence is
+// closure, not a snub? Used to stop the "you haven't answered me" nudge (and the day-end ignored-text
+// visit) once a conversation has been said goodbye to. Matches common farewell wording across the
+// languages the app is used in, plus goodnight / see-you-tomorrow style closers.
+function _looksLikeFarewell(text){
+  const t=String(text||"").toLowerCase().trim();
+  if(!t)return false;
+  return /\b(bye+|byee+|goodbye|good ?night|nighty ?night|see (you|ya|u)( (later|soon|tomorrow|around))?|talk (to you )?(later|soon|tomorrow)|catch you later|take care|farewell|laters|ttyl|cya|gn|gotta go|got to go|i'?m (heading|going|off) (off|out|to bed|now)?|heading (out|off|to bed)|sweet dreams)\b/.test(t)
+    || /(görüşürüz|görüşmek üzere|hoşça ?kal|hoşçakal|iyi geceler|kendine iyi bak|bay bay|güle güle|kapatıyorum|yatıyorum|ben kaçtım|sonra konuşuruz|iyi akşamlar|tamamdır o zaman)/.test(t)
+    || /(adios|hasta luego|hasta pronto|buenas noches|au revoir|bonne nuit|\bciao\b|tschüss|gute nacht)/.test(t);
+}
 // Decide whether ONE offstage character texts the player right now, and compose it. Scores the cast by
 // "pull" (charged memories, hot fast axes, a slow-axis swing today, an unanswered text) and only asks
 // the model about the most-charged one — so silence stays the default and cost stays bounded.
@@ -15773,7 +15784,9 @@ async function maybeProactiveText(chat,opts){
       if(mems.length)signal=memText(mems[mems.length-1]).slice(0,160); }catch(e){}
     const th=textThreadMsgs(chat,p.id);
     const lastT=[...th].reverse().find(m=>m.role==="assistant"), lastU=[...th].reverse().find(m=>m.role==="user");
-    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0));
+    // "Unanswered" only counts as a pull if the last thing THEY said wasn't a sign-off. After a farewell
+    // the silence is the natural end of the conversation, not the player ignoring them — so no nudge.
+    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && !_looksLikeFarewell(lastT.content||"");
     if(unanswered)s+=0.6;
     return {p,s,signal,unanswered};
   }).filter(x=>x.s>=0.85).sort((a,b)=>b.s-a.s);
@@ -15857,7 +15870,9 @@ async function reconcileTextsDay(chat,day){
     if(!(m.textMsg&&m.role==="assistant")||!m.speakerId||done.has(m.speakerId))return;
     const pid=m.speakerId; const th=textThreadMsgs(chat,pid);
     const lastT=[...th].reverse().find(x=>x.role==="assistant"), lastU=[...th].reverse().find(x=>x.role==="user");
-    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && (lastT.gday||day)<=day;
+    // A goodbye left "unanswered" is a conversation that ENDED, not one the player snubbed — don't plant
+    // a hurt/ignored memory or send them chasing over it.
+    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && (lastT.gday||day)<=day && !_looksLikeFarewell(lastT.content||"");
     if(!unanswered)return; done.add(pid);
     const p=(state.personas||[]).find(x=>x.id===pid); if(!p)return;
     const o=relObj(chat,pid,"__user__"); const aff=o.affection||0;
@@ -16231,6 +16246,16 @@ function castHistory(chat,forP){
     // OTHER narrator events (GM beats, environmental nudges): ambient to the CURRENT scene only — a
     // character shouldn't carry the whole day's worth of unrelated GM narration into a fresh scene.
     if(m.narratorEvent){ return idx>=arrivalCut; }
+    // TEXT MESSAGES: a phone thread is private (present:[]) so the witness filter below would drop it.
+    // But a character's OWN texts with the player are part of the SAME continuous relationship as the
+    // face-to-face scene — they remember what they texted and what they were texted. Thread this
+    // character's own texts into their roleplay context (never anyone else's phone thread), within the
+    // day window, tagged as texts in the map below so they aren't mistaken for lines spoken in the room.
+    if(m.textMsg){
+      if(dayOf[idx]<minDay) return false;
+      if(!forP) return true;
+      return m.textWith===forP.id || m.speakerId===forP.id;
+    }
     // DIALOGUE: within the 2-day window, witnessed by this character. For continuity we carry this
     // character's MOST RECENT prior shared scene (so the beach→pub thread resumes), but not unrelated
     // earlier scenes. `priorThreadStart` (computed once below) marks where that prior scene begins;
@@ -16244,6 +16269,15 @@ function castHistory(chat,forP){
     }
     return true;
   }).map(m=>{
+    // TEXT MESSAGES threaded in for continuity: label them clearly as phone texts (not words spoken in
+    // the scene) so the character stays consistent with the thread without treating a text as a line
+    // said out loud in the room. Their own texts keep their voice (assistant); the player's stay user.
+    if(m.textMsg){
+      if(m.role==='assistant'){
+        return {role:"assistant",name:sanitizeName(m.speaker||(forP&&forP.name)||"char"),content:`(text message) ${m.content}`};
+      }
+      return {role:"user",name:sanitizeName(state.user),content:`(${state.user}'s text message) ${m.content}`};
+    }
     // WHISPER: a private aside is FULL for its target (and the player's own view), and a content-free
     // note for everyone else — they know a whisper happened, not what was said.
     if(m.role==='user' && m.whisperTo){

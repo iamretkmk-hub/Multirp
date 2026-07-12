@@ -1185,6 +1185,8 @@
           <div class="desc" style="margin-top:8px"><svg class="ic"><use href="#i-brain"/></svg> <b>Two-tier recall.</b> Each turn the app injects a few of the character's own memories from <b>earlier today</b> (chosen for relevance to what's being said now) plus a few <b>diary</b> entries from previous days, under separate headings. Raw memories drive the diaries; the diary is the long-term memory.</div>
           <div><label>Today's memories per turn <span class="desc" style="display:inline">(from earlier today)</span></label><input type="number" id="setMemRecentCount" min="0" max="10" step="1" value="2"></div>
           <div><label>Diary entries per turn <span class="desc" style="display:inline">(previous days)</span></label><input type="number" id="setMemDistantCount" min="0" max="10" step="1" value="2"></div>
+          <div><label>Max intimate-memory share (0–1): <b><span id="memIntimateFracVal"></span></b> <span class="desc" style="display:block;font-weight:400">The most of each turn's injected memories that may be sexual/intimate — the rest refill with non-sexual history, so intimate scenes can't flood the payload. Lower = less. 1 = no cap.</span></label>
+            <input type="range" id="setMemIntimateFrac" min="0" max="1" step="0.05" oninput="document.getElementById('memIntimateFracVal').textContent=this.value"></div>
           <div style="height:1px;background:var(--border);margin:10px 0"></div>
           <div><label>Messages of history sent per reply</label><input type="number" id="setHistTurns" min="2" max="200" step="1" value="20"></div>
           <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20.</div>
@@ -1932,7 +1934,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   fnCfg:"sm_fncfg",
   // Memory condenser (Stage 4)
   condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",
-  memRecentCount:"sm_memrecentcount",memDistantCount:"sm_memdistantcount",
+  memRecentCount:"sm_memrecentcount",memDistantCount:"sm_memdistantcount",memIntimateFrac:"sm_memintimatefrac",
   gossipOn:"sm_gossipon",gossipThreshold:"sm_gossipthresh",gossipMaxPerDay:"sm_gossipmax",gossipModel:"sm_gossipmodel",gossipPrompt:"sm_gossipprompt",
   intentOn:"sm_intenton",intentForm:"sm_intentform",intentTick:"sm_intenttick",intentMax:"sm_intentmax",contemplate:"sm_contemplate",
   // Character bio generator + auto-character (Stages 5/6)
@@ -4539,6 +4541,7 @@ function loadState(){
     diaryCondenseBatch:+store.raw(K.diaryCondenseBatch,4),
     memRecentCount:+store.raw(K.memRecentCount,2),
     memDistantCount:+store.raw(K.memDistantCount,2),
+    memIntimateFrac:(()=>{const v=parseFloat(store.raw(K.memIntimateFrac,"0.4"));return isNaN(v)?0.4:Math.max(0,Math.min(1,v));})(),
     condensePrompt:store.raw(K.condensePrompt,DEFAULT_CONDENSE),
     gossipOn:store.get(K.gossipOn,true),
     gossipThreshold:+store.raw(K.gossipThreshold,0.6),
@@ -18569,12 +18572,13 @@ async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
       const out=await chatCompletion([
         {role:"system",content:sys},
         {role:"user",content:`Day ${day} — ${c.name}'s diary. The memories ${c.name} formed today:\n\n${memList}`}
-      ],state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",500),dbg:"Diary · "+c.name});
+      ],state.memModel,{temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",500),900),dbg:"Diary · "+c.name});   // generous token headroom so a dense diary isn't cut off mid-sentence
       const j=_parseDiaryOut(out);
       if(j&&j.content){
         state.memory.push({
           id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
-          content:String(j.content).trim().slice(0,1500),location:j.location||"",emotion:j.emotion||"neutral",   // generous backstop; the prompt keeps entries dense but non-repetitive
+          content:_trimToSentence(String(j.content).trim().slice(0,1800)),location:j.location||"",emotion:j.emotion||"neutral",   // trim to a clean sentence end (never mid-sentence); generous cap
+          importance:typeof j.importance_score==="number"?j.importance_score:0.7,
           importance:typeof j.importance_score==="number"?j.importance_score:0.7,
           tags:Array.isArray(j.tags)?j.tags.map(t=>String(t).toLowerCase()):["diary"],
           type:"DIARY",ownerId:c.id,character:c.name,
@@ -20576,6 +20580,44 @@ function memTokens(s){
   catch(e){ words=s.match(/[a-z0-9çğıöşü]+/g)||[]; }   // fallback if Unicode property escapes unsupported
   return words.filter(w=>w.length>2);
 }
+// Intimate/sexual memory detector (EN+TR), shared by the candidate prefilter AND the final injection
+// cap, so a character keeps recalling non-sexual history instead of intimate memories monopolizing.
+const _MEM_INTIMATE_RE=/\b(sex|sexual|intimate|kiss|orgasm|nude|naked|penetrat|thrust|moan|aroused|lust|blowjob|oral|breast|nipple|genital|climax|foreplay|seks|seksüel|öpüş|çıplak|şehvet|zevk|orgazm|meme|boşal|seviş|mastürbasyon|penis|vajina)/i;
+function memIsIntimate(m){
+  if(!m)return false;
+  if(m.emotion && /affectionate/i.test(m.emotion) && _MEM_INTIMATE_RE.test(memSearchText(m))) return true;
+  if(Array.isArray(m.tags) && m.tags.some(t=>_MEM_INTIMATE_RE.test(String(t)))) return true;
+  return _MEM_INTIMATE_RE.test(memSearchText(m));
+}
+// The MAX share (0..1) of injected memories that may be intimate (user setting; default 0.4, 1 = off).
+function memIntimateFrac(){ const v=+state.memIntimateFrac; return (isFinite(v)&&v>=0&&v<=1)?v:0.4; }
+// Cap intimate memories in an already-ranked pick to at most `frac` of `count`, refilling freed slots
+// with the top non-intimate memories from `pool` (then, if still short, the held-back intimate ones),
+// so the final injected set is diverse but never smaller than it was.
+function capIntimateMems(picked,pool,count){
+  if(!Array.isArray(picked)||picked.length<=1) return picked||[];
+  const frac=memIntimateFrac();
+  if(frac>=1) return picked;
+  const cap=Math.max(1,Math.floor((count||picked.length)*frac));
+  const out=[],overflow=[]; let used=0;
+  for(const m of picked){ if(memIsIntimate(m)){ if(used<cap){out.push(m);used++;} else overflow.push(m);} else out.push(m); }
+  if(out.length<picked.length){
+    const chosen=new Set(out.map(m=>m&&m.id));
+    for(const m of (pool||[])){ if(out.length>=picked.length)break; if(!m||chosen.has(m.id)||memIsIntimate(m))continue; out.push(m); chosen.add(m.id); }
+    for(const m of overflow){ if(out.length>=picked.length)break; out.push(m); }
+  }
+  return out.slice(0,picked.length);
+}
+// Trim a possibly token-truncated string back to its last COMPLETE sentence, so a diary never ends
+// mid-word/mid-sentence. If it already ends cleanly (or trimming would gut it), it's left untouched.
+function _trimToSentence(s){
+  let t=String(s||"").trim();
+  if(!t) return t;
+  if(/[.!?…"”'’)\]]$/.test(t)) return t;                 // already ends on terminal punctuation/quote
+  const m=t.match(/^[\s\S]*[.!?…]["”'’)\]]?(?=\s|$)/);    // through the last sentence-ending punctuation
+  if(m && m[0].trim().length >= Math.floor(t.length*0.6)) return m[0].trim();
+  return t;                                              // no safe boundary → keep as-is
+}
 /* keyword pre-filter so the ranker sees a bounded candidate set */
 function prefilter(query,limit,poolOverride){
   const qWords=new Set(memTokens(query));
@@ -20623,13 +20665,8 @@ function prefilter(query,limit,poolOverride){
   // so a genuinely intimate moment still surfaces, it just can't monopolize. Non-intimate memories
   // fill the freed slots in rank order. If there aren't enough non-intimate ones, intimate ones refill
   // (never leave slots empty).
-  const _intimateRe=/\b(sex|sexual|intimate|kiss|orgasm|nude|naked|penetrat|thrust|moan|aroused|lust|blowjob|oral|breast|nipple|genital|climax|foreplay|seks|seksüel|öpüş|çıplak|şehvet|zevk|orgazm|meme|boşal|seviş|mastürbasyon|penis|vajina)/i;
-  const _isIntimate=m=>{
-    if(m && m.emotion && /affectionate/i.test(m.emotion) && _intimateRe.test(memSearchText(m))) return true;
-    if(m && Array.isArray(m.tags) && m.tags.some(t=>_intimateRe.test(String(t)))) return true;
-    return m ? _intimateRe.test(memSearchText(m)) : false;
-  };
-  const _intimateCap=Math.max(1,Math.floor(limit*0.4));   // at most ~40% of the injected set
+  const _isIntimate=memIsIntimate;
+  const _intimateCap=Math.max(1,Math.floor(limit*memIntimateFrac()));   // at most this SHARE (user setting) intimate
   const balanced=[]; let intimateUsed=0; const _overflow=[];
   for(const m of diversified.map(x=>x.m)){
     if(balanced.length>=limit) break;
@@ -20710,10 +20747,14 @@ async function retrieveMemories(userText,chat,ownerId){
   };
 
   // Run both tiers in parallel.
-  const [recent,distant]=await Promise.all([
+  const [recent0,distant]=await Promise.all([
     rankPool(recentPool,recCount,"recent"),
     rankPool(distantPool,disCount,"distant")
   ]);
+  // FINAL intimate cap on the injected RECENT tier (where intimate scenes concentrate): the prefilter
+  // balances CANDIDATES, but the ranked-down final pick could still be mostly intimate — this bounds
+  // the actual payload to the user's share and refills freed slots with non-sexual today-memories.
+  const recent=capIntimateMems(recent0,recentPool,recCount);
   return {recent,distant};
 }
 
@@ -21902,6 +21943,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setDiaryCondenseKeep'); if(e)e.value=(state.diaryCondenseKeep!=null?state.diaryCondenseKeep:7);}
   {const e=document.getElementById('setMemRecentCount'); if(e)e.value=(state.memRecentCount!=null?state.memRecentCount:2);}
   {const e=document.getElementById('setMemDistantCount'); if(e)e.value=(state.memDistantCount!=null?state.memDistantCount:2);}
+  {const e=document.getElementById('setMemIntimateFrac'); if(e){const f=(state.memIntimateFrac!=null?state.memIntimateFrac:0.4); e.value=f; const v=document.getElementById('memIntimateFracVal'); if(v)v.textContent=f;}}
   {const e=document.getElementById('setGossipOn'); if(e)e.checked=state.gossipOn!==false;}
   {const e=document.getElementById('setGossipThreshold'); if(e)e.value=(state.gossipThreshold!=null?state.gossipThreshold:0.6);}
   {const e=document.getElementById('setGossipMaxPerDay'); if(e)e.value=(state.gossipMaxPerDay!=null?state.gossipMaxPerDay:3);}
@@ -22065,6 +22107,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setDiaryCondenseKeep'); if(e)state.diaryCondenseKeep=Math.max(2,Math.min(60,+e.value||7));}
   {const e=document.getElementById('setMemRecentCount'); if(e)state.memRecentCount=Math.max(0,Math.min(10,+e.value||0));}
   {const e=document.getElementById('setMemDistantCount'); if(e)state.memDistantCount=Math.max(0,Math.min(10,+e.value||0));}
+  {const e=document.getElementById('setMemIntimateFrac'); if(e){const v=parseFloat(e.value); state.memIntimateFrac=isNaN(v)?0.4:Math.max(0,Math.min(1,v));}}
   {const e=document.getElementById('setGossipOn'); if(e)state.gossipOn=e.checked;}
   {const e=document.getElementById('setGossipThreshold'); if(e)state.gossipThreshold=Math.max(0,Math.min(1,+e.value||0.6));}
   {const e=document.getElementById('setGossipMaxPerDay'); if(e)state.gossipMaxPerDay=Math.max(0,Math.min(10,+e.value||0));}
@@ -22134,7 +22177,7 @@ function saveSettings(notify){
   store.set(K.autoImg,state.autoImg);store.setRaw(K.rewritePrompt,state.rewritePrompt);
   store.setRaw(K.offstageEvent,state.offstageEvent);store.setRaw(K.calExec,state.calExec);store.setRaw(K.goalPursuit,state.goalPursuit);store.set(K.goalPursuitOn,state.goalPursuitOn!==false);store.setRaw(K.latentNpc,state.latentNpc);store.setRaw(K.trackerGen,state.trackerGen);
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
-  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
+  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);

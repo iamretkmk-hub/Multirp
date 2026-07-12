@@ -779,7 +779,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v22.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v22.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1210,6 +1210,9 @@
             <label class="switchLbl"><input type="checkbox" id="setStripNarr"><span class="sl"></span></label></div>
           <div><label>Keep this many recent messages full</label><input type="number" id="setStripKeepFull" min="2" step="1" value="6"></div>
           <div class="desc">Trims <i>*narration*</i> from OLDER messages within the window to save tokens. Recent messages are always sent in full. Applies only to roleplay replies.</div>
+          <div class="kvline"><span>Private narration (subjective scene)</span>
+            <label class="switchLbl"><input type="checkbox" id="setNarrPrivacy" checked><span class="sl"></span></label></div>
+          <div class="desc">Each present character only witnesses their OWN <i>*narration*</i> and <b>{{user}}</b>'s — never another character's narrated actions/thoughts (they still hear everyone's spoken dialogue). Stops characters reacting to things they couldn't have seen. Off = everyone sees all narration (old behaviour).</div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-globe"/></svg> Living Universe</h3>
@@ -1959,7 +1962,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",
   // History compaction (tiered narration stripping)
-  stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",
+  stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
   // Quality-of-life features
   recapOn:"sm_recapon",
   // Relationships + freeform trackers
@@ -4500,6 +4503,7 @@ function loadState(){
     autoCharOn:store.get(K.autoCharOn,true),
     autoCharDelay:+store.raw(K.autoCharDelay,5),
     stripNarr:store.get(K.stripNarr,true),
+    narrPrivacy:store.get(K.narrPrivacy,true),
     stripKeepFull:+store.raw(K.stripKeepFull,6),
     histTurns:+store.raw(K.histTurns,20),
     stInterval:+store.raw(K.stInterval,5),
@@ -14930,6 +14934,7 @@ function bubble(m){
   // Text messages live in the phone window too, but they also render inline here so the story reads
   // as one thread — clearly marked as a typed message, never mistaken for something said aloud.
   const textTag=m.textMsg?` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="Sent as a phone text message">${icon("message")} text message</span>`:"";
+  const whisperTag=m.whisperTo?` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="Whispered privately — only ${esc(m.whisperToName||'they')} can hear">🤫 whisper → ${esc(m.whisperToName||'')}</span>`:"";
   let avatar="",tempTag="";
   if(m.role==='assistant'){
     const sp=state.personas.find(x=>x.id===m.speakerId)||state.personas.find(x=>x.name===m.speaker);
@@ -14951,7 +14956,7 @@ function bubble(m){
             // copy was gated on media EXISTING AT RENDER TIME, but images land async via
             // refreshBubble (which never rebuilt the meta row), so the button effectively never showed.
   const actions=`<span class="msgActions">${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${m.mid}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${m.mid}')">${icon("trash")}</button></span>`;
-  b.innerHTML=`<div class="meta">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${actions}</div><div class="body">${_revealing?"":md(_dispText(m.content))}</div>`;
+  b.innerHTML=`<div class="meta">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${whisperTag}${actions}</div><div class="body">${_revealing?"":md(_dispText(m.content))}</div>`;
   if(m.role==='assistant'){
     // For finished image/video use the safe DOM builder (handles huge base64 data URLs);
     // loading/error states are cheap strings.
@@ -15279,6 +15284,10 @@ async function sendMessage(){
   let text=inp.value.trim();if(!text)return;
   const chat=curChat();
 
+  // ----- /whisper Name message — a private aside only that character hears; others just see that a
+  //       whisper happened. Runs a real reply turn (only that character responds).
+  {const wm=text.match(/^\/whisper\s+(.+)$/is);
+   if(wm){ inp.value="";inp.style.height="auto"; await sendWhisper(chat,wm[1]); return; }}
   // ----- OOC commands: /bring Name, /leave Name (or /send Name), /who ----- (never narrated)
   if(text.startsWith("/")){
     inp.value="";inp.style.height="auto";
@@ -15342,12 +15351,12 @@ async function sendMessage(){
     // ===== SINGLE PRESENT CHARACTER: direct flow =====
     const solo=cast[0];
     // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
-    let injected={recent:[],distant:[]};
+    let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
       try{
         const r=await retrieveMemories(text,chat,solo.id);
         injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
-      }catch(e){ injected={recent:[],distant:[]}; }
+      }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
     }
     // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
     // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
@@ -15872,6 +15881,40 @@ async function reconcileTextsDay(chat,day){
   }
   if(changed){ persistChats(); persistMemory(); if(scheduled){ try{ updateCalendarBadge(); }catch(e){} } }
 }
+// Deliver a private whisper from {{user}} to ONE present character. Only that character responds; the
+// others learn (in their own payload) that a whisper happened, never its content (see castHistory).
+async function sendWhisper(chat,rest){
+  const present=presentCast(chat);
+  if(!present.length){ toast("Nobody is here to whisper to."); return; }
+  const raw=String(rest||"").trim();
+  let target=null, body="";
+  const low=raw.toLowerCase();
+  present.slice().sort((a,b)=>(b.name||"").length-(a.name||"").length).some(c=>{
+    const nm=(c.name||"").toLowerCase();
+    if(nm && (low===nm || low.startsWith(nm+" ") || low.startsWith(nm+","))){
+      target=c; body=raw.slice(c.name.length).replace(/^[\s,:.\-]+/,"").trim(); return true; }
+    return false;
+  });
+  if(!target){ const parts=raw.split(/\s+/); const nm=(parts.shift()||"").toLowerCase();
+    target=present.find(c=>(c.name||"").toLowerCase()===nm)||(nm.length>=2?present.find(c=>(c.name||"").toLowerCase().includes(nm)):null);
+    if(target)body=parts.join(" ").trim(); }
+  if(!target){ toast("Whisper: no one here by that name. Usage: /whisper Name message"); return; }
+  if(!body){ toast("Usage: /whisper "+target.name+" <message>"); return; }
+  _heatSeq++;
+  chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
+  chat.lastActive=Date.now(); _followAfterSend=true;
+  {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
+  appendNewBubbles(); persistChats();
+  {const _list=document.getElementById('chatList'); if(_list){setScrollTop(_list,_list.scrollHeight);} if(typeof hideNewMsgPill==="function")hideNewMsgPill();}
+  const sb=document.getElementById('sendBtn'); if(sb)sb.disabled=true;
+  try{
+    await playCharacterTurn(chat,target,state.user);   // ONLY the whispered-to character responds
+    await runPresenceTracker(chat);
+    maybeBuildMemory(chat);
+    postTurn(chat);
+  }catch(e){ toast(target.name+": "+((e&&e.friendly)||"reply failed")); }
+  finally{ if(sb)sb.disabled=false; persistChats(); }
+}
 function handleOOC(chat,text){
   const m=text.match(/^\/(\w+)\s*(.*)$/);
   if(!m){toast("Unknown command");return;}
@@ -16008,6 +16051,16 @@ function stripNarration(text){
   // didn't wrap), fall back to the original so context isn't lost.
   if(t.length < Math.min(24, text.length*0.25)) return text.trim();
   return t;
+}
+// STRICT spoken-only: what OTHERS actually HEAR of a line — dialogue with the *narrated actions*
+// removed. Unlike stripNarration() there is NO fallback to the original: a pure-narration line
+// returns "" so it can be dropped (a character never learns another character's private narration).
+function spokenOnly(text){
+  if(!text) return "";
+  return String(text)
+    .replace(/\*[^*]*\*/g," ")     // *asterisk narration*
+    .replace(/_[^_]*_/g," ")       // _underscore stage directions_
+    .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
 }
 // Map a chat message to an API message (role + name + content). Shared by all roleplay
 // builders so behaviour stays identical everywhere.
@@ -16179,6 +16232,17 @@ function castHistory(chat,forP){
     }
     return true;
   }).map(m=>{
+    // WHISPER: a private aside is FULL for its target (and the player's own view), and a content-free
+    // note for everyone else — they know a whisper happened, not what was said.
+    if(m.role==='user' && m.whisperTo){
+      const tn=m.whisperToName||"someone";
+      if(!forP || forP.id===m.whisperTo){
+        return {role:"user",name:sanitizeName(state.user),
+          content:`(${state.user} leans in close and whispers to you, so no one else can hear): ${m.content}`};
+      }
+      return {role:"user",name:sanitizeName(state.user),
+        content:`[${state.user} leaned close and whispered something to ${tn} — you could not hear what was said]`};
+    }
     if(m.role==='assistant' && !m.narratorEvent && !m.presenceNote && !m.dayMarker){
       // SPEAKER ISOLATION (anti-bleed): a weak model that sees EVERY prior character line as its
       // own `assistant` output — each tagged "Name: …" in the content — learns the pattern "an
@@ -16193,10 +16257,15 @@ function castHistory(chat,forP){
       if(isSelf){
         return {role:"assistant",name:sanitizeName(sp),content:m.content};
       }
-      return {role:"user",name:sanitizeName(sp),content:`${sp}: ${m.content}`};
+      // NARRATION PRIVACY: another character's *narrated actions* are NOT witnessed — this character
+      // only HEARS their spoken words. Their own narration and {{user}}'s narration stay full. A line
+      // that was pure narration is dropped entirely (they heard nothing). Toggle: state.narrPrivacy.
+      let heard=m.content;
+      if(forP && state.narrPrivacy!==false){ heard=spokenOnly(m.content); if(!heard) return null; }
+      return {role:"user",name:sanitizeName(sp),content:`${sp}: ${heard}`};
     }
     return mapMsgToApi(m);
-  });
+  }).filter(Boolean);
   return compactHistory(mapped);
 }
 /* ===== ROLEPLAY MODEL ROTATION (#6) =========================================
@@ -16405,7 +16474,7 @@ async function playCharacterTurn(chat,p,addressed){
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
   if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
   try{
-    let injected={recent:[],distant:[]};
+    let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
       try{
         const r=await retrieveMemories(castConvoText(chat,4),chat,p.id);
@@ -16414,7 +16483,7 @@ async function playCharacterTurn(chat,p,addressed){
           diary:(r.diary||[]),
           longterm:(r.longterm||[])
         };
-      }catch(e){ injected={recent:[],distant:[]}; }
+      }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
     }
     // Resolve who this character is actually replying to → name + id for the tail guidance. Derive it
     // from the FRESHEST real line in the transcript (skip narration and this character's own lines),
@@ -20139,7 +20208,7 @@ async function playSingleReaction(chat,p,eventText){
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
   if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
   try{
-    let injected={recent:[],distant:[]};
+    let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
       const r=await retrieveMemories(eventText,chat,p.id);
       injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
@@ -22043,6 +22112,7 @@ function syncSettingsUI(){
   document.getElementById('setAutoCharOn').checked=state.autoCharOn;
   document.getElementById('setAutoCharDelay').value=state.autoCharDelay;
   document.getElementById('setStripNarr').checked=state.stripNarr;
+  {const e=document.getElementById('setNarrPrivacy'); if(e)e.checked=state.narrPrivacy!==false;}
   document.getElementById('setStripKeepFull').value=state.stripKeepFull;
   {const h=document.getElementById('setHistTurns'); if(h)h.value=state.histTurns;}
   document.getElementById('setRelOn').checked=state.relOn;
@@ -22220,6 +22290,7 @@ function saveSettings(notify){
   state.autoCharOn=document.getElementById('setAutoCharOn').checked;
   state.autoCharDelay=Math.max(1,+document.getElementById('setAutoCharDelay').value||5);
   state.stripNarr=document.getElementById('setStripNarr').checked;
+  {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=e.checked;}
   state.stripKeepFull=Math.max(2,+document.getElementById('setStripKeepFull').value||6);
   {const h=document.getElementById('setHistTurns'); if(h)state.histTurns=Math.max(2,Math.min(200,+h.value||20));}
   state.relOn=document.getElementById('setRelOn').checked;
@@ -22269,7 +22340,7 @@ function saveSettings(notify){
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
   store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
-  store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);
+  store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
   store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.setRaw(K.textVisitPrompt,state.textVisitPrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.setRaw(K.calReconcile,state.calReconcile);store.setRaw(K.attendEstimate,state.attendanceEstimate);store.setRaw(K.attendPersuade,state.attendancePersuade);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);

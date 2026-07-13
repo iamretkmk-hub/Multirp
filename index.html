@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v22.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -19273,8 +19273,8 @@ async function generateQuestArc(u,brief){
   try{
     out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Write the arc JSON now."}],
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,dbg:"Quest arc — "+brief});
-  }catch(e){ return null; }
-  const j=parseJSON(out); if(!j)return null;
+  }catch(e){ _qlog("arc.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
+  const j=parseJSON(out); if(!j){ _qlog("arc.fail","reply didn't parse as JSON"); return null; }
   const arc=String(j.arc||brief||"Arc").slice(0,60);
   // v22.9 — DYNAMIC ARCS: the designer returns the arc's GM-only premise + ONE opening quest
   // (j.quest); every later quest is written DURING play by generateNextQuest, from how the previous
@@ -19301,6 +19301,7 @@ async function generateQuestArc(u,brief){
     added++;
   });
   persistUniverses();
+  _qlog("arc.created",`"${arc}" — ${added} opening quest(s); premise ${String(j.premise||"").length} chars`);
   return {arc, added};
 }
 /* v20.7 — SEQUENTIAL QUEST PROGRESSION. Quests in an arc are gated by `seq`: only seq 0 starts
@@ -19325,7 +19326,20 @@ function questMarkDone(qid,opts){
   if(opts&&opts.result)q.result=String(opts.result).slice(0,240);
   const next=_activateNextQuest(uni,q.arc);
   persistUniverses();
+  _qlog("done",`"${q.title}"${q.result?" — "+q.result.slice(0,120):""}${next?` · pre-authored next unlocked: "${next.title}"`:""}`);
   return {quest:q,next};
+}
+/* ===== v23.0 — QUEST DEBUGGER ===== The Debug tab already shows the quest LLM payloads (Quest
+   arc / Quest next / Quest reconcile); this trail answers the other half — WHY the engine did or
+   didn't act: chain gates, materialization outcomes, reconciler verdicts, memory notes. In-memory,
+   bounded; inspected via the Quests modal's Debug button (openQuestDebugModal). */
+let questDbgLog=[];
+function _qlog(tag,detail){
+  try{
+    questDbgLog.push({t:Date.now(),tag:String(tag||""),detail:String(detail||"").slice(0,400)});
+    if(questDbgLog.length>150)questDbgLog=questDbgLog.slice(-150);
+    if(document.getElementById('questDbgModal'))openQuestDebugModal();   // live refresh while open
+  }catch(e){}
 }
 /* ===== v22.9 — QUEST MEMORY + DYNAMIC QUEST CHAIN ===== */
 /* QUEST MEMORY. Each quest carries its own progress log (q.progress = [{day,text}]): mechanical
@@ -19341,6 +19355,7 @@ function questProgressNote(uni,q,day,text){
   q.progress.push({day:day||1,text:t});
   if(q.progress.length>30)q.progress=q.progress.slice(-30);   // bounded per quest
   persistUniverses();
+  _qlog("memory",`"${q.title}" day ${day}: ${t.slice(0,120)}`);
 }
 // The arc's full story so far — each quest with its outcome + quest-memory lines — for the designer.
 function _questArcHistory(gd,arc){
@@ -19375,15 +19390,19 @@ async function _materializeQuest(chat,uni,q){
       const loc=_ensureLocationByName(uni,q.location);
       if(loc){ q.locationId=loc.id; q.where=loc.name;
         const sName=String(q.subArea||"").trim();
-        if(sName){ const s=_ensureSublocationByName(loc,sName); if(s){ q.subId=s.id; q.subName=s.name; } } }
+        if(sName){ const s=_ensureSublocationByName(loc,sName); if(s){ q.subId=s.id; q.subName=s.name; } }
+        _qlog("materialize.loc",`"${q.title}" → ${loc.name}${q.subName?" / "+q.subName:""}`); }
     }
     const nm=String(q.charName||q.npcName||"").trim();
     if(nm&&!q.entityCreated){
-      try{ await _questBuildNpc(uni,q); }catch(e){}
+      let r0=null;
+      try{ r0=await _questBuildNpc(uni,q); }catch(e){ _qlog("materialize.npc.error",String(e&&e.message||e)); }
+      if(r0)_qlog("materialize.npc",`"${q.title}" → ${q.charName||nm} (${r0==="bound"?"bound to existing":"full latent bio"})`);
       if(!q.entityCreated){
         const r=_createBoundEntity(uni,{title:q.title,desc:q.desc,charName:nm,entityType:"npc",
           locationId:q.locationId,subId:q.subId,sourceId:q.id,questId:q.id,where:q.where});
-        if(r.charId){ q.npcId=r.charId; q.charId=r.charId; q.charName=q.charName||nm; q.entityCreated=true; }
+        if(r.charId){ q.npcId=r.charId; q.charId=r.charId; q.charName=q.charName||nm; q.entityCreated=true;
+          _qlog("materialize.npc",`"${q.title}" → ${nm} (${r.made==="bound"?"bound to existing":"minimal latent card — bio authoring failed"})`); }
       }
     }
     persistUniverses(); persistPersonas();
@@ -19432,12 +19451,13 @@ async function generateNextQuest(chat,uni,arc){
     cast, undercurrents:under||"(nothing notable brewing)",
     events:events||"(none)", day:String(day)
   });
+  _qlog("next.design",`arc "${arc}" day ${day} — history ${gd.quests.filter(q=>q&&q.arc===arc).length} quest(s), ${under?"undercurrents fed":"no undercurrents"}`);
   let out;
   try{
     out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Write the JSON now."}],
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Quest next — "+arc});
-  }catch(e){ return null; }
-  const j=parseJSON(out); if(!j)return null;
+  }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
+  const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
   if(j.arcComplete===true){
     gd.arcMeta=(gd.arcMeta&&typeof gd.arcMeta==="object")?gd.arcMeta:{};
     gd.arcMeta[arc]=Object.assign({},gd.arcMeta[arc],{complete:true});
@@ -19449,9 +19469,10 @@ async function generateNextQuest(chat,uni,arc){
       persistChats(); try{ appendNewBubbles(); }catch(e){}
     }
     try{ toast("Arc concluded: "+arc); }catch(e){}
+    _qlog("next.concluded",`arc "${arc}" — epilogue narrated`);
     return {complete:true};
   }
-  const qq=j.quest; if(!qq||!qq.name)return null;
+  const qq=j.quest; if(!qq||!qq.name){ _qlog("next.fail","JSON had no quest.name"); return null; }
   const maxSeq=gd.quests.filter(q=>q&&q.arc===arc).reduce((a,q)=>Math.max(a,q.seq||0),-1);
   const q={
     id:"q_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
@@ -19465,6 +19486,7 @@ async function generateNextQuest(chat,uni,arc){
   await _materializeQuest(chat,uni,q);
   persistUniverses();
   _questAnnounce(chat,q);
+  _qlog("next.created",`"${q.title}" (seq ${q.seq})${q.location?" at "+q.location:""}${q.npcName?" · npc "+q.npcName:""}`);
   try{ toast("New quest: "+q.title); }catch(e){}
   try{ if(document.getElementById('questsModal'))openQuestsModal(); }catch(e){}
   return {quest:q};
@@ -19477,14 +19499,15 @@ async function maybeGenerateNextQuest(chat,uni,arc){
   try{
     if(!uni||!arc)return null;
     const gd=uni.gameData||{}; const quests=Array.isArray(gd.quests)?gd.quests:[];
-    if(quests.some(q=>q&&q.arc===arc&&!q.done&&q.startActive!==false))return null;   // one live quest per arc
-    if(gd.arcMeta&&gd.arcMeta[arc]&&gd.arcMeta[arc].complete)return null;            // arc already concluded
+    if(quests.some(q=>q&&q.arc===arc&&!q.done&&q.startActive!==false)){ _qlog("chain.skip",`arc "${arc}" — a quest is already live`); return null; }   // one live quest per arc
+    if(gd.arcMeta&&gd.arcMeta[arc]&&gd.arcMeta[arc].complete){ _qlog("chain.skip",`arc "${arc}" — already concluded`); return null; }
     const key=uni.id+"|"+arc;
-    if(_qGenBusy.has(key))return null;
+    if(_qGenBusy.has(key)){ _qlog("chain.skip",`arc "${arc}" — a generation is already running`); return null; }
     _qGenBusy.add(key);
     try{
       const next=_activateNextQuest(uni,arc);          // legacy pre-authored arcs still step forward
       if(next){
+        _qlog("chain.activated",`arc "${arc}" — pre-authored "${next.title}" unlocked`);
         await _materializeQuest(chat,uni,next);
         persistUniverses(); _questAnnounce(chat,next);
         return {quest:next};
@@ -19539,7 +19562,8 @@ Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if no
     const usr=`Day ${day} just ended.\n\nMEMORIES FORMED TODAY (all characters):\n${mems.join("\n")}\n\nACTIVE QUESTS:\n${qList}\n\nReturn the JSON array.`;
     const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
     const arr=parseJSON(out);
-    if(!Array.isArray(arr)||!arr.length)return;
+    if(!Array.isArray(arr)||!arr.length){ _qlog("reconcile",`day ${day}: no quest movement judged (${active.length} active)`); return; }
+    _qlog("reconcile",`day ${day}: ${arr.length} verdict(s) for ${active.length} active quest(s)`);
     let changed=false; const completed=[];
     for(const r of arr){
       if(!r)continue;
@@ -19626,6 +19650,81 @@ function questDeleteUI(qid){
   if(!confirm(`Delete quest "${q.title||""}"? Its progress log goes with it.`))return;
   gd.quests=qs.filter(x=>x!==q);
   persistUniverses(); toast("Quest deleted"); _refreshQuestViews();
+}
+/* v23.0 — QUEST DEBUGGER UI. Per-arc engine state (meta, entity resolution, memory counts), the
+   decision trail (_qlog), a manual "run the chain now" per arc, and a copyable state dump. */
+function _closeQuestDebug(){ const m=document.getElementById('questDbgModal'); if(m)m.remove(); }
+function openQuestDebugModal(){
+  const u=_questsUni(); if(!u){ toast("Open a universe first"); return; }
+  _closeQuestDebug();
+  const gd=(u.gameData&&typeof u.gameData==="object")?u.gameData:{};
+  const quests=Array.isArray(gd.quests)?gd.quests:[];
+  const meta=gd.arcMeta||{};
+  const arcs=[...new Set(quests.map(q=>q&&q.arc).filter(Boolean))];
+  window._qdbgArcs=arcs;   // index-addressed so arc names with quotes can't break the onclick
+  const arcBlock=arcs.map((a,i)=>{
+    const am=meta[a]||{};
+    const rows=quests.filter(q=>q&&q.arc===a).sort((x,y)=>((x.seq??1e9)-(y.seq??1e9))).map(q=>{
+      const st=q.done?"done":(q.startActive!==false?"active":"locked");
+      const loc=q.locationId?(locById(q.locationId)?"loc ✓":"loc ?"):(q.location?"loc pending":"no loc");
+      const npc=q.npcId?((state.personas||[]).some(p=>p&&p.id===q.npcId)?"npc ✓":"npc ?"):(q.npcName?"npc pending":"no npc");
+      const n=(q.progress||[]).length;
+      return `<div class="desc" style="margin:2px 0">#${q.seq??"?"} <b>${esc(q.title||"")}</b> — ${st} · ${loc} · ${npc} · ${n} memory note${n===1?"":"s"}</div>`;
+    }).join("");
+    const live=quests.some(q=>q&&q.arc===a&&!q.done&&q.startActive!==false);
+    return `<div class="card" style="padding:10px">
+      <div class="qrow">
+        <div class="qtxt"><b>${esc(a)}</b>${am.complete?` <span style="color:var(--good)">· concluded</span>`:""}
+          ${am.brief?`<div class="desc">brief: ${esc(am.brief)}</div>`:""}
+          ${am.premise?`<div class="desc" style="opacity:.75">premise (GM-only): ${esc(am.premise)}</div>`:""}
+          ${rows||'<div class="desc">(no quests)</div>'}
+        </div>
+        <div class="qbtns">${(!am.complete&&!live)?`<button class="btn small" title="Run the chain now: activate the pre-authored next quest or design one" onclick="questDebugForceNext(${i})">${icon("sparkle")} next</button>`:""}</div>
+      </div></div>`;
+  }).join("")||`<div class="desc">(no arcs yet)</div>`;
+  const logRows=questDbgLog.slice().reverse().map(e=>{
+    const t=new Date(e.t),p=n=>String(n).padStart(2,"0");
+    return `<div class="desc" style="margin:2px 0"><span style="opacity:.55">${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}</span> <b>${esc(e.tag)}</b>${e.detail?` — ${esc(e.detail)}`:""}</div>`;
+  }).join("")||`<div class="desc">(nothing logged yet — the trail fills as the quest engine runs)</div>`;
+  const m=document.createElement('div'); m.id="questDbgModal"; m.className="modal show";
+  m.innerHTML=`<button class="x" onclick="_closeQuestDebug()">×</button>
+   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch">
+     <h3>${icon("bug")} Quest debugger — ${esc(u.name||"")}</h3>
+     <div class="desc">Engine state per arc, plus a trail of every quest-engine decision (why the chain did or didn't act). The raw LLM payloads are in the Debug tab (Quest arc / Quest next / Quest reconcile). The premise shown here is GM-only — reading it spoils the arc.</div>
+     ${arcBlock}
+     <div class="desc" style="margin-top:8px;font-weight:600">Engine trail (newest first)</div>
+     <div style="max-height:36vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px 8px">${logRows}</div>
+     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+       <button class="btn sec small" onclick="questDebugExport()">${icon("download")} Export state</button>
+       <button class="btn sec small" onclick="questDbgLog=[];openQuestDebugModal()">Clear trail</button>
+       <button class="btn sec small" style="margin-left:auto" onclick="_closeQuestDebug()">Close</button>
+     </div>
+   </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)_closeQuestDebug(); });
+  document.body.appendChild(m);
+}
+async function questDebugForceNext(idx){
+  const u=_questsUni(); const chat=curChat();
+  const arc=(window._qdbgArcs||[])[idx];
+  if(!u||!arc)return;
+  _qlog("force",`manual chain run for arc "${arc}"`);
+  toast("Running the quest chain…");
+  try{ await maybeGenerateNextQuest(chat,u,arc); }catch(e){ _qlog("force.error",String(e&&e.message||e)); }
+  openQuestDebugModal(); _refreshQuestViews();
+}
+// Download the full quest-engine state + trail as JSON (same spirit as the Debug tab's Export).
+function questDebugExport(){
+  try{
+    const u=_questsUni(); if(!u)return;
+    const gd=u.gameData||{};
+    const data=JSON.stringify({universe:u.name,exported:new Date().toISOString(),
+      arcMeta:gd.arcMeta||{},quests:gd.quests||[],trail:questDbgLog},null,2);
+    const blob=new Blob([data],{type:"application/json"});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download="quest-debug.json"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast("Quest state exported");
+  }catch(e){ toast("Couldn't export"); }
 }function _closeQuestsModal(){ const m=document.getElementById('questsModal'); if(m)m.remove(); }
 function openQuestsModal(){
   const u=_questsUni(); if(!u){ toast("Open a universe first"); return; }
@@ -19687,6 +19786,7 @@ function openQuestsModal(){
      <div style="display:flex;gap:8px;flex-wrap:wrap">
        <button class="btn sec small" id="qmLocBtn" onclick="questCreateLocations()">${icon("pin")} Create locations</button>
        <button class="btn sec small" id="qmNpcBtn" onclick="questCreateNpcs()">${icon("user")} Create NPCs</button>
+       <button class="btn sec small" id="qmDbgBtn" onclick="openQuestDebugModal()">${icon("bug")} Debug</button>
      </div>
      <div class="desc" style="margin-top:6px">Create locations materializes each quest's place. Create NPCs writes a full hidden character for each quest figure — they stay undiscovered until the player finds them in play. Quests generated DURING play do both automatically; these buttons are the manual fallback.</div>
      <button class="btn sec small" style="margin-top:10px" onclick="_closeQuestsModal()">Close</button>

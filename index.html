@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1390,8 +1390,8 @@
     <div style="margin-top:6px"><label><svg class="ic"><use href="#i-masks"/></svg> Director notes <span class="desc">(how drama, grudges & schemes work in this world — fed to the Gamemaster & Scene Writer)</span></label>
       <textarea class="fld" id="ueDirectingNotes" placeholder="Auto-written when a universe is AI-generated. Describes the genre's tensions, what events fit, how characters act on grudges/ambitions, and the tone of confrontation." style="min-height:90px"></textarea>
       <button type="button" class="btn sec small" id="ueDirGenBtn" onclick="regenDirectingNotes()" style="margin-top:4px"><svg class="ic"><use href="#i-sparkle"/></svg> Write from world & cast</button>
-      <button type="button" class="btn sec small" id="ueTuneBtn" onclick="runTuneUniverse()" style="margin-top:4px"><svg class="ic"><use href="#i-sparkle"/></svg> Tune engine prompts to this world</button>
-      <div class="desc" style="margin-top:2px">Rewrites the gossip / intent / confrontation-judge engine prompts with this world's flavor (saved as per-universe overrides; each result is validity-checked and skipped if it would break the prompt's JSON contract). Manual only — never runs automatically.</div></div>
+      <button type="button" class="btn sec small" id="ueTuneBtn" onclick="runTuneUniverse()" style="margin-top:4px"><svg class="ic"><use href="#i-sparkle"/></svg> Update engine prompts for this world</button>
+      <div class="desc" style="margin-top:2px">Rewrites the living-engine prompts with this world's flavor: gossip, intent form/tick, confrontation judge, offstage interactions, plan executor, goal pursuit, and the character-quest designer / step / text-ask. Each gets a prompt-specific updater brief; every result is validity-checked (placeholders, JSON contract, code-evaluated enums like the quest gate menu) and skipped if it would break anything. Saved as per-universe overrides — your global prompts stay untouched. Manual only — never runs automatically.</div></div>
     <div style="margin-top:6px"><label><svg class="ic"><use href="#i-masks"/></svg> Genre pack &amp; guide <span class="desc">(six short flavor texts injected into every genre-sensitive engine — replies, drama director, judges, relationships, diaries, pacing — so all systems play the same genre. Auto-written when a universe is generated; edit freely.)</span></label>
       <details class="acc"><summary>Edit the six sections + universe guide</summary>
         <label class="desc">Voice &amp; tone (character replies)</label><textarea class="fld" id="uegpVoice" style="min-height:56px"></textarea>
@@ -4677,7 +4677,7 @@ function loadState(){
   // global value (or default) as intended. Legit per-universe tuning is preserved.
   try{
     if(!store.raw("sm_promptscope_v1","")){
-      const TUNABLE=new Set(["gossipPrompt","intentForm","intentTick","confrontJudge"]);
+      const TUNABLE=new Set(["gossipPrompt","intentForm","intentTick","confrontJudge","offstageEvent","calExec","goalPursuit","charQuestGen","charQuestStep","charQuestText"]);
       let stripped=0;
       (state.universes||[]).forEach(u=>{
         if(u&&u.prompts&&typeof u.prompts==="object"){
@@ -4698,7 +4698,7 @@ function loadState(){
   // override. This is exactly "keep universe prompts empty unless meaningfully different".
   try{
     if(!store.raw("sm_promptscope_v2","")){
-      const TUNABLE=new Set(["gossipPrompt","intentForm","intentTick","confrontJudge"]);
+      const TUNABLE=new Set(["gossipPrompt","intentForm","intentTick","confrontJudge","offstageEvent","calExec","goalPursuit","charQuestGen","charQuestStep","charQuestText"]);
       let stripped=0;
       (state.universes||[]).forEach(u=>{
         if(u&&u.prompts&&typeof u.prompts==="object"){
@@ -12337,7 +12337,7 @@ async function runTuneUniverse(){
   const u=editingUniverse||curUniverseObj();
   if(!u){ toast("Open a universe first"); return; }
   const btn=document.getElementById('ueTuneBtn');
-  if(btn){btn.disabled=true;btn.textContent="Tuning… (4 prompts, ~1 min)";}
+  if(btn){btn.disabled=true;btn.textContent=`Updating… (${UNI_TUNE_TARGETS.length} prompts, ~2 min)`;}
   try{
     const n=await tuneUniversePrompts(u);
     persistUniverses();
@@ -12555,15 +12555,55 @@ function _tunedPromptIsSafe(base,tuned,mustBeJson){
 // the Genre Pack: rewriting whole prompts per-universe risked garbling JSON/placeholder contracts
 // and fought _refreshPipe default upgrades. Kept callable (console/manual) and existing tuned
 // u.prompts{} overrides still resolve via up() as before.
+/* v23.3 — WHICH PROMPTS ARE UNIVERSE-TUNED, AND WHY. Tuned: the living-engine JUDGES whose sense
+   of "what counts" (a charged interaction, a motive worth nursing, an ambition step, a personal
+   quest worth committing to, a believable ask of the player) is genre-dependent, and which only
+   receive a truncated world blurb at runtime. NOT tuned: the GM / Scene Writer pipeline (the genre
+   pack already injects per-universe flavor blocks into those), the quest ARC designers questGen /
+   questNext (they receive the full setting + directing + cast at runtime), and every mechanical /
+   memory / format prompt (genre-neutral contracts). Each target carries:
+   · focus    — the per-prompt UPDATER BRIEF appended to the tuner meta-prompt: what to adapt for
+                this world and what is untouchable in THIS prompt.
+   · mustKeep — literal strings that must survive verbatim (JSON keys, CODE-EVALUATED enums such as
+                the char-quest gate menu); a result missing any is rejected and the default kept.
+     These same keys double as the import sanitizer's markers, so a tuned override survives
+     export/import while stale garbage is stripped. */
+const UNI_TUNE_TARGETS=[
+  {key:"gossipPrompt", json:true,
+   focus:"Adapt WHO would care about what, what counts as juicy here, and how word travels in this world (court whispers, comm-channel chatter, tavern talk, servants' corridors...). Keep every rule about vagueness, sourcing and the memory format.",
+   mustKeep:[]},
+  {key:"intentForm", json:true,
+   focus:"Adapt what stirs a motive in this genre — the slights, debts, temptations and ambitions native to this world — and any in-text examples. Keep the kind list, thresholds and the JSON contract untouched.",
+   mustKeep:[]},
+  {key:"intentTick", json:true,
+   focus:"Adapt how motives fester, fade, and recruit allies in this world's social texture. Keep the mechanics, statuses and the JSON contract untouched.",
+   mustKeep:[]},
+  {key:"confrontJudge", json:true,
+   focus:"Adapt what confrontation looks and sounds like in this world (a duel of words at court, a back-alley reckoning, a boardroom ambush) and any examples. Keep conviction/evidence mechanics and the JSON contract untouched.",
+   mustKeep:[]},
+  {key:"offstageEvent", json:true,
+   focus:"Adapt what makes two co-located characters interact in THIS world and what the event narration's texture is (what a scheme, a tenderness, a clash looks like here). Keep the selectivity rule (most checks return happened:false), the output-language instructions, and the JSON contract untouched.",
+   mustKeep:['"happened"']},
+  {key:"calExec", json:true,
+   focus:"Adapt how offstage plans resolve in this world's texture — who shows up how, what going wrong looks like here. Keep the output-language instructions and the JSON contract untouched.",
+   mustKeep:['"followup"']},
+  {key:"goalPursuit", json:true,
+   focus:"Adapt what a concrete, proportionate step toward ambition looks like in this world (a favor called in at court, a contract undercut, a ritual bartered, a rival's supplier bribed) and the in-text examples. Keep the selectivity bias (most days acted:false), the output-language instructions, and the JSON contract untouched.",
+   mustKeep:['"acted"']},
+  {key:"charQuestGen", json:true,
+   focus:"Adapt what a worthy PERSONAL quest looks like in this world, what asks of the player are believable here, and which gate naturally fits which ask; swap the in-text examples (e.g. the harbor-contract example) for ones native to this world. NEVER touch the gate enum (user_alone|with_char|at_location|any), the approach enum (text|in_person|either), the target/USER rules, or any JSON key.",
+   mustKeep:['"quest"','"gate"','"ask"','"approach"','user_alone|with_char|at_location|any','text|in_person|either']},
+  {key:"charQuestStep", json:true,
+   focus:"Adapt what an offstage quest move looks like in this world — how people maneuver, what setbacks and complications are native here. Keep the outcome enum (progress|done|failed), the selectivity rule (most days moved:false), the output-language instructions, and the JSON contract untouched.",
+   mustKeep:['"moved"','"outcome"','progress|done|failed']},
+  {key:"charQuestText", json:true,
+   focus:"Adapt the texting voice and register to this world — slang, formality, what people here would plausibly type. The phone-text mechanic itself is the app's side channel and stays even in period settings; keep the no-nag follow-up rule and the JSON contract untouched.",
+   mustKeep:['"message"']}
+];
 async function tuneUniversePrompts(universe){
   if(!universe||!state.key)return 0;
   if(!universe.prompts||typeof universe.prompts!=="object")universe.prompts={};
-  const targets=[
-    {key:"gossipPrompt", json:true},
-    {key:"intentForm",   json:true},
-    {key:"intentTick",   json:true},
-    {key:"confrontJudge",json:true}
-  ];
+  const targets=UNI_TUNE_TARGETS;
   const directing=(universe.directingNotes||"").slice(0,1200);
   const setting=(universe.setting||"").slice(0,1200);
   let tuned=0;
@@ -12572,15 +12612,24 @@ async function tuneUniversePrompts(universe){
     const base=(state[t.key]&&String(state[t.key]).trim())||(reg&&reg.def&&reg.def())||"";
     if(!base)continue;
     try{
-      const sys=fillTpl(up("promptTuner"),{ setting, directing, base });
+      // The per-prompt updater brief rides AFTER the (possibly user-customized) tuner meta-prompt,
+      // so custom tuners still get it and a missing {{focus}} token can never be an issue.
+      const sys=fillTpl(up("promptTuner"),{ setting, directing, base })
+        +(t.focus?`\n\nFOR THIS PARTICULAR PROMPT — WHAT TO ADAPT (and nothing else):\n${t.focus}`:"");
       const out=await chatCompletion([
         {role:"system",content:sys},
         {role:"user",content:`Output the lightly-adjusted version of the prompt for "${universe.name}".`}
-      ],authoringModel(),{temp:fnTemp("mem",0.4),max:fnTok("mem",1400),dbg:"Prompt tuner · "+t.key});
+      ],authoringModel(),{temp:fnTemp("mem",0.4),
+        // long bases (e.g. the char-quest designer) need more output room than the old flat cap
+        max:Math.max(fnTok("mem",1400),Math.min(3000,Math.ceil(base.length/2))),
+        dbg:"Prompt tuner · "+t.key});
       let cand=stripInlineReasoning(String(out||"")).trim()
         .replace(/^"""\s*/,"").replace(/\s*"""$/,"")
         .replace(/^```[a-z]*\n?/i,"").replace(/\n?```$/,"");
-      if(_tunedPromptIsSafe(base,cand,t.json)){
+      // Code-evaluated contracts (enums the backend parses) must survive VERBATIM — a tune that
+      // drops one is rejected outright, on top of the placeholder/JSON safety net.
+      const keepOk=(t.mustKeep||[]).every(s=>cand.indexOf(s)!==-1);
+      if(keepOk && _tunedPromptIsSafe(base,cand,t.json)){
         universe.prompts[t.key]=cand; tuned++;
         // Keep the OPEN editor's draft in sync, so (a) the "Custom for this universe" accent indicator
         // shows immediately and (b) a later editor Save — which writes _uePrompts back over
@@ -23753,7 +23802,16 @@ async function importUniversesFile(b){
     confrontJudge:"impartial REFEREE",
     sceneWriter:"SCENE WRITER",
     gmJudge:"GAMEMASTER",
-    gmAuthor:"GAMEMASTER"
+    gmAuthor:"GAMEMASTER",
+    // v23.3 — universe-tuned living-engine prompts: their markers are JSON keys the tuner is
+    // REQUIRED to preserve (same strings as UNI_TUNE_TARGETS mustKeep), so a legit tuned override
+    // always survives import while stale garbage is stripped.
+    offstageEvent:'"happened"',
+    calExec:'"followup"',
+    goalPursuit:'"acted"',
+    charQuestGen:'"quest"',
+    charQuestStep:'"moved"',
+    charQuestText:'"message"'
   };
   let stripped=0;
   incoming.forEach(u=>{

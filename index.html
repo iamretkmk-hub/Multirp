@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6532,6 +6532,10 @@ function _playDubUrl(url){
     if(err&&(err.name==="NotAllowedError"||err.name==="AbortError")){
       if(!_audioUnlocked && typeof toast==="function") toast("Tap the screen once to enable audio, then it will play.");
     }
+    // v23.9 — normalize the element out of play-rejected limbo (some engines leave paused=false
+    // with playback never advancing). The explicit pause() makes its state truthful for the mic
+    // gate AND fires the pause event that resolves a waiting queue job — no wedge either way.
+    try{ _dubAudio.pause(); }catch(_){}
   });
 }
 // v19.4 — awaitable playback (resolves on ended/error) + _dubActive flag while ANY dub audio is
@@ -6605,13 +6609,25 @@ async function _inworldFetchPcm(text,voiceId){
 }
 function _playBufAwait(buffer,fx){
   if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
-  const ctx=_dubCtx; const node=ctx.createBufferSource(); node.buffer=buffer;
+  const ctx=_dubCtx;
+  try{ if(ctx.state==="suspended") ctx.resume().catch(()=>{}); }catch(_){}
+  const node=ctx.createBufferSource(); node.buffer=buffer;
   node.connect(fx?_narrFxInto(ctx):ctx.destination);   // fx = the narrator's subtle other-world chain
   _dubSources.push(node);
   _dubActive=true;
-  const done=new Promise(res=>{ node.onended=()=>{ _dubSources=_dubSources.filter(s=>s!==node); _dubActive=_dubSources.length>0; _dubTailUntil=performance.now()+350; res(); }; });
-  node.start();
-  return done;
+  // v23.9 — DURATION FAILSAFE: on a suspended context (no gesture yet) a started source never
+  // progresses, so onended never fires — which used to leave _dubSources/_dubActive stuck forever
+  // (wedging the queue AND permanently gating the narration mic). The clip's own duration bounds
+  // the wait: real playback ends via onended as before; a silent wedge is force-finished.
+  return new Promise(res=>{
+    let fine=false;
+    const fin=()=>{ if(fine)return; fine=true;
+      _dubSources=_dubSources.filter(s=>s!==node); _dubActive=_dubSources.length>0;
+      _dubTailUntil=performance.now()+350; res(); };
+    node.onended=fin;
+    setTimeout(fin,Math.ceil((buffer.duration||1)*1000)+2000);
+    node.start();
+  });
 }
 function _playPcmAwait(f32,fx){
   if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
@@ -6804,8 +6820,17 @@ async function nmStart(){
       // check (playing, not ended) and the live WebAudio source list make that class of leak
       // impossible regardless of flag bookkeeping.
       if(_dubActive||performance.now()<_dubTailUntil) return;
-      if(_dubSources.length>0) return;                                    // narrator PCM still sounding
-      if(_dubAudio && !_dubAudio.paused && !_dubAudio.ended) return;      // dialogue clip still sounding
+      // v23.9 — WEDGE WATCHDOG: the physical checks can get STUCK claiming audio forever — an
+      // element whose play() was rejected (autoplay policy) sits in paused=false limbo, and a
+      // source started on a suspended context never fires onended. That gated the mic permanently
+      // ("mic on, call active, speech never registers"). Genuine playback ALWAYS also holds
+      // _dubActive (checked above), so a physical-only block is trusted for at most 10s, then the
+      // mic reopens.
+      const _phys=(_dubSources.length>0)||(_dubAudio&&!_dubAudio.paused&&!_dubAudio.ended);
+      if(_phys){
+        if(!nm._physSince)nm._physSince=performance.now();
+        if(performance.now()-nm._physSince<10000) return;
+      } else nm._physSince=0;
       const inp=e.inputBuffer.getChannelData(0);
       const ratio=inRate/outRate, n=Math.floor(inp.length/ratio), out=new Int16Array(n);
       for(let i=0;i<n;i++){ let s=inp[Math.floor(i*ratio)]; s=Math.max(-1,Math.min(1,s)); out[i]=s<0?s*0x8000:s*0x7FFF; }
@@ -6847,7 +6872,7 @@ function nmStop(){
   try{ nm.ctx&&nm.ctx.close(); }catch(_){}
   try{ nm.stream&&nm.stream.getTracks().forEach(t=>t.stop()); }catch(_){}
   if(nm._pendTimer){clearTimeout(nm._pendTimer);nm._pendTimer=null;} nm._pend="";
-  nm.ws=null;nm.keep=null;nm.proc=null;nm.src=null;nm.ctx=null;nm.stream=null;nm._finalBuf="";
+  nm.ws=null;nm.keep=null;nm.proc=null;nm.src=null;nm.ctx=null;nm.stream=null;nm._finalBuf="";nm._physSince=0;
   releaseWakeLock();
   reflectNarrMode();
 }

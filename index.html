@@ -10069,6 +10069,28 @@ function recentExchangeText(chat,n){
 // detector — a plan made over text ("meet me tomorrow") is just as binding as one said aloud. The
 // room engines (Gamemaster, Scene Writer) deliberately do NOT use this: a private text must never
 // spawn a spoken-room event.
+// WITNESS-SCOPED recent scene for ONE character (used by the text-reply payload). Unlike
+// recentExchangeMsgs — a global engine view that sees everything — a specific character must
+// only receive what THEY actually lived: their own lines, plus lines/narration from scenes they
+// were present for. Never another character's private scene, never someone else's whisper, never
+// the player-only meta notices (world events, quest/calendar notes, day markers). Untagged old
+// messages (no present[]) are dropped rather than leaked. Same {role,name,content} shape.
+function recentSceneMsgsFor(chat,p,n){
+  if(!chat||!p)return [];
+  return (chat.messages||[]).filter(m=>{
+    if(m.role==='system'||m.sysError||m.textMsg)return false;
+    if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)return false; // player-only meta
+    if(m.role==='user'){
+      if(m.whisperTo&&m.whisperTo!==p.id)return false;   // a whisper to someone else — never its content
+      return witnessedBy(m,p);                            // they must have been in the scene to hear it
+    }
+    if(m.speakerId===p.id||(m.speaker&&m.speaker===p.name))return true;   // their own lines, always
+    return witnessedBy(m,p);                              // others' lines / narration only if witnessed
+  }).slice(-(n||6))
+    .map(m=>({role:m.role==='user'?'user':'assistant',
+              name:sanitizeName(m.role==='user'?state.user:(m.speaker||"Narrator")),
+              content:m.content}));
+}
 function recentExchangeMsgsWithTexts(chat,n){
   const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
   // v23.5 — player-only NOTICE bubbles (world-event news, quest/plan announcements, calendar
@@ -16098,11 +16120,12 @@ async function buildTextReplySystem(chat,p){
   }catch(e){}
   try{ const cl=calendarContextLine(chat,p.name); if(cl)parts.push(cl); }catch(e){}
   // RECENT SCENE — the actual roleplay (narration + dialogue) this text sits on top of, so the reply
-  // reads as continuous with what just happened in person, not a reply in a vacuum. Same recent-
-  // exchange window the living engines share; a text is still typed words, but it KNOWS the scene.
+  // reads as continuous with what just happened in person, not a reply in a vacuum. WITNESS-SCOPED
+  // (v2 fix): only scene turns THIS character was present for — the old recentExchangeMsgs slice was
+  // the global engine view and leaked other characters' private scenes into a texted reply.
   try{
-    const scene=recentExchangeMsgs(chat,12).map(m=>`${m.name}: ${m.content}`).join("\n");
-    if(scene)parts.push(`# RECENT SCENE (the roleplay you and ${state.user} are living right now — narration and dialogue; your text should be consistent with this, but it is still a message typed on your phone, not spoken here)\n${scene}`);
+    const scene=recentSceneMsgsFor(chat,p,12).map(m=>`${m.name}: ${m.content}`).join("\n");
+    if(scene)parts.push(`# RECENT SCENE YOU WITNESSED (roleplay you were present for — narration and dialogue; your text should be consistent with this, but it is still a message typed on your phone, not spoken here)\n${scene}`);
   }catch(e){}
   // YOUR LAST WORDS IN PERSON — this character's most recent spoken line in the face-to-face roleplay,
   // WITH its in-game timestamp, so the text reads as continuous with what they last actually said out

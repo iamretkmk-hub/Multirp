@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6603,16 +6603,42 @@ async function _inworldFetchPcm(text,voiceId){
   const f32=new Float32Array(pcm.length); for(let i=0;i<pcm.length;i++)f32[i]=pcm[i]/0x8000;
   return f32;
 }
-function _playPcmAwait(f32,fx){
+function _playBufAwait(buffer,fx){
   if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
-  const ctx=_dubCtx; const bufd=ctx.createBuffer(1,f32.length,24000); bufd.getChannelData(0).set(f32);
-  const node=ctx.createBufferSource(); node.buffer=bufd;
+  const ctx=_dubCtx; const node=ctx.createBufferSource(); node.buffer=buffer;
   node.connect(fx?_narrFxInto(ctx):ctx.destination);   // fx = the narrator's subtle other-world chain
   _dubSources.push(node);
   _dubActive=true;
   const done=new Promise(res=>{ node.onended=()=>{ _dubSources=_dubSources.filter(s=>s!==node); _dubActive=_dubSources.length>0; _dubTailUntil=performance.now()+350; res(); }; });
   node.start();
   return done;
+}
+function _playPcmAwait(f32,fx){
+  if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const bufd=_dubCtx.createBuffer(1,f32.length,24000); bufd.getChannelData(0).set(f32);
+  return _playBufAwait(bufd,fx);
+}
+/* v23.8 — UNIFIED "PHONE OUTPUT": the xAI mp3 now plays through the SAME WebAudio pipeline as the
+   Inworld narrator (fetch → decode → tracked buffer source in _dubCtx/_dubSources), so the
+   half-duplex mic machinery and the dub queue see ONE audio truth for BOTH engines — an xAI
+   dialogue line is "the app speaking" exactly like an Inworld line, never a separate <audio>
+   element with its own engine-dependent pause/ended event quirks (the family of bugs where the
+   mic heard the dialogue as the player, or the queue cut a line short). The element path remains
+   ONLY as a fallback when the clip can't be fetched (CORS) or the context can't start (no
+   gesture yet — the element path surfaces the unlock toast). */
+async function _playUrlAsPcmAwait(url,fx){
+  try{
+    if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
+    try{ if(_dubCtx.state==="suspended") await _dubCtx.resume(); }catch(_){}
+    if(_dubCtx.state==="suspended") throw 0;                       // no gesture yet → element fallback
+    const res=await fetch(httpsMedia(url));
+    if(!res||!res.ok) throw 0;
+    const raw=await res.arrayBuffer();
+    const buf=await _dubCtx.decodeAudioData(raw);
+    await _playBufAwait(buf,!!fx);
+  }catch(e){
+    await _playDubUrlAwait(url);                                   // CORS/decode failure → legacy path
+  }
 }
 async function inworldSpeak(text,voiceId,fx){
   const f32=await _inworldFetchPcm(text,voiceId);
@@ -6648,9 +6674,9 @@ async function speakText(text,persona,setStat){
     const v=(persona&&persona.voiceId&&persona.voiceId.trim())||state.callVoice||"";
     await inworldSpeak(text,v); return "";
   }
-  // xAI (default)
+  // xAI (default) — v23.8: played through the unified WebAudio pipeline (same as Inworld)
   const url=await atlasTTS(text,ttsVoiceFor(persona),state.ttsLang||"tr",setStat);
-  if(url)await _playDubUrlAwait(url);   // v19.4: resolve when playback ends (sequential queue)
+  if(url)await _playUrlAsPcmAwait(url);
   return url||"";
 }
 // Voice the currently-open diary page in the owner's voice. Not cached (pages change per day).
@@ -6700,7 +6726,9 @@ async function _pumpDub(){
     const stillOn=(state.autoSpeak||state.narrMode) && (job.kind!=='narr'||narrActive());
     if(stillOn){
       const a=await job.prep;
-      if(a&&a.url){ if(job.m){job.m.ttsUrl=a.url;} await _playDubUrlAwait(a.url); }
+      // v23.8 — xAI urls play through the WebAudio pipeline (same as Inworld) so all app speech is
+      // one tracked "phone output"; the cached url is still stamped for the manual replay button.
+      if(a&&a.url){ if(job.m){job.m.ttsUrl=a.url;} await _playUrlAsPcmAwait(a.url,job.kind==='narr'&&!!job.fx); }
       else if(a&&a.f32){ await _playPcmAwait(a.f32,!!job.fx); }
     }
   }catch(e){}

@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4134,8 +4134,8 @@ function _subCapsules(title,body){
     while((m2=re.exec(inner))){ kids.push({label:m2[1],text:m2[0].trim()}); }
     if(kids.length>1) return kids;
   }
-  // --- IMAGE-PROMPT user message: character sheet / continuity / latest exchange (#11). ---
-  if(/CHARACTER SHEET/i.test(b) && /LATEST EXCHANGE/i.test(b)){
+  // --- IMAGE-PROMPT user message: continuity / latest exchange (#11). v25: no character sheet. ---
+  if(/LATEST EXCHANGE/i.test(b) && /(CONTINUITY REFERENCE|No previous image)/i.test(b)){
     const kids=[];
     const parts=b.split(/\n(?=(?:CHARACTER SHEET|CONTINUITY REFERENCE|LATEST EXCHANGE|\(No previous image))/);
     parts.forEach(p2=>{
@@ -8014,7 +8014,8 @@ async function travelTo(locId,companionIds){
   const fromName=chat.location||"somewhere";
   // v19.3 (requests 3+4): traveling starts a FRESH visual scene — wipe every character's image-
   // continuity prompt and the sticky scene type. First frames at the new place are written clean.
-  chat.imgPromptBy={}; chat.lastImgRule="";
+  // v25: the sticky scene type is per-character (lastImgRuleBy) — clear it too, plus the legacy scalar.
+  chat.imgPromptBy={}; chat.lastImgRule=""; chat.lastImgRuleBy={};
   const periods=(dest.travelPeriods!=null?dest.travelPeriods:state.travelTime)||0;
   maybeSeedLocationNpcs(chat);   // v19.91: first-visit inhabitants — background, never awaited
   const {dayChanged}=advanceTime(chat,periods);
@@ -13338,7 +13339,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"dyn",label:"The reply being checked",scope:"chat",desc:"The character's latest reply against their card."}]},
   {key:"image_writer",label:"Image Prompt Writer",desc:"Routes the raw exchange to a scenario rule, then writes the SDXL prompt: universal rewriter → the routed rule's promptStyle → the THIS-FRAME guard. Per-rule promptStyle is edited in Image Generation → Rules.",blocks:[
     {kind:"prompt",promptKey:"routerPrompt"},{kind:"prompt",promptKey:"rewritePrompt"},
-    {kind:"dyn",label:"Character sheet + continuity reference + latest exchange",scope:"chat",desc:"Focal pair + ALSO-PRESENT appearances, the previous frame's prompt, and the exchange being drawn."},
+    {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video / Movie Prompt Writers",desc:"Turns a still into a motion prompt (Animate), a scene-continuation prompt (Movie → video-extend), or a legacy 6-segment movie plan.",blocks:[
     {kind:"prompt",promptKey:"vidPrompt"},{kind:"prompt",promptKey:"extendPrompt"},{kind:"prompt",promptKey:"moviePrompt"},
@@ -14402,7 +14403,9 @@ function applyPresence(chat,enterNames,exitNames){
   exited.forEach(nm=>{const p=byName(nm);if(p)chat.justLeft[p.id]=Date.now();});
   // v19.3 (request 3): a character who EXITS the scene loses their image-continuity prompt —
   // when they next appear (here or elsewhere) their first frame is written fresh.
+  // v25: also drop their per-character sticky scene type so they re-route fresh on return.
   if(chat.imgPromptBy) exited.forEach(nm=>{const p=byName(nm);if(p)delete chat.imgPromptBy[p.id];});
+  if(chat.lastImgRuleBy) exited.forEach(nm=>{const p=byName(nm);if(p)delete chat.lastImgRuleBy[p.id];});
   entered.forEach(nm=>{const p=byName(nm);if(p&&chat.justLeft)delete chat.justLeft[p.id];});
   return {entered,exited};
 }
@@ -16921,8 +16924,11 @@ function _imgLocationClause(chat){
     return bits.filter(Boolean).join(", ");
   }catch(e){ return ""; }
 }
-function _imgPovAppearance(speaker){
-  try{ if(!speaker)return ""; const l=lookProse(speaker.look)||""; return l?`${speaker.name}, ${String(l).replace(/\s+/g," ").trim()}`:""; }catch(e){ return ""; }
+// v25 — the FOCAL speaker's appearance, auto-injected on every image tail (no longer POV-only). The
+// writer never receives a character sheet, so this is the single authoritative source of the drawn
+// character's look — kept to ONE person (the speaker) so no other character's appearance can leak in.
+function _imgSpeakerAppearance(speaker){
+  try{ if(!speaker)return ""; const l=lookProse(speaker.look)||""; return l?String(l).replace(/\s+/g," ").trim():""; }catch(e){ return ""; }
 }
 async function illustrate(mid,replyText,force){
   const msg=findMsg(mid);if(!msg)return;
@@ -16970,29 +16976,17 @@ async function illustrate(mid,replyText,force){
     }
     const latestExchange=(triggerLine?`${triggerWho}: ${triggerLine}\n`:``)+`${who}: ${replyText}`;
 
-    // ---- Appearance sheet. The SPEAKER (the one being drawn) and the player are the focal pair and
-    // are always listed first. The rest of the IN-SCENE cast (same area / earshot) are listed under
-    // ALSO PRESENT so multi-character and combat rules have their appearances available — single-subject
-    // rules (kissing, oral, a solo portrait) simply ignore them. We never list off-area or absent people,
-    // so the writer can't pull someone who isn't here into the frame. ----
+    // ---- v25 — NO character sheet is sent to the writer any more. The SPEAKER (the one being drawn)
+    // is the frame's focal subject; their real appearance is AUTO-INJECTED in code below (see the
+    // deterministic tail), exactly like location, lighting and style. The writer works from the
+    // exchange alone and refers to people generically (Man / Woman). This does two things the old
+    // "CHARACTER SHEET + ALSO PRESENT" block could not: it keeps names/appearances out of the LLM
+    // payload (appearances are handled deterministically, never paraphrased), and it ISOLATES each
+    // character's frame — a second person in the room is never listed to the writer, so they can't be
+    // pulled into this character's picture. Group shots are still possible when the exchange itself
+    // clearly puts two people in contact; the writer names no one, and only the speaker's look is
+    // injected, so the focal subject is always the character whose line this is. ----
     const speaker=cast.find(c=>c.name===who);
-    // Labeled structured appearance (face/features/hair/build) so the rewriter can strip the face for
-    // back/profile shots. Legacy raw-only looks fall back to their prose string. Mirrors the movie path.
-    const _lookSheet=c=>{ const l=normalizeLook(c.look); if(lookHasParts(l)){ return [l.face_map&&`face: ${l.face_map}`, l.face&&`features: ${l.face}`, l.hair&&`hair: ${l.hair}`, l.body&&`build: ${l.body}`].filter(Boolean).join("; "); } return l.raw||""; };
-    let focal="";
-    {const _lk=speaker?_lookSheet(speaker):""; if(speaker&&_lk) focal+=`${speaker.name}: ${_lk}\n`; else if(speaker) focal+=`${speaker.name}\n`;}
-    if(state.userLook) focal+=`${state.user} (the player): ${state.userLook}\n`;
-    let others="";
-    try{
-      const inScene=(typeof inSceneCast==='function')?inSceneCast(chat):[];
-      const seen=new Set([speaker&&speaker.name]);
-      inScene.forEach(p=>{
-        if(!p||!p.name||seen.has(p.name))return; seen.add(p.name);
-        others+=`${p.name}: ${lookProse(p.look)||"(no appearance on file)"}${p.wardrobe?` | WARDROBE (reference only — pick ONE plausible outfit + colors that fit THIS scene; adapt, never paste this list): ${String(p.wardrobe).slice(0,260)}`:""}\n`;
-      });
-    }catch(e){}
-    let castSheet=focal.trim()||(speaker?speaker.name:who);
-    if(others.trim()) castSheet+=`\n\nALSO PRESENT (only include these people if the scene is genuinely multi-character — e.g. a group shot, combat, or an exchange that involves them; otherwise ignore them):\n${others.trim()}`;
 
     // ---- Where the scene is happening, so the setting is drawn correctly. ----
     let locLine="";
@@ -17006,7 +17000,12 @@ async function illustrate(mid,replyText,force){
     // it gets the NAME of the previously selected scene type plus the latest exchange, and is asked
     // a sticky question: did the roleplay change anything? If not, keep the same type; if yes, pick
     // the better one. (Feeding the previous finished prompt biased routing toward stale acts.)
-    const _prevRuleName=(chat&&chat.lastImgRule)||"";
+    // v25 — the sticky scene type is now PER-CHARACTER (chat.lastImgRuleBy[charKey]), mirroring the
+    // per-character continuity above. Previously it was one global sticky type: when {{user}} and X
+    // were in a pose and Y then spoke, the router saw "PREVIOUSLY SELECTED: <that pose>" and kept it,
+    // so Y was drawn into X's pose. Keyed per character, a newcomer like Y starts with NO prior type
+    // and is routed fresh from their OWN line — a solo beat gets a solo shot, alone. ----
+    const _prevRuleName=(chat&&chat.lastImgRuleBy&&chat.lastImgRuleBy[_spkKey])||"";
     const _prevForRoute=_prevRuleName
       ? `PREVIOUSLY SELECTED SCENE TYPE: ${_prevRuleName}\n(If the latest exchange does NOT clearly change the action, position, or framing, return that same type's index again. Switch ONLY when the roleplay shows a real change.)\n\n`
       : "";
@@ -17014,7 +17013,7 @@ async function illustrate(mid,replyText,force){
       +_prevForRoute
       +`LATEST EXCHANGE (the authority — what the scene is NOW; route on what it has BECOME, not what it was):\n${latestExchange}`;
     const rule=await pickRule(state.imgRules,_routeText);
-    if(chat&&rule&&rule.label)chat.lastImgRule=rule.label;   // sticky memory for the next route
+    if(chat&&rule&&rule.label){ if(!chat.lastImgRuleBy||typeof chat.lastImgRuleBy!=="object")chat.lastImgRuleBy={}; chat.lastImgRuleBy[_spkKey]=rule.label; }   // sticky memory for THIS character's next route
     if(rule&&rule.label){const e=document.getElementById('imgrule_'+mid);if(e)e.textContent=rule.label;}
 
     // ---- Step 2: WRITE the image prompt. System prompt is layered:
@@ -17025,22 +17024,21 @@ async function illustrate(mid,replyText,force){
     const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
     const _isNewStyle=/# ?OUTPUT STRUCTURE/i.test(_rawStyle);
     // Old-style / empty rules get a shared FOUNDATION base (new-structure rules already own it).
-    const FOUNDATION_PROMPT=`# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated string of only what is physically VISIBLE in this one frame. Extract from the CHARACTER SHEET (exact appearance) and the LATEST EXCHANGE (pose, expression, contact, clothing state); ignore mood words and dialogue meaning. The viewer/player is faceless — never write his name or appearance. Do not invent anyone not on the sheet. Output NO square brackets and NO "|" — write the real chosen values.`;
+    const FOUNDATION_PROMPT=`# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated string of only what is physically VISIBLE in this one frame. Describe the pose, expression, contact and clothing STATE from the LATEST EXCHANGE; ignore mood words and dialogue meaning. Refer to people generically (Man / Woman / Girl) — do NOT use names, and do NOT describe anyone's face, hair, or build: each character's appearance is AUTO-INJECTED after your text, so writing it yourself only fights the injected version. Draw ONLY the one character whose line this is (plus the faceless viewer if the exchange clearly has them together); the viewer/player is faceless — never write his appearance — and never add a second character the exchange did not put in contact with them. Output NO square brackets and NO "|" — write the real chosen values.`;
     const _foundation=(!_isNewStyle)?`\n\n${FOUNDATION_PROMPT}`:``;
     const _classStyle=_rawStyle?`\n\n${_rawStyle}`:"";
     const sys=up("rewritePrompt")+_foundation+_classStyle+
       `\\n\\n## THIS FRAME\\n`+
       `- The scene-type block above (its OUTPUT STRUCTURE and GUARDRAILS) is AUTHORITATIVE. Follow its template exactly: write the fixed wording as-is, and fill ONLY the dedicated [bracket] areas. Where options are separated by "|", pick the ONE that fits the latest exchange. Do not restructure it into your own sentences and do not add anything the template did not ask for.\\n`+
       `- Keep every "viewer" / "no viewer face" / "head out of frame" / "out of focus" instruction in the template EXACTLY as written — these are load-bearing. The viewer (player) is faceless; unless the template itself describes a man, the viewer is the only male presence: never write the player's name or appearance, and never invent a second person the template did not include.\\n`+
-      `- Fill the [brackets] using the CHARACTER SHEET (appearance, hair, build, clothing) and the LATEST EXCHANGE (pose, expression, state). Take only what is physically VISIBLE in one frame; ignore mood words, dialogue meaning, and non-visual narrative fluff.\\n`+
-      `- Output the finished prompt in ENGLISH regardless of the language of the exchange or the sheet. The LATEST EXCHANGE is authoritative for what is happening NOW — if it changes clothing, pose, who is touching whom, or the act, fill the brackets to reflect that; do not carry a stale state forward.\\n`+
+      `- Fill the [brackets] from the LATEST EXCHANGE (pose, expression, contact, clothing state). Any [bracket] asking for a face, hair, build, or named appearance is NOT yours to fill — the character's appearance is AUTO-INJECTED after your text; for those slots write only a generic reference (e.g. "a woman") or drop the slot, and never invent hair/build/face details. Take only what is physically VISIBLE in one frame; ignore mood words, dialogue meaning, and non-visual narrative fluff.\\n`+
+      `- Output the finished prompt in ENGLISH regardless of the language of the exchange. The LATEST EXCHANGE is authoritative for what is happening NOW — if it changes clothing, pose, who is touching whom, or the act, fill the brackets to reflect that; do not carry a stale state forward.\\n`+
       `- CRITICAL — DROP THE BRACKETS: every [bracket] is a fill-in slot, NOT literal text. Replace each one with the actual chosen words. The finished prompt must contain NO square brackets and NO "|" characters — never output "[hair and build]" or "[place]" or "option a|option b"; write the real value you picked.\\n`+
       `- LOCATION & LIGHTING ARE HANDLED FOR YOU: the setting/place and the time-of-day lighting are appended automatically AFTER your text. Do NOT write a location, background, setting, or lighting phrase, and if the scene-type template has a Location or Lighting slot, leave it out — never decide the place or the light from the exchange.\\n`+
-      `- If NO scene-type block is present above, write a single concise comma-separated English prompt of only what is visible this frame (people, pose, expression, clothing, action — NO location or lighting), keeping the viewer faceless and inventing no one who is not on the sheet.`;
-    // NOTE: the fixed LOCATION line is deliberately NOT injected here — the location is written by
-    // the LLM itself (the rule templates carry a Location slot; continuity + the exchange inform it).
-    const usr=`CHARACTER SHEET (the only people who may appear):\n${castSheet}\n\n`+
-      (prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)+
+      `- If NO scene-type block is present above, write a single concise comma-separated English prompt of only what is visible this frame (pose, expression, clothing, action — NO face/hair/build, NO location or lighting), keeping the viewer faceless and drawing only the one character whose line this is.`;
+    // NOTE: the CHARACTER SHEET is deliberately NOT sent — appearances are auto-injected in code (see the
+    // deterministic tail below), so the writer only receives this character's own continuity + the exchange.
+    const usr=(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)+
       `LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
     const rewritten=await chatCompletion([
       {role:"system",content:sys},
@@ -17053,12 +17051,16 @@ async function illustrate(mid,replyText,force){
     const _styleTail=styleTail();   // v25 user-defined; empty when no styles exist
     let finalPrompt=rewritten.trim().replace(/^["\']|["\']$/g,"");
     // v19.9993 — render/quality style is appended AFTER the deterministic block below (see end).
-    // v19.98 — DETERMINISTIC location + time-of-day lighting (+ POV appearance) appended in code.
+    // v25 — DETERMINISTIC appearance + location + time-of-day lighting appended in code. The FOCAL
+    // speaker's real appearance is ALWAYS auto-injected here (no longer only for POV shots, and no
+    // longer written by the LLM from a character sheet): the writer describes only the pose/action,
+    // and the character whose line this is gets their exact look stamped on the tail. Because only the
+    // speaker's look is injected, a character is never rendered with someone else's appearance.
     {
+      const _appC=_imgSpeakerAppearance(speaker);
       const _locC=_imgLocationClause(chat);
       const _litC=_imgLightingClause(chat);
-      const _povC=(rule&&rule.pov)?_imgPovAppearance(speaker):"";
-      const _det=[_povC,_locC,_litC].filter(Boolean).join(", ");
+      const _det=[_appC,_locC,_litC].filter(Boolean).join(", ");
       if(_det) finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_det;
     }
     // v19.9993 — RENDER STYLE (quality) LAST: character leads, style tail never outweighs the subject.
@@ -17163,13 +17165,9 @@ async function animateScene(mid){
   const setStat=t=>{const e=document.getElementById('vidstat_'+mid);if(e)e.textContent=t;};
   try{
     const cast=curCast();
-    // Send appearance as LABELED structured parts so the rewriter can apply the orientation rule
-    // deterministically (drop face_map+face for back views, face_map for profiles). Legacy raw-only
-    // looks fall back to a single prose line. lookForCamera with "front" yields the full set here;
-    // the per-scene promptStyle + universal orientation rule do the actual per-person stripping.
-    const _lookSheet=c=>{ const l=normalizeLook(c.look); if(lookHasParts(l)){ return [l.face_map&&`face: ${l.face_map}`, l.face&&`features: ${l.face}`, l.hair&&`hair: ${l.hair}`, l.body&&`build: ${l.body}`].filter(Boolean).join("; "); } return l.raw||""; };
-    let castSheet=cast.map(c=>({n:c.name,lk:_lookSheet(c)})).filter(x=>x.lk).map(x=>`${x.n} — ${x.lk}`).join("\n")||cast.map(c=>c.name).join(", ");
-    if(state.userLook)castSheet+=`\n${state.user}: ${state.userLook}`;
+    // v25 — NO character sheet is sent to the motion writer. Appearances already live in the still
+    // image this clip animates (image-to-video), so re-describing faces/hair/build only invites the
+    // writer to contradict the frame. The writer receives ONLY the still's prompt and animates it.
     // Step 1: rewrite still prompt -> motion prompt (OpenRouter LLM call)
     setStat("Directing the shot…");
     // Per-scene motion: pick a video rule (shared vidRules) and feed its motionStyle + (explicit-only)
@@ -17185,7 +17183,7 @@ async function animateScene(mid){
     else             _sys+=`\n\n## SOUND\nThis scene is not explicit — do NOT describe sound.`;
     const motion=await chatCompletion([
       {role:"system",content:_sys},
-      {role:"user",content:`Characters present:\n${castSheet}\n\nStill scene:\n${msg.imgPrompt||msg.content}`}
+      {role:"user",content:`Still scene:\n${msg.imgPrompt||msg.content}`}
     ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",_isExplicit?240:160),dbg:"Video motion prompt writer"});
     const vidPrompt=motion.trim().replace(/^["']|["']$/g,"");
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}
@@ -17282,11 +17280,8 @@ async function movieScene(mid){
   const setStat=t=>{const e=document.getElementById('vidstat_'+mid);if(e)e.textContent=t;};
   try{
     const cast=curCast();
-    // Send appearance as LABELED structured parts so the writer can anchor who is in frame.
-    const _lookSheet=c=>{ const l=normalizeLook(c.look); if(lookHasParts(l)){ return [l.face_map&&`face: ${l.face_map}`, l.face&&`features: ${l.face}`, l.hair&&`hair: ${l.hair}`, l.body&&`build: ${l.body}`].filter(Boolean).join("; "); } return l.raw||""; };
-    let castSheet=cast.map(c=>({n:c.name,lk:_lookSheet(c)})).filter(x=>x.lk).map(x=>`${x.n} — ${x.lk}`).join("\n")||cast.map(c=>c.name).join(", ");
-    if(state.userLook)castSheet+=`\n${state.user}: ${state.userLook}`;
-
+    // v25 — NO character sheet is sent to the extend writer. The continuation animates an existing
+    // still whose appearances are already fixed in-frame; the writer only continues the motion.
     const secs=[5,6,7,8,9,10].includes(+state.extendDur)?+state.extendDur:5;   // new-footage length
     const scenePrompt=(msg.imgPrompt||msg.content||"").trim();
 
@@ -17303,7 +17298,7 @@ async function movieScene(mid){
     setStat(`Writing the ${secs}s continuation…`);
     const out=await chatCompletion([
       {role:"system",content:_sys},
-      {role:"user",content:`Characters present:\n${castSheet}\n\nTarget duration for the new footage: ${secs} seconds\n\nThe next beat to continue the scene into (the picked still):\n${scenePrompt}`}
+      {role:"user",content:`Target duration for the new footage: ${secs} seconds\n\nThe next beat to continue the scene into (the picked still):\n${scenePrompt}`}
     ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",_isExplicit?300:220),dbg:"Video extend prompt writer"});
     const extPrompt=out.trim().replace(/^["']|["']$/g,"");
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}

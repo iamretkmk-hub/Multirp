@@ -5496,10 +5496,11 @@ function applyUiScale(){
   try{ document.body.style.zoom=(v===1)?"":String(v); }catch(e){}
 }
 function revealCps(){ const v=+state.revealCps; return (v>=8&&v<=80)?v:REVEAL_CPS_DEFAULT; }
-/* v19.9 (#12) — VISUAL tag stripping. When reply voicing is active the model writes xAI delivery
-   markup ([whisper], [sighs], <laugh>…</laugh>, etc.). The TTS needs it; the reader doesn't. This
-   strips it at the DISPLAY layer only — generically ([...] and <...> tokens of sane length), not
-   from a hardcoded tag list — while m.content stays raw for the model, TTS, and memory. */
+/* v19.9 (#12) — VISUAL tag stripping. v24.2: the model is no longer ASKED to write delivery
+   markup ([whisper], <laugh>…</laugh>, …) — the coaching is retired — but older messages and a
+   model imitating its own history can still carry it. While voicing is active this strips it at
+   the DISPLAY layer only — generically ([...] and <...> tokens of sane length), not from a
+   hardcoded tag list — while m.content stays raw for the model, TTS, and memory. */
 function _dispText(t){
   if(!(state.narrMode||(state.autoSpeak&&(state.ttsEngine||"xai")==="xai"))) return t;
   return String(t||"")
@@ -6418,6 +6419,11 @@ function ttsCleanText(s){
   t=t.replace(/\*\*([^*]+)\*\*/g,"$1");         // **bold** → keep the words, drop markers
   t=t.replace(/\*[^*]+\*/g,"");                 // *action* asides → drop entirely
   t=t.replace(/\*/g,"");                         // any stray asterisks
+  // v24.2 — delivery-tag markup ([pause], <whisper>…</whisper>): the coaching that asked the
+  // model to write these is retired (the TTS spoke them as literal words). Strip any that still
+  // appear (older messages in history, or the model imitating them) so they never reach synthesis.
+  t=t.replace(/\[\/?[^\[\]\n]{1,32}\]/g,"");    // [pause]/[laugh]… instant tags
+  t=t.replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,""); // <whisper>…</whisper> wrapping tags
   t=t.replace(/\([^)]*\)/g,"");                 // (parentheticals)
   t=t.replace(/[_`#>~]/g,"");                   // md noise
   t=t.replace(/\s+/g," ").trim();
@@ -6785,12 +6791,12 @@ function narrSplit(s){
 // Sequential dub queue: one voice at a time, in order (narrator → character → next message).
 // Replaces the old fire-and-forget (which overlapped in multi-character chains and cannot
 // sequence a two-voice message). Jobs: {kind:'narr'|'dial', text, persona, m}.
-let _dubQ=[],_dubQBusy=false;
+let _dubQ=[],_dubQBusy=false,_dubGen=0;   // _dubGen: kill generation — bumped by _dubKill so a job already pumping dies too
 function _enqueueDub(job){ _dubQ.push(job); _pumpDub(); }
 // v19.41 — KILL SWITCH: flush pending jobs and stop live audio NOW. Called when the mic mode is
 // toggled off and when Settings turn all voicing off — previously, jobs enqueued before the
 // toggle kept synthesizing and speaking long after ("it never turns off").
-function _dubKill(why){ _alog("kill",why||"?"); _dubQ.length=0; try{_stopDub("kill:"+(why||"?"));}catch(_){ } _dubActive=false; }
+function _dubKill(why){ _alog("kill",why||"?"); _dubGen++; _dubQ.length=0; try{_stopDub("kill:"+(why||"?"));}catch(_){ } _dubActive=false; }
 // Pre-synthesis for a dialogue segment on the CHOSEN engine — started the moment the job is
 // enqueued, so the audio is (usually) ready before its turn comes (kills the narr→dialogue gap).
 function _dialPrep(text,who){
@@ -6815,9 +6821,13 @@ async function _pumpDub(){
   _dubQBusy=true;
   try{
     // PLAY-TIME gate (not just enqueue-time): if voicing was switched off while this job waited,
-    // it dies silently instead of speaking from the grave.
-    const stillOn=(state.autoSpeak||state.narrMode) && (job.kind!=='narr'||narrActive());
-    if(stillOn){
+    // it dies silently instead of speaking from the grave. RE-CHECKED after every await below —
+    // synthesis takes seconds, and the old single up-front check let a clip whose prep finished
+    // AFTER the toggle start speaking anyway ("turning Speak replies off doesn't stop it").
+    // gen pins the _dubKill generation: any kill while this job is in flight invalidates it.
+    const gen=_dubGen;
+    const gateOn=()=>gen===_dubGen && (state.autoSpeak||state.narrMode) && (job.kind!=='narr'||narrActive());
+    if(gateOn()){
       _alog("pump.job",job.kind);
       const a=await job.prep;
       if(a&&a.url&&job.m)job.m.ttsUrl=a.url;   // manual replay button keeps the cached url
@@ -6826,7 +6836,8 @@ async function _pumpDub(){
       // the Inworld relay in the character's call voice — the exact same output format as the
       // narrator, so car bluetooth treats it as the live call speaking. The <audio> element (media
       // channel — cars mute it during a call) is the LAST resort only.
-      if(a&&a.buf){ await _playBufAwait(a.buf,job.kind==='narr'&&!!job.fx); }
+      if(!gateOn()){ _alog("pump.skip",job.kind+" (voicing switched off mid-prep)"); }
+      else if(a&&a.buf){ await _playBufAwait(a.buf,job.kind==='narr'&&!!job.fx); }
       else if(a&&a.f32){ await _playPcmAwait(a.f32,!!job.fx); }
       else if(a&&a.url){
         const relay=(state.ttsRelay||"").trim();
@@ -6835,9 +6846,12 @@ async function _pumpDub(){
           _alog("pump.revoice-inworld","bytes unavailable → relay pcm, voice="+(((a.who&&a.who.voiceId)||state.callVoice||"default")));
           const v=(a.who&&a.who.voiceId&&a.who.voiceId.trim())||state.callVoice||"";
           const f32=await _inworldFetchPcm(ttsCleanText(a.text),v).catch(()=>null);
-          if(f32){ await _playPcmAwait(f32,false); played=true; }
+          if(f32&&gateOn()){ await _playPcmAwait(f32,false); played=true; }
         }
-        if(!played)await _playUrlAsPcmAwait(a.url,job.kind==='narr'&&!!job.fx);
+        if(!played){
+          if(gateOn())await _playUrlAsPcmAwait(a.url,job.kind==='narr'&&!!job.fx);
+          else _alog("pump.skip",job.kind+" (voicing switched off mid-prep)");
+        }
       }
       else _alog("pump.no-audio",job.kind+" (synthesis failed/empty)");
       _alog("pump.job-done",job.kind);
@@ -13546,7 +13560,7 @@ const PAYLOAD_DEFS={
       response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
       feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Considered + momentary relationship prose (or the stranger notice on a first encounter)."},
       final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Spoken delivery (TTS tags)",kind:"dyn",desc:"Only appears when auto-speak with xAI TTS is on."}
+      spoken_delivery:{label:"Voice format reset",kind:"dyn",desc:"Only appears while recent replies still carry old voice markup — orders the model to drop it. (The TTS delivery-tag coaching is retired: the tags were read aloud and broke the speech.)"}
     }
   },
   multi:{
@@ -13575,7 +13589,7 @@ const PAYLOAD_DEFS={
       response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
       feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Relationship prose or the stranger notice."},
       final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Spoken delivery (TTS tags)",kind:"dyn",desc:"Only with auto-speak + xAI TTS."}
+      spoken_delivery:{label:"Voice format reset",kind:"dyn",desc:"Only while recent replies still carry old voice markup (delivery-tag coaching retired)."}
     }
   },
   gm:{
@@ -13904,6 +13918,10 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   rail_consistent_known:`Stay consistent with your established voice, mood, and the relationship above — don't reset between replies.`,
   rail_consistent_stranger:`Stay consistent with your established voice and mood — don't reset between replies. Remember you do not know {{who}} yet; don't manufacture familiarity.`,
   // --- tail: spoken delivery (whole block; was SPOKEN_DELIVERY_BLOCK) ---
+  // v24.2 — RETIRED (leg 2 broken on purpose): no producer consumes this fragment anymore. The
+  // tags it coached were read aloud by the TTS as literal words and broke the speech. Kept only
+  // so older customized overrides don't orphan-warn; the spoken_delivery block slot now renders
+  // voice_format_reset (below) when recent history still carries the markup.
   spoken_delivery:`# SPOKEN DELIVERY (this dialogue will be voiced aloud)
 Add xAI TTS delivery tags INSIDE the quotation marks of spoken dialogue so it sounds alive. Use them sparingly and only where the emotion genuinely calls for it — never in narration or actions.
 - Instant tags (drop in mid-line): [pause] [long-pause] [laugh] [chuckle] [giggle] [sigh] [breath] [gasp] [cry]
@@ -14478,17 +14496,14 @@ function buildTailBlocks(opts){
   if(_feel.length)B.feelings=_feel.join("\n\n");
   B.final_guardrails=`${blkTpl("rails_header")}\n`+rails.map(r=>`- ${r}`).join("\n");
 
-  // When auto-speak is ON, the dialogue is read aloud by xAI TTS — so ask the model to mark up the
-  // SPOKEN words with xAI's inline delivery tags. Tags affect quoted dialogue only (narration,
-  // when voiced, goes to the separate narrator voice which never sees these tags). Tags must sit
-  // INSIDE the quotes so extractDialogue carries them to the TTS.
-  if(state.autoSpeak && (state.ttsEngine||"xai")==="xai"){
-    B.spoken_delivery=blkTpl("spoken_delivery");
-  }else if(chat && _recentVoiceMarkup(chat)){
-    // v19.5: voicing is OFF but the last replies still carry voice markup — without an explicit
-    // counter-order the model imitates its own recent history and the tags/shape never go away.
-    // Reuses the spoken_delivery block slot (already in every payload order). Self-decaying: once
-    // clean replies push the marked ones out of the detection window, this stops rendering.
+  // v24.2 — delivery-tag coaching RETIRED (was: auto-speak + xAI asked the model to wrap dialogue
+  // in [instant] / <wrapping> tags). In practice the TTS read the tags as literal words and the
+  // extra markup broke the speech, so the model is no longer asked to produce them — and
+  // ttsCleanText now strips any stragglers before synthesis. What remains is the counter-order:
+  // if the recent replies still carry the markup (older sessions, or the model imitating its own
+  // history), send the format reset regardless of whether voicing is currently on. Self-decaying:
+  // once clean replies push the marked ones out of the detection window, this stops rendering.
+  if(chat && _recentVoiceMarkup(chat)){
     B.spoken_delivery=blkTpl("voice_format_reset");
   }
   if(chat && chat._heatBeat){

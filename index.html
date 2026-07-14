@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6542,9 +6542,25 @@ function _playDubUrlAwait(url){
   return new Promise(res=>{
     _playDubUrl(url);
     if(!_dubAudio){res();return;}
+    const el=_dubAudio;
     _dubActive=true;
-    const fin=()=>{ _dubActive=false; _dubTailUntil=performance.now()+350; _dubAudio.removeEventListener("ended",fin); _dubAudio.removeEventListener("error",fin); _dubAudio.removeEventListener("pause",fin); res(); };
-    _dubAudio.addEventListener("ended",fin); _dubAudio.addEventListener("error",fin); _dubAudio.addEventListener("pause",fin);   // pause = killed (_dubKill) — never wedge the queue
+    const fin=(ev)=>{
+      // v23.6 — STALE-EVENT GUARD (the "second line stops right after it starts" bug). Starting
+      // THIS clip, _playDubUrl→_stopDub() paused the PREVIOUS (already-ended) clip and blanked its
+      // src; the "pause" (and the src="" load-abort "error") those queue fire AFTER this await
+      // attached its listeners — resolving it instantly, so the queue advanced and the NEXT job's
+      // _stopDub() killed THIS clip moments after it began. From the second queued line onward,
+      // every other line died at birth. A STALE pause arrives with playback already resumed
+      // (el.paused false, not ended); a STALE error arrives with el.error already cleared by the
+      // new load — ignore both. A real kill (_dubKill → paused stays true), a natural end, and a
+      // real media failure (el.error set) still resolve, so the queue can never wedge.
+      if(ev&&ev.type==="pause"&&!el.paused&&!el.ended)return;
+      if(ev&&ev.type==="error"&&!el.error)return;
+      _dubActive=false; _dubTailUntil=performance.now()+350;
+      el.removeEventListener("ended",fin); el.removeEventListener("error",fin); el.removeEventListener("pause",fin);
+      res();
+    };
+    el.addEventListener("ended",fin); el.addEventListener("error",fin); el.addEventListener("pause",fin);   // pause = killed (_dubKill) — never wedge the queue
   });
 }
 // Extract ONLY spoken dialogue (inside quotes). For AUTO-speak we want dialogue ONLY — if a line is

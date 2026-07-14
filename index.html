@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v24.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v24.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6517,17 +6517,74 @@ function _unlockAudio(){
 function _wireAudioUnlock(){
   ["pointerdown","touchend","click","keydown"].forEach(ev=>document.addEventListener(ev,_unlockAudio,true));
 }
-function _stopDub(){
+/* ===== v24.1 — VOICE DEBUG TRAIL ==============================================================
+   Always-on, bounded, in-memory log of every audio decision: who started a clip, who stopped it
+   and WHY, queue pumps, stale-event ignores, mic-gate transitions, commits. Inspect with the
+   /voicedebug chat command (live view + export). This exists because the "audio stops mid-line"
+   family of bugs is device-dependent — the trail turns "it stopped" into "X stopped it". */
+let _audLogArr=[];
+function _alog(tag,detail){
+  try{
+    _audLogArr.push({t:Date.now(),tag:String(tag||""),detail:String(detail||"").slice(0,220)});
+    if(_audLogArr.length>400)_audLogArr=_audLogArr.slice(-400);
+    if(document.getElementById('voiceDbgModal'))openVoiceDebugModal();   // live refresh while open
+  }catch(e){}
+}
+function _audioSnap(){
+  try{
+    const el=_dubAudio?`el(paused=${_dubAudio.paused},ended=${_dubAudio.ended},t=${(_dubAudio.currentTime||0).toFixed(1)})`:"el(none)";
+    return `${el} src=${_dubSources.length} act=${_dubActive} q=${_dubQ?_dubQ.length:"?"} busy=${typeof _dubQBusy!=="undefined"?_dubQBusy:"?"}`;
+  }catch(e){ return "?"; }
+}
+function _closeVoiceDebug(){ const m=document.getElementById('voiceDbgModal'); if(m)m.remove(); }
+function openVoiceDebugModal(){
+  _closeVoiceDebug();
+  const rows=_audLogArr.slice().reverse().map(e=>{
+    const t=new Date(e.t),p=n=>String(n).padStart(2,"0");
+    return `<div class="desc" style="margin:2px 0"><span style="opacity:.55">${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}.${String(t.getMilliseconds()).padStart(3,"0")}</span> <b>${esc(e.tag)}</b>${e.detail?` — ${esc(e.detail)}`:""}</div>`;
+  }).join("")||`<div class="desc">(empty — the trail fills as audio plays)</div>`;
+  const m=document.createElement('div'); m.id="voiceDbgModal"; m.className="modal show";
+  m.innerHTML=`<button class="x" onclick="_closeVoiceDebug()">×</button>
+   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch">
+     <h3>${icon("bug")} Voice debug — audio trail</h3>
+     <div class="desc">Newest first. Every clip start/stop carries WHO did it and why; "stop" entries are the interesting ones when audio dies mid-line.</div>
+     <div class="desc" style="margin:6px 0;font-weight:600">Now: ${esc(_audioSnap())}</div>
+     <div style="max-height:52vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px 8px">${rows}</div>
+     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+       <button class="btn sec small" onclick="voiceDebugExport()">${icon("download")} Export</button>
+       <button class="btn sec small" onclick="_audLogArr=[];openVoiceDebugModal()">Clear</button>
+       <button class="btn sec small" style="margin-left:auto" onclick="_closeVoiceDebug()">Close</button>
+     </div>
+   </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)_closeVoiceDebug(); });
+  document.body.appendChild(m);
+}
+function voiceDebugExport(){
+  try{
+    const data=JSON.stringify({exported:new Date().toISOString(),state:_audioSnap(),
+      engine:state.ttsEngine||"xai",autoSpeak:!!state.autoSpeak,narrMode:!!state.narrMode,narrOn:!!state.narrOn,
+      trail:_audLogArr},null,2);
+    const blob=new Blob([data],{type:"application/json"});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download="voice-debug.json"; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast("Voice trail exported");
+  }catch(e){ toast("Couldn't export"); }
+}
+function _stopDub(why){
+  _alog("stop",`${why||"?"} · ${_audioSnap()}`);
   if(_dubAudio){try{_dubAudio.pause();}catch(_){}_dubAudio.src="";}
   _dubSources.forEach(s=>{try{s.stop();}catch(_){}}); _dubSources=[];
 }
 function _playDubUrl(url){
-  _stopDub();
+  _stopDub("new-el-clip");
   if(!_dubAudio){ _dubAudio=new Audio(); _dubAudio.preload="auto"; }
   _dubAudio.muted=false;
   _dubAudio.src=httpsMedia(url);
+  _alog("el.play",String(url||"").slice(-48));
   const p=_dubAudio.play&&_dubAudio.play();
   if(p&&p.catch) p.catch(err=>{
+    _alog("el.play-rejected",(err&&err.name)||"?");
     // Autoplay still blocked (no gesture yet this load) — surface it ONCE instead of silent failure.
     if(err&&(err.name==="NotAllowedError"||err.name==="AbortError")){
       if(!_audioUnlocked && typeof toast==="function") toast("Tap the screen once to enable audio, then it will play.");
@@ -6558,8 +6615,9 @@ function _playDubUrlAwait(url){
       // (el.paused false, not ended); a STALE error arrives with el.error already cleared by the
       // new load — ignore both. A real kill (_dubKill → paused stays true), a natural end, and a
       // real media failure (el.error set) still resolve, so the queue can never wedge.
-      if(ev&&ev.type==="pause"&&!el.paused&&!el.ended)return;
-      if(ev&&ev.type==="error"&&!el.error)return;
+      if(ev&&ev.type==="pause"&&!el.paused&&!el.ended){ _alog("el.stale-pause-ignored",""); return; }
+      if(ev&&ev.type==="error"&&!el.error){ _alog("el.stale-error-ignored",""); return; }
+      _alog("el.done",(ev&&ev.type)||"sync");
       _dubActive=false; _dubTailUntil=performance.now()+350;
       el.removeEventListener("ended",fin); el.removeEventListener("error",fin); el.removeEventListener("pause",fin);
       res();
@@ -6619,13 +6677,15 @@ function _playBufAwait(buffer,fx){
   // progresses, so onended never fires — which used to leave _dubSources/_dubActive stuck forever
   // (wedging the queue AND permanently gating the narration mic). The clip's own duration bounds
   // the wait: real playback ends via onended as before; a silent wedge is force-finished.
+  _alog("ctx.start",`dur=${(buffer.duration||0).toFixed(1)}s state=${ctx.state}`);
   return new Promise(res=>{
     let fine=false;
-    const fin=()=>{ if(fine)return; fine=true;
+    const fin=(why)=>{ if(fine)return; fine=true;
+      _alog("ctx.done",why||"?");
       _dubSources=_dubSources.filter(s=>s!==node); _dubActive=_dubSources.length>0;
       _dubTailUntil=performance.now()+350; res(); };
-    node.onended=fin;
-    setTimeout(fin,Math.ceil((buffer.duration||1)*1000)+2000);
+    node.onended=()=>fin("ended");
+    setTimeout(()=>fin("failsafe"),Math.ceil((buffer.duration||1)*1000)+2000);
     node.start();
   });
 }
@@ -6642,23 +6702,31 @@ function _playPcmAwait(f32,fx){
    mic heard the dialogue as the player, or the queue cut a line short). The element path remains
    ONLY as a fallback when the clip can't be fetched (CORS) or the context can't start (no
    gesture yet — the element path surfaces the unlock toast). */
+// Fetch + decode a clip into an AudioBuffer (CORS-tolerant attempt; throws when the host refuses).
+async function _fetchDecodeAudio(url){
+  if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const res=await fetch(httpsMedia(url),{mode:"cors",referrerPolicy:"no-referrer"});
+  if(!res||!res.ok) throw new Error("HTTP "+(res&&res.status));
+  const raw=await res.arrayBuffer();
+  return await _dubCtx.decodeAudioData(raw);
+}
 async function _playUrlAsPcmAwait(url,fx){
+  let phase="ctx";
   try{
     if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
     try{ if(_dubCtx.state==="suspended") await _dubCtx.resume(); }catch(_){}
     if(_dubCtx.state==="suspended") throw 0;                       // no gesture yet → element fallback
-    const res=await fetch(httpsMedia(url));
-    if(!res||!res.ok) throw 0;
-    const raw=await res.arrayBuffer();
-    const buf=await _dubCtx.decodeAudioData(raw);
+    phase="fetch/decode";
+    const buf=await _fetchDecodeAudio(url);
     await _playBufAwait(buf,!!fx);
   }catch(e){
+    _alog("url.fallback-to-el",phase+(e&&e.message?": "+String(e.message).slice(0,60):""));
     await _playDubUrlAwait(url);                                   // CORS/decode failure → legacy path
   }
 }
 async function inworldSpeak(text,voiceId,fx){
   const f32=await _inworldFetchPcm(text,voiceId);
-  _stopDub();
+  _stopDub("inworld-speak");
   await _playPcmAwait(f32,fx);
   return "inworld:played";    // inworld has no cacheable URL (streamed PCM)
 }
@@ -6722,7 +6790,7 @@ function _enqueueDub(job){ _dubQ.push(job); _pumpDub(); }
 // v19.41 — KILL SWITCH: flush pending jobs and stop live audio NOW. Called when the mic mode is
 // toggled off and when Settings turn all voicing off — previously, jobs enqueued before the
 // toggle kept synthesizing and speaking long after ("it never turns off").
-function _dubKill(){ _dubQ.length=0; try{_stopDub();}catch(_){ } _dubActive=false; }
+function _dubKill(why){ _alog("kill",why||"?"); _dubQ.length=0; try{_stopDub("kill:"+(why||"?"));}catch(_){ } _dubActive=false; }
 // Pre-synthesis for a dialogue segment on the CHOSEN engine — started the moment the job is
 // enqueued, so the audio is (usually) ready before its turn comes (kills the narr→dialogue gap).
 function _dialPrep(text,who){
@@ -6731,7 +6799,16 @@ function _dialPrep(text,who){
     const v=(who&&who.voiceId&&who.voiceId.trim())||state.callVoice||"";
     return _inworldFetchPcm(text,v).then(f32=>({f32})).catch(()=>null);
   }
-  return atlasTTS(text,ttsVoiceFor(who),state.ttsLang||"tr").then(url=>url?{url}:null).catch(()=>null);
+  // v24.1 — xAI: synthesize, then try to pull the BYTES immediately (decoded AudioBuffer), so
+  // playback runs through the WebAudio "phone output" like Inworld. If the mp3 host refuses the
+  // cross-origin fetch, keep the url AND the text+voice so the pump can RE-VOICE the line through
+  // the Inworld relay instead of the <audio> element (car bluetooth kills media-channel audio
+  // during a live-mic "call"; only call-format output survives).
+  return atlasTTS(text,ttsVoiceFor(who),state.ttsLang||"tr").then(async url=>{
+    if(!url)return null;
+    const buf=await _fetchDecodeAudio(url).catch(()=>null);
+    return buf?{buf,url}:{url,text,who};
+  }).catch(()=>null);
 }
 async function _pumpDub(){
   if(_dubQBusy) return; const job=_dubQ.shift(); if(!job) return;
@@ -6741,13 +6818,31 @@ async function _pumpDub(){
     // it dies silently instead of speaking from the grave.
     const stillOn=(state.autoSpeak||state.narrMode) && (job.kind!=='narr'||narrActive());
     if(stillOn){
+      _alog("pump.job",job.kind);
       const a=await job.prep;
-      // v23.8 — xAI urls play through the WebAudio pipeline (same as Inworld) so all app speech is
-      // one tracked "phone output"; the cached url is still stamped for the manual replay button.
-      if(a&&a.url){ if(job.m){job.m.ttsUrl=a.url;} await _playUrlAsPcmAwait(a.url,job.kind==='narr'&&!!job.fx); }
+      if(a&&a.url&&job.m)job.m.ttsUrl=a.url;   // manual replay button keeps the cached url
+      // v24.1 — playback priority: decoded BYTES through the WebAudio "phone output" (identical to
+      // Inworld); pre-fetched PCM; then, when the bytes were CORS-refused, RE-VOICE the line via
+      // the Inworld relay in the character's call voice — the exact same output format as the
+      // narrator, so car bluetooth treats it as the live call speaking. The <audio> element (media
+      // channel — cars mute it during a call) is the LAST resort only.
+      if(a&&a.buf){ await _playBufAwait(a.buf,job.kind==='narr'&&!!job.fx); }
       else if(a&&a.f32){ await _playPcmAwait(a.f32,!!job.fx); }
-    }
-  }catch(e){}
+      else if(a&&a.url){
+        const relay=(state.ttsRelay||"").trim();
+        let played=false;
+        if(a.text&&relay){
+          _alog("pump.revoice-inworld","bytes unavailable → relay pcm, voice="+(((a.who&&a.who.voiceId)||state.callVoice||"default")));
+          const v=(a.who&&a.who.voiceId&&a.who.voiceId.trim())||state.callVoice||"";
+          const f32=await _inworldFetchPcm(ttsCleanText(a.text),v).catch(()=>null);
+          if(f32){ await _playPcmAwait(f32,false); played=true; }
+        }
+        if(!played)await _playUrlAsPcmAwait(a.url,job.kind==='narr'&&!!job.fx);
+      }
+      else _alog("pump.no-audio",job.kind+" (synthesis failed/empty)");
+      _alog("pump.job-done",job.kind);
+    }else _alog("pump.skip",job.kind+" (voicing off)");
+  }catch(e){ _alog("pump.error",String(e&&e.message||e).slice(0,80)); }
   finally{ _dubQBusy=false; if(_dubQ.length)_pumpDub(); }
 }
 // v19.4: while the narration-mode session is live, treat auto-speak + narration voice as ON
@@ -6766,7 +6861,7 @@ function autoSpeakMsg(m,p){
   // so voice the whole cleaned body in the sender's voice — texting hands-free reads replies aloud.
   if(m.textMsg){
     const body=ttsCleanText(m.content);
-    if(body)_enqueueDub({kind:'dial',prep:_dialPrep(body,who),m});
+    if(body){ _alog("speak.enqueue",`text · ${(who&&who.name)||"?"} · ${body.length}ch`); _enqueueDub({kind:'dial',prep:_dialPrep(body,who),m}); }
     return;
   }
   if(narrActive()){
@@ -6774,12 +6869,13 @@ function autoSpeakMsg(m,p){
     // Both segments start synthesizing IMMEDIATELY and in parallel; the queue only sequences
     // PLAYBACK — narrator first, then the character — so the hand-off has no synthesis gap.
     const nv=(state.narrVoice&&state.narrVoice.trim())||state.callVoice||"";
-    if(narr)_enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr),nv).then(f32=>({f32})).catch(()=>null)});
-    if(dial)_enqueueDub({kind:'dial',prep:_dialPrep(dial,who),m});
+    if(narr){ _alog("speak.enqueue",`narr · ${narr.length}ch`); _enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr),nv).then(f32=>({f32})).catch(()=>null)}); }
+    if(dial){ _alog("speak.enqueue",`dial · ${(who&&who.name)||"?"} · ${dial.length}ch`); _enqueueDub({kind:'dial',prep:_dialPrep(dial,who),m}); }
     return;
   }
   const line=extractDialogue(m.content);
   if(!line) return;   // pure narration with no spoken words → nothing to say
+  _alog("speak.enqueue",`dial · ${(who&&who.name)||"?"} · ${line.length}ch`);
   _enqueueDub({kind:'dial',prep:_dialPrep(line,who),m});
 }
 /* ===== v19.4 — NARRATION MODE (mic): continuous open mic in the chat =====================
@@ -6826,7 +6922,7 @@ async function nmStart(){
       // which then spawned a new reply whose audio job STOPPED the dialogue mid-word. The element
       // check (playing, not ended) and the live WebAudio source list make that class of leak
       // impossible regardless of flag bookkeeping.
-      if(_dubActive||performance.now()<_dubTailUntil) return;
+      if(_dubActive||performance.now()<_dubTailUntil){ if(nm._gateLog!=="flag"){nm._gateLog="flag";_alog("mic.gated","flag");} return; }
       // v23.9 — WEDGE WATCHDOG: the physical checks can get STUCK claiming audio forever — an
       // element whose play() was rejected (autoplay policy) sits in paused=false limbo, and a
       // source started on a suspended context never fires onended. That gated the mic permanently
@@ -6836,8 +6932,10 @@ async function nmStart(){
       const _phys=(_dubSources.length>0)||(_dubAudio&&!_dubAudio.paused&&!_dubAudio.ended);
       if(_phys){
         if(!nm._physSince)nm._physSince=performance.now();
-        if(performance.now()-nm._physSince<10000) return;
+        if(performance.now()-nm._physSince<10000){ if(nm._gateLog!=="phys"){nm._gateLog="phys";_alog("mic.gated","phys");} return; }
+        if(nm._gateLog!=="watchdog"){nm._gateLog="watchdog";_alog("mic.watchdog-open","phys stuck >10s");}
       } else nm._physSince=0;
+      if(nm._gateLog&&nm._gateLog!=="open"&&nm._gateLog!=="watchdog"){nm._gateLog="open";_alog("mic.open","");}
       const inp=e.inputBuffer.getChannelData(0);
       const ratio=inRate/outRate, n=Math.floor(inp.length/ratio), out=new Int16Array(n);
       for(let i=0;i<n;i++){ let s=inp[Math.floor(i*ratio)]; s=Math.max(-1,Math.min(1,s)); out[i]=s<0?s*0x8000:s*0x7FFF; }
@@ -6894,6 +6992,7 @@ function nmCommit(){
   const full=(nm._finalBuf||'').trim(); if(!full) return;
   const now=performance.now();
   if(nm._lastText===full && (now-(nm._lastAt||0))<2500){ nm._finalBuf=''; return; }   // dupe guard
+  _alog("mic.commit",full.slice(0,80));
   nm._lastText=full; nm._lastAt=now; nm._finalBuf='';
   nm._pend=((nm._pend||'')+' '+full).trim();
   if(nm._pendTimer)clearTimeout(nm._pendTimer);
@@ -6906,18 +7005,19 @@ function nmFlush(){
   // "send Baran", "close") executes as an OPERATION and never reaches the auto-RP writer. The
   // parser only consumes lines whose argument resolves to a real character/place, so ordinary
   // roleplay speech falls through untouched.
-  try{ if(handsFreeCommand(curChat(),text)){ nm._pend=''; return; } }catch(e){}
+  try{ if(handsFreeCommand(curChat(),text)){ _alog("mic.flush","command: "+text.slice(0,60)); nm._pend=''; return; } }catch(e){}
   // v24.0 — TEXTING BY VOICE: while a character's text window is open, speech IS the text message
   // — sent verbatim to that thread (their reply comes back as a voiced text). Say "close" to
   // return to the scene.
   if(_openTextPid){
     const chat=curChat(); const p=(state.personas||[]).find(x=>x&&x.id===_openTextPid);
-    if(chat&&p){ nm._pend=''; sendTextMessage(chat,p,text); return; }
+    if(chat&&p){ _alog("mic.flush","text→"+p.name+": "+text.slice(0,50)); nm._pend=''; sendTextMessage(chat,p,text); return; }
   }
   const inp=document.getElementById('chatInput');
   if(!inp){ nm._pend=''; return; }
   if(inp.disabled){ nm._pendTimer=setTimeout(nmFlush,700); return; }   // a turn is converting → hold, don't drop
   nm._pend='';
+  _alog("mic.flush","rp turn: "+text.slice(0,60));
   inp.value=text; _spokenVerbatim=true;
   sendMessage();
 }
@@ -14919,7 +15019,7 @@ async function toggleMode(mode,ev){
   switch(mode){
     case 'mic':    await toggleNarrMode(); break;   // open mic (+ wake lock inside nmStart/nmStop)
     case 'tts':    state.autoSpeak=!state.autoSpeak; store.setRaw(K.autoSpeak,state.autoSpeak?"1":"0");
-                   if(!state.autoSpeak&&!state.narrMode)_dubKill();
+                   if(!state.autoSpeak&&!state.narrMode)_dubKill("tts-toggle-off");
                    toast(state.autoSpeak?"Replies will be spoken":"Replies muted"); break;
     case 'heat':   state.heatOn=!state.heatOn; store.set(K.heatOn,state.heatOn);
                    toast(state.heatOn?"Heat of the moment on":"Heat off"); break;
@@ -14934,7 +15034,7 @@ function reflectNarrMode(){ const b=document.getElementById('narrModeBtn'); if(b
 // on + auto images & typewriter reveal paused (nothing waits; see autoImgActive/typewriterReveal).
 // autoSpeak/narrOn are raised for the SESSION only (narrActive()); persisted settings are untouched.
 async function toggleNarrMode(){
-  if(state.narrMode){ state.narrMode=false; nmStop(); _dubKill(); toast("Narration mode off"); return; }
+  if(state.narrMode){ state.narrMode=false; nmStop(); _dubKill("narr-mode-off"); toast("Narration mode off"); return; }
   if(!state.autoRpOn) toggleAutoRp();          // spoken words need the narrator around them
   const ok=await nmStart();
   if(!ok){ state.narrMode=false; reflectNarrMode(); return; }
@@ -16563,6 +16663,8 @@ function handleOOC(chat,text){
     p.latent=true; if(chat.locationId)p.boundLocId=chat.locationId; persistPersonas();
     if(chat.presentIds){ chat.presentIds=chat.presentIds.filter(id=>id!==p.id); persistChats(); }
     toast(`${p.name} is now hidden here — /seek them to reveal`); appendNewBubbles();
+  }else if(cmd==="voicedebug"||cmd==="voicelog"){
+    openVoiceDebugModal();
   }else if(cmd==="who"||cmd==="here"){
     const here=presentCast(chat).map(c=>c.name);
     toast(here.length?("Here: "+here.join(", ")):"Nobody is nearby");
@@ -22630,7 +22732,7 @@ async function genDiaryPaper(){
 }
 function setDiaryFont(id){ localStorage.setItem('sm_diaryfont',id); if(_diaryReaderOwner!=null)openDiaryReader(_diaryReaderOwner,_diaryReaderDay); }
 let _diaryReaderOwner=null;
-function _diaryClose(){ if(typeof _stopDub==="function")_stopDub(); const m=document.getElementById('diaryReaderModal'); if(m)m.remove(); _diaryReaderOwner=null; }
+function _diaryClose(){ if(typeof _stopDub==="function")_stopDub("diary-close"); const m=document.getElementById('diaryReaderModal'); if(m)m.remove(); _diaryReaderOwner=null; }
 function openDiaryReader(ownerId,day){
   const p=state.personas.find(x=>x.id===ownerId); if(!p)return;
   const uni=curUniverseObj();
@@ -23750,7 +23852,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setTtsEngine'); if(e)state.ttsEngine=e.value||"xai";}
   {const e=document.getElementById('setAutoSpeak'); if(e)state.autoSpeak=e.checked;}
   {const e=document.getElementById('setNarrOn'); if(e){state.narrOn=e.checked; store.set(K.narrOn,state.narrOn);}}
-  if(!(state.autoSpeak||state.narrMode))_dubKill();   // v19.41: silence NOW, including queued jobs
+  if(!(state.autoSpeak||state.narrMode))_dubKill("settings-voicing-off");   // v19.41: silence NOW, including queued jobs
   {const e=document.getElementById('setNarrVoice'); if(e){state.narrVoice=e.value.trim(); store.setRaw(K.narrVoice,state.narrVoice);}}
   {const e=document.getElementById('setNmPatience'); if(e){let v=parseInt(e.value,10); if(!(v>=800&&v<=8000))v=3000; state.nmPatience=v; store.setRaw(K.nmPatience,String(v));}}
   {const e=document.getElementById('setHeatOn'); if(e){state.heatOn=e.checked; store.set(K.heatOn,state.heatOn);}}

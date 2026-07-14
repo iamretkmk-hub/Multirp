@@ -787,7 +787,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v23.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v24.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6762,6 +6762,13 @@ function autoSpeakMsg(m,p){
   if(!m||m.role!=='assistant'||m.dayMarker||m.sysError||m.sceneBeat||m.narratorEvent) return;
   const who=p||(m.speakerId&&state.personas.find(x=>x.id===m.speakerId))||
             (m.name&&state.personas.find(x=>x.name===m.name))||null;
+  // v24.0 — TEXT MESSAGES: a phone text is ALL typed words (no quotes for extractDialogue to find),
+  // so voice the whole cleaned body in the sender's voice — texting hands-free reads replies aloud.
+  if(m.textMsg){
+    const body=ttsCleanText(m.content);
+    if(body)_enqueueDub({kind:'dial',prep:_dialPrep(body,who),m});
+    return;
+  }
   if(narrActive()){
     const {narr,dial}=narrSplit(m.content);
     // Both segments start synthesizing IMMEDIATELY and in parallel; the queue only sequences
@@ -6895,6 +6902,18 @@ function nmCommit(){
 function nmFlush(){
   nm._pendTimer=null;
   const text=(nm._pend||'').trim(); if(!text)return;
+  // v24.0 — HANDS-FREE OPERATOR: a spoken command ("messages Ayla", "go gym", "bring Baran",
+  // "send Baran", "close") executes as an OPERATION and never reaches the auto-RP writer. The
+  // parser only consumes lines whose argument resolves to a real character/place, so ordinary
+  // roleplay speech falls through untouched.
+  try{ if(handsFreeCommand(curChat(),text)){ nm._pend=''; return; } }catch(e){}
+  // v24.0 — TEXTING BY VOICE: while a character's text window is open, speech IS the text message
+  // — sent verbatim to that thread (their reply comes back as a voiced text). Say "close" to
+  // return to the scene.
+  if(_openTextPid){
+    const chat=curChat(); const p=(state.personas||[]).find(x=>x&&x.id===_openTextPid);
+    if(chat&&p){ nm._pend=''; sendTextMessage(chat,p,text); return; }
+  }
   const inp=document.getElementById('chatInput');
   if(!inp){ nm._pend=''; return; }
   if(inp.disabled){ nm._pendTimer=setTimeout(nmFlush,700); return; }   // a turn is converting → hold, don't drop
@@ -16002,7 +16021,8 @@ async function sendTextMessage(chat,p,body){
     chat.messages.push(msg); markChatDirty(chat); persistChats();
     renderTextThread(p.id); updateTextBadges();
     try{ appendNewBubbles(); }catch(e){}   // reply also appears inline in the main story window
-    if(state.autoSpeak){ try{ autoSpeakMsg(msg,p); }catch(e){} }
+    // v24.0 — autoSpeakMsg self-gates (autoSpeak OR narration mode) and voices the whole text body.
+    try{ autoSpeakMsg(msg,p); }catch(e){}
     _notePlayerTexting(chat);                     // others in the room notice he's texting (not who/what)
     try{ maybeTextInvite(chat,p,body,reply); }catch(e){}
     // Texts function like dialogue for the reasoning engines: scan the exchange for future plans
@@ -16173,6 +16193,7 @@ function deliverProactiveText(chat,p,message,why){
   renderTextThread(p.id); updateTextBadges();
   try{ appendNewBubbles(); }catch(e){}   // proactive text also appears inline in the main story window
   try{ toast(`📱 ${p.name}: yeni mesaj`); }catch(e){}
+  try{ autoSpeakMsg(msg,p); }catch(e){}   // v24.0 — spoken responses read incoming texts aloud too
   try{
     state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:p.id,character:p.name,
       content:`${state.user}'a kendim mesaj attım${why?` (${String(why).slice(0,60)})`:""}: "${String(message).slice(0,80)}"`,
@@ -16372,9 +16393,81 @@ async function sendWhisper(chat,rest){
   }catch(e){ toast(target.name+": "+((e&&e.friendly)||"reply failed")); }
   finally{ if(sb)sb.disabled=false; persistChats(); }
 }
+/* ===== v24.0 — HANDS-FREE OPERATOR ============================================================
+   One command layer shared by the TYPED slash path (handleOOC tries it first) and the SPOKEN
+   narration-mode mic (nmFlush tries it before auto-RP) — so saying "messages Ayla", "go gym",
+   "bring Baran", "send Baran" mid-roleplay executes the OPERATION instead of becoming prose.
+   Spoken text has no leading slash, so the FIRST WORD is the command (EN + TR synonyms) and the
+   REST must resolve to a real character/location — otherwise it returns false and the line falls
+   through as ordinary roleplay speech ("git buradan" stays dialogue; "git spor salonu" travels).
+   Commands: messages/mesaj(lar) <name> (open their text window — the mic then TEXTS them),
+   close/kapat (leave the text window), go/git <place>, bring/getir/çağır <name>,
+   send/gönder/yolla <name>. Returns true when the line was consumed as a command. */
+function handsFreeCommand(chat,raw){
+  try{
+    if(!chat)return false;
+    let t=String(raw||"").trim().replace(/^\//,"");
+    t=t.replace(/[.,;:!?…"'«»]+/g," ").replace(/\s{2,}/g," ").trim();   // STT punctuation is noise here
+    if(!t)return false;
+    const w=t.split(/\s+/);
+    const cmd=(w[0]||"").toLocaleLowerCase("tr");
+    const arg=w.slice(1).join(" ").trim();
+    const uid=chat.universeId;
+    const pool=(state.personas||[]).filter(x=>x&&(!uid||x.universeId===uid)&&isActiveChar(x));
+    const byName=n=>{ const k=String(n||"").toLocaleLowerCase("tr"); if(!k)return null;
+      return pool.find(c=>c.name.toLocaleLowerCase("tr")===k)||pool.find(c=>c.name.toLocaleLowerCase("tr").includes(k))||null; };
+    // 📱 open a character's text thread — the mic + voicing then work on TEXTS until "close"
+    if(["messages","message","mesajlar","mesaj"].includes(cmd)&&arg){
+      const p=byName(arg); if(!p)return false;
+      openTextWith(p.id);
+      toast(`📱 ${p.name} — speak to text them · say "close" / "kapat" to return to the scene`);
+      return true;
+    }
+    if(["close","kapat","geri"].includes(cmd)&&!arg&&_openTextPid){
+      closeTextPop(); toast("Back to the scene"); return true;
+    }
+    // 🧭 travel
+    if(["go","git","travel"].includes(cmd)&&arg){
+      const loc=locByName(arg); if(!loc)return false;
+      if(chat.locationId===loc.id){ toast("Already at "+loc.name); return true; }
+      travelTo(loc.id,[]);
+      return true;
+    }
+    // 👋 bring a character into the scene (narrated arrival, same path as /bring)
+    if(["bring","call","getir","çağır","cagir"].includes(cmd)&&arg){
+      const p=byName(arg); if(!p)return false;
+      if(presentIds(chat).includes(p.id)){ toast(`${p.name} is already here`); return true; }
+      (async()=>{ try{ await summonCharacterNarrated(chat,p.name); }
+        catch(e){ gmSummonCharacter(chat,p.name); }
+        persistChats();appendNewBubbles();updateChatHeader(); })();
+      return true;
+    }
+    // 🚪 send a present character away (narrated exit, same path as /send)
+    if(["send","leave","dismiss","gönder","gonder","yolla"].includes(cmd)&&arg){
+      const k=arg.toLocaleLowerCase("tr");
+      const p=presentCast(chat).find(x=>x.name.toLocaleLowerCase("tr")===k)
+            ||presentCast(chat).find(x=>x.name.toLocaleLowerCase("tr").includes(k))
+            ||(chat.tempChars||[]).find(x=>x.name&&x.name.toLocaleLowerCase("tr").includes(k));
+      if(!p||!presentIds(chat).includes(p.id))return false;
+      (async()=>{
+        const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:(chat&&chat.location)||"",why:summonWhyContext(chat,p)});
+        chat.presentIds=chat.presentIds.filter(x=>x!==p.id);
+        if(chat.worldPositions)chat.worldPositions[p.id]=null;
+        if(chat.companionLock)delete chat.companionLock[p.id];
+        notePresence(chat,[],[p.name],narr);
+        persistChats();appendNewBubbles();updateChatHeader();
+      })();
+      return true;
+    }
+    return false;
+  }catch(e){ return false; }
+}
 function handleOOC(chat,text){
   const m=text.match(/^\/(\w+)\s*(.*)$/);
   if(!m){toast("Unknown command");return;}
+  // v24.0 — the hands-free operator layer handles /go, /messages, /close (and the shared voice
+  // synonyms of /bring, /send) first; anything it doesn't consume falls to the branches below.
+  if(handsFreeCommand(chat,text))return;
   const cmd=m[1].toLowerCase();const arg=(m[2]||"").trim();
   const cast=curCast();
   const findByName=n=>cast.find(c=>c.name.toLowerCase()===n.toLowerCase())
@@ -16480,7 +16573,7 @@ function handleOOC(chat,text){
     if(dead.length)msg+=" · removed: "+dead.join(", ");
     toast(msg);
   }else{
-    toast("Commands: /bring Name · /leave Name · /remove Name · /revive Name · /who · /cast");
+    toast("Commands: /go Place · /messages Name · /bring Name · /leave Name · /remove Name · /revive Name · /who · /cast");
   }
 }
 

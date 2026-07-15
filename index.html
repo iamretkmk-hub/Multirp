@@ -1249,10 +1249,10 @@
             <label class="switchLbl"><input type="checkbox" id="setPresenceOn" checked><span class="sl"></span></label></div>
           <div class="desc">When a character clearly leaves or arrives, they exit/enter the scene automatically.</div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
-            <label style="margin:0"><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment <span class="desc" style="display:block;font-weight:400">After your turn, the scene keeps going on its own for N replies — each one a NEW beat that advances the moment (typing and voice alike). Speak or send anything to cut in and stop the burst.</span></label>
+            <label style="margin:0"><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment <span class="desc" style="display:block;font-weight:400">After your turn, the scene continues on its own with ONE extended, dialogue-rich response worth about N normal replies — several new beats that advance the moment in one go (typing and voice alike). Speak or send anything before it lands to cancel it.</span></label>
             <label class="switchLbl"><input type="checkbox" id="setHeatOn"><span class="sl"></span></label>
           </div>
-          <div><label>Heat burst length (replies per turn, 2–10)</label><input type="number" id="setHeatN" min="2" max="10" step="1" placeholder="5"></div>
+          <div><label>Heat length (how many replies' worth in the single response, 2–10)</label><input type="number" id="setHeatN" min="2" max="10" step="1" placeholder="5"></div>
           <div class="kvline"><span>Relationship tracking</span>
             <label class="switchLbl"><input type="checkbox" id="setRelOn" checked><span class="sl"></span></label></div>
           <div class="desc">Characters build feelings (-100…+100) toward each other and you, fed back into the story.</div>
@@ -5648,11 +5648,12 @@ function applyUiScale(){
   try{ document.body.style.zoom=(v===1)?"":String(v); }catch(e){}
 }
 function revealCps(){ const v=+state.revealCps; return (v>=8&&v<=80)?v:REVEAL_CPS_DEFAULT; }
-/* v19.9 (#12) — VISUAL tag stripping. v24.2: the model is no longer ASKED to write delivery
-   markup ([whisper], <laugh>…</laugh>, …) — the coaching is retired — but older messages and a
-   model imitating its own history can still carry it. While voicing is active this strips it at
-   the DISPLAY layer only — generically ([...] and <...> tokens of sane length), not from a
-   hardcoded tag list — while m.content stays raw for the model, TTS, and memory. */
+/* v19.9 (#12) — VISUAL tag stripping. v24.3: while voicing with the xAI engine the model IS
+   asked to write delivery markup ([pause], <whisper>…</whisper>, …) — the spoken_delivery
+   coaching — and xAI TTS renders it expressively. On screen the markup is noise, so while
+   voicing is active this strips it at the DISPLAY layer only — generically ([...] and <...>
+   tokens of sane length), not from a hardcoded tag list — while m.content stays raw for the
+   model, TTS, and memory. */
 function _dispText(t){
   if(!(state.narrMode||(state.autoSpeak&&(state.ttsEngine||"xai")==="xai"))) return t;
   return String(t||"")
@@ -6582,24 +6583,30 @@ function ttsVoiceFor(p){
 }
 // Strip narration/asterisks/markdown so the TTS reads the SPOKEN line, not stage directions.
 // Roleplay replies mix *actions* with dialogue; we voice the words, drop the rest.
-function ttsCleanText(s){
+// v24.3 — delivery-tag markup ([pause], <whisper>…</whisper>) is ENGINE-DEPENDENT: xAI TTS
+// renders these tags expressively, so when the xai engine is active they are KEPT and reach
+// synthesis; Inworld would read them as literal words, so they are stripped. Call sites that
+// always target Inworld (narrator voice, the xAI→Inworld re-voice fallback) force stripping
+// with stripTags=true regardless of the selected engine.
+function ttsCleanText(s,stripTags){
+  if(stripTags===undefined)stripTags=(state.ttsEngine||"xai")!=="xai";
   let t=String(s||"");
   t=t.replace(/\*\*([^*]+)\*\*/g,"$1");         // **bold** → keep the words, drop markers
   t=t.replace(/\*[^*]+\*/g,"");                 // *action* asides → drop entirely
   t=t.replace(/\*/g,"");                         // any stray asterisks
-  // v24.2 — delivery-tag markup ([pause], <whisper>…</whisper>): the coaching that asked the
-  // model to write these is retired (the TTS spoke them as literal words). Strip any that still
-  // appear (older messages in history, or the model imitating them) so they never reach synthesis.
-  t=t.replace(/\[\/?[^\[\]\n]{1,32}\]/g,"");    // [pause]/[laugh]… instant tags
-  t=t.replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,""); // <whisper>…</whisper> wrapping tags
+  if(stripTags){
+    t=t.replace(/\[\/?[^\[\]\n]{1,32}\]/g,"");    // [pause]/[laugh]… instant tags
+    t=t.replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,""); // <whisper>…</whisper> wrapping tags
+  }
   t=t.replace(/\([^)]*\)/g,"");                 // (parentheticals)
-  t=t.replace(/[_`#>~]/g,"");                   // md noise
+  // md noise — ">" only when tags are stripped too, or <wrapping> tags would lose their bracket
+  t=t.replace(stripTags?/[_`#>~]/g:/[_`#~]/g,"");
   t=t.replace(/\s+/g," ").trim();
   return t.slice(0,15000);                       // model hard cap
 }
 async function atlasTTS(text,voiceId,lang,setStat){
   if(!state.atlasKey)throw{friendly:"No AtlasCloud API key set (Settings → AtlasCloud key)."};
-  const clean=ttsCleanText(text);
+  const clean=ttsCleanText(text,false);   // xAI synthesis — keep expressive delivery tags
   if(!clean){throw{friendly:"Nothing to speak in this line."};}
   const body={
     model:"xai/tts-v1",
@@ -7013,7 +7020,7 @@ async function _pumpDub(){
         if(a.text&&relay){
           _alog("pump.revoice-inworld","bytes unavailable → relay pcm, voice="+(((a.who&&a.who.voiceId)||state.callVoice||"default")));
           const v=(a.who&&a.who.voiceId&&a.who.voiceId.trim())||state.callVoice||"";
-          const f32=await _inworldFetchPcm(ttsCleanText(a.text),v).catch(()=>null);
+          const f32=await _inworldFetchPcm(ttsCleanText(a.text,true),v).catch(()=>null);
           if(f32&&gateOn()){ await _playPcmAwait(f32,false); played=true; }
         }
         if(!played){
@@ -7051,7 +7058,7 @@ function autoSpeakMsg(m,p){
     // Both segments start synthesizing IMMEDIATELY and in parallel; the queue only sequences
     // PLAYBACK — narrator first, then the character — so the hand-off has no synthesis gap.
     const nv=(state.narrVoice&&state.narrVoice.trim())||state.callVoice||"";
-    if(narr){ _alog("speak.enqueue",`narr · ${narr.length}ch`); _enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr),nv).then(f32=>({f32})).catch(()=>null)}); }
+    if(narr){ _alog("speak.enqueue",`narr · ${narr.length}ch`); _enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr,true),nv).then(f32=>({f32})).catch(()=>null)}); }
     if(dial){ _alog("speak.enqueue",`dial · ${(who&&who.name)||"?"} · ${dial.length}ch`); _enqueueDub({kind:'dial',prep:_dialPrep(dial,who),m}); }
     return;
   }
@@ -13764,7 +13771,7 @@ const PAYLOAD_DEFS={
       response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
       feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Considered + momentary relationship prose (or the stranger notice on a first encounter)."},
       final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Voice format reset",kind:"dyn",desc:"Only appears while recent replies still carry old voice markup — orders the model to drop it. (The TTS delivery-tag coaching is retired: the tags were read aloud and broke the speech.)"}
+      spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"While voicing is on with the xAI engine: the delivery-tag coaching (xAI TTS renders the tags expressively; they're hidden on screen). Otherwise, while recent replies still carry the markup: the format reset that orders the model to drop it."}
     }
   },
   multi:{
@@ -13793,7 +13800,7 @@ const PAYLOAD_DEFS={
       response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
       feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Relationship prose or the stranger notice."},
       final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Voice format reset",kind:"dyn",desc:"Only while recent replies still carry old voice markup (delivery-tag coaching retired)."}
+      spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"Delivery-tag coaching while voicing with xAI; the format reset while old markup lingers otherwise."}
     }
   },
   gm:{
@@ -14033,9 +14040,12 @@ const BLOCK_TPL_DEFAULTS={
   // history still carries voice markup the model would otherwise imitate.
   voice_format_reset:`## FORMAT RESET — THE VOICE SESSION IS OVER
 Recent replies were written for a voice session: [bracketed delivery tags] inside quotes and/or a narration-block-then-dialogue-only shape. That session has ENDED. Ignore that formatting in the history — it is stale. Write normally per the format rules: NO bracketed delivery tags anywhere, narration woven naturally with dialogue.`,
-  // v19.5 — appended to the guardrails for each Heat-of-the-moment continuation beat.
-  heat_advance:`## HEAT OF THE MOMENT — CONTINUATION {{round}} of {{total}}
-{{user}} stays silent; the scene keeps moving on its own. ADVANCE it: a new beat — an action, a reaction, an escalation, a consequence, a shift — that did not exist yet. NEVER restate, summarize, or paraphrase anything already written; every sentence must add something new. Do not stall and do not hand the turn back to {{user}} with a question unless it genuinely drives the moment. End mid-momentum so the next beat can pick it up.`,
+  // v19.5 — appended to the guardrails for the Heat-of-the-moment continuation turn.
+  // v24.3 — SINGLE-SHOT: heat is one extended generation now (not N separate beats), so this
+  // asks for one flowing, dialogue-rich response with the substance of ~{{total}} normal replies.
+  heat_advance:`## HEAT OF THE MOMENT — EXTENDED CONTINUATION
+{{user}} stays silent; the scene keeps moving on its own. Deliver ONE uninterrupted, extended continuation — a single flowing response with the substance of about {{total}} normal replies, built from several distinct beats that each ADVANCE the moment: an action, a reaction, an escalation, a consequence, a shift that did not exist yet. For this continuation only, this OVERRIDES the usual reply-length and single-beat pacing rules above.
+Make it DIALOGUE-RICH: spoken lines carry the scene — alive, reactive, overlapping — with narration kept to thin connective tissue between them. NEVER restate, summarize, or paraphrase anything already written; every sentence must add something new. Do not stall, do not pad, and do not hand the turn back to {{user}} with a question unless it genuinely drives the moment. End mid-momentum, leaving the scene alive for {{user}} to step back into.`,
   // v19.4 — appended to the format block ONLY while narration voice / narration mode is active.
   // It deliberately OVERRIDES the "one short narration beat" limit above it for this session shape.
   narr_shape:`## NARRATION MODE — STRICT OUTPUT SHAPE (this session is voice-narrated; overrides the narration limits above)
@@ -14122,10 +14132,11 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   rail_consistent_known:`Stay consistent with your established voice, mood, and the relationship above — don't reset between replies.`,
   rail_consistent_stranger:`Stay consistent with your established voice and mood — don't reset between replies. Remember you do not know {{who}} yet; don't manufacture familiarity.`,
   // --- tail: spoken delivery (whole block; was SPOKEN_DELIVERY_BLOCK) ---
-  // v24.2 — RETIRED (leg 2 broken on purpose): no producer consumes this fragment anymore. The
-  // tags it coached were read aloud by the TTS as literal words and broke the speech. Kept only
-  // so older customized overrides don't orphan-warn; the spoken_delivery block slot now renders
-  // voice_format_reset (below) when recent history still carries the markup.
+  // v24.3 — ACTIVE again: rendered into the spoken_delivery slot whenever voicing is on with the
+  // xAI engine (buildTailBlocks), so the model writes expressive delivery tags xAI TTS renders
+  // natively. Tags are stripped from the on-screen bubble (_dispText) and from Inworld synthesis,
+  // but pass through to xAI (ttsCleanText). When voicing is off, the slot renders
+  // voice_format_reset (above) while recent history still carries the markup.
   spoken_delivery:`# SPOKEN DELIVERY (this dialogue will be voiced aloud)
 Add xAI TTS delivery tags INSIDE the quotation marks of spoken dialogue so it sounds alive. Use them sparingly and only where the emotion genuinely calls for it — never in narration or actions.
 - Instant tags (drop in mid-line): [pause] [long-pause] [laugh] [chuckle] [giggle] [sigh] [breath] [gasp] [cry]
@@ -14700,18 +14711,22 @@ function buildTailBlocks(opts){
   if(_feel.length)B.feelings=_feel.join("\n\n");
   B.final_guardrails=`${blkTpl("rails_header")}\n`+rails.map(r=>`- ${r}`).join("\n");
 
-  // v24.2 — delivery-tag coaching RETIRED (was: auto-speak + xAI asked the model to wrap dialogue
-  // in [instant] / <wrapping> tags). In practice the TTS read the tags as literal words and the
-  // extra markup broke the speech, so the model is no longer asked to produce them — and
-  // ttsCleanText now strips any stragglers before synthesis. What remains is the counter-order:
-  // if the recent replies still carry the markup (older sessions, or the model imitating its own
-  // history), send the format reset regardless of whether voicing is currently on. Self-decaying:
-  // once clean replies push the marked ones out of the detection window, this stops rendering.
-  if(chat && _recentVoiceMarkup(chat)){
+  // v24.3 — delivery-tag coaching RESTORED for the xAI engine: while replies are being voiced
+  // through xAI TTS, ask the model to write expressive delivery tags inside the dialogue quotes
+  // (the spoken_delivery block). The tags never show on screen (_dispText strips them at the
+  // display layer) but PASS THROUGH to xAI synthesis, which renders them expressively —
+  // ttsCleanText keeps them for the xai engine and still strips them for Inworld. When voicing
+  // is OFF, the old counter-order applies: if the recent replies still carry the markup (a voice
+  // session just ended, or the model imitating its own history), send the format reset instead.
+  // Self-decaying: once clean replies push the marked ones out of the window, it stops rendering.
+  if((state.autoSpeak||state.narrMode)&&(state.ttsEngine||"xai")==="xai"){
+    B.spoken_delivery=blkTpl("spoken_delivery");
+  }else if(chat && _recentVoiceMarkup(chat)){
     B.spoken_delivery=blkTpl("voice_format_reset");
   }
   if(chat && chat._heatBeat){
-    B.final_guardrails+=`\n\n${fillTpl(blkTpl("heat_advance"),{round:chat._heatBeat.round,total:chat._heatBeat.total,user:state.user})}`;
+    // round kept in the map for customized overrides that still reference {{round}} (legacy N-beat era)
+    B.final_guardrails+=`\n\n${fillTpl(blkTpl("heat_advance"),{round:chat._heatBeat.round||"1",total:chat._heatBeat.total,user:state.user})}`;
   }
 
   return B;
@@ -14731,19 +14746,10 @@ function curChat(){
      video in the chat. Tapping the pin toggles it (and re-enables auto-gen on unpin).
    - Portrait keeps inline images; the rail is hidden by CSS but the pin still freezes
      auto-gen and shows a small sticky pinned banner above the list. */
-let _heatSeq=0,_heatBusy=false,_heatNoImg=false;
-/* v19.97 — heat anti-loop: a single/two-character scene otherwise regenerates near-identical text
-   each beat (the "same response 3 times" bug). Normalize + word-set Jaccard catches a repeat. */
-function _heatNorm(s){ return String(s||"").toLowerCase().replace(/[^0-9a-zçğıöşü\s]/gi," ").replace(/\s+/g," ").trim(); }
-function _heatTooSimilar(a,b){
-  a=_heatNorm(a); b=_heatNorm(b);
-  if(!a||!b)return false;
-  if(a===b)return true;
-  const wa=new Set(a.split(" ")), wb=new Set(b.split(" "));
-  if(wa.size<4||wb.size<4)return a===b;
-  let inter=0; wa.forEach(w=>{ if(wb.has(w))inter++; });
-  return inter/(wa.size+wb.size-inter)>=0.90;
-}   // v19.5 heat-of-the-moment burst state
+let _heatSeq=0,_heatBusy=false,_heatNoImg=false;   // v19.5 heat-of-the-moment state
+// (v24.3 — the v19.97 per-beat repeat detector is gone with the beat loop: heat is one
+// extended generation now, so there is no next beat to loop into. _heatNoImg stays declared
+// for autoImgActive but is never raised — the single heat response gets its auto image.)
 function autoImgActive(){
   if(!state.autoImg) return false;
   if(state.imgPauseOn) return false; // v24.2: "Pause images" mode row — INVERTED toggle: ON = no auto images
@@ -17423,15 +17429,16 @@ async function runMultiCharTurn(chat,playerText){
     persistChats();appendNewBubbles();
   }finally{document.getElementById('sendBtn').disabled=false;}
 }
-/* v19.5 — HEAT OF THE MOMENT: after the player's turn resolves, the scene continues on its
-   own for N-1 more beats (Settings: heatOn/heatN). Each beat: pick the present character who has
-   spoken LONGEST AGO (round-robin-ish, keeps a scene moving between people), stamp
-   chat._heatBeat={round,total} (transient `_` field — never persisted; read by buildTailBlocks →
-   heat_advance guardrail: advance, never repeat), and run a normal playCharacterTurn — so voicing,
-   reveal, presence and refusal handling all behave exactly like an ordinary reply. Auto images are
-   suppressed on non-final beats (_heatNoImg) so the burst never waits on generation.
-   CANCELLATION: sendMessage bumps _heatSeq on every player turn (typed or spoken) — an in-flight
-   burst notices and stops before its next beat. Hooked at all three chain-end sites. */
+/* v19.5 — HEAT OF THE MOMENT. v24.3 — SINGLE-SHOT: after the player's turn resolves, the scene
+   continues on its own in ONE extended generation (Settings: heatOn/heatN — heatN is now "how
+   many replies' worth of substance", not a beat count). Pick the present character who has
+   spoken LONGEST AGO (keeps a scene moving between people), stamp chat._heatBeat={total}
+   (transient `_` field — never persisted; read by buildTailBlocks → heat_advance guardrail:
+   one dialogue-rich continuation worth ~total replies), and run a normal playCharacterTurn with
+   a max_tokens headroom bump — so voicing, reveal, presence and refusal handling all behave
+   exactly like an ordinary reply, and the auto image fires for the (single, final) response.
+   CANCELLATION: sendMessage bumps _heatSeq on every player turn (typed or spoken) — checked
+   right before the generation starts. Hooked at all three chain-end sites. */
 function maybeHeatBursts(chat){
   if(!state.heatOn||_heatBusy||!chat)return;
   // v19.97 — PER-TURN single-flight: the burst runs at most once per new tail line. Two hook sites
@@ -17449,25 +17456,15 @@ async function runHeatBursts(chat){
   const mySeq=_heatSeq;
   _heatBusy=true;
   try{
-    // the line the burst continues FROM (the player-turn's last reply) — beat 2 is checked against it
-    let prevContent=(()=>{ for(let i=chat.messages.length-1;i>=0;i--){ const m=chat.messages[i]; if(m.role==="assistant"&&m.speaker&&!m.sysError)return m.content||""; } return ""; })();
-    for(let round=2;round<=total;round++){
-      if(mySeq!==_heatSeq||!state.heatOn)break;   // the player cut in, or the toggle went off
-      const cast=presentCast(chat); if(!cast.length)break;
-      const lastIdx={};
-      chat.messages.slice(-30).forEach((m,i)=>{ if(m.role==='assistant'&&m.speaker){ const p=cast.find(c=>c.name===m.speaker); if(p)lastIdx[p.id]=i; } });
-      const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
-      chat._heatBeat={round:String(round),total:String(total)};
-      _heatNoImg=(round<total);
-      const _before=chat.messages.length;
-      try{ await playCharacterTurn(chat,next,state.user); }
-      finally{ delete chat._heatBeat; _heatNoImg=false; }
-      // v19.97 — stop the burst the moment a beat adds nothing or near-repeats the previous line.
-      const _added=chat.messages.length>_before?chat.messages[chat.messages.length-1]:null;
-      if(!_added||!_added.content)break;
-      if(_heatTooSimilar(_added.content,prevContent))break;
-      prevContent=_added.content;
-    }
+    if(mySeq!==_heatSeq||!state.heatOn)return;   // the player cut in, or the toggle went off
+    const cast=presentCast(chat); if(!cast.length)return;
+    // Voice: the present character who has spoken longest ago carries the extended continuation.
+    const lastIdx={};
+    chat.messages.slice(-30).forEach((m,i)=>{ if(m.role==='assistant'&&m.speaker){ const p=cast.find(c=>c.name===m.speaker); if(p)lastIdx[p.id]=i; } });
+    const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
+    chat._heatBeat={total:String(total)};
+    try{ await playCharacterTurn(chat,next,state.user); }
+    finally{ delete chat._heatBeat; }
   }finally{ _heatBusy=false; _heatNoImg=false; if(chat)delete chat._heatBeat; }
 }
 // One character produces one message, shown with its own name/avatar.
@@ -17526,7 +17523,15 @@ async function playCharacterTurn(chat,p,addressed){
       chat.pendingGmNudge=null;persistChats();
     }
     const _rpModel=rpModel();
-    let reply=await chatCompletion(messages,_rpModel,{rp:true,dbg:"Roleplay reply · "+p.name});
+    const _rpOpts={rp:true,dbg:"Roleplay reply · "+p.name};
+    // v24.3 — heat single-shot: the extended continuation is worth ~N normal replies, so give it
+    // max_tokens headroom beyond a low user cap (never LESS than the user's setting).
+    if(chat._heatBeat){
+      const n=Math.max(2,Math.min(10,+chat._heatBeat.total||5));
+      _rpOpts.max=Math.max(+state.tokens||4000,450*n);
+      _rpOpts.dbg=`Roleplay reply (heat ×${n}) · `+p.name;
+    }
+    let reply=await chatCompletion(messages,_rpModel,_rpOpts);
     // REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
     // canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it.
     // If the primary model refused, retry ONCE on the fallback model (flash tends to be more
@@ -17537,7 +17542,7 @@ async function playCharacterTurn(chat,p,addressed){
       const fb=(state.fallbackModel&&state.fallbackModel.trim())||((state.mcModel&&state.mcModel!==state.model)?state.mcModel:state.model);
       if(fb!==state.model){
         try{
-          const alt=await chatCompletion(messages,fb,{rp:true,dbg:"Roleplay reply (refusal fallback) · "+p.name});
+          const alt=await chatCompletion(messages,fb,Object.assign({},_rpOpts,{dbg:"Roleplay reply (refusal fallback) · "+p.name}));
           if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
         }catch(e){/* keep refused=true; honest message below */}
       }

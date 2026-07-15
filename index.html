@@ -13327,6 +13327,18 @@ function deletePersona(){
 
 /* ---- system prompt ---- */
 function memText(m){return m.content||m.text||"";}
+// Present a memory inside a prompt payload WITHOUT cutting it mid-sentence. Full text when it fits;
+// otherwise trimmed back to the last sentence end inside the limit (or last word + ellipsis as the
+// final fallback). Raw slice(0,n) fed the engines broken half-sentences.
+function memPayloadText(s,max){
+  s=String(s||"").replace(/\s+/g," ").trim(); max=max||500;
+  if(s.length<=max)return s;
+  const cut=s.slice(0,max);
+  const end=Math.max(cut.lastIndexOf("."),cut.lastIndexOf("!"),cut.lastIndexOf("?"));
+  if(end>=max*0.5)return cut.slice(0,end+1);
+  const sp=cut.lastIndexOf(" ");
+  return (sp>0?cut.slice(0,sp):cut)+"…";
+}
 // Full SEARCHABLE surface of a memory: the new richer format moves names (people) and concrete
 // specifics (details) out of `content` into their own fields. The prefilter and ranker must see those
 // or retrieval matches worse than before. Plain memText stays the gist-level accessor everywhere else
@@ -16234,10 +16246,13 @@ async function rememberTextExchange(chat,p){
   const th=textThreadMsgs(chat,p.id);
   if(th.length<3)return;                                  // too little to be worth a memory yet
   chat._textMemLen=chat._textMemLen||{};
-  if(th.length-(chat._textMemLen[p.id]||0)<3)return;      // wait for a few new lines since the last one
+  const prevLen=Math.min(chat._textMemLen[p.id]||0,th.length);   // clamp in case messages were deleted
+  if(th.length-prevLen<3)return;                          // wait for a few new lines since the last one
   chat._textMemLen[p.id]=th.length; markChatDirty(chat);
   try{
-    const convo=th.slice(-10).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    // Only the lines SINCE the last text memory (capped at 10) — re-reading the whole tail window made
+    // each successive memory a near-duplicate of the previous one plus a few new lines.
+    const convo=th.slice(Math.max(prevLen,th.length-10)).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
       `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`;
     const out=await chatCompletion([
@@ -16446,7 +16461,7 @@ async function maybeProactiveText(chat,opts){
   try{
     const o=relObj(chat,p.id,"__user__");
     const feel=[relTag(o),relConsideredProse(o),relMomentaryProse(o)].filter(Boolean).join("; ");
-    const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memText(m).slice(0,160)).join("\n");
+    const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memPayloadText(memText(m),320)).join("\n");
     const th=textThreadMsgs(chat,p.id).slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const cal=(()=>{ try{ return calendarContextLine(chat,p.name); }catch(_){ return ""; } })();
     // THE ROLEPLAY ITSELF (witness-scoped): the last scene this character was in with the player, plus
@@ -16512,7 +16527,7 @@ async function _judgeTextVisit(chat,p,o){
     const e=relSheetEntry(p,"__user__");
     const fam=o.familiarity||0;
     const closeness=`How close they are: ${fam>=45?"very close / intimate":fam>=20?"fairly close":"not close"}.`;
-    const mems=memoriesOf(p.id).slice(-4).map(m=>"- "+memText(m).slice(0,140)).join("\n");
+    const mems=memoriesOf(p.id).slice(-4).map(m=>"- "+memPayloadText(memText(m),280)).join("\n");
     const sys=fillTpl(up("textVisitPrompt"),{user:state.user,char:p.name});
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n${e&&(e.tie||e.relationship)?`Relationship: ${[e.tie,e.relationship].filter(Boolean).join(" — ")}\n`:""}${closeness}\n\n# Recent memories\n${mems||"(none)"}\n\n${state.user} left ${p.name}'s text unanswered all day. Would ${p.name} go find them in person tomorrow? Return the JSON.`;
     const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.gmModel,{temp:fnTemp("gm",0.4),max:fnTok("gm",110),dbg:"Text visit judge — "+p.name});
@@ -18723,7 +18738,7 @@ function _pulseKnows(chat,p,otherName,day){
   const un=String(state.user||"").toLowerCase(), on=String(otherName||"").toLowerCase();
   const rec=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&(m.gameDay==null||day-(m.gameDay||0)<=2))
     .filter(m=>{const t=String(m.content||"").toLowerCase(); return (on&&t.includes(on))||(un&&t.includes(un))||m.type==="GOSSIP"||(m.importance||0)>=0.7;})
-    .slice(-4).map(m=>"- "+String(m.content).slice(0,200));
+    .slice(-4).map(m=>"- "+memPayloadText(m.content,500));
   return rec.length?rec.join("\n"):"- (nothing charged recently)";
 }
 function _pulseTie(chat,a,b){
@@ -18841,7 +18856,7 @@ async function runGoalPursuit(chat,day,uni){
       if(ran>=cap)break;
       const place=(locById(pos[p.id])||{}).name||"";
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3)
-        .slice(-5).map(m=>"- "+String(m.content).slice(0,180)).join("\n")||"- (nothing notable recently)";
+        .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
       const others=pool.concat(state.personas.filter(x=>x&&x.universeId===uni.id&&isActiveChar(x))).filter(x=>x&&x.id!==p.id);
       const seen=new Set(); const ties=[];
       for(const o of others){ if(seen.has(o.id))continue; seen.add(o.id);
@@ -20957,7 +20972,7 @@ async function runCharQuestSpawn(chat,day,uni){
       const myIntents=((chat.intents||[]).filter(i=>i&&i.holderId===p.id&&i.status!=="spent")).slice(-3)
         .map(i=>`- a ${i.valence||""} ${i.kind} toward ${i.targetName}: ${String(i.aim||i.trigger||"").slice(0,140)} (${i.status})`).join("\n")||"- (nothing notable brewing)";
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3)
-        .slice(-5).map(m=>"- "+String(m.content).slice(0,180)).join("\n")||"- (nothing notable recently)";
+        .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
       const ties=[]; const seen=new Set();
       for(const o of roster){ if(o.id===p.id||seen.has(o.id))continue; seen.add(o.id);
         const t=_pulseTie(chat,p,o); if(t&&t.replace(/[;\s]/g,"").length)ties.push(`${o.name}: ${t}`);
@@ -21038,7 +21053,7 @@ async function runCharQuestPursuit(chat,day,uni){
       }
       const place=(locById(pos[holder.id])||{}).name||"";
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===holder.id&&day-(m.gameDay||0)<=3)
-        .slice(-5).map(m=>"- "+String(m.content).slice(0,180)).join("\n")||"- (nothing notable recently)";
+        .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
       const progress=(q.progress||[]).slice(-6).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")||"- (no moves yet)";
       const tpl=fillTpl(up("charQuestStep"),{
         char:holder.name, personality:String(holder.personality||"").slice(0,240),
@@ -22147,6 +22162,7 @@ async function flushMemoryArc(chat, dayStamp){
   if(!ev||!ev.open) return;
   const start=ev.startIdx||0;
   chat.memEvent=null;                       // clear FIRST so re-entrancy can't double-commit
+  chat.memDoneIdx=chat.messages.length-1;   // the next arc must not re-cover this committed span
   markChatDirty(chat);
   await commitMemoryArc(chat, start, chat.messages.length-1, dayStamp);
 }
@@ -22165,9 +22181,16 @@ async function maybeBuildMemory(chat){
   // Scene boundary: the current arc can't predate the last location change.
   let sceneStart=0;
   for(let i=chat.messages.length-1;i>=0;i--){ if(chat.messages[i]&&chat.messages[i].travelBeat){ sceneStart=i; break; } }
+  // COMMITTED boundary: never reopen an arc over messages already cut into memories. Reopening at the
+  // scene start after a mid-scene commit re-covered the whole committed span, layering near-duplicate
+  // memories that each add one beat ("we went to the bar" → "we went to the bar and ordered beer").
+  // memDoneIdx = last message index a committed arc consumed; clamped so message deletion/regeneration
+  // can't strand the pointer past the end of the transcript.
+  const doneAfter=Math.min((typeof chat.memDoneIdx==="number"?chat.memDoneIdx:-1),chat.messages.length-1)+1;
   if(!chat.memEvent || !chat.memEvent.open || chat.memEvent.startIdx < sceneStart){
-    // No live arc (or it belongs to a previous scene) — open a fresh one at the scene start.
-    chat.memEvent={ startIdx:Math.max(sceneStart,0), open:true, paused:false, summary:"" };
+    // No live arc (or it belongs to a previous scene) — open a fresh one where the last one ended
+    // (or at the scene start, whichever is later).
+    chat.memEvent={ startIdx:Math.max(sceneStart,doneAfter,0), open:true, paused:false, summary:"" };
   }
   const ev=chat.memEvent;
 
@@ -22201,18 +22224,20 @@ async function maybeBuildMemory(chat){
     let newStart=arcEnd;
     for(let i=chat.messages.length-1;i>oldStart;i--){ if(chat.messages[i]&&chat.messages[i].role==='user'){ newStart=i; break; } }
     chat.memEvent={ startIdx:newStart, open:true, paused:false, summary };
+    chat.memDoneIdx=Math.max(oldStart,newStart-1);
     markChatDirty(chat);
     await commitMemoryArc(chat, oldStart, Math.max(oldStart,newStart-1));
     return;
   }
   if(progress==="finished"){
-    chat.memEvent=null; markChatDirty(chat);
+    chat.memEvent=null; chat.memDoneIdx=arcEnd; markChatDirty(chat);
     await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
     return;
   }
   if(progress!=="paused" && spanLen>=MEM_ARC_CAP){
     // SAFETY VALVE: an arc that won't close on its own commits here, then a fresh one opens.
     chat.memEvent={ startIdx:arcEnd, open:true, paused:false, summary:"" };
+    chat.memDoneIdx=arcEnd;
     markChatDirty(chat);
     await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
     return;

@@ -1009,13 +1009,13 @@
       <div class="sgbody">
         <div class="card">
           <h3><svg class="ic"><use href="#i-video"/></svg> Base video models</h3>
-          <div class="desc" style="margin-bottom:8px"><svg class="ic"><use href="#i-film"/></svg> <b>Animate</b> runs on <b>wan-2.5 image-to-video-fast</b> and makes the <b>initial</b> clip from a scene image (audio from the prompt, 5–20s). <svg class="ic"><use href="#i-reel"/></svg> <b>Extend</b> (the reel button on later scenes) runs on <b>wan-2.5 video-extend</b>: it takes that image's prompt, writes a "scene continues…" prompt sized to the length below, and appends new footage onto the chat's latest clip — press it again and again to keep growing the video.</div>
+          <div class="desc" style="margin-bottom:8px"><svg class="ic"><use href="#i-film"/></svg> <b>Animate</b> runs on <b>wan-2.2 turbo-spicy image-to-video-lora</b> and makes the <b>initial</b> clip from a scene image — the routed video rule's LoRAs and trigger keyword apply. <svg class="ic"><use href="#i-reel"/></svg> <b>Extend</b> (the reel button on later scenes) runs on <b>wan-2.5 video-extend</b>: it takes that image's prompt, writes a "scene continues…" prompt sized to the length below, and appends new footage onto the chat's latest clip — press it again and again to keep growing the video.</div>
         </div>
         <div class="card">
-          <h3><svg class="ic"><use href="#i-video"/></svg> Animate — wan-2.5 options (initial clip)</h3>
-          <div class="desc" style="margin-bottom:8px">These control the Animate button (wan-2.5 image-to-video-fast) that seeds the <b>first</b> video. Audio is rendered from the prompt's sound description; the output video follows the scene image's own aspect ratio.</div>
-          <div><label>Animate model</label><input class="fld" id="setSeedanceModel" placeholder="alibaba/wan-2.5/image-to-video-fast"></div>
-          <div class="kvline" style="padding:0 0 6px"><label>Voice-guided Animate <span class="desc" style="display:block;font-weight:400">Speak the line (xAI voice) and send it as the clip's audio track — wan-2.5 syncs the video to the dialogue. Lines with no dialogue animate as before. Long lines get cut at the clip length — raise the duration for longer speech.</span></label>
+          <h3><svg class="ic"><use href="#i-video"/></svg> Animate — wan-2.2 turbo-spicy options (initial clip)</h3>
+          <div class="desc" style="margin-bottom:8px">These control the Animate button (wan-2.2-turbo-spicy image-to-video-lora) that seeds the <b>first</b> video. The routed video rule's LoRAs load into the model's high/low-noise channels; the output follows the scene image's own aspect ratio. This model renders 5s or 8s clips — the duration slider snaps to the nearest. Set a wan-2.5 model id below to get 5–20s durations and voice-guided audio instead.</div>
+          <div><label>Animate model</label><input class="fld" id="setSeedanceModel" placeholder="atlascloud/wan-2.2-turbo-spicy/image-to-video-lora"></div>
+          <div class="kvline" style="padding:0 0 6px"><label>Voice-guided Animate <span class="desc" style="display:block;font-weight:400">Speak the line (xAI voice) and send it as the clip's audio track. Only works when the Animate model is a wan-2.5 id (wan-2.2 turbo-spicy has no audio input — the toggle is ignored there). Lines with no dialogue animate as before.</span></label>
             <label class="switchLbl"><input type="checkbox" id="setAnimVoice"><span class="sl"></span></label></div>
           <div class="row">
             <div style="flex:1"><label>Duration: <span id="seedanceDurVal">5</span>s</label>
@@ -4332,7 +4332,7 @@ function loadState(){
     vidModel:store.raw(K.vidModel,"atlascloud/wan-2.2-turbo-spicy/image-to-video"),
     // v19.3 default = wan-2.5 fast; a stored bytedance/seedance* id is mapped over one time just
     // below (the user asked to REPLACE Seedance — any Seedance id would 404 the Animate button).
-    seedanceModel:store.raw(K.seedanceModel,"alibaba/wan-2.5/image-to-video-fast"),
+    seedanceModel:store.raw(K.seedanceModel,"atlascloud/wan-2.2-turbo-spicy/image-to-video-lora"),
     seedanceDur:(()=>{const n=parseInt(store.raw(K.seedanceDur,"5"),10);return (n>=5&&n<=20)?n:5;})(),
     seedanceRes:store.raw(K.seedanceRes,"720p"),
     seedanceAspect:store.raw(K.seedanceAspect,"16:9"),
@@ -5116,10 +5116,12 @@ function loadState(){
   });
   _refreshPipe("vidPrompt","prompt engineer","LANGUAGE RULES (Seedance-specific",DEFAULT_VIDPROMPT);
   _refreshPipe("moviePrompt","INFINITE image-to-video","the model takes verbs literally",DEFAULT_MOVIEPROMPT);
-  // v19.3 — Animate moved Seedance → wan-2.5 fast: map any stored Seedance model id over once
-  // (a Seedance id in the new generateVideo body would fail with a schema/model error).
-  if(/^bytedance\/seedance/i.test(state.seedanceModel||"")){
-    state.seedanceModel="alibaba/wan-2.5/image-to-video-fast";
+  // v26 — Animate's standard model is atlascloud/wan-2.2-turbo-spicy/image-to-video-lora.
+  // Map the two previous defaults over once (bytedance Seedance ids from v19.2-, and the
+  // v19.3 wan-2.5 fast default); a hand-typed custom model id is left alone.
+  if(/^bytedance\/seedance/i.test(state.seedanceModel||"")
+     || (state.seedanceModel||"")==="alibaba/wan-2.5/image-to-video-fast"){
+    state.seedanceModel="atlascloud/wan-2.2-turbo-spicy/image-to-video-lora";
     store.setRaw(K.seedanceModel,state.seedanceModel);
   }
   // Image-prompt rewriter upgrade: the universal prompt was reworked to be camera-agnostic and lean
@@ -6320,39 +6322,54 @@ async function atlasVideo(prompt,imageUrl,negative,rule){
   return await atlasGenerate("video",body,label,null);
 }
 
-/* ===== ANIMATE i2v (AtlasCloud, wan-2.5 fast) =================================
-   v19.3 — the Animate button moved from Seedance to alibaba/wan-2.5/image-to-video-fast
-   (user request). Schema per the official docs: { model, image (hosted URL), prompt,
-   negative_prompt, resolution 720p|1080p, duration 5|10, enable_prompt_expansion, seed }.
-   NO aspect_ratio (the output follows the input image's frame), NO last_image, NO
-   generate_audio/camera_fixed flags (wan-2.5 renders audio natively from the prompt's
-   diegetic sound description). Transport is the existing atlasGenerate("video") submit→
-   /model/prediction/{id} poll — exactly the documented flow. Movie is untouched (wan-2.2
-   infinite via atlasVideo). The state fields keep their old K keys (seedanceModel/Dur/Res)
-   to avoid a storage migration; loadState maps a stored bytedance/seedance* model id to
-   the new default one time. seedanceAspect/Audio/CamFixed are retired (ignored if stored). */
+/* ===== ANIMATE i2v (AtlasCloud) ===============================================
+   v26 — the Animate button runs on atlascloud/wan-2.2-turbo-spicy/image-to-video-lora
+   (user request). Schema per the official docs:
+     { model, image (hosted URL), prompt, resolution 480p|720p|1080p, duration 5|8,
+       high_noise_loras[], low_noise_loras[], seed }
+   → POST /model/generateVideo, then poll /model/prediction/{id} — exactly the flow
+   atlasGenerate("video") already implements. The routed video rule's LoRAs now apply to
+   Animate: the rule's high/low-noise pair fills the matching channels; a general rule LoRA
+   with no explicit pair loads into BOTH channels (the usual way one wan-2.2 LoRA is used).
+   This schema has NO negative_prompt and NO audio input, so voice-guided Animate only
+   engages when the Animate model is overridden to a wan-2.5 id (which keeps the old
+   negative_prompt/enable_prompt_expansion/audio fields). State keeps the old K keys
+   (seedanceModel/Dur/Res) to avoid a storage migration. */
 async function wanAnimateVideo(prompt,imageUrl,opts){
-  const model=state.seedanceModel||"alibaba/wan-2.5/image-to-video-fast";
-  const dur=Math.min(20,Math.max(5,parseInt(state.seedanceDur,10)||5));      // slider: 5–20s
+  const model=state.seedanceModel||"atlascloud/wan-2.2-turbo-spicy/image-to-video-lora";
+  const isWan22=/wan-2\.2/i.test(model);
+  let dur=Math.min(20,Math.max(5,parseInt(state.seedanceDur,10)||5));        // slider: 5–20s
+  if(isWan22) dur=(dur>=7)?8:5;                                              // wan-2.2 i2v: 5 | 8 only — snap
   const res=({"480p":"480p","720p":"720p","1024p":"1080p","1080p":"1080p"})[state.seedanceRes]||"720p"; // UI 1024p → API 1080p
-  // wan-2.5 wants a hosted URL in `image`. Upload base64 data URIs; fall back to inline on failure.
+  // The API wants a hosted URL in `image`. Upload base64 data URIs; fall back to inline on failure.
   let img=imageUrl;
   try{ img=await atlasUpload(imageUrl); }catch(e){ img=imageUrl; }
   const body={
     model,
     image:img,
     prompt:(typeof prompt==="string"?prompt:String(prompt||"")),
-    // v19.6: the routed video rule's own negative wins; the generic string is the fallback.
-    negative_prompt:(opts&&opts.negative&&String(opts.negative).trim())||"blur, distortion, artifacts, watermark, text",
     resolution:res,
     duration:dur,
-    enable_prompt_expansion:false,
     seed:-1
   };
-  // v19.6 voice-guided Animate: an audio URL (the line's TTS) makes wan-2.5 sync the clip to the
-  // actual spoken dialogue instead of inventing its own audio from the prompt.
-  if(opts&&opts.audio) body.audio=opts.audio;
-  return await atlasGenerate("video",body,"Video generation (wan-2.5 Animate)",null);
+  const rule=opts&&opts.rule;
+  if(isWan22){
+    // wan-2.2 dual-expert LoRA channels (max 3 each; we send at most 1 per channel).
+    body.high_noise_loras=[]; body.low_noise_loras=[];
+    const hi=rule&&typeof rule.loraHighPath==="string"&&rule.loraHighPath.trim();
+    if(hi){ let s=parseFloat(rule.loraHighScale); if(!(s>=0))s=1; body.high_noise_loras=[{path:civitaiLoraUrl(hi),scale:s}]; }
+    const lo=rule&&typeof rule.loraLowPath==="string"&&rule.loraLowPath.trim();
+    if(lo){ let s=parseFloat(rule.loraLowScale); if(!(s>=0))s=1; body.low_noise_loras=[{path:civitaiLoraUrl(lo),scale:s}]; }
+    const gen=atlasLoras(rule);
+    if(gen){ if(!body.high_noise_loras.length)body.high_noise_loras=gen; if(!body.low_noise_loras.length)body.low_noise_loras=gen; }
+  }else{
+    // wan-2.5 override keeps its extra fields: negative prompt, prompt expansion, optional
+    // audio sync (voice-guided Animate hands the line's TTS mp3 here).
+    body.negative_prompt=(opts&&opts.negative&&String(opts.negative).trim())||"blur, distortion, artifacts, watermark, text";
+    body.enable_prompt_expansion=false;
+    if(opts&&opts.audio) body.audio=opts.audio;
+  }
+  return await atlasGenerate("video",body,"Video generation (Animate · "+(isWan22?"wan-2.2 turbo-spicy":"wan-2.5")+")",null);
 }
 
 /* ===== EXTEND i2v (AtlasCloud, alibaba/wan-2.5/video-extend) ===================
@@ -17821,7 +17838,11 @@ async function animateScene(mid){
     // track → wan renders its own audio from the prompt exactly as before. TTS failure is
     // best-effort: the video still generates, just unguided.
     let _voiceUrl="";
-    if(state.animVoice!==false){
+    // Voice sync needs the wan-2.5 `audio` input — the wan-2.2 turbo-spicy schema has none,
+    // so skip the TTS step entirely there (the clip still generates, just unguided).
+    const _animModel=state.seedanceModel||"atlascloud/wan-2.2-turbo-spicy/image-to-video-lora";
+    const _animIsWan22=/wan-2\.2/i.test(_animModel);
+    if(state.animVoice!==false && !_animIsWan22){
       const _dial=extractDialogue(msg.content||"");
       if(_dial){
         try{
@@ -17834,11 +17855,13 @@ async function animateScene(mid){
       }
     }
     let videoUrl;
-    // ANIMATE runs on wan-2.5 image-to-video-fast. No LoRA routing here — the LoRA rules apply to
-    // the MOVIE path only. Output follows the input image's own aspect, so no aspect parameter.
-    setStat(_voiceUrl?"Generating video on wan-2.5 (synced to the spoken line)… (~1 min)"
+    // ANIMATE runs on wan-2.2 turbo-spicy i2v-lora by default (wan-2.5 if overridden). The routed
+    // video rule rides along: its LoRAs fill the wan-2.2 high/low-noise channels and its trigger
+    // keyword is prepended. Output follows the input image's own aspect, so no aspect parameter.
+    setStat(_animIsWan22?"Generating video on wan-2.2 turbo-spicy… (~1 min)"
+           :_voiceUrl?"Generating video on wan-2.5 (synced to the spoken line)… (~1 min)"
                      :"Generating video on wan-2.5 (audio from the prompt)… (~1 min)");
-    videoUrl=await wanAnimateVideo(vidPrompt,msg.img,{audio:_voiceUrl,negative:baseNeg});
+    videoUrl=await wanAnimateVideo(injectLoraKeyword(vidPrompt,_vidRule),msg.img,{audio:_voiceUrl,negative:baseNeg,rule:_vidRule});
     // Keep the durable, embeddable remote URL as the primary source. A direct <video src=remote>
     // plays without CORS on https hosts; the render path will blob-recover only if it errors.
     // (Eagerly blob-fetching here failed on CDNs without CORS headers and discarded the URL that
@@ -23068,17 +23091,17 @@ function renderRules(kind){
         <textarea class="fld" data-k="motionStyle" style="min-height:110px" placeholder="How this position MOVES over the clip — rhythm, body motion, expression beats. A foundation template can be inserted above and edited.">${esc(r.motionStyle||'')}</textarea>
         <label>Sound prompt (explicit scenes only — the video model renders audio from the prompt)</label>
         <textarea class="fld" data-k="soundStyle" style="min-height:54px" placeholder="Diegetic sound of this position: breathing, moans, rhythm of impact, room tone.">${esc(r.soundStyle||'')}</textarea>
-        <label>Movie high-noise LoRA — structure/layout (Movie path only)</label>
+        <label>High-noise LoRA — structure/layout (wan-2.2 models)</label>
         <div class="row">
           <div style="flex:2"><input type="text" data-k="loraHighPath" value="${esc(r.loraHighPath||'')}" placeholder="HF owner/name, .safetensors URL, or CivitAI URL"></div>
           <div style="flex:1"><input type="number" data-k="loraHighScale" step="0.05" min="0" max="2" value="${r.loraHighScale!=null?esc(String(r.loraHighScale)):'1'}" placeholder="1"></div>
         </div>
-        <label>Movie low-noise LoRA — detail/texture (Movie path only)</label>
+        <label>Low-noise LoRA — detail/texture (wan-2.2 models)</label>
         <div class="row">
           <div style="flex:2"><input type="text" data-k="loraLowPath" value="${esc(r.loraLowPath||'')}" placeholder="HF owner/name, .safetensors URL, or CivitAI URL"></div>
           <div style="flex:1"><input type="number" data-k="loraLowScale" step="0.05" min="0" max="2" value="${r.loraLowScale!=null?esc(String(r.loraLowScale)):'1'}" placeholder="1"></div>
         </div>
-        <div class="desc" style="margin:-2px 0 6px">The base video models are fixed in <b>Video Generation</b> settings — rules pick the LoRAs + per-scene prompts. The general LoRA + trigger keyword apply to both paths; the high/low-noise pair is the Wan MoE channel used by Movie. Leave all LoRA fields blank for a plain rule. CivitAI links auto-attach your CivitAI key.</div>
+        <div class="desc" style="margin:-2px 0 6px">The base video models are fixed in <b>Video Settings</b> — rules pick the LoRAs + per-scene prompts. On wan-2.2 models (Animate's turbo-spicy i2v-lora and rule-routed video) the high/low-noise pair fills the matching channels; a general LoRA with no pair set loads into both. The trigger keyword is auto-prepended to the prompt. Leave all LoRA fields blank for a plain rule. CivitAI links auto-attach your CivitAI key.</div>
         <button class="btn danger sec small" data-del="1" style="margin-top:4px">Delete rule</button>`;
       } else {
         body.innerHTML=`
@@ -24013,7 +24036,7 @@ function saveSettings(notify){
   {const aim=document.getElementById('setAtlasImgModel'); if(aim&&state.imgProvider==="atlascloud"&&aim.value.trim())state.imgModel=aim.value.trim();}
   {const avm=document.getElementById('setAtlasVidModel'); if(avm&&state.vidProvider==="atlascloud")state.vidModel=avm.value.trim()||"atlascloud/wan-2.2-turbo-spicy/image-to-video";}
   {const e=document.getElementById('setVidModelFixed'); if(e&&e.value.trim())state.vidModel=e.value.trim();}
-  {const e=document.getElementById('setSeedanceModel'); if(e)state.seedanceModel=e.value.trim()||"alibaba/wan-2.5/image-to-video-fast";}
+  {const e=document.getElementById('setSeedanceModel'); if(e)state.seedanceModel=e.value.trim()||"atlascloud/wan-2.2-turbo-spicy/image-to-video-lora";}
   {const e=document.getElementById('setSeedanceDur'); if(e)state.seedanceDur=Math.min(20,Math.max(5,parseInt(e.value,10)||5));}
   {const e=document.getElementById('setSeedanceRes'); if(e)state.seedanceRes=(["480p","720p","1024p"].includes(e.value)?e.value:"720p");}
   {const e=document.getElementById('setExtendModel'); if(e)state.extendModel=e.value.trim()||"alibaba/wan-2.5/video-extend";}

@@ -14750,6 +14750,10 @@ function autoImgActive(){
   if(state.narrMode) return false;   // v19.4: narration mode never waits on image generation
   if(_heatNoImg) return false;       // v19.5: no auto image on non-final heat beats (no waiting mid-burst)
   const c=state.chats&&state.curChat?state.chats[state.curChat]:null;
+  // v29 — SCENE MODE: while a scene video is docked over the story, image generation stops;
+  // each beat routes between the user's scenes instead (see autoVisualize/routeSceneForBeat).
+  // Closing the video window (closeSceneDock) clears sceneDockId and auto images resume.
+  if(c&&c.sceneDockId&&typeof sceneById==="function"&&sceneById(c.sceneDockId)) return false;
   if(c&&c.pinnedMid){
     // Only treat the pin as active if the pinned message still actually holds media. After a
     // reload, inline images aren't persisted (see _slimChat → hadImg), so a stale pinnedMid must
@@ -14759,6 +14763,53 @@ function autoImgActive(){
     if(c.pinnedMid){ c.pinnedMid=null; }            // stale pin (media gone) → drop it, resume
   }
   return true;
+}
+/* ===== v29 — SCENE MODE (video window open → scenes are selected instead of images) =====
+   While the player has a scene playing over the story (chat.sceneDockId set), the per-beat
+   visual step changes: no image is generated; instead an LLM routes between the user's SCENES
+   using each scene's "When to select" field (scene.when — edited in the scene editor), exactly
+   like the image pose router. The winning scene starts playing in the dock; picking the same
+   scene again leaves playback untouched. This holds until the player closes the video window. */
+function sceneModeActive(){
+  const c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
+  return !!(c&&c.sceneDockId&&typeof sceneById==="function"&&sceneById(c.sceneDockId));
+}
+// Every auto-illustration call site goes through this: scene mode routes a scene, otherwise
+// the normal image pipeline runs (manual Retry/Generate still calls illustrate directly).
+function autoVisualize(mid,reply){
+  if(sceneModeActive()){ routeSceneForBeat(mid,reply); return; }
+  if(autoImgActive()) illustrate(mid,reply);
+}
+let _sceneRouteBusy=false;
+async function routeSceneForBeat(mid,replyText){
+  const chat=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
+  if(!chat||!chat.sceneDockId)return;
+  if(!state.routeOn)return;                     // routing disabled → keep whatever is playing
+  const scenes=_galScope(state.scenes||[]).filter(s=>s&&(s.clips||[]).length);
+  if(scenes.length<2)return;                    // nothing to choose between
+  if(_sceneRouteBusy)return;                    // one route in flight per turn is enough
+  _sceneRouteBusy=true;
+  try{
+    // The router reads the last few lines (ending with this beat) — same freshest-last shape
+    // as the image router — plus a sticky "currently playing" bias so scenes don't flap.
+    const recent=(chat.messages||[])
+      .filter(m=>m&&!m.sysError&&!m.dayMarker&&!m.presenceNote&&m.content)
+      .slice(-3)
+      .map(m=>`${m.role==='user'?state.user:(m.speaker||"Narrator")}: ${m.content}`).join("\n")
+      ||`Narrator: ${String(replyText||"").slice(0,400)}`;
+    const cur=sceneById(chat.sceneDockId);
+    const items=scenes.map(s=>({id:s.id,label:s.name,
+      when:(s.when&&s.when.trim())||`CHOOSE WHEN the moment matches "${s.name}".`}));
+    const prev=cur?`CURRENTLY PLAYING SCENE: ${cur.name}\n(If the latest exchange does NOT clearly call for a different scene, return that same scene's index again. Switch ONLY when the roleplay really moves to a moment another scene fits better.)\n\n`:"";
+    const picked=await pickRule(items,prev+`LATEST EXCHANGE (the authority — route on what the roleplay is NOW):\n${recent}`);
+    // Only a real change restarts playback; the same pick keeps the current loop seamless.
+    if(picked&&picked.id&&picked.id!==chat.sceneDockId&&sceneById(picked.id)){
+      chat.sceneDockId=picked.id; markChatDirty(chat); persistChats();
+      syncSceneDock(true);
+      toast(`Scene: ${picked.label}`);
+    }
+  }catch(e){}
+  _sceneRouteBusy=false;
 }
 // The message whose media should fill the rail right now: pinned if set & still has media,
 // otherwise the most recent message that carries a finished image or video.
@@ -16188,7 +16239,7 @@ async function sendMessage(){
     // BACKGROUND (does not wait on screen): persist, fire the image pipeline the instant text is
     // ready, run the voice check. The bubble itself is shown by the presentation queue.
     persistChats();
-    if(autoImgActive()) illustrate(msg.mid,reply);
+    autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
     autoSpeakMsg(msg,solo);
     runVoiceCheck(chat,msg,solo);
     // ON SCREEN: append + reveal this one line, in order, via the presentation queue. Not awaited,
@@ -17506,7 +17557,7 @@ async function playCharacterTurn(chat,p,addressed){
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
     // next character can generate while this one is still queued/rolling on screen.
     persistChats();
-    if(autoImgActive()) illustrate(msg.mid,reply);
+    autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
     autoSpeakMsg(msg,p);
     runVoiceCheck(chat,msg,p);
     // ON SCREEN: append + reveal in strict order via the presentation queue. We AWAIT the reveal so
@@ -17942,7 +17993,7 @@ function autoIllustrateLast(){
   const chat=curChat();const m=chat.messages[chat.messages.length-1];
   // Never auto-illustrate a scene-writer / narrator beat (sceneBeat|narratorEvent) — those are
   // transition prose, not the turn's main visual, and illustrating them races the reply image.
-  if(m&&autoImgActive()&&m.role==='assistant'&&!m.img&&!m.dayMarker&&!m.sysError&&!m.sceneBeat&&!m.narratorEvent){illustrate(m.mid,m.content);}
+  if(m&&m.role==='assistant'&&!m.img&&!m.dayMarker&&!m.sysError&&!m.sceneBeat&&!m.narratorEvent){autoVisualize(m.mid,m.content);}
 }
 
 /* ---- VIDEO PIPELINE (provider-routed: Segmind WAN sync, or OpenRouter async) ---- */
@@ -18518,6 +18569,16 @@ function renderSceneEditor(){
   const inp=document.createElement('input'); inp.type="text"; inp.value=s.name||"";
   inp.onchange=()=>{ s.name=inp.value.trim()||"Scene"; persistScenes(); renderGallery(); };
   nameWrap.appendChild(inp); box.appendChild(nameWrap);
+  // v29 — SCENE MODE routing field: while a scene plays over the story, the AI picks the scene
+  // whose "when" matches the roleplay beat (instead of generating images). Same idea as the
+  // image pose rules' "when" descriptions.
+  const whenWrap=document.createElement('div');
+  whenWrap.innerHTML=`<label>When to select — while a scene video is playing, the AI switches to the scene whose description matches the roleplay</label>`;
+  const wta=document.createElement('textarea'); wta.className="fld"; wta.style.minHeight="64px";
+  wta.placeholder=`e.g. CHOOSE WHEN they are kissing or getting intimate on the sofa. DON'T CHOOSE for casual talk.`;
+  wta.value=s.when||"";
+  wta.onchange=()=>{ s.when=wta.value.trim(); persistScenes(); };
+  whenWrap.appendChild(wta); box.appendChild(whenWrap);
   const act=document.createElement('div'); act.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
   act.innerHTML=`
     <button class="btn small" ${clips.length?"":"disabled"} onclick="playSceneModal('${s.id}')">${icon("play")} Play</button>
@@ -22971,7 +23032,7 @@ async function playSingleReaction(chat,p,eventText){
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null};
     stampStatus(chat,msg);chat.messages.push(msg);
     persistChats();appendNewBubbles();
-    if(autoImgActive()) illustrate(msg.mid,reply);
+    autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
     autoSpeakMsg(msg,p);
     runVoiceCheck(chat,msg,p);
   }catch(err){typing.remove();toast(""+(err.friendly||"reaction failed"));}

@@ -3220,6 +3220,7 @@ RULES:
 - Text like a real person on their phone: natural length (often short), their own register — casual or clipped or warm or cold as fits WHO THEY ARE and HOW THEY FEEL about {{user}} right now. Emoji only if this character would actually use them.
 - You are NOT necessarily in the same place as {{user}} — you're wherever you are, replying on your phone. Do not narrate a shared scene.
 - Everything you know about {{user}}, your history, your feelings, your plans and what happened between you still applies — let it color the tone completely (a warm character flirts, a hurt one is terse, a scheming one probes). React to how long it's been since the last message if that matters to you.
+- CONTINUITY WITH REAL LIFE: your texts and your in-person life are ONE continuous relationship, not two separate channels. If you and {{user}} were recently together in person (you may be shown that scene), this text picks up from it — reference what happened naturally, follow up on it, say what you didn't say out loud. NEVER text as if a scene you both lived through didn't happen.
 - Reply in the SAME LANGUAGE {{user}} texted in.
 
 Write ONLY {{char}}'s text reply.`;
@@ -3229,9 +3230,11 @@ Write ONLY {{char}}'s text reply.`;
 // event. Returns strict JSON.
 const DEFAULT_TEXT_PROACTIVE=`You decide whether a character would, ON THEIR OWN, pick up their phone and TEXT {{user}} right now — and if so, what they'd type.
 
-You are given: who the character is, how they feel about {{user}} (their considered standing AND their in-the-moment state), what has recently happened between them, any background event, and whether {{user}} has left an earlier text of theirs unanswered.
+You are given: who the character is, how they feel about {{user}} (their considered standing AND their in-the-moment state), what has recently happened between them — including the last in-person scene they shared, if any — any background event, and whether {{user}} has left an earlier text of theirs unanswered.
 
 A real person texts unprompted when something PULLS them to: afterglow or second thoughts about an intimate moment, worry, jealousy, missing someone, wanting to make plans or invite them over, needing an answer, anger at being left on read, excitement to share news, a scheme that needs a nudge. A character with nothing pulling at them does NOT text — silence is the default. Do NOT invent a reason. Base it on who they are and what actually happened.
+
+CONTINUITY WITH REAL LIFE: texting and in-person life are ONE relationship. If you are shown a scene the character and {{user}} recently lived through together, the text MUST be continuous with it — an afterglow message, a follow-up on what was said or done there, wanting to meet again, something they didn't dare say face to face, "did you get home okay". Never text as if that meeting didn't happen. And if the character has SEEN {{user}} in person since their own last text, that thread is settled — do not treat it as "left on read".
 
 If they text: write it as a real phone text in THEIR voice and in {{user}}'s language — dialogue only, no narration, no asterisks, natural length. It can be needy, cold, flirty, cryptic, demanding — whatever fits them and this moment. It may ASK for something or INVITE {{user}} somewhere.
 
@@ -5088,6 +5091,11 @@ function loadState(){
   // customized prompts (no fingerprint) are preserved.
   _refreshPipe("routerPlayer","You are the conversation director for a multi-character roleplay","GROUP ADDRESS —",DEFAULT_ROUTER_PLAYER);
   _refreshPipe("routerPrompt","You are a routing assistant for an image generator","route on what the scene has BECOME",DEFAULT_ROUTER);
+  // v24.x — TEXT↔ROLEPLAY CONTINUITY: texts are one life with the in-person scenes. Replies and
+  // proactive texts are grounded in the scene just lived through together, and meeting in person
+  // supersedes an "unanswered" text. Refresh unmodified stored defaults.
+  _refreshPipe("textReplyPrompt","# YOU ARE TEXTING","CONTINUITY WITH REAL LIFE",DEFAULT_TEXT_REPLY);
+  _refreshPipe("textProactivePrompt","pick up their phone and TEXT","CONTINUITY WITH REAL LIFE",DEFAULT_TEXT_PROACTIVE);
   _refreshPipe("memEval","silent ARC TRACKER","A continuous physical or intimate encounter is ONE arc",DEFAULT_MEMEVAL);
   _refreshPipe("memBuild","durable, first-person MEMORY","READ CAREFULLY, THIS IS STRICT",DEFAULT_MEMBUILD);
   // v22.x — drop the redundant "details" bullet list from memories (the content already carries the facts).
@@ -16054,12 +16062,48 @@ function _markTextRead(chat,pid){
   (chat&&chat.messages||[]).forEach(m=>{ if(m.textMsg && m.role==="assistant" && m.unread && m.speakerId===pid){ m.unread=false; changed=true; } });
   if(changed)persistChats();
 }
+// Texting and in-person roleplay are ONE continuous life. True if the character shared a scene with
+// the player AFTER the given text message — meeting face to face supersedes the text (nobody sulks
+// about being "left on read" by someone they've since spent an evening with).
+function _metInPersonAfter(chat,p,textMsg){
+  if(!chat||!p||!textMsg)return false;
+  const msgs=chat.messages||[];
+  const idx=msgs.indexOf(textMsg);
+  if(idx<0)return false;
+  for(let i=idx+1;i<msgs.length;i++){
+    const m=msgs[i];
+    if(!m||m.textMsg||m.role==="system"||m.sysError)continue;
+    if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)continue;
+    if(m.role==="assistant"&&m.speakerId===p.id)return true;   // their own spoken line in the player's scene
+    if(witnessedBy(m,p))return true;                           // or they were present for a scene turn
+  }
+  return false;
+}
+// When did this character last share an in-person scene with the player? → {day,period,location,gap}
+// (gap = in-game days since; 0 = earlier today) or null if they never have (or old msgs lack a stamp).
+function _lastInPersonInfo(chat,p){
+  if(!chat||!p)return null;
+  const msgs=chat.messages||[];
+  for(let i=msgs.length-1;i>=0;i--){
+    const m=msgs[i];
+    if(!m||m.textMsg||m.role==="system"||m.sysError)continue;
+    if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)continue;
+    if(!((m.role==="assistant"&&m.speakerId===p.id)||witnessedBy(m,p)))continue;
+    const st=m.status||{};
+    const day=(st.day!=null)?st.day:null;
+    return {day, period:st.period||"", location:st.location||"",
+            gap:(day!=null)?Math.max(0,(chat.gameDay||1)-day):null};
+  }
+  return null;
+}
 // If the char left an earlier text and only now is the player replying, tell them how stale it is —
 // so a late reply lands as a late reply (they can be hurt/curious/cool about it, per who they are).
-function _textTimingNote(chat,pid){
-  const th=textThreadMsgs(chat,pid); if(!th.length)return "";
+// If they've SEEN each other in person since that text, it isn't stale — the meeting answered it.
+function _textTimingNote(chat,p){
+  const th=textThreadMsgs(chat,p.id); if(!th.length)return "";
   let lastTheirs=null; for(let i=th.length-1;i>=0;i--){ if(th[i].role==="assistant"){ lastTheirs=th[i]; break; } }
   if(!lastTheirs)return "";
+  if(_metInPersonAfter(chat,p,lastTheirs))return "";
   const dgap=(chat.gameDay||1)-(lastTheirs.gday||chat.gameDay||1);
   if(dgap>=2)return `NOTE: You texted ${state.user} ${dgap} days ago and they are only replying now — the long silence is not lost on you.`;
   if(dgap===1)return `NOTE: You texted ${state.user} yesterday; they're only getting back to you now.`;
@@ -16150,7 +16194,7 @@ async function buildTextReplySystem(chat,p){
   let nowLine=`# NOW\nIt is Day ${chat.gameDay||1}, ${chatPeriod(chat)}.`;
   try{ const place=charPlaceName(chat,p); if(place)nowLine+=` You are at ${place}.`; }catch(e){}
   parts.push(nowLine);
-  const tn=_textTimingNote(chat,p.id); if(tn)parts.push(tn);
+  const tn=_textTimingNote(chat,p); if(tn)parts.push(tn);
   if(presentIds(chat).includes(p.id))parts.push(`(You happen to be in the same place as ${state.user} right now — but this is still a text on your phone, so keep it to typed words.)`);
   return parts.join("\n\n");
 }
@@ -16386,10 +16430,15 @@ async function maybeProactiveText(chat,opts){
       if(mems.length)signal=memText(mems[mems.length-1]).slice(0,160); }catch(e){}
     const th=textThreadMsgs(chat,p.id);
     const lastT=[...th].reverse().find(m=>m.role==="assistant"), lastU=[...th].reverse().find(m=>m.role==="user");
-    // "Unanswered" only counts as a pull if the last thing THEY said wasn't a sign-off. After a farewell
-    // the silence is the natural end of the conversation, not the player ignoring them — so no nudge.
-    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && !_looksLikeFarewell(lastT.content||"");
+    // "Unanswered" only counts as a pull if the last thing THEY said wasn't a sign-off — after a farewell
+    // silence is the natural end, not a snub — AND they haven't seen the player IN PERSON since: a shared
+    // scene supersedes the text (real people don't sulk over an unreplied text after spending time together).
+    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && !_looksLikeFarewell(lastT.content||"") && !_metInPersonAfter(chat,p,lastT);
     if(unanswered)s+=0.6;
+    // JUST-PARTED PULL: they were in a scene with the player earlier today and have since left — the
+    // real-life follow-up text ("home safe?", "about earlier…", afterglow, missing them) needs a pull
+    // of its own, because the memory of the scene may not have been distilled yet.
+    try{ const li=_lastInPersonInfo(chat,p); if(li&&li.gap===0)s+=0.4; }catch(e){}
     return {p,s,signal,unanswered};
   }).filter(x=>x.s>=0.85).sort((a,b)=>b.s-a.s);
   if(!scored.length)return false;
@@ -16400,8 +16449,16 @@ async function maybeProactiveText(chat,opts){
     const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memText(m).slice(0,160)).join("\n");
     const th=textThreadMsgs(chat,p.id).slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const cal=(()=>{ try{ return calendarContextLine(chat,p.name); }catch(_){ return ""; } })();
+    // THE ROLEPLAY ITSELF (witness-scoped): the last scene this character was in with the player, plus
+    // when they last saw each other — so a text after a meeting is continuous with that meeting instead
+    // of firing off feelings-and-memories alone as if the scene never happened.
+    const scene=(()=>{ try{ return recentSceneMsgsFor(chat,p,10).map(m=>`${m.name}: ${String(m.content).slice(0,400)}`).join("\n"); }catch(_){ return ""; } })();
+    const li=(()=>{ try{ return _lastInPersonInfo(chat,p); }catch(_){ return null; } })();
+    const seenLine=li?`You last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""}.`:"";
     const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name});
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n\n# Recent memories\n${mems||"(none)"}\n`
+      +(scene?`\n# The last scene you and ${state.user} were in together (in-person roleplay you witnessed — a text now must be continuous with this)\n${scene}\n`:"")
+      +(seenLine?`\n${seenLine}\n`:"")
       +(cal?`\n# Your meetings with ${state.user}\n${cal}\n`:"")
       +(opts.eventText?`\n# A background event just happened\n${opts.eventText}\n`:"")
       +(th?`\n# Your text thread so far\n${th}\n`:"")
@@ -16471,12 +16528,13 @@ async function reconcileTextsDay(chat,day){
   (chat.messages||[]).slice().reverse().forEach(m=>{
     if(!(m.textMsg&&m.role==="assistant")||!m.speakerId||done.has(m.speakerId))return;
     const pid=m.speakerId; const th=textThreadMsgs(chat,pid);
+    const p=(state.personas||[]).find(x=>x.id===pid); if(!p)return;
     const lastT=[...th].reverse().find(x=>x.role==="assistant"), lastU=[...th].reverse().find(x=>x.role==="user");
     // A goodbye left "unanswered" is a conversation that ENDED, not one the player snubbed — don't plant
-    // a hurt/ignored memory or send them chasing over it.
-    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && (lastT.gday||day)<=day && !_looksLikeFarewell(lastT.content||"");
+    // a hurt/ignored memory or send them chasing over it. Same if they've since met IN PERSON: the shared
+    // scene answered the text (no "you ignored me" grievance from someone the player just spent time with).
+    const unanswered=lastT && (!lastU || (lastU.ts||0)<(lastT.ts||0)) && (lastT.gday||day)<=day && !_looksLikeFarewell(lastT.content||"") && !_metInPersonAfter(chat,p,lastT);
     if(!unanswered)return; done.add(pid);
-    const p=(state.personas||[]).find(x=>x.id===pid); if(!p)return;
     const o=relObj(chat,pid,"__user__"); const aff=o.affection||0;
     const mood=aff>=25?"kırgın ama merak içinde":aff<=-15?"öfkeli":"tedirgin";
     try{ o.st.agitation=clampRel((o.st.agitation||0)+8); o.st.comfort=clampRel((o.st.comfort||0)-6); if(aff<=-15)o.st.agitation=clampRel(o.st.agitation+6); }catch(e){}
@@ -21053,7 +21111,11 @@ async function maybeCharQuestText(chat){
         if(unanswered)continue;
       }
       const sys=fillTpl(up("charQuestText"),{user:state.user,char:holder.name});
-      const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${state.user}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${state.user}.`}\nWrite the text message. Return the JSON.`;
+      // Continuity: if they saw the player in person recently, the text should read like it comes from
+      // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
+      const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
+        return li?`${holder.name} last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
+      const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${state.user}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${state.user}.`}\n${seenLine?seenLine+"\n":""}Write the text message. Return the JSON.`;
       let j=null;
       try{
         const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],

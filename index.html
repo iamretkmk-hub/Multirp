@@ -515,6 +515,14 @@
   .scAddGrid .galVidCell{aspect-ratio:1/1;}
   .scPickGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
   .scPickGrid .sceneCard{flex:none;aspect-ratio:16/10;}
+  /* ===== v28 — PLAYGROUND (create image · image→video) ===== */
+  .pgActor{display:inline-flex;align-items:center;gap:6px;}
+  .pgActor .avatarChip{width:20px;height:20px;font-size:14px;display:inline-flex;align-items:center;justify-content:center;flex:none;}
+  .pgActor .avatarChip img{width:20px;height:20px;border-radius:50%;object-fit:cover;display:block;}
+  .pgLabel{font-size:12.5px;font-weight:700;color:var(--text);margin-top:4px;}
+  .scSheet select{width:100%;}
+  .galCellVid{position:absolute;bottom:6px;right:6px;width:30px;height:30px;border-radius:50%;border:none;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .galCellVid .ic{width:14px;height:14px;margin:0;}
   /* Media dropdown under a chat scene image */
   .mediaMenu{position:fixed;z-index:400;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:6px;box-shadow:0 12px 40px rgba(0,0,0,.55);width:min(300px,92vw);}
   .mediaMenu button{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;background:none;border:none;color:var(--text);padding:10px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:600;}
@@ -1996,6 +2004,18 @@
 <div class="modal" id="scenePlayModal">
   <button class="x" onclick="closeScenePlayModal()">×</button>
   <div id="scenePlayHost" style="width:100%;max-width:900px;height:min(78vh,720px);border-radius:14px;overflow:hidden;"></div>
+</div>
+
+<!-- v28: PLAYGROUND — compose an image (actor · location · pose · AI prompt) -->
+<div class="modal" id="playgroundModal">
+  <button class="x" onclick="closeModal('playgroundModal')">×</button>
+  <div class="scSheet" id="playgroundBody"></div>
+</div>
+
+<!-- v28: image → video (pick a motion pose · AI motion prompt · generate) -->
+<div class="modal" id="img2vidModal">
+  <button class="x" onclick="closeModal('img2vidModal')">×</button>
+  <div class="scSheet" id="img2vidBody"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -17695,6 +17715,18 @@ function _imgLocationClause(chat){
 function _imgSpeakerAppearance(speaker){
   try{ if(!speaker)return ""; const l=lookProse(speaker.look)||""; return l?String(l).replace(/\s+/g," ").trim():""; }catch(e){ return ""; }
 }
+/* v28 — the image-writer guidance strings are shared between the roleplay pipeline (illustrate)
+   and the gallery PLAYGROUND, so both write prompts under identical rules. Content unchanged. */
+const IMG_WRITER_FOUNDATION=`# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated string of only what is physically VISIBLE in this one frame. Describe the pose, expression, contact and clothing STATE from the LATEST EXCHANGE; ignore mood words and dialogue meaning. Refer to people generically (Man / Woman / Girl) — do NOT use names, and do NOT describe anyone's face, hair, or build: each character's appearance is AUTO-INJECTED after your text, so writing it yourself only fights the injected version. Draw ONLY the one character whose line this is (plus the faceless viewer if the exchange clearly has them together); the viewer/player is faceless — never write his appearance — and never add a second character the exchange did not put in contact with them. Output NO square brackets and NO "|" — write the real chosen values.`;
+const IMG_WRITER_FRAME_GUIDE=
+  `\\n\\n## THIS FRAME\\n`+
+  `- The scene-type block above (its OUTPUT STRUCTURE and GUARDRAILS) is AUTHORITATIVE. Follow its template exactly: write the fixed wording as-is, and fill ONLY the dedicated [bracket] areas. Where options are separated by "|", pick the ONE that fits the latest exchange. Do not restructure it into your own sentences and do not add anything the template did not ask for.\\n`+
+  `- Keep every "viewer" / "no viewer face" / "head out of frame" / "out of focus" instruction in the template EXACTLY as written — these are load-bearing. The viewer (player) is faceless; unless the template itself describes a man, the viewer is the only male presence: never write the player's name or appearance, and never invent a second person the template did not include.\\n`+
+  `- Fill the [brackets] from the LATEST EXCHANGE (pose, expression, contact, clothing state). Any [bracket] asking for a face, hair, build, or named appearance is NOT yours to fill — the character's appearance is AUTO-INJECTED after your text; for those slots write only a generic reference (e.g. "a woman") or drop the slot, and never invent hair/build/face details. Take only what is physically VISIBLE in one frame; ignore mood words, dialogue meaning, and non-visual narrative fluff.\\n`+
+  `- Output the finished prompt in ENGLISH regardless of the language of the exchange. The LATEST EXCHANGE is authoritative for what is happening NOW — if it changes clothing, pose, who is touching whom, or the act, fill the brackets to reflect that; do not carry a stale state forward.\\n`+
+  `- CRITICAL — DROP THE BRACKETS: every [bracket] is a fill-in slot, NOT literal text. Replace each one with the actual chosen words. The finished prompt must contain NO square brackets and NO "|" characters — never output "[hair and build]" or "[place]" or "option a|option b"; write the real value you picked.\\n`+
+  `- LOCATION & LIGHTING ARE HANDLED FOR YOU: the setting/place and the time-of-day lighting are appended automatically AFTER your text. Do NOT write a location, background, setting, or lighting phrase, and if the scene-type template has a Location or Lighting slot, leave it out — never decide the place or the light from the exchange.\\n`+
+  `- If NO scene-type block is present above, write a single concise comma-separated English prompt of only what is visible this frame (pose, expression, clothing, action — NO face/hair/build, NO location or lighting), keeping the viewer faceless and drawing only the one character whose line this is.`;
 async function illustrate(mid,replyText,force){
   const msg=findMsg(mid);if(!msg)return;
   // Idempotency guard: multiple reply paths (solo / multi-char / gamemaster / opening greeting /
@@ -17789,18 +17821,10 @@ async function illustrate(mid,replyText,force){
     const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
     const _isNewStyle=/# ?OUTPUT STRUCTURE/i.test(_rawStyle);
     // Old-style / empty rules get a shared FOUNDATION base (new-structure rules already own it).
-    const FOUNDATION_PROMPT=`# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated string of only what is physically VISIBLE in this one frame. Describe the pose, expression, contact and clothing STATE from the LATEST EXCHANGE; ignore mood words and dialogue meaning. Refer to people generically (Man / Woman / Girl) — do NOT use names, and do NOT describe anyone's face, hair, or build: each character's appearance is AUTO-INJECTED after your text, so writing it yourself only fights the injected version. Draw ONLY the one character whose line this is (plus the faceless viewer if the exchange clearly has them together); the viewer/player is faceless — never write his appearance — and never add a second character the exchange did not put in contact with them. Output NO square brackets and NO "|" — write the real chosen values.`;
+    const FOUNDATION_PROMPT=IMG_WRITER_FOUNDATION;
     const _foundation=(!_isNewStyle)?`\n\n${FOUNDATION_PROMPT}`:``;
     const _classStyle=_rawStyle?`\n\n${_rawStyle}`:"";
-    const sys=up("rewritePrompt")+_foundation+_classStyle+
-      `\\n\\n## THIS FRAME\\n`+
-      `- The scene-type block above (its OUTPUT STRUCTURE and GUARDRAILS) is AUTHORITATIVE. Follow its template exactly: write the fixed wording as-is, and fill ONLY the dedicated [bracket] areas. Where options are separated by "|", pick the ONE that fits the latest exchange. Do not restructure it into your own sentences and do not add anything the template did not ask for.\\n`+
-      `- Keep every "viewer" / "no viewer face" / "head out of frame" / "out of focus" instruction in the template EXACTLY as written — these are load-bearing. The viewer (player) is faceless; unless the template itself describes a man, the viewer is the only male presence: never write the player's name or appearance, and never invent a second person the template did not include.\\n`+
-      `- Fill the [brackets] from the LATEST EXCHANGE (pose, expression, contact, clothing state). Any [bracket] asking for a face, hair, build, or named appearance is NOT yours to fill — the character's appearance is AUTO-INJECTED after your text; for those slots write only a generic reference (e.g. "a woman") or drop the slot, and never invent hair/build/face details. Take only what is physically VISIBLE in one frame; ignore mood words, dialogue meaning, and non-visual narrative fluff.\\n`+
-      `- Output the finished prompt in ENGLISH regardless of the language of the exchange. The LATEST EXCHANGE is authoritative for what is happening NOW — if it changes clothing, pose, who is touching whom, or the act, fill the brackets to reflect that; do not carry a stale state forward.\\n`+
-      `- CRITICAL — DROP THE BRACKETS: every [bracket] is a fill-in slot, NOT literal text. Replace each one with the actual chosen words. The finished prompt must contain NO square brackets and NO "|" characters — never output "[hair and build]" or "[place]" or "option a|option b"; write the real value you picked.\\n`+
-      `- LOCATION & LIGHTING ARE HANDLED FOR YOU: the setting/place and the time-of-day lighting are appended automatically AFTER your text. Do NOT write a location, background, setting, or lighting phrase, and if the scene-type template has a Location or Lighting slot, leave it out — never decide the place or the light from the exchange.\\n`+
-      `- If NO scene-type block is present above, write a single concise comma-separated English prompt of only what is visible this frame (pose, expression, clothing, action — NO face/hair/build, NO location or lighting), keeping the viewer faceless and drawing only the one character whose line this is.`;
+    const sys=up("rewritePrompt")+_foundation+_classStyle+IMG_WRITER_FRAME_GUIDE;
     // NOTE: the CHARACTER SHEET is deliberately NOT sent — appearances are auto-injected in code (see the
     // deterministic tail below), so the writer only receives this character's own continuity + the exchange.
     const usr=(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)+
@@ -18223,7 +18247,11 @@ function renderGallery(){
   el.className="";  // we manage our own layout inside, not the generic .grid
   const uni=curUniverseObj();
   const hasImg=_galScope(state.images).length, hasVid=_galScope(state.videos).length;
-  if(!hasImg&&!hasVid){ el.innerHTML=`<div class="empty"><div class="big">${icon("image")}</div><div>Scene images and videos appear here as you roleplay.</div></div>`; return; }
+  if(!hasImg&&!hasVid){
+    el.innerHTML=`<div class="empty"><div class="big">${icon("image")}</div><div>Scene images and videos appear here as you roleplay.</div></div>`;
+    el.appendChild(_pgCreateBtn(""));   // v28: the Playground works even on an empty gallery
+    return;
+  }
 
   // Tab bar (Images | Videos), default Images.
   const tabs=document.createElement('div'); tabs.className="galTabs";
@@ -18236,9 +18264,19 @@ function renderGallery(){
   _renderGalImages(el);
 }
 
+// v28 — the "Create image (Playground)" button shown in the Images tab (folder view + open folder).
+function _pgCreateBtn(actorName){
+  const b=document.createElement('button'); b.className="btn small"; b.style.cssText="width:auto;align-self:flex-start;margin-bottom:12px";
+  b.innerHTML=`${icon("sparkle")} Create image`;
+  b.onclick=()=>openPlayground(actorName||"");
+  return b;
+}
 function _renderGalImages(el){
   const items=_galScope(state.images).filter(r=>r&&r.url);   // v19.9: this universe only
-  if(!items.length){ const d=document.createElement('div');d.className="desc";d.style.marginTop="14px";d.textContent="No images yet.";el.appendChild(d);return; }
+  if(!items.length){
+    el.appendChild(_pgCreateBtn(""));
+    const d=document.createElement('div');d.className="desc";d.style.marginTop="14px";d.textContent="No images yet. Roleplay to illustrate scenes, or compose one in the Playground with Create image.";el.appendChild(d);return;
+  }
   // FOLDER VIEW: a card per character (like Diaries). An image with two people appears in both folders.
   if(_galFolder==null){
     const counts=new Map(), cover=new Map();
@@ -18250,6 +18288,7 @@ function _renderGalImages(el){
     if(!counts.size){ // images with no character tag — just show them flat
       _galFolder="__all__"; _renderGalImages(el); return;
     }
+    el.appendChild(_pgCreateBtn(""));
     const grid=document.createElement('div'); grid.className="charGrid";
     [...counts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,n])=>{
       const card=document.createElement('div'); card.className="charCard"; card.onclick=()=>openGalFolder(name);
@@ -18271,6 +18310,7 @@ function _renderGalImages(el){
   const shown=items.slice().reverse().filter(r=>!folderName||_imgChars(r).includes(folderName));
   const head=document.createElement('div'); head.className="galFolderHead"; head.textContent=(folderName||"All images")+` · ${shown.length}`;
   el.appendChild(head);
+  el.appendChild(_pgCreateBtn(folderName||""));
   const grid=document.createElement('div'); grid.className="grid"; el.appendChild(grid);
   // the viewer swipes through exactly the urls shown here, in display order
   const viewUrls=shown.map(r=>r.url);
@@ -18279,7 +18319,10 @@ function _renderGalImages(el){
     const img=document.createElement('img'); img.src=r.url; img.onclick=()=>openImgViewer(viewUrls,idx,`${r.character||""}${r.prompt?" — "+r.prompt:""}`);
     const del=document.createElement('button'); del.className="galCellDel"; del.title="Delete"; del.innerHTML=icon("trash");
     del.onclick=(e)=>{e.stopPropagation(); if(confirm("Delete this image?"))delGalleryImage(r.id);};
-    cell.appendChild(img); cell.appendChild(del); grid.appendChild(cell);
+    // v28: every gallery image can seed a video — pick a motion pose, AI writes the prompt.
+    const vb=document.createElement('button'); vb.className="galCellVid"; vb.title="Generate video from this image"; vb.innerHTML=icon("film");
+    vb.onclick=(e)=>{e.stopPropagation(); openImg2Video(r.id);};
+    cell.appendChild(img); cell.appendChild(del); cell.appendChild(vb); grid.appendChild(cell);
   });
 }
 
@@ -18547,6 +18590,376 @@ function openScenePicker(opts){
     box.appendChild(d);
   }
   openModal('scenePickModal');
+}
+
+/* ===== v28 — PLAYGROUND (Gallery → Images → Create image) =====================
+   Compose an image OUTSIDE the roleplay: pick the actor (a character of this universe), the
+   place (a universe location + sub-area, or free-form text), the time of day, and a predefined
+   pose (the image scene-type rules). The AI writes the prompt from the pose template — the user
+   can rewrite it by hand or ask the AI for changes — then generation reuses the roleplay
+   pipeline: the actor's appearance, the location clause, the lighting and the render style are
+   auto-injected in code exactly like in-story images, and the result lands in that character's
+   image gallery. */
+let _pg={actorId:null,locMode:"loc",locId:null,subId:null,locText:"",period:null,ruleId:null,frame:null,idea:"",prompt:"",editReq:"",busy:null,resultId:null};
+function _pgActorObj(){ return (state.personas||[]).find(p=>p&&p.id===_pg.actorId)||null; }
+function _pgRuleObj(){ return (state.imgRules||[]).filter(r=>r&&r.enabled!==false).find(r=>r.id===_pg.ruleId)||null; }
+function _pgLabelEl(t){ const l=document.createElement('div'); l.className="pgLabel"; l.textContent=t; return l; }
+function openPlayground(actorName){
+  const uni=curUniverseObj(); if(!uni){toast("Open a universe first");return;}
+  const cast=personasInUniverse(uni.id);
+  if(!cast.length){toast("This universe has no characters yet");return;}
+  if(actorName){ const p=cast.find(x=>x&&x.name===actorName); if(p)_pg.actorId=p.id; }
+  if(!_pg.actorId||!cast.find(x=>x.id===_pg.actorId))_pg.actorId=cast[0].id;
+  if(!_pg.period){ try{_pg.period=chatPeriod(curChat())||"Afternoon";}catch(e){_pg.period="Afternoon";} }
+  // Default place: where the story currently is.
+  if(!_pg.locId&&!_pg.locText){
+    const c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
+    if(c&&c.locationId&&locById(c.locationId)){ _pg.locMode="loc"; _pg.locId=c.locationId; _pg.subId=c.subId||null; }
+  }
+  const rules=(state.imgRules||[]).filter(r=>r&&r.enabled!==false);
+  if(!_pg.ruleId||!rules.find(r=>r.id===_pg.ruleId))_pg.ruleId=rules[0]?rules[0].id:null;
+  _pg.busy=null; _pg.resultId=null;
+  renderPlayground();
+  openModal('playgroundModal');
+}
+function renderPlayground(){
+  const box=document.getElementById('playgroundBody'); if(!box)return;
+  const uni=curUniverseObj(); const cast=uni?personasInUniverse(uni.id):[];
+  const rules=(state.imgRules||[]).filter(r=>r&&r.enabled!==false);
+  const rule=_pgRuleObj();
+  box.innerHTML="";
+  const h=document.createElement('h3'); h.innerHTML=`${icon("sparkle")} <span>Playground — create an image</span>`; box.appendChild(h);
+
+  // 1) ACTOR — one of this universe's characters; their appearance is auto-injected.
+  box.appendChild(_pgLabelEl("Actor"));
+  const chips=document.createElement('div'); chips.className="styleChips";
+  cast.forEach(p=>{
+    const b=document.createElement('button'); b.className="styleChip pgActor"+(p.id===_pg.actorId?" on":"");
+    b.innerHTML=`${avatarHTML(p)} ${esc(p.name)}`;
+    b.onclick=()=>{ _pg.actorId=p.id; renderPlayground(); };
+    chips.appendChild(b);
+  });
+  box.appendChild(chips);
+
+  // 2) LOCATION — a universe location (with optional sub-area) OR free-form text.
+  box.appendChild(_pgLabelEl("Location"));
+  const locWrap=document.createElement('div'); locWrap.style.cssText="display:flex;flex-direction:column;gap:6px";
+  const sel=document.createElement('select');
+  sel.innerHTML=`<option value="" ${_pg.locMode==="loc"&&!_pg.locId?"selected":""}>(no particular place)</option>`+
+    curLocations().map(l=>`<option value="${esc(l.id)}" ${_pg.locMode==="loc"&&_pg.locId===l.id?"selected":""}>${esc(l.name)}</option>`).join("")+
+    `<option value="__free__" ${_pg.locMode==="free"?"selected":""}>✏️ Custom — write your own…</option>`;
+  sel.onchange=()=>{ const v=sel.value;
+    if(v==="__free__"){ _pg.locMode="free"; }
+    else { _pg.locMode="loc"; _pg.locId=v||null; _pg.subId=null; }
+    renderPlayground(); };
+  locWrap.appendChild(sel);
+  if(_pg.locMode==="free"){
+    const inp=document.createElement('input'); inp.type="text"; inp.placeholder="Describe the place: a rain-slicked rooftop bar at neon night…";
+    inp.value=_pg.locText||""; inp.onchange=()=>{_pg.locText=inp.value;};
+    locWrap.appendChild(inp);
+  }else if(_pg.locId){
+    const l=locById(_pg.locId);
+    if(l){ ensureSublocations(l);
+      const subs=(l.sublocations||[]).filter(Boolean);
+      if(subs.length){
+        const ss=document.createElement('select');
+        ss.innerHTML=`<option value="">(anywhere in ${esc(l.name)})</option>`+
+          subs.map(s=>`<option value="${esc(s.id)}" ${_pg.subId===s.id?"selected":""}>${esc(s.name)}</option>`).join("");
+        ss.onchange=()=>{_pg.subId=ss.value||null;};
+        locWrap.appendChild(ss);
+      }
+    }
+  }
+  box.appendChild(locWrap);
+
+  // 3) TIME OF DAY — drives the injected lighting clause.
+  box.appendChild(_pgLabelEl("Time of day (lighting)"));
+  const tRow=document.createElement('div'); tRow.className="styleChips";
+  Object.keys(LIGHTING_BY_PERIOD).forEach(p=>{
+    const b=document.createElement('button'); b.className="styleChip"+(p===_pg.period?" on":"");
+    b.textContent=p; b.onclick=()=>{ _pg.period=p; renderPlayground(); };
+    tRow.appendChild(b);
+  });
+  box.appendChild(tRow);
+
+  // 4) POSE — the predefined image scene-type rules (same catalog the roleplay router picks from).
+  box.appendChild(_pgLabelEl("Pose / scene type"));
+  const rs=document.createElement('select');
+  rs.innerHTML=rules.length?rules.map(r=>`<option value="${esc(r.id)}" ${r.id===_pg.ruleId?"selected":""}>${esc(r.label||r.id)}</option>`).join("")
+                           :`<option value="">(no image rules configured — a plain prompt is used)</option>`;
+  rs.onchange=()=>{ _pg.ruleId=rs.value||null; renderPlayground(); };
+  box.appendChild(rs);
+
+  // 5) FRAME — aspect ratio (defaults to the pose's own ratio, else the global setting).
+  box.appendChild(_pgLabelEl("Frame"));
+  const fs=document.createElement('select');
+  const _defFrame=(rule&&rule.ratio&&RATIOS[rule.ratio])?rule.ratio:(state.ratio||DEFAULT_FRAME);
+  const _curFrame=(_pg.frame&&RATIOS[_pg.frame])?_pg.frame:_defFrame;
+  fs.innerHTML=Object.keys(RATIOS).map(k=>`<option value="${esc(k)}" ${k===_curFrame?"selected":""}>${esc(frameShort(k))}${k!==frameShort(k)?` (${esc(k)})`:""}</option>`).join("");
+  fs.onchange=()=>{_pg.frame=fs.value;};
+  box.appendChild(fs);
+
+  // 6) Optional idea for the AI writer.
+  box.appendChild(_pgLabelEl("Scene idea (optional — guides the AI writer)"));
+  const idea=document.createElement('textarea'); idea.className="fld"; idea.style.minHeight="52px";
+  idea.placeholder="e.g. she just stepped out of the pool, laughing, towel in hand";
+  idea.value=_pg.idea||""; idea.onchange=()=>{_pg.idea=idea.value;};
+  box.appendChild(idea);
+
+  // 7) AI writer → editable prompt → AI change requests.
+  const wrow=document.createElement('div'); wrow.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
+  const wb=document.createElement('button'); wb.className="btn small"; wb.disabled=!!_pg.busy;
+  wb.innerHTML=`${icon("sparkle")} ${_pg.busy==="write"?"Writing…":"Write prompt (AI)"}`;
+  wb.onclick=()=>pgWritePrompt();
+  wrow.appendChild(wb); box.appendChild(wrow);
+  box.appendChild(_pgLabelEl("Image prompt — edit freely. Appearance, location, lighting and render style are auto-added on generate."));
+  const ta=document.createElement('textarea'); ta.className="fld"; ta.style.minHeight="110px";
+  ta.placeholder="Write the prompt yourself, or tap “Write prompt (AI)”.";
+  ta.value=_pg.prompt||""; ta.onchange=()=>{_pg.prompt=ta.value;};
+  box.appendChild(ta);
+  const erow=document.createElement('div'); erow.style.cssText="display:flex;gap:8px";
+  const ei=document.createElement('input'); ei.type="text"; ei.style.flex="1";
+  ei.placeholder="Ask the AI to change it: “make it rainy, add an umbrella”…";
+  ei.value=_pg.editReq||""; ei.onchange=()=>{_pg.editReq=ei.value;};
+  const eb=document.createElement('button'); eb.className="btn sec small"; eb.style.width="auto"; eb.disabled=!!_pg.busy;
+  eb.textContent=_pg.busy==="edit"?"Changing…":"Ask AI";
+  eb.onclick=()=>pgAiEdit();
+  erow.appendChild(ei); erow.appendChild(eb); box.appendChild(erow);
+
+  // 8) Generate + result.
+  const g=document.createElement('button'); g.className="btn"; g.disabled=!!_pg.busy;
+  g.innerHTML=`${icon("image")} ${_pg.busy==="gen"?"Generating…":"Generate image"}`;
+  g.onclick=()=>pgGenerate();
+  box.appendChild(g);
+  const res=document.createElement('div');
+  if(_pg.busy==="gen"){ res.innerHTML=`<div class="scene loading" style="min-height:140px"><div class="spin"></div>Generating the image…</div>`; }
+  else if(_pg.resultId){
+    const rec=(state.images||[]).find(x=>x&&x.id===_pg.resultId);
+    if(rec&&rec.url){
+      const im=document.createElement('img'); im.src=rec.url; im.referrerPolicy="no-referrer";
+      im.style.cssText="width:100%;border-radius:12px;border:1px solid var(--border);background:#000";
+      res.appendChild(im);
+      const row=document.createElement('div'); row.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px";
+      const vb=document.createElement('button'); vb.className="btn sec small";
+      vb.innerHTML=`${icon("film")} Generate video from this image`;
+      vb.onclick=()=>openImg2Video(rec.id);
+      row.appendChild(vb); res.appendChild(row);
+      const d=document.createElement('div'); d.className="desc"; d.style.marginTop="6px";
+      d.textContent=`Saved to ${rec.character||"the"} image gallery.`;
+      res.appendChild(d);
+    }
+  }
+  box.appendChild(res);
+}
+// The playground's location clause — mirrors _imgLocationClause but from the picker's selection.
+function _pgLocationClause(){
+  if(_pg.locMode==="free") return String(_pg.locText||"").replace(/\s+/g," ").trim();
+  const l=_pg.locId?locById(_pg.locId):null; if(!l)return "";
+  const sub=_pg.subId?subById(l,_pg.subId):null;
+  const head=(sub&&sub.name)?`${l.name}'s ${sub.name}`:l.name;
+  const bits=[head];
+  if(l.description)bits.push(String(l.description).replace(/\s+/g," ").trim());
+  if(sub&&sub.description)bits.push(String(sub.description).replace(/\s+/g," ").trim());
+  return bits.filter(Boolean).join(", ");
+}
+// AI writes the image prompt from the picked pose template — the same writer layering as the
+// roleplay pipeline (up("rewritePrompt") + foundation + the rule's promptStyle + frame guide),
+// with the user's scene idea standing in for the roleplay exchange.
+async function pgWritePrompt(){
+  if(_pg.busy)return;
+  if(!state.key){toast("Add your API key in Settings first");return;}
+  const rule=_pgRuleObj(); const actor=_pgActorObj();
+  _pg.busy="write"; renderPlayground();
+  try{
+    const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
+    const _isNewStyle=/# ?OUTPUT STRUCTURE/i.test(_rawStyle);
+    const _foundation=(!_isNewStyle)?`\n\n${IMG_WRITER_FOUNDATION}`:``;
+    const _classStyle=_rawStyle?`\n\n${_rawStyle}`:"";
+    const sys=up("rewritePrompt")+_foundation+_classStyle+IMG_WRITER_FRAME_GUIDE;
+    const brief=(_pg.idea||"").trim()||`${actor?actor.name:"She"} is here in this pose — a natural, candid moment.`;
+    const usr=`(No previous image — describe the scene fresh.)\n\nLATEST EXCHANGE (what just happened — the authority on the current moment):\nNarrator: ${brief}`;
+    const rewritten=await chatCompletion([
+      {role:"system",content:sys},
+      {role:"user",content:usr}
+    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Playground image prompt writer"});
+    _pg.prompt=rewritten.trim().replace(/^["']|["']$/g,"");
+  }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
+  _pg.busy=null; renderPlayground();
+}
+// Shared "revise this prompt" helper (playground image + image→video).
+async function _aiEditPrompt(cur,req,dbg){
+  const out=await chatCompletion([
+    {role:"system",content:`You revise prompts for image/video generation models. Apply the user's requested changes to the prompt while keeping everything else intact. Keep the comma-separated visual style, keep it in English, and return ONLY the revised prompt text — no quotes, no commentary.`},
+    {role:"user",content:`CURRENT PROMPT:\n${cur}\n\nREQUESTED CHANGES:\n${req}`}
+  ],state.rewriter,{temp:fnTemp("rewriter",0.5),max:fnTok("rewriter",260),dbg:dbg||"Prompt editor"});
+  return out.trim().replace(/^["']|["']$/g,"");
+}
+async function pgAiEdit(){
+  if(_pg.busy)return;
+  if(!state.key){toast("Add your API key in Settings first");return;}
+  const req=(_pg.editReq||"").trim();
+  if(!req){toast("Type what to change first");return;}
+  if(!(_pg.prompt||"").trim()){toast("Write a prompt first (AI or manual)");return;}
+  _pg.busy="edit"; renderPlayground();
+  try{ _pg.prompt=await _aiEditPrompt(_pg.prompt.trim(),req,"Playground image prompt editor"); _pg.editReq=""; }
+  catch(err){ toast(""+(err&&err.friendly||"Couldn't apply the change")); }
+  _pg.busy=null; renderPlayground();
+}
+async function pgGenerate(){
+  if(_pg.busy)return;
+  const actor=_pgActorObj();
+  if(!actor){toast("Pick an actor first");return;}
+  if(!(_pg.prompt||"").trim()){ await pgWritePrompt(); if(!(_pg.prompt||"").trim())return; }
+  const rule=_pgRuleObj();
+  _pg.busy="gen"; renderPlayground();
+  try{
+    // Deterministic tail — IDENTICAL to the roleplay pipeline: actor appearance, then the picked
+    // location, then the picked time-of-day lighting, then the render/quality style last.
+    let finalPrompt=_pg.prompt.trim().replace(/^["']|["']$/g,"");
+    const _det=[_imgSpeakerAppearance(actor),_pgLocationClause(),LIGHTING_BY_PERIOD[_pg.period]||""].filter(Boolean).join(", ");
+    if(_det) finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_det;
+    const _styleTail=styleTail();
+    if(_styleTail && !finalPrompt.toLowerCase().includes(_styleTail.slice(0,18).toLowerCase()))
+      finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_styleTail;
+    const baseNeg="low quality, blurry, deformed, bad anatomy, extra limbs, watermark, text, signature";
+    const _frame=(_pg.frame&&RATIOS[_pg.frame])?_pg.frame
+               :(rule&&rule.ratio&&RATIOS[rule.ratio])?rule.ratio
+               :(state.ratio||DEFAULT_FRAME);
+    let url;
+    _frameOverride=_frame;
+    try{
+      if(rule) url=await genImageForRule(rule,finalPrompt,baseNeg);
+      else if(state.imgProvider==="atlascloud")      url=await atlasImage(finalPrompt,baseNeg,null);
+      else if(state.imgProvider==="modelslab")       url=await modelslabImage(finalPrompt,baseNeg,null);
+      else                                           url=await imageCompletion(finalPrompt,state.imgModel,RATIOS[curImgRatioKey()]);
+    }finally{ _frameOverride=null; }
+    const uni=curUniverseObj();
+    const rec={id:"img_"+Date.now(),url,prompt:finalPrompt,character:actor.name,characterId:actor.id,
+               universeId:uni?uni.id:null,date:Date.now(),frame:_frame,playground:true};
+    state.images.push(rec); persistImages(); if(typeof updateStorage==="function")updateStorage();
+    _pg.resultId=rec.id;
+    renderGallery();
+    toast(`Image saved to ${actor.name}'s gallery`);
+  }catch(err){ toast(""+(err&&err.friendly||"Image generation failed")); }
+  _pg.busy=null; renderPlayground();
+}
+
+/* ===== v28 — IMAGE → VIDEO (any gallery image) =================================
+   Pick ONE motion pose (the video LoRA rules), the AI writes the motion prompt from the
+   image's stored prompt (same layering as the Animate button), the user edits it or sends it
+   as-is, and the clip is generated with wanAnimateVideo and saved to the character's video
+   gallery. */
+let _i2v={imgId:null,ruleId:null,prompt:"",editReq:"",busy:null,videoUrl:null};
+function _i2vRec(){ return (state.images||[]).find(x=>x&&x.id===_i2v.imgId)||null; }
+function _i2vRule(){ return (state.vidRules||[]).filter(r=>r&&r.enabled!==false).find(r=>r.id===_i2v.ruleId)||null; }
+function openImg2Video(imgId){
+  const rec=(state.images||[]).find(x=>x&&x.id===imgId&&x.url);
+  if(!rec){toast("Image not found");return;}
+  const rules=(state.vidRules||[]).filter(r=>r&&r.enabled!==false);
+  if(!rules.length){toast("No video motion rules configured (Settings → Video)");return;}
+  const keepRule=_i2v.ruleId;
+  _i2v={imgId,ruleId:(keepRule&&rules.find(r=>r.id===keepRule))?keepRule:rules[0].id,prompt:"",editReq:"",busy:null,videoUrl:null};
+  renderImg2Video();
+  openModal('img2vidModal');
+}
+function renderImg2Video(){
+  const box=document.getElementById('img2vidBody'); if(!box)return;
+  const rec=_i2vRec(); const rules=(state.vidRules||[]).filter(r=>r&&r.enabled!==false);
+  box.innerHTML="";
+  const h=document.createElement('h3'); h.innerHTML=`${icon("film")} <span>Generate video</span>`; box.appendChild(h);
+  if(!rec||!rec.url){ box.appendChild(_pgLabelEl("Image not found.")); return; }
+  const im=document.createElement('img'); im.src=rec.url; im.referrerPolicy="no-referrer";
+  im.style.cssText="width:100%;max-height:240px;object-fit:contain;background:#000;border-radius:12px;border:1px solid var(--border)";
+  box.appendChild(im);
+  box.appendChild(_pgLabelEl("Motion pose"));
+  const rs=document.createElement('select');
+  rs.innerHTML=rules.map(r=>`<option value="${esc(r.id)}" ${r.id===_i2v.ruleId?"selected":""}>${esc(r.label||r.id)}</option>`).join("");
+  rs.onchange=()=>{_i2v.ruleId=rs.value;};
+  box.appendChild(rs);
+  const wrow=document.createElement('div'); wrow.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
+  const wb=document.createElement('button'); wb.className="btn small"; wb.disabled=!!_i2v.busy;
+  wb.innerHTML=`${icon("sparkle")} ${_i2v.busy==="write"?"Writing…":"Write motion prompt (AI)"}`;
+  wb.onclick=()=>i2vWritePrompt();
+  wrow.appendChild(wb); box.appendChild(wrow);
+  box.appendChild(_pgLabelEl("Motion prompt — edit freely, or send as-is (Generate writes it for you if empty)."));
+  const ta=document.createElement('textarea'); ta.className="fld"; ta.style.minHeight="100px";
+  ta.placeholder="Tap “Write motion prompt (AI)”, or describe the motion yourself.";
+  ta.value=_i2v.prompt||""; ta.onchange=()=>{_i2v.prompt=ta.value;};
+  box.appendChild(ta);
+  const erow=document.createElement('div'); erow.style.cssText="display:flex;gap:8px";
+  const ei=document.createElement('input'); ei.type="text"; ei.style.flex="1";
+  ei.placeholder="Ask the AI to change it: “slower, more tender”…";
+  ei.value=_i2v.editReq||""; ei.onchange=()=>{_i2v.editReq=ei.value;};
+  const eb=document.createElement('button'); eb.className="btn sec small"; eb.style.width="auto"; eb.disabled=!!_i2v.busy;
+  eb.textContent=_i2v.busy==="edit"?"Changing…":"Ask AI";
+  eb.onclick=()=>i2vAiEdit();
+  erow.appendChild(ei); erow.appendChild(eb); box.appendChild(erow);
+  const g=document.createElement('button'); g.className="btn"; g.disabled=!!_i2v.busy;
+  g.innerHTML=`${icon("film")} ${_i2v.busy==="gen"?"Generating… (~1 min)":"Generate video"}`;
+  g.onclick=()=>i2vGenerate();
+  box.appendChild(g);
+  if(_i2v.busy==="gen"){
+    const d=document.createElement('div'); d.innerHTML=`<div class="scene loading" style="min-height:120px"><div class="spin"></div>Generating the video… (~1 min)</div>`;
+    box.appendChild(d);
+  }else if(_i2v.videoUrl){
+    const v=document.createElement('video'); v.src=_i2v.videoUrl; v.controls=true; v.playsInline=true; v.loop=true;
+    v.referrerPolicy="no-referrer"; v.style.cssText="width:100%;border-radius:12px;border:1px solid var(--border);background:#000";
+    box.appendChild(v);
+    const d=document.createElement('div'); d.className="desc"; d.textContent=`Saved to ${rec.character||"the"} video gallery.`;
+    box.appendChild(d);
+  }
+}
+// AI writes the motion prompt — the same layering the Animate button uses (up("vidPrompt") +
+// the picked rule's motionStyle + explicit-only sound guidance), fed the image's stored prompt.
+async function i2vWritePrompt(){
+  if(_i2v.busy)return;
+  if(!state.key){toast("Add your API key in Settings first");return;}
+  const rec=_i2vRec(); const rule=_i2vRule(); if(!rec)return;
+  _i2v.busy="write"; renderImg2Video();
+  try{
+    const _motion=(rule&&rule.motionStyle&&rule.motionStyle.trim())||"";
+    const _isExplicit=!!(rule&&rule.explicit);
+    const _sound=(_isExplicit&&rule&&rule.soundStyle&&rule.soundStyle.trim())||"";
+    let _sys=up("vidPrompt");
+    if(_motion) _sys+=`\n\n## THIS SCENE — MOTION\n${_motion}`;
+    if(_isExplicit) _sys+=`\n\n## SOUND (this scene is explicit — the video model renders audio from the prompt)\nDescribe the diegetic SOUND of the moment as part of the prompt: breathing and its rhythm, gasps/moans building with the pace, skin-on-skin impact, wet sounds, bed/props, ambient room tone. Keep it physical and synced to the motion tempo. ${_sound}`.trimEnd();
+    else _sys+=`\n\n## SOUND\nThis scene is not explicit — do NOT describe sound.`;
+    const out=await chatCompletion([
+      {role:"system",content:_sys},
+      {role:"user",content:`Still scene:\n${rec.prompt||"(no stored prompt — write natural, subtle motion for the pictured scene)"}`}
+    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",_isExplicit?240:160),dbg:"Playground video prompt writer"});
+    _i2v.prompt=out.trim().replace(/^["']|["']$/g,"");
+  }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
+  _i2v.busy=null; renderImg2Video();
+}
+async function i2vAiEdit(){
+  if(_i2v.busy)return;
+  if(!state.key){toast("Add your API key in Settings first");return;}
+  const req=(_i2v.editReq||"").trim();
+  if(!req){toast("Type what to change first");return;}
+  if(!(_i2v.prompt||"").trim()){toast("Write a motion prompt first (AI or manual)");return;}
+  _i2v.busy="edit"; renderImg2Video();
+  try{ _i2v.prompt=await _aiEditPrompt(_i2v.prompt.trim(),req,"Playground video prompt editor"); _i2v.editReq=""; }
+  catch(err){ toast(""+(err&&err.friendly||"Couldn't apply the change")); }
+  _i2v.busy=null; renderImg2Video();
+}
+async function i2vGenerate(){
+  if(_i2v.busy)return;
+  const rec=_i2vRec(); const rule=_i2vRule();
+  if(!rec||!rec.url){toast("Image not found");return;}
+  if(!(_i2v.prompt||"").trim()){ await i2vWritePrompt(); if(!(_i2v.prompt||"").trim())return; }
+  _i2v.busy="gen"; renderImg2Video();
+  try{
+    const baseNeg=(rule&&rule.negative&&rule.negative.trim())||"blur, distortion, artifacts, watermark, text";
+    const videoUrl=await wanAnimateVideo(injectLoraKeyword(_i2v.prompt.trim(),rule),rec.url,{negative:baseNeg,rule});
+    state.videos.push({id:"vid_"+Date.now(),url:videoUrl,prompt:_i2v.prompt.trim(),character:rec.character||"",
+                       characterId:rec.characterId||null,universeId:rec.universeId||null,date:Date.now(),playground:true});
+    persistVideos();
+    _i2v.videoUrl=httpsMedia(videoUrl);
+    renderGallery();
+    toast("Video saved to the gallery");
+  }catch(err){ toast(""+(err&&err.friendly||"Video generation failed")); }
+  _i2v.busy=null; renderImg2Video();
 }
 
 /* ---- swipe image viewer (gallery) ---- */

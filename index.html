@@ -16234,10 +16234,13 @@ async function rememberTextExchange(chat,p){
   const th=textThreadMsgs(chat,p.id);
   if(th.length<3)return;                                  // too little to be worth a memory yet
   chat._textMemLen=chat._textMemLen||{};
-  if(th.length-(chat._textMemLen[p.id]||0)<3)return;      // wait for a few new lines since the last one
+  const prevLen=Math.min(chat._textMemLen[p.id]||0,th.length);   // clamp in case messages were deleted
+  if(th.length-prevLen<3)return;                          // wait for a few new lines since the last one
   chat._textMemLen[p.id]=th.length; markChatDirty(chat);
   try{
-    const convo=th.slice(-10).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    // Only the lines SINCE the last text memory (capped at 10) — re-reading the whole tail window made
+    // each successive memory a near-duplicate of the previous one plus a few new lines.
+    const convo=th.slice(Math.max(prevLen,th.length-10)).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
       `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`;
     const out=await chatCompletion([
@@ -22147,6 +22150,7 @@ async function flushMemoryArc(chat, dayStamp){
   if(!ev||!ev.open) return;
   const start=ev.startIdx||0;
   chat.memEvent=null;                       // clear FIRST so re-entrancy can't double-commit
+  chat.memDoneIdx=chat.messages.length-1;   // the next arc must not re-cover this committed span
   markChatDirty(chat);
   await commitMemoryArc(chat, start, chat.messages.length-1, dayStamp);
 }
@@ -22165,9 +22169,16 @@ async function maybeBuildMemory(chat){
   // Scene boundary: the current arc can't predate the last location change.
   let sceneStart=0;
   for(let i=chat.messages.length-1;i>=0;i--){ if(chat.messages[i]&&chat.messages[i].travelBeat){ sceneStart=i; break; } }
+  // COMMITTED boundary: never reopen an arc over messages already cut into memories. Reopening at the
+  // scene start after a mid-scene commit re-covered the whole committed span, layering near-duplicate
+  // memories that each add one beat ("we went to the bar" → "we went to the bar and ordered beer").
+  // memDoneIdx = last message index a committed arc consumed; clamped so message deletion/regeneration
+  // can't strand the pointer past the end of the transcript.
+  const doneAfter=Math.min((typeof chat.memDoneIdx==="number"?chat.memDoneIdx:-1),chat.messages.length-1)+1;
   if(!chat.memEvent || !chat.memEvent.open || chat.memEvent.startIdx < sceneStart){
-    // No live arc (or it belongs to a previous scene) — open a fresh one at the scene start.
-    chat.memEvent={ startIdx:Math.max(sceneStart,0), open:true, paused:false, summary:"" };
+    // No live arc (or it belongs to a previous scene) — open a fresh one where the last one ended
+    // (or at the scene start, whichever is later).
+    chat.memEvent={ startIdx:Math.max(sceneStart,doneAfter,0), open:true, paused:false, summary:"" };
   }
   const ev=chat.memEvent;
 
@@ -22201,18 +22212,20 @@ async function maybeBuildMemory(chat){
     let newStart=arcEnd;
     for(let i=chat.messages.length-1;i>oldStart;i--){ if(chat.messages[i]&&chat.messages[i].role==='user'){ newStart=i; break; } }
     chat.memEvent={ startIdx:newStart, open:true, paused:false, summary };
+    chat.memDoneIdx=Math.max(oldStart,newStart-1);
     markChatDirty(chat);
     await commitMemoryArc(chat, oldStart, Math.max(oldStart,newStart-1));
     return;
   }
   if(progress==="finished"){
-    chat.memEvent=null; markChatDirty(chat);
+    chat.memEvent=null; chat.memDoneIdx=arcEnd; markChatDirty(chat);
     await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
     return;
   }
   if(progress!=="paused" && spanLen>=MEM_ARC_CAP){
     // SAFETY VALVE: an arc that won't close on its own commits here, then a fresh one opens.
     chat.memEvent={ startIdx:arcEnd, open:true, paused:false, summary:"" };
+    chat.memDoneIdx=arcEnd;
     markChatDirty(chat);
     await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
     return;

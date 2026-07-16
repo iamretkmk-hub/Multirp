@@ -1434,7 +1434,7 @@
           <div class="desc" style="margin-top:12px;font-weight:600;color:var(--danger)">Danger zone</div>
           <button class="btn danger small" onclick="confirmClear('chats')">Clear all chats</button>
           <button class="btn danger small" onclick="confirmClear('memory')">Clear all memories</button>
-          <button class="btn danger small" onclick="wipeUniverseMemory()"><svg class="ic"><use href="#i-brain"/></svg> Wipe this universe's memories</button>
+          <button class="btn danger small" onclick="wipeUniverseMemory()"><svg class="ic"><use href="#i-brain"/></svg> Reset this universe (memories, relationships, quests…)</button>
           <button class="btn danger small" onclick="confirmClear('images')">Clear gallery</button>
         </div>
       </div>
@@ -1540,7 +1540,7 @@
     <div id="uePromptList" style="display:flex;flex-direction:column;gap:6px;margin:6px 0"></div>
 
     <div class="row">
-      <button class="btn danger sec small" id="ueWipeMem" onclick="wipeEditingUniverseMemory()">Wipe memories</button>
+      <button class="btn danger sec small" id="ueWipeMem" onclick="wipeEditingUniverseMemory()" title="Fresh start: wipes memories, diaries, relationships, feelings, schemes, meetings, tracker values, quests and the chronicle — keeps the world, cast cards, locations and chat transcripts">Reset universe (fresh start)</button>
       <button class="btn danger sec small" id="ueDelete" onclick="deleteUniverse()">Delete</button>
       <button class="btn" onclick="saveUniverse()">Save</button>
     </div>
@@ -25837,46 +25837,90 @@ function confirmClear(w){
   if(w==='images'&&confirm("Delete ALL gallery images?")){state.images=[];persistImages();renderGallery();toast("Cleared");updateStorage();}
   if(w==='videos'&&confirm("Delete ALL gallery videos? (Scenes built from them are removed too.)")){state.videos=[];state.scenes=[];persistVideos();persistScenes();renderGallery();toast("Cleared");}
 }
-// Wipe memories of the universe currently OPEN in the editor (not necessarily the active one).
-// Mirrors wipeUniverseMemory but scoped to editingUniverse, for the per-universe editor button.
+/* v24.4 — FULL UNIVERSE RESET. The old "wipe memories" only dropped state.memory; every other
+   layer of evolved play state survived — generated relationship sheets, the per-chat feeling axes,
+   live intents, calendar meetings, tracker values, quests/arcs, character quests, the universe
+   chronicle — so a "fresh start" still remembered everything that mattered. This resets one
+   universe to its AUTHORED initial state.
+   WIPED: memories & diaries (gossip, suspicions and bystander gists live there too), generated
+     relationship sheets (p.relationships — rebuilt on demand from the cards), relationship axes +
+     short-term feelings (chat.rel), live intents/undercurrents, calendar meetings, tracker values,
+     memory-arc counters, player quests + arc premises, character quests, background tasks, the
+     universe chronicle + eras, and never-revealed latent NPCs that quests minted.
+   KEPT: the world (setting/directing/genre pack/guide/rules), the cast's authored cards —
+     personality, goals, backstory, socialGraph, interject, routine, schedules — locations,
+     per-universe prompts, the state-zero origin doc (that IS the initial state), and chat
+     transcripts (delete chats separately for a truly blank page). */
+function wipeUniverseState(uniId){
+  const u=universeById(uniId); if(!u)return null;
+  const charIds=new Set(personasInUniverse(uniId).map(p=>p.id));
+  const before=state.memory.length;
+  // 1) memories & diaries — conservative attribution: drop what's owned by this universe's
+  //    characters or tagged to it; keep anything clearly belonging to another universe.
+  state.memory=state.memory.filter(m=>{
+    if(m && m.universeId && m.universeId!==uniId) return true;
+    if(m && charIds.has(m.ownerId)) return false;
+    if(m && m.universeId===uniId) return false;
+    return true;
+  });
+  persistMemory();
+  // 2) never-revealed latent NPCs minted BY quests: their quests are about to vanish and the
+  //    player has never met them — remove the card and scrub it from location residents.
+  //    Revealed characters stay, even quest-born ones (they're part of the world now).
+  const dropIds=new Set(personasInUniverse(uniId)
+    .filter(p=>p&&p.latent&&Array.isArray(p.questIds)&&p.questIds.length).map(p=>p.id));
+  if(dropIds.size){
+    state.personas=state.personas.filter(p=>!(p&&dropIds.has(p.id)));
+    (u.locations||[]).forEach(l=>{ if(l&&Array.isArray(l.residents))l.residents=l.residents.filter(id=>!dropIds.has(id)); });
+  }
+  // 3) evolved character state: the GENERATED relationship sheets. The authored card fields
+  //    (the socialGraph text included) ARE the initial state — they stay.
+  personasInUniverse(uniId).forEach(p=>{ if(p)p.relationships={}; });
+  persistPersonas();
+  // 4) per-chat engine state in this universe (transcripts stay).
+  let chats=0;
+  for(const id in state.chats){
+    const c=state.chats[id]; if(!c||c.universeId!==uniId)continue;
+    c.rel={}; c.intents=[]; c.memCounts={}; c.calendar=[]; c.trackerVals={};
+    markChatDirty(c); chats++;
+  }
+  persistChats();
+  // 5) universe-level play state: quests + arcs + character quests + the chronicle.
+  //    u.originDoc (state zero) is the definition of the initial state — kept.
+  if(u.gameData&&typeof u.gameData==="object"){
+    u.gameData.quests=[]; u.gameData.charQuests=[]; u.gameData.arcMeta={};
+    if(Array.isArray(u.gameData.tasks))u.gameData.tasks=[];
+  }
+  u.chronicle=[]; u.chronicleEras=[];
+  persistUniverses();
+  // Refresh whatever is showing this data.
+  try{ if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory(); }catch(e){}
+  try{ const d=document.getElementById('screen-diary'); if(d&&d.classList.contains('active'))renderDiary(); }catch(e){}
+  try{ _refreshQuestViews&&_refreshQuestViews(); }catch(e){}
+  try{ if(editingUniverse&&editingUniverse.id===uniId)renderUeChronicle(u); }catch(e){}
+  try{ updateStorage&&updateStorage(); }catch(e){}
+  return {mems:before-state.memory.length,chats,npcs:dropIds.size};
+}
+function _confirmUniverseReset(uName){
+  return confirm(`Reset "${uName}" to its initial state?\n\nWIPES: all memories & diaries, generated relationships & feelings, live schemes, calendar meetings, tracker values, quests & story arcs, character quests, and the universe chronicle.\n\nKEEPS: the world, the cast's authored cards (incl. their written social graph), locations, schedules, prompts, the state-zero briefing, and chat transcripts.`);
+}
+// Reset the universe currently OPEN in the editor (not necessarily the active one).
 function wipeEditingUniverseMemory(){
   const uni=editingUniverse?editingUniverse.id:(state.curUniverse||null);
   if(!uni){ toast("No universe open"); return; }
   const uName=(state.universes.find(u=>u.id===uni)||{}).name||"this universe";
-  const charIds=new Set(personasInUniverse(uni).map(p=>p.id));
-  const before=state.memory.length;
-  if(!confirm(`Wipe all character memories formed in "${uName}"? Memories from other universes are kept.`)) return;
-  state.memory=state.memory.filter(m=>{
-    if(m && m.universeId && m.universeId!==uni) return true;   // clearly another universe → keep
-    if(m && charIds.has(m.ownerId)) return false;              // owned by this universe's character → drop
-    if(m && m.universeId===uni) return false;                 // tagged to this universe → drop
-    return true;                                              // untagged/other → keep
-  });
-  persistMemory();
-  if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory();
-  updateStorage&&updateStorage();
-  toast(`Wiped ${before-state.memory.length} memories from "${uName}"`);
+  if(!_confirmUniverseReset(uName))return;
+  const r=wipeUniverseState(uni);
+  if(r)toast(`"${uName}" reset — ${r.mems} memories wiped, ${r.chats} chat${r.chats===1?"":"s"} cleared`);
 }
-// Wipe only the memories belonging to the current universe. Targeted cleanup for the case where
-// stale memories from an earlier playthrough bleed into a scene. Legacy memories without a
-// universeId are also removed here (they can't be safely attributed to another universe).
+// Reset the CURRENT universe (Settings → data row). Same full reset as the editor button.
 function wipeUniverseMemory(){
   const uni=state.curUniverse||null;
+  if(!uni){ toast("No universe selected"); return; }
   const uName=(state.universes.find(u=>u.id===uni)||{}).name||"this universe";
-  const before=state.memory.length;
-  if(!confirm(`Wipe all character memories formed in "${uName}"? Memories from other universes are kept.`)) return;
-  state.memory=state.memory.filter(m=>{
-    // keep memories that clearly belong to a DIFFERENT universe
-    if(m.universeId && m.universeId!==uni) return true;
-    return false; // drop current-universe and unattributed (legacy) memories
-  });
-  persistMemory();
-  // Also reset per-character memory counters on this universe's chats so building restarts cleanly.
-  for(const id in state.chats){ if(state.chats[id].universeId===uni){ state.chats[id].memCounts={}; markChatDirty(state.chats[id]); } }
-  persistChats();
-  if(document.getElementById('screen-memory').classList.contains('active'))renderMemory();
-  updateStorage();
-  toast(`Wiped ${before-state.memory.length} mem\u200bories`);
+  if(!_confirmUniverseReset(uName))return;
+  const r=wipeUniverseState(uni);
+  if(r)toast(`"${uName}" reset — ${r.mems} memories wiped, ${r.chats} chat${r.chats===1?"":"s"} cleared`);
 }
 
 /* ---- onboarding (single landing page; keys + roster moved into the app) ---- */

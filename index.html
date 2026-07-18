@@ -883,7 +883,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -5540,8 +5540,8 @@ function persistChats(){
   _persistChatsTimer=setTimeout(()=>{ _persistChatsTimer=null; persistChatsNow(); scheduleAutoBackup(); }, 400);
 }
 function flushPersistChats(){ if(_persistChatsTimer){ clearTimeout(_persistChatsTimer); _persistChatsTimer=null; } persistChatsNow(); }
-function persistPersonas(){mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);}
-function persistUniverses(){mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");}
+function persistPersonas(){mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
+function persistUniverses(){mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
 function persistMemory(){mediaDB.kvSet("memory",state.memory);}
 function persistImages(){
   // Persist to IndexedDB (large quota). Durable remote-URL images (http(s)) are tiny (just the
@@ -5582,6 +5582,9 @@ async function hydrateMedia(){
     const scenes=await mediaDB.kvGet("scenes");
     if(Array.isArray(scenes)) state.scenes=scenes;
     bindMediaToUniverse();
+    // v25.3 — point portraits/covers/map/location images at their stored bytes (and migrate
+    // legacy inline base64 / capture legacy remote links). Best-effort; renders refresh inside.
+    try{ await rehydrateStaticImages(); }catch(e){ console.warn("rehydrateStaticImages failed",e); }
     _mediaHydrated=true;
     const gal=document.getElementById('galleryGrid'); if(gal) renderGallery();
     if(typeof syncSceneDock==="function")try{syncSceneDock();}catch(e){}
@@ -12117,6 +12120,11 @@ function deleteUniverse(){
   persistUniverses();persistPersonas();persistChats();persistMemory();
   if(typeof persistImages==="function")persistImages();
   if(typeof persistVideos==="function")persistVideos();
+  // v25.3 — drop the deleted world's stored static-image bytes (cover, map, locations, portraits).
+  try{ const heads=["uniCover:"+delId,"uniMap:"+delId]
+    .concat((editingUniverse.locations||[]).flatMap(l=>l?["loc:"+l.id,"sub:"+l.id]:[]))
+    .concat([...charIdSet].flatMap(id=>["char:"+id,"diary:"+id]));
+    deleteStaticImagesFor(heads); }catch(e){}
   closeModal('universeModal');showUniverseGrid();updateStorage&&updateStorage();toast("Universe and all its content deleted");
 }
 
@@ -13797,6 +13805,7 @@ function deletePersona(){
   state.memory=state.memory.filter(m=>m.ownerId!==delId);
   if(state.curPersona===delId)state.curPersona=(state.personas[0]&&state.personas[0].id)||null;
   persistPersonas();persistChats();persistMemory();
+  try{ deleteStaticImagesFor(["char:"+delId,"diary:"+delId]); }catch(e){}
   renderPersonas();closeModal('personaModal');toast("Deleted");
 }
 
@@ -16223,6 +16232,157 @@ async function imgFallback(mid,imgEl){
     if(data){ const c=curChat(); const m=c&&(c.messages||[]).find(x=>x.mid===mid); if(m){m.img=data;} if(imgEl)imgEl.src=data; return; }
   }catch(e){}
   if(imgEl){ imgEl.style.display="none"; }
+}
+/* ===== v25.3 — PERSISTENT STATIC IMAGES (portraits · covers · map · locations) =====
+   The world's STATIC art — character portraits & diary covers, universe cover pictures, world-map
+   art, and location / sub-area images — used to live on their entities as whatever the generator
+   returned: usually a HOSTED URL that expires after a while (the image silently dies), or heavy
+   inline base64 that made every universes/personas write rewrite megabytes. Now the BYTES of every
+   static image are stored once in IndexedDB (kv, "simg:<stable key>"), captured automatically at
+   persist time, and on every boot the entities are re-pointed at fresh object URLs built from those
+   bytes — so the art survives expired links and never bloats the collections. Keys derive from
+   entity ids (never from the URL), so they stay stable across sessions and backups. */
+function _staticImgSlots(){
+  const slots=[];
+  (state.personas||[]).forEach(p=>{ if(!p)return;
+    slots.push({coll:"p",key:"simg:char:"+p.id,obj:p,field:"image"});
+    slots.push({coll:"p",key:"simg:diary:"+p.id,obj:p,field:"diaryCover"});
+  });
+  (state.universes||[]).forEach(u=>{ if(!u)return;
+    slots.push({coll:"u",key:"simg:uniCover:"+u.id,obj:u,field:"image"});
+    slots.push({coll:"u",key:"simg:uniMap:"+u.id,obj:u,field:"mapImage"});
+    (u.locations||[]).forEach(l=>{ if(!l)return;
+      slots.push({coll:"u",key:"simg:loc:"+l.id,obj:l,field:"image"});
+      (l.sublocations||[]).forEach(s=>{ if(!s)return;
+        slots.push({coll:"u",key:"simg:sub:"+l.id+":"+s.id,obj:s,field:"image"});
+      });
+    });
+  });
+  return slots;
+}
+// Store a static image's bytes under its stable key. Base64 goes straight in; a hosted URL is
+// fetched to a data URL best-effort (harmless if CORS blocks it — the URL keeps rendering live).
+function saveStaticImage(key,url){
+  if(!key||!url||typeof url!=="string")return;
+  try{
+    if(url.startsWith("data:")){ mediaDB.kvSet(key,url); return; }
+    if(/^https?:/.test(url)){
+      fetch(url).then(r=>r&&r.ok?r.blob():null).then(b=>{ if(!b)return;
+        const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet(key,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
+      }).catch(()=>{});
+    }
+  }catch(e){}
+}
+function _dataURLtoObjectURL(d){
+  try{
+    const m=/^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(d); if(!m)return null;
+    const mime=m[1]||"image/jpeg";
+    let bytes;
+    if(m[2]){ const bin=atob(m[3]); bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i); }
+    else bytes=new TextEncoder().encode(decodeURIComponent(m[3]));
+    return URL.createObjectURL(new Blob([bytes],{type:mime}));
+  }catch(e){ return null; }
+}
+// Capture pass, hooked into persistPersonas/persistUniverses — the funnel EVERY static-image
+// assignment already flows through, so any current or future set-site is covered automatically.
+// Each (key, value) pair is captured once per session; blob:/object URLs are session-local refs
+// whose bytes are already stored, so they're skipped.
+const _simgCaptured=new Set();
+function captureStaticImages(coll){
+  try{
+    for(const s of _staticImgSlots()){
+      if(coll&&s.coll!==coll)continue;
+      const v=s.obj[s.field];
+      if(!v||typeof v!=="string")continue;
+      if(!(v.startsWith("data:")||/^https?:/.test(v)))continue;
+      const sig=s.key+"|"+v.slice(0,200);
+      if(_simgCaptured.has(sig))continue;
+      _simgCaptured.add(sig);
+      saveStaticImage(s.key,v);
+    }
+  }catch(e){}
+}
+// Boot pass: point every entity at its stored bytes (a fresh object URL), migrate legacy inline
+// base64 out of the collections, and capture legacy remote URLs that were never stored. A blob:
+// value with no stored bytes is a dead pointer from before this feature — left alone (renders
+// empty exactly as it already did).
+async function rehydrateStaticImages(){
+  let changedP=false,changedU=false,swapped=0;
+  for(const s of _staticImgSlots()){
+    const v=s.obj[s.field];
+    if(!v||typeof v!=="string")continue;
+    let cached=null; try{ cached=await mediaDB.kvGet(s.key); }catch(e){}
+    if(cached){
+      const ourl=_dataURLtoObjectURL(cached);
+      if(ourl){
+        if(v!==ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; }
+        _simgCaptured.add(s.key+"|"+String(cached).slice(0,200));
+        continue;
+      }
+    }
+    if(v.startsWith("data:")){
+      // Legacy inline base64 → move the bytes into the store FIRST, then slim the entity.
+      const ok=await mediaDB.kvSet(s.key,v);
+      if(ok){ const ourl=_dataURLtoObjectURL(v);
+        if(ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; } }
+      _simgCaptured.add(s.key+"|"+v.slice(0,200));
+    }else if(/^https?:/.test(v)){
+      // Legacy hosted link with no stored bytes yet → capture in the background; keep the link live.
+      const sig=s.key+"|"+v.slice(0,200);
+      if(!_simgCaptured.has(sig)){ _simgCaptured.add(sig); saveStaticImage(s.key,v); }
+    }
+  }
+  if(changedP)persistPersonas();
+  if(changedU)persistUniverses();
+  if(swapped){
+    try{ if(typeof applyLocationBackground==="function")applyLocationBackground(); }catch(e){}
+    try{ const cv=document.getElementById('charsView');
+      if(cv&&!cv.classList.contains('hide')&&typeof renderPersonas==="function")renderPersonas(); }catch(e){}
+  }
+}
+// All stored static-image records, for the full backup bundle.
+async function collectStaticImageRecords(){
+  const out=[];
+  try{
+    const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("simg:")===0);
+    for(const k of keys){ const data=await mediaDB.kvGet(k); if(data)out.push({key:k,data}); }
+  }catch(e){}
+  return out;
+}
+// Share-file inlining: deep-copy universes/personas with each static image's stored BYTES put back
+// inline, so an exported world/roleplay renders on any device. Dead blob: pointers export as null.
+async function inlineStaticImages(universes,personas){
+  const U=JSON.parse(JSON.stringify(universes||[]));
+  const P=JSON.parse(JSON.stringify(personas||[]));
+  const fill=async(obj,field,key)=>{
+    const v=obj&&obj[field];
+    if(!v||typeof v!=="string"||v.startsWith("data:"))return;
+    let cached=null; try{ cached=await mediaDB.kvGet(key); }catch(e){}
+    if(cached)obj[field]=cached;
+    else if(v.startsWith("blob:"))obj[field]=null;
+  };
+  for(const p of P){ if(!p)continue; await fill(p,"image","simg:char:"+p.id); await fill(p,"diaryCover","simg:diary:"+p.id); }
+  for(const u of U){ if(!u)continue;
+    await fill(u,"image","simg:uniCover:"+u.id); await fill(u,"mapImage","simg:uniMap:"+u.id);
+    for(const l of (u.locations||[])){ if(!l)continue;
+      await fill(l,"image","simg:loc:"+l.id);
+      for(const s of (l.sublocations||[])){ if(s)await fill(s,"image","simg:sub:"+l.id+":"+s.id); }
+    }
+  }
+  return {universes:U,personas:P};
+}
+// Best-effort cleanup of stored static-image bytes when their entity is permanently deleted.
+// Passed a list of "kind:idPrefix" heads (e.g. "char:p_123", "uniCover:u_9"); each simg record
+// whose key starts with one of them is dropped.
+async function deleteStaticImagesFor(heads){
+  try{
+    if(!heads||!heads.length)return;
+    const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("simg:")===0);
+    for(const k of keys){
+      const body=k.slice(5);
+      if(heads.some(h=>body===h||body.indexOf(h+":")===0)) await mediaDB.kvDelete(k);
+    }
+  }catch(e){}
 }
 function sceneHTML(m){
   const mid=m.mid;
@@ -25891,11 +26051,14 @@ async function buildBackup(){
   const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
   const images=await mediaDB.getAll("images");
   const videos=await mediaDB.getAll("videos");
+  // v25.3 — static art bytes (portraits/covers/map/locations). The collections may reference them
+  // by session-local blob: URLs; these records are what makes the backup carry the actual images.
+  const statics=await collectStaticImageRecords();
   return {
     app:"StoryMind", backupVersion:BACKUP_VERSION, date:Date.now(),
     localStorage:ls,
     collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[] },
-    media:{ images, videos }
+    media:{ images, videos, statics }
   };
 }
 async function exportAll(){
@@ -25955,6 +26118,10 @@ async function applyBackupBundle(b){
   if(b.media){
     await mediaDB.putAll("images",b.media.images||[]);
     await mediaDB.putAll("videos",b.media.videos||[]);
+    // v25.3 — static art bytes; on next boot rehydrateStaticImages re-links entities to them.
+    if(Array.isArray(b.media.statics)){
+      for(const r of b.media.statics){ if(r&&r.key&&r.data){ try{ await mediaDB.kvSet(r.key,r.data); }catch(e){} } }
+    }
   }
   toast("Restored — reloading");
   setTimeout(()=>location.reload(),700);
@@ -26007,7 +26174,8 @@ function _downloadJSON(obj,name){
 }
 // ROLEPLAY: the current universe's chats + the memories tied to it, plus the universe and its
 // cast so the bundle is self-contained and importable into a fresh install.
-function exportRoleplay(){
+// v25.3 — async: static images are inlined from their stored bytes so the file is self-contained.
+async function exportRoleplay(){
   try{
     flushPersistChats();
     const uni=state.curUniverse||null;
@@ -26016,8 +26184,9 @@ function exportRoleplay(){
     const personas=(state.personas||[]).filter(p=>p.universeId===uni);
     const memory=(state.memory||[]).filter(m=>!m.universeId||m.universeId===uni);
     if(!Object.keys(chats).length && !memory.length){ toast("No roleplay in this universe to export"); return; }
+    const inl=await inlineStaticImages(universe?[universe]:[],personas);
     _downloadJSON({app:"StoryMind",kind:"roleplay",version:BACKUP_VERSION,date:Date.now(),
-      universe, personas, chats, memory, curChat:state.curChat}, "storymind_roleplay");
+      universe:inl.universes[0]||null, personas:inl.personas, chats, memory, curChat:state.curChat}, "storymind_roleplay");
     toast("Roleplay exported");
   }catch(e){ console.warn("exportRoleplay failed",e); toast("Export failed"); }
 }
@@ -26035,10 +26204,12 @@ async function importRoleplayFile(b){
   return true;
 }
 // UNIVERSES: worlds + their characters only (no chats/memories) — share worldbuilding.
-function exportUniverses(){
+// v25.3 — async: static images are inlined from their stored bytes so the file is self-contained.
+async function exportUniverses(){
   try{
+    const inl=await inlineStaticImages(state.universes||[],state.personas||[]);
     _downloadJSON({app:"StoryMind",kind:"universes",version:BACKUP_VERSION,date:Date.now(),
-      universes:state.universes||[], personas:state.personas||[]}, "storymind_universes");
+      universes:inl.universes, personas:inl.personas}, "storymind_universes");
     toast("Universes exported");
   }catch(e){ console.warn("exportUniverses failed",e); toast("Export failed"); }
 }

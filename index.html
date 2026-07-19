@@ -982,6 +982,7 @@
           <div class="ovr"><div data-ovr="mem" data-kind="temp"></div><div data-ovr="mem" data-kind="tok"></div></div>
           <div><label>Rolling recap model <span class="desc" style="display:inline">(voice calls — blank = memory model; was hidden)</span></label><input type="text" id="setRecapModel" list="modelList" placeholder="(uses memory model)"></div>
           <div><label>Gossip &amp; offstage-intent model <span class="desc" style="display:inline">(blank = memory model)</span></label><input type="text" id="setGossipModel" list="modelList" placeholder="(uses memory model)"></div>
+          <div><label>Semantic-memory embeddings model <span class="desc" style="display:inline">(vector recall — needs the toggle in Settings → Memory; blank = openai/text-embedding-3-small)</span></label><input type="text" id="setEmbedModel" placeholder="openai/text-embedding-3-small"></div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-film"/></svg> Gamemaster, Scene Writer &amp; Judges</h3>
@@ -1293,7 +1294,7 @@
           <div class="kvline"><span>Semantic memory (neural embeddings)</span>
             <label class="switchLbl"><input type="checkbox" id="setEmbedOn"><span class="sl"></span></label></div>
           <div class="desc">Recall memories by MEANING, not just keywords — each memory is embedded and ranked by vector similarity, using your <b>OpenRouter key</b> (no separate key needed). Off, or if a call fails, retrieval falls back to lexical matching automatically.</div>
-          <div><label>Embeddings model</label><input type="text" id="setEmbedModel" placeholder="openai/text-embedding-3-small"></div>
+          <div class="desc">The embeddings model is picked in <b>2 · LLM Selection → Memory &amp; Daily Engines</b> (blank = openai/text-embedding-3-small). Every embeddings request — and each turn's weighted memory-retrieval ranking — is logged on the <b>Debug</b> page.</div>
           <div class="desc" style="margin-top:6px">Retrieval weights — how much each facet counts when ranking which memories to recall (0 = ignore that facet):</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <div style="flex:1;min-width:100px"><label>Semantic</label><input type="number" id="setMemWSem" min="0" max="3" step="0.1" value="1"></div>
@@ -1454,7 +1455,7 @@
     </div>
   </header>
   <div class="pad">
-    <div class="desc">Every request sent to an AI service is logged here (newest first). Tap a row to see the full payload. API keys are redacted. <b>Export</b> saves the latest payloads as a JSON file you can send for diagnosis.</div>
+    <div class="desc">Every request sent to an AI service is logged here (newest first) — including <b>embeddings calls</b> and a local <b>Memory retrieval</b> trace per turn showing each candidate memory's per-facet scores under your weights. Tap a row to see the full payload. API keys are redacted. <b>Export</b> saves the latest payloads as a JSON file you can send for diagnosis.</div>
     <div id="debugList" style="display:flex;flex-direction:column;gap:8px"></div>
   </div>
 </div>
@@ -24404,21 +24405,35 @@ function embedKeyVal(){ return (state.embedKey&&state.embedKey.trim())||state.ke
 function embedConfigured(){ return !!(state.embedOn && embedKeyVal()); }
 const _embCache=new Map();   // (model::text) -> Float32Array — session cache; dedupes identical strings
 let _embBusy=false;
-async function embedText(text){
+let _embLastErr="";          // last embeddings failure — surfaced by batch debug entries + retrieval trace
+// opts.dbgLabel names the Debug-page entry; opts.noLog skips per-call logging (batch callers log
+// one summary entry instead, so the backfill can't flood the bounded debug log).
+async function embedText(text,opts){
   const t=String(text||"").trim(); if(!t||!embedConfigured())return null;
   const model=embedModelName(), ck=model+"::"+t;
   if(_embCache.has(ck))return _embCache.get(ck);
+  const body={model,input:t.slice(0,8000),encoding_format:"float"};
+  const url=(state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings");
+  const entry=(opts&&opts.noLog)?null:dbg((opts&&opts.dbgLabel)||("Embeddings — "+model),"OpenRouter",url,body);
   try{
-    const url=(state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings");
     const r=await fetch(url,{method:"POST",
       headers:{"Content-Type":"application/json","Authorization":"Bearer "+embedKeyVal()},
-      body:JSON.stringify({model,input:t.slice(0,8000),encoding_format:"float"})});
-    if(!r.ok)return null;
+      body:JSON.stringify(body)});
+    if(!r.ok){
+      _embLastErr="HTTP "+r.status+" "+String(await r.text().catch(()=>"")).slice(0,300);
+      dbgDone(entry,"error",_embLastErr); return null;
+    }
     const j=await r.json();
     const v=j&&j.data&&j.data[0]&&j.data[0].embedding;
-    if(!Array.isArray(v)||!v.length)return null;
-    const f=Float32Array.from(v); _embCache.set(ck,f); return f;
-  }catch(e){ return null; }
+    if(!Array.isArray(v)||!v.length){
+      _embLastErr="No embedding vector in response ("+String(JSON.stringify(j)).slice(0,200)+")";
+      dbgDone(entry,"error",_embLastErr); return null;
+    }
+    const f=Float32Array.from(v); _embCache.set(ck,f);
+    _embLastErr="";
+    dbgDone(entry,"ok",v.length+"-dim vector for "+t.length+"-char input");
+    return f;
+  }catch(e){ _embLastErr=String(e&&e.message||e); dbgDone(entry,"error",_embLastErr); return null; }
 }
 function cosineSim(a,b){
   if(!a||!b||a.length!==b.length)return 0;
@@ -24436,15 +24451,26 @@ async function ensureMemEmbeddings(ownerId,limit){
   const need=(state.memory||[]).filter(m=>m&&(!ownerId||m.ownerId===ownerId)&&!memVec(m)&&memSearchText(m));
   if(!need.length)return;
   _embBusy=true;
+  // One summary entry for the whole batch (per-call logging off) so the backfill stays readable
+  // in the bounded debug log instead of pushing out the chat payloads.
+  const batch=need.slice(0,limit||24);
+  const entry=dbg("Embeddings — memory bank backfill ("+batch.length+" of "+need.length+" pending)","OpenRouter",
+    (state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings"),
+    {model:embedModelName(),memoriesToEmbed:batch.length,totalMissingVectors:need.length,
+     sample:batch.slice(0,3).map(m=>String(memSearchText(m)).slice(0,120))});
+  let done=0;
   try{
-    let wrote=false;
-    for(const m of need.slice(0,limit||24)){
-      const f=await embedText(memSearchText(m)); if(!f)break;
-      m.vec=Array.from(f); m.vecModel=embedModelName(); wrote=true;
+    for(const m of batch){
+      const f=await embedText(memSearchText(m),{noLog:true}); if(!f)break;
+      m.vec=Array.from(f); m.vecModel=embedModelName(); done++;
     }
-    if(wrote)persistMemory();
+    if(done)persistMemory();
   }catch(e){}
-  finally{ _embBusy=false; }
+  finally{
+    _embBusy=false;
+    if(done===batch.length)dbgDone(entry,"ok",done+"/"+batch.length+" memories embedded and stored");
+    else dbgDone(entry,"error",done+"/"+batch.length+" embedded, then stopped: "+(_embLastErr||"unknown error"));
+  }
 }
 async function retrieveMemories(userText,chat,ownerId){
   const recCount=Math.max(0, state.memRecentCount!=null?state.memRecentCount:2);   // working memories
@@ -24481,7 +24507,7 @@ async function retrieveMemories(userText,chat,ownerId){
   }
 
   // Embed the query once (null unless the embeddings backend is configured and the call succeeds).
-  const qVec = await embedText(query);
+  const qVec = await embedText(query,{dbgLabel:"Embeddings — memory retrieval query"});
 
   // WEIGHTED FACET RETRIEVAL. Each memory scores on up to six facets, blended by user-set weights:
   //   • semantic   — cosine to the query embedding (or lexical query-overlap when embeddings are off)
@@ -24513,7 +24539,7 @@ async function retrieveMemories(userText,chat,ownerId){
       }
     }
   }catch(_){}
-  const facetScore=m=>{
+  const facetParts=m=>{
     let sem=0; const v=memVec(m);
     if(qVec&&v){ sem=Math.max(0,Math.min(1,(cosineSim(qVec,v)+1)/2)); }
     else { let hay=""; try{ hay=memSearchText(m).toLowerCase(); }catch(_){}
@@ -24526,8 +24552,10 @@ async function retrieveMemories(userText,chat,ownerId){
     const rec=1/(1+gap*0.15);
     const emo=(moodSet&&m.emotion&&moodSet.has(String(m.emotion).toLowerCase()))?1:0;
     const imp=Math.max(0,Math.min(1,m.importance||0));
-    return wSem*sem + wPpl*ppl + wLoc*loc + wRec*rec + wEmo*emo + wImp*imp;
+    return {sem,ppl,loc,rec,emo,imp,
+      total:wSem*sem + wPpl*ppl + wLoc*loc + wRec*rec + wEmo*emo + wImp*imp};
   };
+  const facetScore=m=>facetParts(m).total;
   const rankPool=(pool,max)=>{
     if(max<=0||!pool.length)return [];
     if(pool.length<=max)return pool.slice();
@@ -24542,6 +24570,29 @@ async function retrieveMemories(userText,chat,ownerId){
   // intimate. Enforce the per-type cap AND the intimate share here, refilling from the wider pool.
   // (The DISTANT tier is all diaries and is governed by the diary-entries-per-turn count instead.)
   const recent=balanceMems(recent0,recentPool,recCount);
+  // DEBUG TRACE — one local (no-network) entry per retrieval on the Debug page: the query, whether the
+  // neural or lexical path ran, the active facet weights, and every candidate's per-facet score with the
+  // injected ones flagged. This is the ground truth for "are my weights doing what I set".
+  try{
+    const rnd=x=>Math.round(x*1000)/1000;
+    const tierTrace=(pool,picked)=>{
+      const chosen=new Set(picked);
+      return pool.map(m=>({m,p:facetParts(m)})).sort((a,b)=>b.p.total-a.p.total).slice(0,12)
+        .map(({m,p})=>({injected:chosen.has(m),score:rnd(p.total),
+          facets:{semantic:rnd(p.sem),people:rnd(p.ppl),location:rnd(p.loc),recency:rnd(p.rec),emotion:rnd(p.emo),importance:rnd(p.imp)},
+          match:(qVec&&memVec(m))?"neural (cosine)":"lexical (word overlap)",
+          memory:String(memSearchText(m)||"").slice(0,160)}));
+    };
+    const withVec=pool=>pool.filter(m=>memVec(m)).length;
+    const e=dbg("Memory retrieval — "+(qVec?"semantic (embeddings)":"lexical fallback"),"In-app","(local ranking — no network request)",{
+      query,
+      semanticMemory:{toggleOn:!!state.embedOn,configured:embedConfigured(),model:embedModelName(),
+        queryEmbedded:!!qVec,lastEmbeddingError:_embLastErr||null,
+        memoriesWithVectors:{recent:withVec(recentPool)+"/"+recentPool.length,diary:withVec(diaryPool)+"/"+diaryPool.length,longterm:withVec(longtermPool)+"/"+longtermPool.length}},
+      weights:{semantic:wSem,people:wPpl,location:wLoc,recency:wRec,emotion:wEmo,importance:wImp},
+      candidatesByTier:{recent:tierTrace(recentPool,recent),diary:tierTrace(diaryPool,diary),longterm:tierTrace(longtermPool,longterm)}});
+    dbgDone(e,"ok",recent.length+" recent + "+diary.length+" diary + "+longterm.length+" long-term memories injected"+(qVec?"":" (ranked lexically — no query embedding)"));
+  }catch(_){}
   // Background: embed any of this character's memories that still lack a current-model vector, so the
   // next retrieval is fully semantic. Never awaited; safe no-op when embeddings aren't configured.
   if(embedConfigured()) ensureMemEmbeddings(ownerId,32).catch(()=>{});

@@ -811,6 +811,13 @@
       <button type="button" class="modeRow" data-mode="autorp" onclick="toggleMode('autorp',event)"><svg class="ic"><use href="#i-feather"/></svg><span class="modeTxt">Auto-RP<small>Narrate my short inputs</small></span><span class="modeSw"></span></button>
       <button type="button" class="modeRow" data-mode="dnd" onclick="toggleMode('dnd',event)"><svg class="ic"><use href="#i-moon"/></svg><span class="modeTxt">Do Not Disturb<small>Pause the Gamemaster (this chat)</small></span><span class="modeSw"></span></button>
     </div>
+    <button class="iconBtn" id="langBtn" onclick="toggleLangMenu(event)" title="Story language"><svg class="ic"><use href="#i-globe"/></svg></button>
+    <div class="modesMenu" id="langMenu">
+      <div class="modesMenuHd">Story language</div>
+      <button type="button" class="modeRow" data-lang="en" onclick="setStoryLang('en',event)"><span class="modeTxt">🇬🇧 English<small>Story text in English</small></span><span class="modeSw"></span></button>
+      <button type="button" class="modeRow" data-lang="de" onclick="setStoryLang('de',event)"><span class="modeTxt">🇩🇪 Deutsch<small>Geschichte auf Deutsch</small></span><span class="modeSw"></span></button>
+      <button type="button" class="modeRow" data-lang="tr" onclick="setStoryLang('tr',event)"><span class="modeTxt">🇹🇷 Türkçe<small>Hikâye Türkçe yazılır</small></span><span class="modeSw"></span></button>
+    </div>
     <textarea id="chatInput" rows="1" placeholder="Say or do something…"></textarea>
     <button class="iconBtn" id="sendBtn" onclick="sendMessage()"><svg class="ic"><use href="#i-send"/></svg></button>
   </div>
@@ -883,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2105,6 +2112,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   fallbackModel:"sm_fallbackmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",
+  storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
   // Quality-of-life features
@@ -4111,6 +4119,30 @@ const DEFAULT_UNIVERSE_BUNDLE={"universes":[], "personas":[], "curUniverse":null
 
 let state={};
 
+/* ===== STORY LANGUAGE ===== player-selected language for all in-game story text ==================
+   Picked from the globe button in the chat input bar. The app's default prompts historically
+   hardcode Turkish; langDirective() is appended as the LAST block of every payload whose output the
+   player reads in the chat (replies, narrations, texts, calls), and explicitly overrides any older
+   language instruction — so it works with customized prompts too. Engine prose that is stored rather
+   than shown in chat (memories, diaries, gossip) keeps its own prompts' language rules. */
+const STORY_LANGS={
+  en:{name:"English",native:"English",flag:"🇬🇧"},
+  de:{name:"German",native:"Deutsch",flag:"🇩🇪"},
+  tr:{name:"Turkish",native:"Türkçe",flag:"🇹🇷"}
+};
+function storyLang(){ return STORY_LANGS[state.storyLang]?state.storyLang:"tr"; }
+function storyLangName(){ return STORY_LANGS[storyLang()].name; }
+function langDirective(){
+  const n=storyLangName(), L=n.toUpperCase();
+  let s=`# STORY LANGUAGE — ${L} (selected by the player; this OVERRIDES every other language instruction anywhere in this prompt, including any instruction to write in Turkish)
+- Write ALL story text the player reads — dialogue, narration, actions, inner thoughts — in perfect, natural, everyday ${n}, in the speaker's own voice.`;
+  if(storyLang()!=="en")s+=`
+- Do NOT translate from English: take the intention and tone, then write what a native ${n} speaker would actually say. Avoid formal, artificial, translated-sounding phrasing.`;
+  s+=`
+- JSON keys, fixed enum values, and other machine fields stay EXACTLY as the prompt specifies — only human-readable prose is written in ${n}.`;
+  return s;
+}
+
 /* ===== DEBUG LOG ===== captures every payload sent to an AI service ===== */
 let dbgLog=[];           // newest last
 const DBG_MAX=80;        // keep memory bounded
@@ -4611,6 +4643,7 @@ function loadState(){
     embedKey:store.raw(K.embedKey,""),
     embedUrl:store.raw(K.embedUrl,""),
     embedModel:store.raw(K.embedModel,""),
+    storyLang:store.raw(K.storyLang,"tr"),
     memWSem:(()=>{const v=parseFloat(store.raw(K.memWSem,"1"));return isNaN(v)?1:Math.max(0,v);})(),
     memWPpl:(()=>{const v=parseFloat(store.raw(K.memWPpl,"0.4"));return isNaN(v)?0.4:Math.max(0,v);})(),
     memWLoc:(()=>{const v=parseFloat(store.raw(K.memWLoc,"0.3"));return isNaN(v)?0.3:Math.max(0,v);})(),
@@ -8706,7 +8739,7 @@ async function travelTo(locId,companionIds,opts){
       : "";
     const ctx=`Origin: ${fromName}\nDestination: ${dest.name} — ${dest.description||""}\nTravelling: ${who}\nWorld: ${curWorldSetting()||""}\nTime now: Day ${chat.gameDay}, ${chatPeriod(chat)}${thereLine}${purposeLine}`;
     narration=await chatCompletion([
-      {role:"system",content:sys},
+      {role:"system",content:sys+"\n\n"+langDirective()},
       {role:"user",content:ctx+"\n\nWrite the travel narration."}
     ],state.model,{dbg:"Travel narration"});
   }catch(e){}
@@ -9470,7 +9503,7 @@ async function narrateMeetingOutcome(chat,e,p){
       const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
       const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
       const out=await chatCompletion(
-        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks."},{role:"user",content:ask}],
+        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.\n\n"+langDirective()},{role:"user",content:ask}],
         state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
       line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
     }
@@ -10037,7 +10070,7 @@ async function _fireArrival(chat,subId,item){
     // sequentially (two round-trips); they are dispatched CONCURRENTLY and posted in order once both
     // return, so the NPC speaks after a single round-trip. The character line is grounded in their
     // authored tie to the player (see quest NPC bios) so they don't open as a stranger.
-    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid ${storyLangName().toUpperCase()} narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
     // v23.4 — skipNarration: the quest play button already narrated the journey AS the quest's
     // opening beat (purpose-aware travelTo); a second scene-setting here would double-narrate.
     const narrP=item.skipNarration?Promise.resolve(""):chatCompletion([{role:"system",content:narrSys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
@@ -10046,7 +10079,7 @@ async function _fireArrival(chat,subId,item){
       // v23.4 — the opening line knows the quest's SUBSTANCE (desc), not just its title, and knows
       // who else of the quest's cast stands here — so the conversation starts from the matter itself.
       const others=(Array.isArray(item.castNames)?item.castNames:[]).filter(n=>n&&n.toLocaleLowerCase("tr")!==p.name.toLocaleLowerCase("tr"));
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
       lineP=chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name}).catch(()=>"");
     }
     const [nout,cout]=await Promise.all([narrP,lineP]);
@@ -14505,7 +14538,9 @@ function buildSystemPromptBlocks(injectedMemories){
   // wrap it in a second one (that produced an empty-looking duplicate header).
   {const _fr=(up("formatRules")||"").trim();
    if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
-   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;}
+   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
+   // Player-selected story language — appended last so it overrides any language rule above.
+   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
 
   // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
   {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
@@ -14637,7 +14672,9 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed){
   // wrap it in a second one (that produced an empty-looking duplicate header).
   {const _fr=(up("formatRules")||"").trim();
    if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
-   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;}
+   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
+   // Player-selected story language — appended last so it overrides any language rule above.
+   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
 
   // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
   {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
@@ -15504,8 +15541,8 @@ async function narrateCharMove(chat,mover,opts){
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
     const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in Turkish."}
+      {role:"system",content:sys+"\n\n"+langDirective()},
+      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}
     ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
     let beat=(out||"").trim().replace(/^["']|["']$/g,"");
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
@@ -15615,6 +15652,30 @@ function toggleModesMenu(ev){
 }
 function _closeModesOnce(){ const m=document.getElementById('modesMenu'); if(m)m.classList.remove('open'); }
 function closeModesMenu(){ const m=document.getElementById('modesMenu'); if(m)m.classList.remove('open'); }
+/* ---- Story-language picker (globe button in the input bar) ---- */
+function reflectLangMenu(){
+  const menu=document.getElementById('langMenu'); if(!menu)return;
+  menu.querySelectorAll('.modeRow').forEach(r=>r.classList.toggle('on',r.dataset.lang===storyLang()));
+  const btn=document.getElementById('langBtn');
+  if(btn)btn.title="Story language: "+STORY_LANGS[storyLang()].native;
+}
+function toggleLangMenu(ev){
+  if(ev){ev.stopPropagation();}
+  const menu=document.getElementById('langMenu'); if(!menu)return;
+  const open=menu.classList.toggle('open');
+  reflectLangMenu();
+  if(open){ setTimeout(()=>document.addEventListener('click',_closeLangOnce,{once:true}),0); }
+}
+function _closeLangOnce(){ const m=document.getElementById('langMenu'); if(m)m.classList.remove('open'); }
+function setStoryLang(code,ev){
+  if(ev){ev.stopPropagation();}
+  if(!STORY_LANGS[code])return;
+  state.storyLang=code;
+  store.setRaw(K.storyLang,code);
+  reflectLangMenu();
+  _closeLangOnce();
+  toast("Story language: "+STORY_LANGS[code].native+" — takes effect from the next message");
+}
 async function toggleMode(mode,ev){
   if(ev){ev.stopPropagation();}
   switch(mode){
@@ -16572,7 +16633,8 @@ async function narratePlayerTurn(rawText,chat,opts){
     // v19.4 narration mode: the player's words were SPOKEN aloud. They must survive VERBATIM as
     // the quoted dialogue; only the narration around them is authored. (Speech alone carries no
     // action cues — this is where the cues come from.)
-    +((opts&&opts.verbatim)?`\n\n## SPOKEN INPUT — VERBATIM RULE\nThe player's text below was SPOKEN aloud. Their words are their dialogue: quote them WORD-FOR-WORD inside "quotes" — never paraphrase, translate, trim, or extend the quoted words. Write ONLY a short narration beat around the quote (before it), in the required narration-then-dialogue shape.`:"");
+    +((opts&&opts.verbatim)?`\n\n## SPOKEN INPUT — VERBATIM RULE\nThe player's text below was SPOKEN aloud. Their words are their dialogue: quote them WORD-FOR-WORD inside "quotes" — never paraphrase, translate, trim, or extend the quoted words. Write ONLY a short narration beat around the quote (before it), in the required narration-then-dialogue shape.`:"")
+    +"\n\n"+langDirective();
   const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
   try{
     const out=await chatCompletion([
@@ -16893,6 +16955,7 @@ async function buildTextReplySystem(chat,p){
   parts.push(nowLine);
   const tn=_textTimingNote(chat,p); if(tn)parts.push(tn);
   if(presentIds(chat).includes(p.id))parts.push(`(You happen to be in the same place as ${state.user} right now — but this is still a text on your phone, so keep it to typed words.)`);
+  parts.push(langDirective());
   return parts.join("\n\n");
 }
 async function sendTextMessage(chat,p,body){
@@ -17155,7 +17218,7 @@ async function maybeProactiveText(chat,opts){
     const scene=(()=>{ try{ return recentSceneMsgsFor(chat,p,10).map(m=>`${m.name}: ${String(m.content).slice(0,400)}`).join("\n"); }catch(_){ return ""; } })();
     const li=(()=>{ try{ return _lastInPersonInfo(chat,p); }catch(_){ return null; } })();
     const seenLine=li?`You last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""}.`:"";
-    const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name});
+    const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name})+"\n\n"+langDirective();
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n\n# Recent memories\n${mems||"(none)"}\n`
       +(scene?`\n# The last scene you and ${state.user} were in together (in-person roleplay you witnessed — a text now must be continuous with this)\n${scene}\n`:"")
       +(seenLine?`\n${seenLine}\n`:"")
@@ -19805,7 +19868,7 @@ async function endDay(){
     try{
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
-      const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.`;
+      const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.\n\n`+langDirective();
       const nout=await chatCompletion([
         {role:"system",content:nsys},
         {role:"user",content:`The scene so far (Day ${day}):\n${lastMsgs||"(a quiet day)"}\n\nWrite the day-ending transition into Day ${day+1}.`}
@@ -22994,7 +23057,7 @@ async function maybeCharQuestText(chat){
         const unanswered=lastT&&(!lastU||(lastU.ts||0)<(lastT.ts||0));
         if(unanswered)continue;
       }
-      const sys=fillTpl(up("charQuestText"),{user:state.user,char:holder.name});
+      const sys=fillTpl(up("charQuestText"),{user:state.user,char:holder.name})+"\n\n"+langDirective();
       // Continuity: if they saw the player in person recently, the text should read like it comes from
       // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
       const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
@@ -23232,7 +23295,7 @@ async function maybeGamemaster(chat,force){
     const presentSheet=present.map(c=>{const _lk=lookProse(c.look);return c.name+(_lk?` (${_lk})`:"");}).join("; ")||"(nobody is currently nearby)";
     const offstageSheet=cast.filter(c=>!present.some(pc=>pc.id===c.id)).map(c=>c.name).join("; ");
     const nudge=await chatCompletion([
-      {role:"system",content:authorSys},
+      {role:"system",content:authorSys+"\n\n"+langDirective()},
       {role:"user",content:(ctx?ctx+"\n\n":"")+`Characters present now: ${presentSheet}\n`+(offstageSheet?`Characters in this world who could arrive: ${offstageSheet}\n`:``)+`Day ${chat.gameDay||1}.\n\nRecent exchange:\n${since}`+stagingBlock}
     ],state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
@@ -23609,7 +23672,7 @@ async function runSceneWriter(chat){
         `Their overture is now ${band}. Write their words and manner to MATCH this exactly — if landing, let warmth and relief show, let them step closer; if rebuffed, show the hurt and the retreat. This is NOT a confrontation: they are reaching out, not accusing. Do NOT have them press an accusation or demand answers. Do NOT force a warm ending if they're being rebuffed, and do NOT keep them cold once they've been genuinely met.`+
         (ev._lastJudge&&ev._lastJudge.reason?`\nHow it was received: ${ev._lastJudge.reason}`:``);
     }
-    const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)}];
+    const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)+"\n\n"+langDirective()}];
     if(ctx)swMsgs.push({role:"user",name:"context",content:ctx});
     recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>swMsgs.push(m));
     // The player's last line is ALREADY the final message in the recent-exchange block just pushed,
@@ -27211,7 +27274,7 @@ function buildCallInstructions(callee, chat){
     if(mems.length){ const lines=mems.map(m=>`- ${(typeof memInjectText==='function'?memInjectText(m):(m.content||''))}`).filter(Boolean); if(lines.length) blocks.push(`# YOUR RECENT DIARY (background — shapes how you act; do NOT recite)\n${lines.join("\n")}`); }
   }catch(e){}
   blocks.push(`# HOW YOU SPEAK (this is a live spoken conversation)
-Speak naturally and warmly in short spoken sentences. Reply in the SAME language ${state.user} speaks (Turkish if they speak Turkish). Keep replies to 1–3 sentences so the conversation flows.
+Speak naturally and warmly in short spoken sentences. Reply in perfect, natural, everyday ${storyLangName()} — the story's selected language (this overrides any other language instruction). Keep replies to 1–3 sentences so the conversation flows.
 
 VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you direct with bracketed cues:
 1. Begin EACH sentence with its OWN bracketed delivery instruction in ENGLISH describing HOW to say that sentence, e.g. [say warmly] then the sentence, then [say with a teasing grin] before the next one. Each sentence gets its own tone so the emotion can shift naturally across the reply. The bracket directs the voice and is never spoken aloud.

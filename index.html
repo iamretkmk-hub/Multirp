@@ -811,6 +811,13 @@
       <button type="button" class="modeRow" data-mode="autorp" onclick="toggleMode('autorp',event)"><svg class="ic"><use href="#i-feather"/></svg><span class="modeTxt">Auto-RP<small>Narrate my short inputs</small></span><span class="modeSw"></span></button>
       <button type="button" class="modeRow" data-mode="dnd" onclick="toggleMode('dnd',event)"><svg class="ic"><use href="#i-moon"/></svg><span class="modeTxt">Do Not Disturb<small>Pause the Gamemaster (this chat)</small></span><span class="modeSw"></span></button>
     </div>
+    <button class="iconBtn" id="langBtn" onclick="toggleLangMenu(event)" title="Story language"><svg class="ic"><use href="#i-globe"/></svg></button>
+    <div class="modesMenu" id="langMenu">
+      <div class="modesMenuHd">Story language</div>
+      <button type="button" class="modeRow" data-lang="en" onclick="setStoryLang('en',event)"><span class="modeTxt">🇬🇧 English<small>Story text in English</small></span><span class="modeSw"></span></button>
+      <button type="button" class="modeRow" data-lang="de" onclick="setStoryLang('de',event)"><span class="modeTxt">🇩🇪 Deutsch<small>Geschichte auf Deutsch</small></span><span class="modeSw"></span></button>
+      <button type="button" class="modeRow" data-lang="tr" onclick="setStoryLang('tr',event)"><span class="modeTxt">🇹🇷 Türkçe<small>Hikâye Türkçe yazılır</small></span><span class="modeSw"></span></button>
+    </div>
     <textarea id="chatInput" rows="1" placeholder="Say or do something…"></textarea>
     <button class="iconBtn" id="sendBtn" onclick="sendMessage()"><svg class="ic"><use href="#i-send"/></svg></button>
   </div>
@@ -883,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2105,6 +2112,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   fallbackModel:"sm_fallbackmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",
+  storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
   // Quality-of-life features
@@ -4111,6 +4119,30 @@ const DEFAULT_UNIVERSE_BUNDLE={"universes":[], "personas":[], "curUniverse":null
 
 let state={};
 
+/* ===== STORY LANGUAGE ===== player-selected language for all in-game story text ==================
+   Picked from the globe button in the chat input bar. The app's default prompts historically
+   hardcode Turkish; langDirective() is appended as the LAST block of every payload whose output the
+   player reads in the chat (replies, narrations, texts, calls), and explicitly overrides any older
+   language instruction — so it works with customized prompts too. Engine prose that is stored rather
+   than shown in chat (memories, diaries, gossip) keeps its own prompts' language rules. */
+const STORY_LANGS={
+  en:{name:"English",native:"English",flag:"🇬🇧"},
+  de:{name:"German",native:"Deutsch",flag:"🇩🇪"},
+  tr:{name:"Turkish",native:"Türkçe",flag:"🇹🇷"}
+};
+function storyLang(){ return STORY_LANGS[state.storyLang]?state.storyLang:"tr"; }
+function storyLangName(){ return STORY_LANGS[storyLang()].name; }
+function langDirective(){
+  const n=storyLangName(), L=n.toUpperCase();
+  let s=`# STORY LANGUAGE — ${L} (selected by the player; this OVERRIDES every other language instruction anywhere in this prompt, including any instruction to write in Turkish)
+- Write ALL story text the player reads — dialogue, narration, actions, inner thoughts — in perfect, natural, everyday ${n}, in the speaker's own voice.`;
+  if(storyLang()!=="en")s+=`
+- Do NOT translate from English: take the intention and tone, then write what a native ${n} speaker would actually say. Avoid formal, artificial, translated-sounding phrasing.`;
+  s+=`
+- JSON keys, fixed enum values, and other machine fields stay EXACTLY as the prompt specifies — only human-readable prose is written in ${n}.`;
+  return s;
+}
+
 /* ===== DEBUG LOG ===== captures every payload sent to an AI service ===== */
 let dbgLog=[];           // newest last
 const DBG_MAX=80;        // keep memory bounded
@@ -4611,6 +4643,7 @@ function loadState(){
     embedKey:store.raw(K.embedKey,""),
     embedUrl:store.raw(K.embedUrl,""),
     embedModel:store.raw(K.embedModel,""),
+    storyLang:store.raw(K.storyLang,"tr"),
     memWSem:(()=>{const v=parseFloat(store.raw(K.memWSem,"1"));return isNaN(v)?1:Math.max(0,v);})(),
     memWPpl:(()=>{const v=parseFloat(store.raw(K.memWPpl,"0.4"));return isNaN(v)?0.4:Math.max(0,v);})(),
     memWLoc:(()=>{const v=parseFloat(store.raw(K.memWLoc,"0.3"));return isNaN(v)?0.3:Math.max(0,v);})(),
@@ -8541,7 +8574,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
       place_desc:(leftLoc.description||"").slice(0,200), others, visit
     });
     const out=await chatCompletion([
-      {role:"system",content:sys},
+      {role:"system",content:sys+"\n\n"+langDirective()},
       {role:"user",content:`What are people saying about ${state.user}'s time at ${leftLoc.name||"this place"}? Return the JSON.`}
     ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",260),dbg:"Location gossip · "+(leftLoc.name||"?")});
     const j=parseJSON(out); if(!j||!j.content)return;
@@ -8706,7 +8739,7 @@ async function travelTo(locId,companionIds,opts){
       : "";
     const ctx=`Origin: ${fromName}\nDestination: ${dest.name} — ${dest.description||""}\nTravelling: ${who}\nWorld: ${curWorldSetting()||""}\nTime now: Day ${chat.gameDay}, ${chatPeriod(chat)}${thereLine}${purposeLine}`;
     narration=await chatCompletion([
-      {role:"system",content:sys},
+      {role:"system",content:sys+"\n\n"+langDirective()},
       {role:"user",content:ctx+"\n\nWrite the travel narration."}
     ],state.model,{dbg:"Travel narration"});
   }catch(e){}
@@ -9220,7 +9253,7 @@ async function runCalendarEngine(chat){
     const openItems=_openAll
       .map(e=>`- ${e.title}${e.who?` (with ${e.who})`:""}${e.day!=null?` day ${e.day}`:""}`)
       .slice(-40).join("\n");
-    const msgs=[{role:"system",content:up("calPrompt")}];
+    const msgs=[{role:"system",content:up("calPrompt")+"\n\n"+langDirective()}];
     // Include recent phone texts alongside the spoken scene — a plan made over text is still a plan.
     recentExchangeMsgsWithTexts(chat,ENGINE_RECENT_TURNS+4).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${today}, ${chatPeriod(chat)}.\n\nALREADY TRACKED MEETINGS (do NOT re-emit these, nor any re-wording or translation of them):\n${openItems||"(none yet)"}\n\nBased ONLY on the exchange above, return {"new":[...]}: genuinely NEW dated meetings agreed in this exchange.`});
@@ -9391,7 +9424,7 @@ async function reconcileCalendarDay(chat,day,uni){
     });
     if(!anyMems)return;   // no participant memories today → nothing can be confirmed done
     const msgs=[
-      {role:"system",content:up("calReconcile")},
+      {role:"system",content:up("calReconcile")+"\n\n"+langDirective()},
       {role:"user",content:`Day ${day} just ended.\n\nSTILL-OPEN MEETINGS — each with its participants and THEIR memories from today:\n\n${sections.join("\n\n")}\n\nReturn ONLY the JSON array of meetings that actually HAPPENED today (id + status:"done" + result), or [] if none did.`}
     ];
     const out=await chatCompletion(msgs,state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",360),dbg:"Calendar reconcile"});
@@ -9470,7 +9503,7 @@ async function narrateMeetingOutcome(chat,e,p){
       const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
       const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
       const out=await chatCompletion(
-        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks."},{role:"user",content:ask}],
+        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.\n\n"+langDirective()},{role:"user",content:ask}],
         state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
       line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
     }
@@ -10037,7 +10070,7 @@ async function _fireArrival(chat,subId,item){
     // sequentially (two round-trips); they are dispatched CONCURRENTLY and posted in order once both
     // return, so the NPC speaks after a single round-trip. The character line is grounded in their
     // authored tie to the player (see quest NPC bios) so they don't open as a stranger.
-    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid TURKISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid ${storyLangName().toUpperCase()} narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
     // v23.4 — skipNarration: the quest play button already narrated the journey AS the quest's
     // opening beat (purpose-aware travelTo); a second scene-setting here would double-narrate.
     const narrP=item.skipNarration?Promise.resolve(""):chatCompletion([{role:"system",content:narrSys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
@@ -10046,7 +10079,7 @@ async function _fireArrival(chat,subId,item){
       // v23.4 — the opening line knows the quest's SUBSTANCE (desc), not just its title, and knows
       // who else of the quest's cast stands here — so the conversation starts from the matter itself.
       const others=(Array.isArray(item.castNames)?item.castNames:[]).filter(n=>n&&n.toLocaleLowerCase("tr")!==p.name.toLocaleLowerCase("tr"));
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in TURKISH, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
       lineP=chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name}).catch(()=>"");
     }
     const [nout,cout]=await Promise.all([narrP,lineP]);
@@ -10795,7 +10828,7 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
     `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence description of how ${fromP.name} feels about ${tName} now. ALSO: if today established a DURABLE relational FACT about ${tName} that ${fromP.name} would treat as known (a kinship/role/history tie — e.g. "${tName} is X's brother", "${tName} is my new boss", "${tName} betrayed Y"), include it as "social_fact" (one short sentence from ${fromP.name}'s point of view). Omit social_fact if nothing durable was revealed — do NOT restate feelings there.`;
 
   const out=await chatCompletion([
-    {role:"system",content:sys},
+    {role:"system",content:sys+"\n\n"+langDirective()},
     {role:"user",content:userMsg}
   ],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",340),dbg:"Daily relationship · "+fromP.name+" → "+toName});
   const j=parseJSON(out); if(!j||typeof j!=="object")return;
@@ -14505,7 +14538,9 @@ function buildSystemPromptBlocks(injectedMemories){
   // wrap it in a second one (that produced an empty-looking duplicate header).
   {const _fr=(up("formatRules")||"").trim();
    if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
-   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;}
+   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
+   // Player-selected story language — appended last so it overrides any language rule above.
+   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
 
   // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
   {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
@@ -14637,7 +14672,9 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed){
   // wrap it in a second one (that produced an empty-looking duplicate header).
   {const _fr=(up("formatRules")||"").trim();
    if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
-   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;}
+   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
+   // Player-selected story language — appended last so it overrides any language rule above.
+   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
 
   // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
   {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
@@ -15254,7 +15291,7 @@ async function maybeShowRecap(chat){
   try{
     const convo=msgs.slice(-16).map(m=>`${m.role==='user'?state.user:(m.speaker||'Narrator')}: ${m.content}`).join("\n");
     const out=await chatCompletion([
-      {role:"system",content:"You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands."},
+      {role:"system",content:"You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands.\n\n"+langDirective()},
       {role:"user",content:`Scene so far:\n${convo}\n\nWrite the one-line recap.`}
     ],state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
     const txt=(out||"").trim().replace(/^["']|["']$/g,"");
@@ -15432,10 +15469,30 @@ function applyPresence(chat,enterNames,exitNames){
   entered.forEach(nm=>{const p=byName(nm);if(p&&chat.justLeft)delete chat.justLeft[p.id];});
   return {entered,exited};
 }
-// v19.993 — Turkish time-of-day labels for on-screen narrator/presence lines (display-only).
-const PERIOD_TR={Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"};
-function _periodTR(p){ return PERIOD_TR[p]||String(p||"").toLowerCase(); }
-// Drop a subtle system line into the chat noting who left/arrived (Turkish).
+// v25.5 — time-of-day labels for on-screen narrator/presence lines (display-only), per story language.
+const PERIOD_L10N={
+  tr:{Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"},
+  en:{Morning:"morning",Midday:"midday",Afternoon:"afternoon",Evening:"evening",Night:"night"},
+  de:{Morning:"Morgen",Midday:"Mittag",Afternoon:"Nachmittag",Evening:"Abend",Night:"Nacht"}
+};
+function _periodTR(p){ const m=PERIOD_L10N[storyLang()]||PERIOD_L10N.tr; return m[p]||String(p||"").toLowerCase(); }
+// Arrived/left verbs for the presence line, per story language (count-aware where grammar needs it).
+function _presenceVerb(kind,count){
+  switch(storyLang()){
+    case "en": return kind==="in"?"arrived":"left";
+    case "de": return kind==="in"?(count>1?"kamen an":"kam an"):(count>1?"gingen":"ging");
+    default:   return kind==="in"?"geldi":"ayrıldı";
+  }
+}
+// "Day N" label for on-screen stamps, per story language.
+function _dayLabel(n){
+  switch(storyLang()){
+    case "en": return `Day ${n}`;
+    case "de": return `Tag ${n}`;
+    default:   return `${n}. gün`;
+  }
+}
+// Drop a subtle system line into the chat noting who left/arrived (in the story language).
 // `narration` (optional) — a short travel beat (from narrateCharMove) to show INSTEAD of the terse
 // "X geldi/ayrıldı" line. The structural presenceNote (enteredIds/exitedIds → arrival cut, witness
 // scoping) is untouched; only the visible content and its rendering change (moveNarr → prose style).
@@ -15446,8 +15503,8 @@ function notePresence(chat,entered,exited,narration){
   const period=chat?chatPeriod(chat):"";
   // v19.993 — parenthetical place/time avoids Turkish case-suffix (vowel-harmony) bugs on names.
   const tail=(locName||period)?` (${[locName, period&&_periodTR(period)].filter(Boolean).join(", ")})`:"";
-  if(exited.length)parts.push(`${exited.join(", ")} ayrıldı${tail}`);
-  if(entered.length)parts.push(`${entered.join(", ")} geldi${tail}`);
+  if(exited.length)parts.push(`${exited.join(", ")} ${_presenceVerb("out",exited.length)}${tail}`);
+  if(entered.length)parts.push(`${entered.join(", ")} ${_presenceVerb("in",entered.length)}${tail}`);
   if(!parts.length)return;
   // Resolve names → ids so the witness/scene logic can act on a presence change structurally
   // (not by parsing the display text). enteredIds in particular lets a freshly-arrived character's
@@ -15504,8 +15561,8 @@ async function narrateCharMove(chat,mover,opts){
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
     const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in Turkish."}
+      {role:"system",content:sys+"\n\n"+langDirective()},
+      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}
     ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
     let beat=(out||"").trim().replace(/^["']|["']$/g,"");
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
@@ -15615,6 +15672,30 @@ function toggleModesMenu(ev){
 }
 function _closeModesOnce(){ const m=document.getElementById('modesMenu'); if(m)m.classList.remove('open'); }
 function closeModesMenu(){ const m=document.getElementById('modesMenu'); if(m)m.classList.remove('open'); }
+/* ---- Story-language picker (globe button in the input bar) ---- */
+function reflectLangMenu(){
+  const menu=document.getElementById('langMenu'); if(!menu)return;
+  menu.querySelectorAll('.modeRow').forEach(r=>r.classList.toggle('on',r.dataset.lang===storyLang()));
+  const btn=document.getElementById('langBtn');
+  if(btn)btn.title="Story language: "+STORY_LANGS[storyLang()].native;
+}
+function toggleLangMenu(ev){
+  if(ev){ev.stopPropagation();}
+  const menu=document.getElementById('langMenu'); if(!menu)return;
+  const open=menu.classList.toggle('open');
+  reflectLangMenu();
+  if(open){ setTimeout(()=>document.addEventListener('click',_closeLangOnce,{once:true}),0); }
+}
+function _closeLangOnce(){ const m=document.getElementById('langMenu'); if(m)m.classList.remove('open'); }
+function setStoryLang(code,ev){
+  if(ev){ev.stopPropagation();}
+  if(!STORY_LANGS[code])return;
+  state.storyLang=code;
+  store.setRaw(K.storyLang,code);
+  reflectLangMenu();
+  _closeLangOnce();
+  toast("Story language: "+STORY_LANGS[code].native+" — takes effect from the next message");
+}
 async function toggleMode(mode,ev){
   if(ev){ev.stopPropagation();}
   switch(mode){
@@ -16572,7 +16653,8 @@ async function narratePlayerTurn(rawText,chat,opts){
     // v19.4 narration mode: the player's words were SPOKEN aloud. They must survive VERBATIM as
     // the quoted dialogue; only the narration around them is authored. (Speech alone carries no
     // action cues — this is where the cues come from.)
-    +((opts&&opts.verbatim)?`\n\n## SPOKEN INPUT — VERBATIM RULE\nThe player's text below was SPOKEN aloud. Their words are their dialogue: quote them WORD-FOR-WORD inside "quotes" — never paraphrase, translate, trim, or extend the quoted words. Write ONLY a short narration beat around the quote (before it), in the required narration-then-dialogue shape.`:"");
+    +((opts&&opts.verbatim)?`\n\n## SPOKEN INPUT — VERBATIM RULE\nThe player's text below was SPOKEN aloud. Their words are their dialogue: quote them WORD-FOR-WORD inside "quotes" — never paraphrase, translate, trim, or extend the quoted words. Write ONLY a short narration beat around the quote (before it), in the required narration-then-dialogue shape.`:"")
+    +"\n\n"+langDirective();
   const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
   try{
     const out=await chatCompletion([
@@ -16893,6 +16975,7 @@ async function buildTextReplySystem(chat,p){
   parts.push(nowLine);
   const tn=_textTimingNote(chat,p); if(tn)parts.push(tn);
   if(presentIds(chat).includes(p.id))parts.push(`(You happen to be in the same place as ${state.user} right now — but this is still a text on your phone, so keep it to typed words.)`);
+  parts.push(langDirective());
   return parts.join("\n\n");
 }
 async function sendTextMessage(chat,p,body){
@@ -16939,7 +17022,7 @@ async function rememberTextExchange(chat,p){
     // each successive memory a near-duplicate of the previous one plus a few new lines.
     const convo=th.slice(Math.max(prevLen,th.length-10)).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
-      `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`;
+      `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`+"\n\n"+langDirective();
     const out=await chatCompletion([
       {role:"system",content:sys},
       {role:"user",content:`Text conversation ${p.name} had with ${state.user}:\n\n${convo}`}
@@ -17030,7 +17113,7 @@ function renderTextThread(pid){
   const chat=curChat(); const th=textThreadMsgs(chat,pid);
   box.innerHTML=th.map(m=>{
     const mine=m.role==="user";
-    const when=m.gday?`${m.gday}. gün${m.gperiod?" · "+_periodTR(m.gperiod):""}`:"";
+    const when=m.gday?`${_dayLabel(m.gday)}${m.gperiod?" · "+_periodTR(m.gperiod):""}`:"";
     return `<div style="display:flex;justify-content:${mine?"flex-end":"flex-start"};margin:5px 0">
       <div style="max-width:80%;padding:7px 11px;border-radius:14px;background:${mine?"var(--grad)":"rgba(128,128,128,.16)"};color:${mine?"#fff":"var(--text)"};font-size:14px;line-height:1.42">
         ${md(_dispText(m.content))}<div style="font-size:9px;opacity:.5;margin-top:3px;text-align:right">${esc(when)}</div></div></div>`;
@@ -17155,7 +17238,7 @@ async function maybeProactiveText(chat,opts){
     const scene=(()=>{ try{ return recentSceneMsgsFor(chat,p,10).map(m=>`${m.name}: ${String(m.content).slice(0,400)}`).join("\n"); }catch(_){ return ""; } })();
     const li=(()=>{ try{ return _lastInPersonInfo(chat,p); }catch(_){ return null; } })();
     const seenLine=li?`You last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""}.`:"";
-    const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name});
+    const sys=fillTpl(up("textProactivePrompt"),{user:state.user,char:p.name})+"\n\n"+langDirective();
     const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral"}\n\n# Recent memories\n${mems||"(none)"}\n`
       +(scene?`\n# The last scene you and ${state.user} were in together (in-person roleplay you witnessed — a text now must be continuous with this)\n${scene}\n`:"")
       +(seenLine?`\n${seenLine}\n`:"")
@@ -19805,7 +19888,7 @@ async function endDay(){
     try{
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
-      const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.`;
+      const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.\n\n`+langDirective();
       const nout=await chatCompletion([
         {role:"system",content:nsys},
         {role:"user",content:`The scene so far (Day ${day}):\n${lastMsgs||"(a quiet day)"}\n\nWrite the day-ending transition into Day ${day+1}.`}
@@ -19914,7 +19997,7 @@ async function runGossipPropagation(chat,day,uni){
         witness_ties:ties, candidates:candList
       });
       const out=await chatCompletion([
-        {role:"system",content:sys},
+        {role:"system",content:sys+"\n\n"+langDirective()},
         {role:"user",content:`Decide what ${witness.name} does with what they saw.`}
       ],model,{temp:fnTemp("mem",0.6),max:fnTok("mem",400),dbg:"Gossip · "+witness.name});
       const j=parseJSON(out);
@@ -20063,7 +20146,7 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
         nature:(holder.personality?String(holder.personality).slice(0,200):"ordinary")+(holder.goals&&String(holder.goals).trim()?` | driven by: ${String(holder.goals).slice(0,200)}`:""),
         kind:it.kind, valence:it.valence||"hostile", target:it.targetName||nameById(it.targetId)||state.user,
         aim:it.aim||"", trigger:it.trigger||"", strength:String((it.strength||0.6).toFixed(2)),
-        allies, leverage, world })},
+        allies, leverage, world })+"\n\n"+langDirective()},
       {role:"user",content:`How does ${holder.name} make their move? Return the JSON.`}
     ],model,{temp:fnTemp("mem",0.6),max:fnTok("mem",300),dbg:"Contemplate · "+holder.name});
     const j=parseJSON(out)||{};
@@ -20326,7 +20409,7 @@ async function runOffstageInteraction(chat,uni){
     place, places:_pulsePlaces(chat), day:String(day), period:chatPeriod(chat), user:state.user||"the player",
     world:String(curWorldSetting()||"").slice(0,700)
   });
-  const out=await chatCompletion([{role:"system",content:tpl},{role:"user",content:"Decide and respond with ONLY the JSON."}],
+  const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+langDirective()},{role:"user",content:"Decide and respond with ONLY the JSON."}],
     state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (offstage interaction)"});
   const j=parseJSON(out);
   if(!j||!j.happened)return false;
@@ -20383,7 +20466,7 @@ async function runCalendarExecutor(chat,uni){
       user:state.user||"the player",world:String(curWorldSetting()||"").slice(0,700)
     });
     try{
-      const out=await chatCompletion([{role:"system",content:tpl},{role:"user",content:"Resolve it and respond with ONLY the JSON."}],
+      const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+langDirective()},{role:"user",content:"Resolve it and respond with ONLY the JSON."}],
         state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (calendar executor)"});
       const j=parseJSON(out); if(!j||!j.event){ e.result=e.result||""; continue; }
       const uniObj=uni||universeById(chat.universeId);
@@ -20475,7 +20558,7 @@ async function runGoalPursuit(chat,day,uni){
       });
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:tpl},{role:"user",content:"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+langDirective()},{role:"user",content:"Decide and respond with ONLY the JSON."}],
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (goal pursuit) · "+p.name});
         j=parseJSON(out);
       }catch(err){}
@@ -20631,7 +20714,7 @@ async function runIntentEngine(chat,day,uni){
           user:state.user, char:holder.name,
           nature:(holder.personality?String(holder.personality).slice(0,220):"ordinary"),
           goals:(holder.goals&&String(holder.goals).trim())?String(holder.goals).slice(0,300):"(no stated goals — judge from nature and events)",
-          day_memories:mems, relationships:relBlock, roster:rosterList })},
+          day_memories:mems, relationships:relBlock, roster:rosterList })+"\n\n"+langDirective()},
         {role:"user",content:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}
       ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
       const j=parseJSON(out)||{};
@@ -20680,7 +20763,7 @@ async function runIntentEngine(chat,day,uni){
           kind:it.kind, target:it.targetName, aim:it.aim, trigger:it.trigger,
           strength:String(it.strength.toFixed(2)),
           allies:(it.allies||[]).map(nameById).filter(Boolean).join(", ")||"(none)",
-          candidates:cand })},
+          candidates:cand })+"\n\n"+langDirective()},
         {role:"user",content:`Develop ${holder.name}'s ${it.kind} over one more day. Return the JSON.`}
       ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",200),dbg:"Intent tick · "+holder.name});
       const j=parseJSON(out)||{};
@@ -21081,7 +21164,7 @@ async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
       // v24.4 — `uni` here is the universe ID; genrePackBlock needs the OBJECT (a string id made
       // it silently return "" — the diary's genre voice was never injected from this path).
       const sys=fillTpl(up("daySummaryPrompt"),{char:c.name,user:state.user})+_gpTailU("diaryVoice",universeById(uni))+
-        `\n\nWrite strictly from ${c.name}'s own perspective, grounded ONLY in the memories below — the things ${c.name} personally experienced and would actually record. Never reference events ${c.name} did not witness.`;
+        `\n\nWrite strictly from ${c.name}'s own perspective, grounded ONLY in the memories below — the things ${c.name} personally experienced and would actually record. Never reference events ${c.name} did not witness.`+"\n\n"+langDirective();
       const out=await chatCompletion([
         {role:"system",content:sys},
         {role:"user",content:`Day ${day} — ${c.name}'s diary. The memories ${c.name} formed today:\n\n${memList}`}
@@ -21590,7 +21673,7 @@ async function generateOriginDoc(u,ovr){
   });
   let out=null;
   try{
-    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Write the STATE ZERO briefing now."}],
+    out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:"Write the STATE ZERO briefing now."}],
       authoringModel(),{temp:fnTemp("unigen",0.7),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
   }catch(e){ _qlog("origin.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const doc=String(out||"").trim();
@@ -21679,7 +21762,7 @@ async function runUniverseChronicler(chat,day,uni){
     if(!mems.length&&!qlines.length)return;
     const sys=fillTpl(up("chronicler",uni.id),{user:uni.userName||state.user||"the player",day:String(day)});
     const usr=`Day ${day} evidence.\n\nMEMORIES FORMED TODAY (all characters, [owner] prefixed):\n${mems.join("\n")||"(none)"}\n\nQUEST MOVEMENTS TODAY:\n${qlines.join("\n")||"(none)"}\n\nReturn the JSON now.`;
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.memModel,
+    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:usr}],state.memModel,
       {temp:fnTemp("mem",0.3),max:fnTok("mem",500),frequency_penalty:0,presence_penalty:0,dbg:"Universe chronicle · day "+day});
     const j=parseJSON(out); const arr=Array.isArray(j)?j:(j&&Array.isArray(j.entries)?j.entries:null);
     if(!arr||!arr.length){ _qlog("chronicle",`day ${day}: nothing consequential recorded`); return; }
@@ -21751,7 +21834,7 @@ async function generateQuestArc(u,brief){
   });
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Write the arc JSON now."}],
+    out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:"Write the arc JSON now."}],
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,dbg:"Quest arc — "+brief});
   }catch(e){ _qlog("arc.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("arc.fail","reply didn't parse as JSON"); return null; }
@@ -21954,7 +22037,7 @@ async function generateNextQuest(chat,uni,arc){
   _qlog("next.design",`arc "${arc}" day ${day} — history ${gd.quests.filter(q=>q&&q.arc===arc).length} quest(s), ${under?"undercurrents fed":"no undercurrents"}`);
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Write the JSON now."}],
+    out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:"Write the JSON now."}],
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Quest next — "+arc});
   }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
@@ -22080,7 +22163,7 @@ OUTPUT FORMAT — return ONLY a JSON array. No prose, no explanation, no markdow
 Example of a valid reply:
 [{"id":"q_abc123","done":false,"progress":"Aysu babasının çekmecesindeki mektubu buldu ama kimseye göstermedi."}]`;
     const usr=`Day ${day} just ended.\n\nACTIVE QUESTS — each with its own character(s) and THEIR memories from today:\n\n${sections.join("\n\n")}\n\nReturn the JSON array now (or [] if no quest changed).`;
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
+    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:usr}],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
     const arr=parseJSON(out);
     if(!Array.isArray(arr)||!arr.length){ _qlog("reconcile",`day ${day}: no quest movement judged (${active.length} active)`); return; }
     _qlog("reconcile",`day ${day}: ${arr.length} verdict(s) for ${active.length} active quest(s)`);
@@ -22541,7 +22624,7 @@ async function runBackgroundTasks(chat,day,uni){
       if(ran>=cap)break;
       e._bgResolved=day;
       const success=rollDice("1d6")>=3;   // ~66% succeed, ~33% fail — a real chance to fail
-      const sys=`You narrate a brief OFFSTAGE outcome in a roleplay, in TURKISH. ${doer.name} spent time — away from ${state.user} — working on this on their own: "${String(e.title||"").slice(0,120)}". It ${success?"SUCCEEDED":"FAILED"}. Write ONE short, vivid third-person beat (1-2 sentences)${success?"":" showing what went wrong"}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`;
+      const sys=`You narrate a brief OFFSTAGE outcome in a roleplay, in ${storyLangName().toUpperCase()}. ${doer.name} spent time — away from ${state.user} — working on this on their own: "${String(e.title||"").slice(0,120)}". It ${success?"SUCCEEDED":"FAILED"}. Write ONE short, vivid third-person beat (1-2 sentences)${success?"":" showing what went wrong"}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`;
       let j=null;
       try{
         const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate it."}],state.bioModel,{temp:fnTemp("mem",0.85),max:fnTok("mem",260),frequency_penalty:0,presence_penalty:0,dbg:"BG task — "+e.title});
@@ -22856,7 +22939,7 @@ async function runCharQuestSpawn(chat,day,uni){
       });
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:tpl},{role:"user",content:"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+langDirective()},{role:"user",content:"Decide and respond with ONLY the JSON."}],
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (spawn) · "+p.name});
         j=parseJSON(out);
       }catch(err){}
@@ -22935,7 +23018,7 @@ async function runCharQuestPursuit(chat,day,uni){
       });
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:tpl},{role:"user",content:"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+langDirective()},{role:"user",content:"Decide and respond with ONLY the JSON."}],
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (step) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -22994,7 +23077,7 @@ async function maybeCharQuestText(chat){
         const unanswered=lastT&&(!lastU||(lastU.ts||0)<(lastT.ts||0));
         if(unanswered)continue;
       }
-      const sys=fillTpl(up("charQuestText"),{user:state.user,char:holder.name});
+      const sys=fillTpl(up("charQuestText"),{user:state.user,char:holder.name})+"\n\n"+langDirective();
       // Continuity: if they saw the player in person recently, the text should read like it comes from
       // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
       const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
@@ -23057,7 +23140,7 @@ Never on a hunch; if unsure it stays pending.
 Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if none:
 [{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense TURKISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense TURKISH sentence>"}]`;
     const usr=`Day ${day} just ended.\n\nMEMORIES FORMED TODAY (all characters — scenes and phone texts):\n${mems.join("\n")}\n\nDELIVERED CHARACTER QUESTS (asks made of ${state.user}):\n${qList}\n\nReturn the JSON array.`;
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],
+    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:usr}],
       state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",480),frequency_penalty:0,presence_penalty:0,dbg:"Char quest reconcile"});
     const arr=parseJSON(out);
     if(!Array.isArray(arr)||!arr.length){ _qlog("cq.reconcile",`day ${day}: no movement judged (${active.length} delivered)`); return; }
@@ -23232,7 +23315,7 @@ async function maybeGamemaster(chat,force){
     const presentSheet=present.map(c=>{const _lk=lookProse(c.look);return c.name+(_lk?` (${_lk})`:"");}).join("; ")||"(nobody is currently nearby)";
     const offstageSheet=cast.filter(c=>!present.some(pc=>pc.id===c.id)).map(c=>c.name).join("; ");
     const nudge=await chatCompletion([
-      {role:"system",content:authorSys},
+      {role:"system",content:authorSys+"\n\n"+langDirective()},
       {role:"user",content:(ctx?ctx+"\n\n":"")+`Characters present now: ${presentSheet}\n`+(offstageSheet?`Characters in this world who could arrive: ${offstageSheet}\n`:``)+`Day ${chat.gameDay||1}.\n\nRecent exchange:\n${since}`+stagingBlock}
     ],state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
@@ -23609,7 +23692,7 @@ async function runSceneWriter(chat){
         `Their overture is now ${band}. Write their words and manner to MATCH this exactly — if landing, let warmth and relief show, let them step closer; if rebuffed, show the hurt and the retreat. This is NOT a confrontation: they are reaching out, not accusing. Do NOT have them press an accusation or demand answers. Do NOT force a warm ending if they're being rebuffed, and do NOT keep them cold once they've been genuinely met.`+
         (ev._lastJudge&&ev._lastJudge.reason?`\nHow it was received: ${ev._lastJudge.reason}`:``);
     }
-    const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)}];
+    const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)+"\n\n"+langDirective()}];
     if(ctx)swMsgs.push({role:"user",name:"context",content:ctx});
     recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>swMsgs.push(m));
     // The player's last line is ALREADY the final message in the recent-exchange block just pushed,
@@ -23991,7 +24074,7 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp){
         max=fnTok("mem",560);
       }
       const out=await chatCompletion([
-        {role:"system",content:sys},{role:"user",content:userMsg}
+        {role:"system",content:sys+"\n\n"+langDirective()},{role:"user",content:userMsg}
       ],state.memModel,{temp:fnTemp("mem",0.3),max,dbg:(isBystander?"Bystander gist · ":"Memory (arc) · ")+p.name});
       const j=parseJSON(out);
       if(!j||!j.content)continue;
@@ -24150,7 +24233,7 @@ async function maybeCondenseMemories(ownerId,name){
   }
   if(!clusters.length) return;
   // Each cluster → ONE durable LONGTERM memory written by the model (hybrid: code groups, LLM writes).
-  const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user});
+  const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user})+"\n\n"+langDirective();
   let changed=false;
   for(const cl of clusters.slice(0,4)){   // bound work per pass
     const listed=cl.map((m,i)=>`[${i}] ${memText(m)} | day: ${m.gameDay||1} | importance: ${m.importance} | tags: ${(m.tags||[]).join(", ")}`).join("\n");
@@ -24201,7 +24284,7 @@ async function condenseDiaries(ownerId,name){
   if(fresh.length<batch)return;                                     // wait until enough new days accumulate
   const listed=older.slice().sort((a,b)=>(a.gameDay||0)-(b.gameDay||0))
     .map((m,i)=>`[${i}] Day ${m.gameDay||1}${Array.isArray(m.diarySpan)?`-${m.diarySpan[1]}`:""}: ${memText(m)}`).join("\n");
-  const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user});
+  const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user})+"\n\n"+langDirective();
   let out;
   try{
     out=await chatCompletion([
@@ -24256,7 +24339,7 @@ async function genQuery(userText,chat){
   const recent=chat.messages.filter(m=>m.role!=='system'&&!m.sysError).slice(-4)
     .map(m=>`${m.role==='user'?state.user:(m.speaker||p.name)}: ${m.content}`).join("\n");
   const out=await chatCompletion([
-    {role:"system",content:up("queryGen")},
+    {role:"system",content:up("queryGen")+"\n\nWrite the query in "+storyLangName()+" — the story's selected language, which the memories are written in (this overrides any other language instruction above)."},
     {role:"user",content:`Recent conversation:\n${recent}\n\n${state.user}'s newest message:\n${userText}`}
   ],state.mcModel||state.memModel||state.model,{temp:fnTemp("mc",0.3),max:fnTok("mc",120),dbg:"Memory query generator"});
   return (out||"").replace(/```/g,"").trim();
@@ -27211,7 +27294,7 @@ function buildCallInstructions(callee, chat){
     if(mems.length){ const lines=mems.map(m=>`- ${(typeof memInjectText==='function'?memInjectText(m):(m.content||''))}`).filter(Boolean); if(lines.length) blocks.push(`# YOUR RECENT DIARY (background — shapes how you act; do NOT recite)\n${lines.join("\n")}`); }
   }catch(e){}
   blocks.push(`# HOW YOU SPEAK (this is a live spoken conversation)
-Speak naturally and warmly in short spoken sentences. Reply in the SAME language ${state.user} speaks (Turkish if they speak Turkish). Keep replies to 1–3 sentences so the conversation flows.
+Speak naturally and warmly in short spoken sentences. Reply in perfect, natural, everyday ${storyLangName()} — the story's selected language (this overrides any other language instruction). Keep replies to 1–3 sentences so the conversation flows.
 
 VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you direct with bracketed cues:
 1. Begin EACH sentence with its OWN bracketed delivery instruction in ENGLISH describing HOW to say that sentence, e.g. [say warmly] then the sentence, then [say with a teasing grin] before the next one. Each sentence gets its own tone so the emotion can shift naturally across the reply. The bracket directs the voice and is never spoken aloud.

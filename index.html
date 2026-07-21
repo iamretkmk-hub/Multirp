@@ -890,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -19089,11 +19089,10 @@ function galVidSelectAll(){
 /* ===== v27 — SCENES (user-curated ordered video playlists, per character) ===== */
 function sceneById(id){ return (state.scenes||[]).find(s=>s&&s.id===id)||null; }
 function createScene(characterName){
-  const name=prompt("Name the scene:","Scene "+((state.scenes||[]).length+1));
-  if(name==null)return null;
+  // No naming prompt() — the scene editor opens right below with an editable name field.
   const uni=curUniverseObj();
   const p=(state.personas||[]).find(x=>x&&x.name===characterName);
-  const s={id:"scn_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),name:(name.trim()||"Scene"),
+  const s={id:"scn_"+Date.now()+"_"+Math.random().toString(36).slice(2,6),name:"Scene "+((state.scenes||[]).length+1),
     characterId:p?p.id:null,characterName:characterName||"",universeId:uni?uni.id:null,clips:[],created:Date.now()};
   state.scenes=state.scenes||[]; state.scenes.push(s);
   // clips marked in the gallery flow straight into the new scene
@@ -22573,6 +22572,7 @@ function openQuestsModal(){
             ${askLine}${prog}
             ${q.status!=="active"&&q.result?`<div class="desc" style="color:${q.status==="failed"?"#c0556b":"var(--good)"};opacity:.85">${icon("check")} ${esc(q.result)}</div>`:""}</div>
           <div class="qbtns">
+            <button class="btn sec small" title="Edit" onclick="charQuestEditUI('${q.id}')">${icon("edit")}</button>
             ${q.status==="active"?`<button class="btn sec small" title="Mark this pursuit resolved" onclick="charQuestMarkDoneUI('${q.id}')">${icon("check")}</button>`:""}
             <button class="btn danger sec small" title="Delete" onclick="charQuestDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
           </div>
@@ -23284,13 +23284,104 @@ Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if no
   }catch(e){ try{ console.warn("[reconcileCharQuestsForDay] bailed:",e); }catch(_){} }
 }
 // Manual controls (Quests modal).
+/* v25.8 — the resolve button opens a small card instead of a bare prompt(); it can also mark the
+   pursuit FAILED (the engine always could — charQuestComplete(failed) — but the popup couldn't). */
+function _closeCharQuestResolve(){ const m=document.getElementById('cqResolveModal'); if(m)m.remove(); }
 function charQuestMarkDoneUI(id){
   const u=_questsUni(); if(!u)return;
   const q=_charQuests(u).find(x=>x&&x.id===id); if(!q||q.status!=="active")return;
-  const r=prompt("How did it end? (one past-tense sentence — becomes the result)","");
-  if(r===null)return;
-  charQuestComplete(curChat(),u,q,(curChat()&&curChat().gameDay)||1,false,r.trim());
+  _closeCharQuestResolve();
+  const m=document.createElement('div'); m.id="cqResolveModal"; m.className="modal show";
+  m.innerHTML=`<button class="x" onclick="_closeCharQuestResolve()">×</button>
+   <div class="card editCard">
+     <h3>${icon("check")} Resolve — ${esc(q.holderName||"?")}'s pursuit</h3>
+     <div class="desc"><b>${esc(q.title||"")}</b>${q.desc?` — ${esc(q.desc)}`:""}</div>
+     <div><label>How did it end? <span class="desc" style="font-weight:400">(one past-tense sentence — becomes the result, a narrator beat, and the holder's memory)</span></label>
+       <textarea class="fld" id="cqResult" style="min-height:64px"></textarea></div>
+     <div class="row" style="margin-top:4px">
+       <button class="btn sec" onclick="_closeCharQuestResolve()">Cancel</button>
+       <button class="btn danger sec" onclick="charQuestResolveSave('${q.id}',true)">Failed</button>
+       <button class="btn" onclick="charQuestResolveSave('${q.id}',false)">${icon("check")} Achieved</button>
+     </div>
+   </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestResolve(); });
+  document.body.appendChild(m);
+}
+function charQuestResolveSave(id,failed){
+  const u=_questsUni(); if(!u)return;
+  const q=_charQuests(u).find(x=>x&&x.id===id); if(!q||q.status!=="active")return;
+  const r=(document.getElementById('cqResult')?document.getElementById('cqResult').value:"").trim();
+  _closeCharQuestResolve();
+  charQuestComplete(curChat(),u,q,(curChat()&&curChat().gameDay)||1,!!failed,r);
   _refreshQuestViews();
+}
+/* v25.8 — character quests get the same full edit card as player quests: every aspect of the
+   pursuit is editable. Status changes here just edit the record — the ✓ resolve card is the
+   flow that fires the narrated completion + memory. */
+function _closeCharQuestEdit(){ const m=document.getElementById('cqEditModal'); if(m)m.remove(); }
+function charQuestEditUI(id){
+  const u=_questsUni(); if(!u)return;
+  const q=_charQuests(u).find(x=>x&&x.id===id); if(!q)return;
+  _closeCharQuestEdit();
+  const tgt=q.targetId==="__user__"?(state.user||"you"):(q.targetName||"?");
+  const m=document.createElement('div'); m.id="cqEditModal"; m.className="modal show";
+  m.innerHTML=`<button class="x" onclick="_closeCharQuestEdit()">×</button>
+   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch">
+     <h3>${icon("edit")} Edit pursuit — ${esc(q.holderName||"?")} → ${esc(tgt)}</h3>
+     <div><label>Title</label><input type="text" class="fld" id="cqeTitle"></div>
+     <div><label>Description</label><textarea class="fld" id="cqeDesc" style="min-height:70px"></textarea></div>
+     <div><label>Motive (why they want it)</label><textarea class="fld" id="cqeMotive" style="min-height:56px"></textarea></div>
+     <div><label>Ask (what they want from ${esc(tgt)})</label><textarea class="fld" id="cqeAsk" style="min-height:56px"></textarea></div>
+     <div style="display:flex;gap:6px;flex-wrap:wrap">
+       <div style="flex:1;min-width:130px"><label>Approach</label>
+         <select class="fld" id="cqeApproach"><option value="either">Either</option><option value="in_person">In person</option><option value="text">Text</option></select></div>
+       <div style="flex:1;min-width:130px"><label>Status</label>
+         <select class="fld" id="cqeStatus"><option value="active">Active</option><option value="done">Done</option><option value="failed">Failed</option></select></div>
+     </div>
+     <div style="display:flex;gap:6px;flex-wrap:wrap">
+       <div style="flex:1;min-width:130px"><label>Ask gate (when it can fire)</label>
+         <select class="fld" id="cqeGateType"><option value="">No gate</option><option value="user_alone">When the player is alone</option><option value="with_char">When with a character</option><option value="at_location">At a location</option></select></div>
+       <div style="flex:1;min-width:130px"><label>Gate character / place</label><input type="text" class="fld" id="cqeGateName"></div>
+     </div>
+     <div><label>Result (when resolved)</label><input type="text" class="fld" id="cqeResult" placeholder="How it ended, one line"></div>
+     <div><label>Progress log <span class="desc" style="font-weight:400">— one entry per line, "day N: what happened"</span></label>
+       <textarea class="fld" id="cqeProg" style="min-height:80px"></textarea></div>
+     <div class="row" style="margin-top:4px">
+       <button class="btn sec" onclick="_closeCharQuestEdit()">Cancel</button>
+       <button class="btn" onclick="charQuestEditSave('${q.id}')">${icon("save")} Save</button>
+     </div>
+   </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestEdit(); });
+  document.body.appendChild(m);
+  // Values go in via the DOM so quotes/markup in quest text can't break the markup.
+  const v=(eid,val)=>{ const el=document.getElementById(eid); if(el)el.value=val; };
+  v("cqeTitle",q.title||""); v("cqeDesc",q.desc||""); v("cqeMotive",q.motive||"");
+  v("cqeAsk",q.ask||""); v("cqeApproach",q.approach||"either"); v("cqeStatus",q.status||"active");
+  v("cqeGateType",(q.gate&&q.gate.type)||""); v("cqeGateName",(q.gate&&(q.gate.charName||q.gate.locationName))||"");
+  v("cqeResult",q.result||"");
+  v("cqeProg",(q.progress||[]).map(p=>`day ${p.day}: ${p.text}`).join("\n"));
+}
+function charQuestEditSave(id){
+  const u=_questsUni(); if(!u)return;
+  const q=_charQuests(u).find(x=>x&&x.id===id); if(!q)return;
+  const gv=eid=>{ const el=document.getElementById(eid); return el?String(el.value):""; };
+  const t=gv("cqeTitle").trim(); if(t)q.title=t.slice(0,90);
+  q.desc=gv("cqeDesc").trim().slice(0,500);
+  q.motive=gv("cqeMotive").trim().slice(0,300);
+  q.ask=gv("cqeAsk").trim().slice(0,300);
+  {const ap=gv("cqeApproach"); if(["either","in_person","text"].includes(ap))q.approach=ap;}
+  {const st=gv("cqeStatus"); if(["active","done","failed"].includes(st)){ q.status=st; if(st==="active")q.completedDay=null; }}
+  {const gt=gv("cqeGateType"), gn=gv("cqeGateName").trim().slice(0,60);
+   if(!gt)q.gate=null;
+   else q.gate=Object.assign({},q.gate,{type:gt,
+     charName:gt==="with_char"?gn:undefined, locationName:gt==="at_location"?gn:undefined});}
+  q.result=gv("cqeResult").trim().slice(0,240);
+  {const curDay=(curChat()&&curChat().gameDay)||1;
+   q.progress=gv("cqeProg").split("\n").map(s=>s.trim()).filter(Boolean).map(s=>{
+     const mm=s.match(/^day\s+(\d+)\s*:\s*(.*)$/i);
+     return mm?{day:parseInt(mm[1],10),text:mm[2].trim()}:{day:curDay,text:s};
+   }).filter(p=>p.text).slice(-30);}
+  persistUniverses(); _closeCharQuestEdit(); toast("Character quest updated"); _refreshQuestViews();
 }
 function charQuestDeleteUI(id){
   const u=_questsUni(); if(!u)return;

@@ -890,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.10</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -10126,8 +10126,44 @@ async function _fireArrival(chat,subId,item){
       // v23.4 — the opening line knows the quest's SUBSTANCE (desc), not just its title, and knows
       // who else of the quest's cast stands here — so the conversation starts from the matter itself.
       const others=(Array.isArray(item.castNames)?item.castNames:[]).filter(n=>n&&n.toLocaleLowerCase("tr")!==p.name.toLocaleLowerCase("tr"));
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
-      lineP=chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name}).catch(()=>"");
+      // v25.10 — the arrival line now carries the character's OWN context — relationship sheet,
+      // fast+slow feelings toward the player, and retrieved memories (the same data the scene and
+      // text-reply payloads get). Without it the opening line came from the bare bio and read like
+      // a stranger wearing the character's name.
+      lineP=(async()=>{
+        const X=[];
+        try{ const sheet=relSheetBlockFull(p); if(sheet)X.push(`# YOUR RELATIONSHIPS (who the people in your life are to you)\n${sheet}`); }catch(e){}
+        try{
+          if(state.relOn){
+            const o=relObj(chat,p.id,"__user__");
+            const considered=relConsideredProse(o), momentary=relMomentaryProse(o);
+            let rel=`# HOW YOU FEEL ABOUT ${state.user}\nOverall you are ${relTag(o)} toward them.`;
+            if(considered)rel+=` Considered: ${considered}.`;
+            if(o.stNote&&o.stNote.trim())rel+=`\nRight now: ${o.stNote.trim()}`;
+            else if(momentary)rel+=` In the moment: ${momentary}.`;
+            try{ const _t=relImpulseTension(o);
+              if(_t==='desire')rel+=` ${blkTpl("feel_tension_desire")}`;
+              else if(_t==='anger')rel+=` ${blkTpl("feel_tension_anger")}`;
+              else if(_t==='fear')rel+=` ${blkTpl("feel_tension_fear")}`;
+            }catch(_){}
+            X.push(rel);
+          }
+        }catch(e){}
+        try{
+          if(state.mem && state.memory.length){
+            const q=[item.title,item.desc].filter(Boolean).map(String).join(" — ")||state.user;
+            const r=await retrieveMemories(q,chat,p.id);
+            const rec=(r.recent||[]).map(m=>memInjectText(m)).filter(Boolean);
+            const dia=(r.diary||[]).map(m=>memInjectText(m)).filter(Boolean);
+            const lt=(r.longterm||[]).map(m=>memInjectText(m)).filter(Boolean);
+            if(rec.length)X.push("# RECENT MEMORIES (yours — shape your tone, don't recite)\n"+rec.map(t=>"- "+t).join("\n"));
+            if(dia.length)X.push("# YOUR DIARY (earlier days)\n"+dia.map(t=>"- "+t).join("\n"));
+            if(lt.length)X.push("# YOUR LONG-TERM MEMORY\n"+lt.map(t=>"- "+t).join("\n"));
+          }
+        }catch(e){}
+        const csys=`You are ${p.name}.\n${charBioBlock(p)}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+        return chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
+      })().catch(()=>"");
     }
     const [nout,cout]=await Promise.all([narrP,lineP]);
     const narr=String(nout||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");

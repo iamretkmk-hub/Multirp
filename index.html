@@ -890,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.10</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -10126,8 +10126,44 @@ async function _fireArrival(chat,subId,item){
       // v23.4 — the opening line knows the quest's SUBSTANCE (desc), not just its title, and knows
       // who else of the quest's cast stands here — so the conversation starts from the matter itself.
       const others=(Array.isArray(item.castNames)?item.castNames:[]).filter(n=>n&&n.toLocaleLowerCase("tr")!==p.name.toLocaleLowerCase("tr"));
-      const csys=`You are ${p.name}.\n${charBioBlock(p)}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
-      lineP=chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name}).catch(()=>"");
+      // v25.10 — the arrival line now carries the character's OWN context — relationship sheet,
+      // fast+slow feelings toward the player, and retrieved memories (the same data the scene and
+      // text-reply payloads get). Without it the opening line came from the bare bio and read like
+      // a stranger wearing the character's name.
+      lineP=(async()=>{
+        const X=[];
+        try{ const sheet=relSheetBlockFull(p); if(sheet)X.push(`# YOUR RELATIONSHIPS (who the people in your life are to you)\n${sheet}`); }catch(e){}
+        try{
+          if(state.relOn){
+            const o=relObj(chat,p.id,"__user__");
+            const considered=relConsideredProse(o), momentary=relMomentaryProse(o);
+            let rel=`# HOW YOU FEEL ABOUT ${state.user}\nOverall you are ${relTag(o)} toward them.`;
+            if(considered)rel+=` Considered: ${considered}.`;
+            if(o.stNote&&o.stNote.trim())rel+=`\nRight now: ${o.stNote.trim()}`;
+            else if(momentary)rel+=` In the moment: ${momentary}.`;
+            try{ const _t=relImpulseTension(o);
+              if(_t==='desire')rel+=` ${blkTpl("feel_tension_desire")}`;
+              else if(_t==='anger')rel+=` ${blkTpl("feel_tension_anger")}`;
+              else if(_t==='fear')rel+=` ${blkTpl("feel_tension_fear")}`;
+            }catch(_){}
+            X.push(rel);
+          }
+        }catch(e){}
+        try{
+          if(state.mem && state.memory.length){
+            const q=[item.title,item.desc].filter(Boolean).map(String).join(" — ")||state.user;
+            const r=await retrieveMemories(q,chat,p.id);
+            const rec=(r.recent||[]).map(m=>memInjectText(m)).filter(Boolean);
+            const dia=(r.diary||[]).map(m=>memInjectText(m)).filter(Boolean);
+            const lt=(r.longterm||[]).map(m=>memInjectText(m)).filter(Boolean);
+            if(rec.length)X.push("# RECENT MEMORIES (yours — shape your tone, don't recite)\n"+rec.map(t=>"- "+t).join("\n"));
+            if(dia.length)X.push("# YOUR DIARY (earlier days)\n"+dia.map(t=>"- "+t).join("\n"));
+            if(lt.length)X.push("# YOUR LONG-TERM MEMORY\n"+lt.map(t=>"- "+t).join("\n"));
+          }
+        }catch(e){}
+        const csys=`You are ${p.name}.\n${charBioBlock(p)}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+        return chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
+      })().catch(()=>"");
     }
     const [nout,cout]=await Promise.all([narrP,lineP]);
     const narr=String(nout||"").trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g,"");
@@ -15637,13 +15673,35 @@ function notePresence(chat,entered,exited,narration){
   const enteredIds=(entered||[]).map(nameToId).filter(Boolean);
   const exitedIds=(exited||[]).map(nameToId).filter(Boolean);
   const narr=(narration||"").trim();
-  chat.messages.push({mid:newMid(),role:"assistant",presenceNote:true,sysError:true,
+  const note={mid:newMid(),role:"assistant",presenceNote:true,sysError:true,
     present:presentIds(chat).slice(),   // v19.82: who could perceive this (stamped for future witnessed-scoping; the filter currently uses the arrival cut)
     content: narr ? narr : "— "+parts.join(" · ")+" —",
     moveNarr: narr?true:false,          // renderer shows narrated moves as prose, terse notes as a subtle line
     terse: "— "+parts.join(" · ")+" —", // keep the plain marker for any logic that scans note text
     enteredIds, exitedIds,
-    img:null,imgState:"idle",vidState:"idle",video:null});
+    img:null,imgState:"idle",vidState:"idle",video:null};
+  if(_mergeIntoLastPresenceNote(chat,note))return;
+  chat.messages.push(note);
+}
+// v25.10 — movement notes MERGE instead of flooding. When several characters move in the same beat
+// their notes land back-to-back; if the LAST message is already a presence/move note, fold the new
+// one into it — content appended, entered/exited ids concatenated (both are consumed as sets by the
+// arrival-cut/witness logic, so concatenation is structurally identical to separate notes) — and the
+// on-screen bubble is refreshed in place. Returns true if merged (caller must NOT push).
+function _mergeIntoLastPresenceNote(chat,add){
+  try{
+    const last=chat.messages&&chat.messages[chat.messages.length-1];
+    if(!last||!last.presenceNote)return false;
+    last.content=String(last.content||"").trim()+"\n\n"+String(add.content||"").trim();
+    if(add.moveNarr)last.moveNarr=true;   // any narrated part → render the merged bubble as prose
+    if(add.terse)last.terse=(last.terse?last.terse+"\n":"")+add.terse;
+    if(add.enteredIds&&add.enteredIds.length)last.enteredIds=(last.enteredIds||[]).concat(add.enteredIds);
+    if(add.exitedIds&&add.exitedIds.length)last.exitedIds=(last.exitedIds||[]).concat(add.exitedIds);
+    try{ last.present=presentIds(chat).slice(); }catch(e){}
+    // Bump the already-rendered bubble: re-render it in place so the merged beat shows immediately.
+    try{ const node=document.querySelector('[data-mid="'+last.mid+'"]'); if(node&&node.parentNode)node.parentNode.replaceChild(bubble(last),node); }catch(e){}
+    return true;
+  }catch(e){ return false; }
 }
 // Where a character physically is right now, as a place NAME (best-effort) — for move narration.
 // Prefers their live world position, then their home/residency, else "" (unknown → narrated vaguely).
@@ -15693,6 +15751,40 @@ async function narrateCharMove(chat,mover,opts){
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     const pref=mover.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
     beat=beat.replace(new RegExp("^\\s*"+pref+"\\s*:\\s*","i"),"").trim();
+    return beat;
+  }catch(e){ return ""; }
+}
+// v25.10 — ONE movement beat for SEVERAL characters moving in the same moment. The old path made a
+// separate narrateCharMove call per mover with the SAME context (same why/from/to), so a batch of
+// movers came back as a screenful of near-identical narrations. A single call sees everyone at once,
+// so each mover gets their own distinct action true to who they are. `movers` = [{p, fromName,
+// toName}]. Returns "" on any failure so callers fall back to the terse note.
+async function narrateCharMoveGroup(chat,movers,opts){
+  opts=opts||{};
+  if(!chat||!Array.isArray(movers)||!movers.length||!state.key)return "";
+  if(movers.length===1)return narrateCharMove(chat,movers[0].p,{dir:opts.dir||"submove",fromName:movers[0].fromName,toName:movers[0].toName,toDesc:movers[0].toDesc,why:opts.why});
+  try{
+    const dir=opts.dir||"submove";
+    const what = dir==="exit"  ? "They are all LEAVING the scene."
+               : dir==="enter" ? "They are all ARRIVING into the scene."
+               :                 "They are each crossing to another area within the same place.";
+    const lines=movers.map(m=>`- ${m.p.name}${m.p.personality?` — ${String(m.p.personality).slice(0,90)}`:""}: ${m.fromName||"(unknown — imply it, don't invent a place)"} → ${m.toName||"(elsewhere)"}`);
+    const why=(opts.why||"").trim();
+    const ctx=[
+      `${movers.length} characters are moving at the SAME moment:`,
+      lines.join("\n"),
+      what,
+      why?`Why they are moving now: ${why}`:``,
+      `Time: Day ${chat.gameDay||1}, ${chatPeriod(chat)}`,
+      `Write ONE short beat (${Math.min(4,movers.length+1)} sentences at most) covering ALL of them together. Give EACH character a DISTINCT action, manner or detail true to who they are — never recycle the same phrasing between two people. No dialogue.`
+    ].filter(Boolean).join("\n");
+    const sys=fillTpl(up("charMovePrompt"),{user:state.user});
+    const out=await chatCompletion([
+      {role:"system",content:sys+"\n\n"+langDirective()},
+      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}
+    ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
+    let beat=(out||"").trim().replace(/^["']|["']$/g,"");
+    beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     return beat;
   }catch(e){ return ""; }
 }
@@ -18350,6 +18442,10 @@ async function runPresenceTracker(chat){
     // so they remain a regular for gossip and can drift back later.
     if(hereLoc && j.move && typeof j.move==="object" && !Array.isArray(j.move)){
       if(!chat.subPos)chat.subPos={};
+      // v25.10 — collect ALL area moves FIRST, then narrate them as ONE beat (one call, one bubble).
+      // The old per-character loop made a separate call per mover with the same context, flooding
+      // the window with near-identical narrations when several people moved in the same turn.
+      const movers=[];
       for(const nm in j.move){
         const p=find(nm); if(!p||!present.some(o=>o.toLowerCase()===String(nm).toLowerCase()))continue;
         const sid=subByName(hereLoc,j.move[nm]); if(!sid)continue;
@@ -18357,15 +18453,19 @@ async function runPresenceTracker(chat){
         chat.subPos[p.id]=sid;
         const sName=(subById(hereLoc,sid)||{}).name||"another area";
         const prevName=(subById(hereLoc,prev)||{}).name||"";
+        movers.push({p, fromName:prevName?`${hereLoc.name} — ${prevName}`:hereLoc.name,
+          toName:`${hereLoc.name} — ${sName}`, sName});
+      }
+      if(movers.length){
         // RP-triggered area move → the recent exchange is the "why". Narrate it short; fall back to
         // the terse stage direction if the model fails.
-        const narr=await narrateCharMove(chat,p,{dir:"submove",
-          fromName:prevName?`${hereLoc.name} — ${prevName}`:hereLoc.name,
-          toName:`${hereLoc.name} — ${sName}`, why:castConvoText(chat,3).slice(-500)});
-        chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+        const narr=await narrateCharMoveGroup(chat,movers,{dir:"submove",why:castConvoText(chat,3).slice(-500)});
+        const terse=movers.map(m=>`— ${m.p.name} steps away to the ${m.sName} —`).join("\n");
+        const note={mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
           moveNarr:narr?true:false,
-          content: narr ? narr : `— ${p.name} steps away to the ${sName} —`,
-          img:null,imgState:"idle",vidState:"idle",video:null});
+          content: narr||terse, terse,
+          img:null,imgState:"idle",vidState:"idle",video:null};
+        if(!_mergeIntoLastPresenceNote(chat,note))chat.messages.push(note);
         persistChats();appendNewBubbles();updateChatHeader();
       }
     }
@@ -18398,20 +18498,25 @@ async function runPresenceTracker(chat){
     // NOT auto-speak. People enter rooms without announcing themselves; staying silent also keeps
     // them a bystander (forming a gist memory, not a full participant transcript), which is what the
     // gossip system feeds on. They speak when the player engages them or the router picks them.
-    for(const p of enter){
-      // Where they came FROM — read their prior world position BEFORE we overwrite it below.
-      const cameFrom=charPlaceName(chat,p);
+    if(enter.length){
+      // v25.10 — simultaneous arrivals are narrated as ONE beat and recorded in ONE presence note
+      // (notePresence natively takes a name list), instead of a bubble per entrant with the same
+      // narration. Where each came FROM is read BEFORE their world position is overwritten below.
       const hereLocObj=chat.locationId?locById(chat.locationId):null;
       const toName=(hereLocObj&&hereLocObj.name)||(chat&&chat.location)||"";
+      const toDesc=(hereLocObj&&hereLocObj.description)||"";
       // RP-triggered arrival → the recent exchange is the "why".
-      const narr=await narrateCharMove(chat,p,{dir:"enter",fromName:cameFrom,
-        toName, toDesc:(hereLocObj&&hereLocObj.description)||"", why:castConvoText(chat,3).slice(-500)});
-      applyPresence(chat,[p.name],[]);
-      notePresence(chat,[p.name],[],narr);
-      if(chat.worldPositions&&chat.locationId)chat.worldPositions[p.id]=chat.locationId; // now here
-      if(chat.locationId){ if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=curSubId(chat); } // join the player's area
+      const narr=await narrateCharMoveGroup(chat,
+        enter.map(p=>({p, fromName:charPlaceName(chat,p), toName, toDesc})),
+        {dir:"enter", why:castConvoText(chat,3).slice(-500)});
+      applyPresence(chat,enter.map(p=>p.name),[]);
+      notePresence(chat,enter.map(p=>p.name),[],narr);
+      for(const p of enter){
+        if(chat.worldPositions&&chat.locationId)chat.worldPositions[p.id]=chat.locationId; // now here
+        if(chat.locationId){ if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=curSubId(chat); } // join the player's area
+        result.entered.push(p);   // present now, but SILENT — not a "beat", so don't set lastBeat
+      }
       persistChats();appendNewBubbles();updateChatHeader();
-      result.entered.push(p);   // present now, but SILENT — not a "beat", so don't set lastBeat
     }
   }catch(e){console.warn("[presence] presence tracker failed — presence unchanged this turn:",e&&e.message||e);}
   return result;

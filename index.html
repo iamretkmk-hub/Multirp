@@ -890,7 +890,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.10</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v25.12</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1076,6 +1076,11 @@
             <label style="margin-top:6px">Image model rules — top to bottom = priority. Use ▲▼ to reorder. Each rule picks its own provider &amp; model.</label>
             <div id="imgRuleList" style="display:flex;flex-direction:column;gap:10px"></div>
             <button class="btn sec small" onclick="addRule('img')" style="margin-top:4px">＋ Add image rule</button>
+          </div>
+          <div>
+            <label>Guidance scale / CFG — default (<span id="imgGuidanceVal">auto</span>)</label>
+            <input type="range" id="setImgGuidance" min="0" max="12" step="0.5" value="0" style="width:100%">
+            <div class="desc">How hard the model is pushed to obey the prompt. 0 = auto (each provider's own default). Any rule with its own guidance overrides this. <b>Z-Image rejects a negative prompt at CFG ≤ 1</b>, so z-image models are raised above it automatically when needed — set a value here only if you want to steer it yourself (turbo/distilled: 1–3, regular models: 5–8).</div>
           </div>
         </div>
         <div class="card">
@@ -2098,7 +2103,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   theme:"sm_theme",font:"sm_font",streamReveal:"sm_streamreveal",revealCps:"sm_revealcps",uiScale:"sm_uiscale",chats:"sm_chats",curChat:"sm_curchat",
   personas:"sm_personas",curPersona:"sm_curpersona",universes:"sm_universes",curUniverse:"sm_curuniverse",memory:"sm_memory",images:"sm_images",videos:"sm_videos",onboarded:"sm_onboarded",
   // ModelsLab + smart routing
-  imgRules:"sm_imgrules",vidRules:"sm_vidrules",imgModelMigration:"sm_imgmodelmig",routeOn:"sm_routeon",routerModel:"sm_routermodel",routerPrompt:"sm_routerprompt",steps:"sm_steps",
+  imgRules:"sm_imgrules",vidRules:"sm_vidrules",imgModelMigration:"sm_imgmodelmig",routeOn:"sm_routeon",routerModel:"sm_routermodel",routerPrompt:"sm_routerprompt",steps:"sm_steps",imgGuidance:"sm_imgguidance",
   fnCfg:"sm_fncfg",
   // Memory condenser (Stage 4)
   condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",memMaxBeforeCondense:"sm_memmaxcondense",memCondenseStart:"sm_memcondensestart",embedOn:"sm_embedon",embedKey:"sm_embedkey",embedUrl:"sm_embedurl",embedModel:"sm_embedmodel",memWSem:"sm_memwsem",memWPpl:"sm_memwppl",memWLoc:"sm_memwloc",memWAct:"sm_memwact",memWRec:"sm_memwrec",memWEmo:"sm_memwemo",memWImp:"sm_memwimp",memLongtermCount:"sm_memltcount",
@@ -4627,6 +4632,9 @@ function loadState(){
     routerModel:store.raw(K.routerModel,"deepseek/deepseek-v4-flash"),
     routerPrompt:store.raw(K.routerPrompt,DEFAULT_ROUTER),
     steps:+store.raw(K.steps,25),
+    // v25.11 — global CFG / guidance-scale default. 0 = auto (send nothing; each provider uses its
+    // own default). A rule's own guidance overrides this; see imgGuidance().
+    imgGuidance:+store.raw(K.imgGuidance,0)||0,
     fnCfg:store.get(K.fnCfg,{"gm": {"temp": null, "tok": 1600}, "mc": {"temp": 0.8, "tok": 1000}, "rewriter": {"tok": 4000}, "mem": {"tok": 4000}, "unigen": {"tok": 4000}})||{},
     // v19 — per-payload block ordering: {solo:[blockIds…], multi:[…], gm:[…]}. Absent/empty = the
     // default (current hardcoded) order, so old saves behave byte-identically with no migration.
@@ -5577,26 +5585,134 @@ function flushPersistChats(){ if(_persistChatsTimer){ clearTimeout(_persistChats
 function persistPersonas(){mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
 function persistUniverses(){mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
 function persistMemory(){mediaDB.kvSet("memory",state.memory);}
+/* ===== v25.11 — DURABLE GALLERY MEDIA =========================================
+   Generated images and videos used to be stored as the PROVIDER'S REMOTE URL (fal / AtlasCloud /
+   ModelsLab CDN links). Those links expire after a while, so the gallery quietly went blank — the
+   records were all still there, the pictures behind them were gone. On top of that the old
+   persistence evicted history to bound memory: only the newest 60 base64 images and the newest 20
+   clips were ever written back.
+
+   Now the BYTES of every gallery image and video are copied into IndexedDB as a Blob under
+   "gmedia:<record id>" the first time the record is seen, and each record is re-pointed at an
+   object URL built from those bytes. The record itself is tiny metadata, so nothing is capped or
+   evicted any more — the gallery keeps its whole history and survives both reloads and expired
+   links. The original link is kept in `remote` as a fallback for anything CORS blocked us from
+   fetching (those keep rendering live exactly as they did before, until they expire).
+
+   Object URLs pin their blob for the session, so boot only materializes a recent window; anything
+   older is hydrated on demand when the gallery actually renders it (ensureGalleryUrls). */
+const _gmKey=id=>"gmedia:"+id;
+const GM_BOOT_IMAGES=150, GM_BOOT_VIDEOS=60;   // how many object URLs to materialize at boot
+const _gmCaptured=new Set();   // record ids whose bytes are stored (or are being stored) this session
+const _gmObjUrls=new Map();    // record id -> object URL handed out this session (revoked on delete)
+function _dataURLtoBlob(d){
+  try{
+    const m=/^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(d); if(!m)return null;
+    const mime=m[1]||"application/octet-stream";
+    let bytes;
+    if(m[2]){ const bin=atob(m[3]); bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i); }
+    else bytes=new TextEncoder().encode(decodeURIComponent(m[3]));
+    return new Blob([bytes],{type:mime});
+  }catch(e){ return null; }
+}
+function _gmSetUrl(rec,blob){
+  const old=_gmObjUrls.get(rec.id);
+  if(old){ try{ URL.revokeObjectURL(old); }catch(e){} }
+  const ourl=URL.createObjectURL(blob);
+  _gmObjUrls.set(rec.id,ourl);
+  rec.url=ourl; rec.stored=true; rec.evicted=false;
+  return ourl;
+}
+// Copy a record's pixels/frames into IndexedDB, then point the record at those bytes. Best-effort:
+// a CORS-blocked provider URL simply stays remote-only and keeps rendering live, as it did before.
+async function captureGalleryMedia(rec){
+  if(!rec||!rec.id)return false;
+  if(_gmCaptured.has(rec.id))return false;
+  const url=(typeof rec.url==="string"&&rec.url)||rec.remote||"";
+  if(!url||url.startsWith("blob:"))return false;   // nothing to fetch / already our own object URL
+  _gmCaptured.add(rec.id);
+  try{
+    let blob=null;
+    if(url.startsWith("data:")) blob=_dataURLtoBlob(url);
+    else if(/^https?:/.test(url)){ const r=await fetch(url); if(r&&r.ok) blob=await r.blob(); }
+    if(!blob||!blob.size){ _gmCaptured.delete(rec.id); return false; }
+    if(!(await mediaDB.kvSet(_gmKey(rec.id),blob))){ _gmCaptured.delete(rec.id); return false; }
+    if(/^https?:/.test(url)) rec.remote=url;   // keep the link as a fallback for other devices
+    _gmSetUrl(rec,blob);                       // also frees a heavy base64 string from the record
+    _gmPersistSoon();                          // rewrite the record now that it's slim + flagged
+    return true;
+  }catch(e){ _gmCaptured.delete(rec.id); return false; }
+}
+// Captures finish after the record was already written, so re-persist once the dust settles (the
+// record is slimmer and carries `stored` now). Coalesced — a burst of captures costs one write.
+let _gmPersistTimer=null;
+function _gmPersistSoon(){
+  if(_gmPersistTimer)return;
+  _gmPersistTimer=setTimeout(()=>{ _gmPersistTimer=null;
+    try{ mediaDB.putAll("images",(state.images||[]).filter(x=>x&&x.id).map(_slimMediaRec)); }catch(e){}
+    try{ mediaDB.putAll("videos",(state.videos||[]).filter(v=>v&&v.id).map(_slimMediaRec)); }catch(e){}
+  },1500);
+}
+// Persisted shape: never write a session-only blob: URL (dead after reload), and once the bytes are
+// stored, drop any heavy base64 from the record — the blob in IndexedDB is the copy that matters.
+function _slimMediaRec(r){
+  const o=Object.assign({},r);
+  if(typeof o.url==="string" && (o.url.startsWith("blob:") || (o.stored&&o.url.startsWith("data:"))))
+    o.url=o.remote||"";
+  return o;
+}
+// Background capture pass for anything not stored yet (new records, and legacy ones whose links
+// are still alive). Guarded by _gmCaptured, so repeat calls after the first are free.
+function _gmCaptureAll(list){
+  (list||[]).forEach(r=>{ if(r&&r.id&&!r.stored) captureGalleryMedia(r); });
+}
+// Hydrate a specific set of records from their stored bytes (used on demand by the gallery for
+// history outside the boot window). Returns how many were newly materialized.
+async function ensureGalleryUrls(list){
+  let n=0;
+  for(const r of (list||[])){
+    if(!r||!r.id||r.url)continue;
+    if(!r.stored)continue;
+    let blob=null; try{ blob=await mediaDB.kvGet(_gmKey(r.id)); }catch(e){}
+    if(blob&&blob.size){ _gmSetUrl(r,blob); n++; }
+    else if(r.remote){ r.url=r.remote; n++; }   // bytes missing → fall back to the link
+  }
+  return n;
+}
+// Sweep stored bytes whose record is gone (bulk deletes, universe resets), so IndexedDB doesn't
+// accumulate orphaned blobs. Cheap: one key listing, then deletes only for what no longer exists.
+async function pruneGalleryMedia(){
+  try{
+    const live=new Set([...(state.images||[]),...(state.videos||[])].filter(r=>r&&r.id).map(r=>r.id));
+    const keys=await mediaDB.kvKeys();
+    for(const k of keys){
+      if(typeof k!=="string"||!k.startsWith("gmedia:"))continue;
+      const id=k.slice(7);
+      if(!live.has(id)) dropGalleryMedia(id);
+    }
+  }catch(e){}
+}
+// Drop a record's stored bytes (called when the user deletes the image/video).
+function dropGalleryMedia(id){
+  if(!id)return;
+  const ourl=_gmObjUrls.get(id);
+  if(ourl){ try{ URL.revokeObjectURL(ourl); }catch(e){} _gmObjUrls.delete(id); }
+  _gmCaptured.delete(id);
+  try{ mediaDB.kvDelete(_gmKey(id)); }catch(e){}
+}
 function persistImages(){
-  // Persist to IndexedDB (large quota). Durable remote-URL images (http(s)) are tiny (just the
-  // link) and must ALL be kept so the gallery survives reload. Only heavy base64 data-URLs are
-  // capped — keep the newest 60 of those, since they're ~1MB each.
-  const isHeavy=u=>typeof u==="string"&&u.startsWith("data:");
-  const light=state.images.filter(x=>x&&!isHeavy(x.url));
-  const heavyRecent=state.images.filter(x=>x&&isHeavy(x.url)).slice(-60);
-  // preserve original order while applying the heavy cap
-  const keepHeavy=new Set(heavyRecent);
-  const out=state.images.filter(x=>x && (!isHeavy(x.url) || keepHeavy.has(x)));
-  mediaDB.putAll("images",out);
+  // Records are metadata now (the bytes live under gmedia:<id>), so the whole gallery is written
+  // back — no cap, nothing evicted.
+  mediaDB.putAll("images",(state.images||[]).filter(x=>x&&x.id).map(_slimMediaRec));
+  _gmCaptureAll(state.images);
   // Best-effort: clear any legacy localStorage images key from older versions.
   try{ localStorage.removeItem(K.images); }catch(e){}
 }
 function persistVideos(){
-  // Keep the newest 20 clips PLUS every clip referenced by a scene — a curated scene must
-  // never lose its footage to the rolling cap.
-  const keep=new Set(state.videos.slice(-20).map(v=>v&&v.id));
-  (state.scenes||[]).forEach(s=>(s&&s.clips||[]).forEach(c=>c&&keep.add(c.id)));
-  mediaDB.putAll("videos",state.videos.filter(v=>v&&keep.has(v.id)));
+  // Every clip is kept — including the ones a scene references, which the old rolling cap of 20
+  // had to be taught to spare.
+  mediaDB.putAll("videos",(state.videos||[]).filter(v=>v&&v.id).map(_slimMediaRec));
+  _gmCaptureAll(state.videos);
 }
 // v27 — scenes are tiny metadata (name + ordered clip refs w/ url snapshots) → kv store.
 function persistScenes(){ mediaDB.kvSet("scenes",state.scenes||[]); }
@@ -5616,6 +5732,9 @@ async function hydrateMedia(){
     const scenes=await mediaDB.kvGet("scenes");
     if(Array.isArray(scenes)) state.scenes=scenes;
     bindMediaToUniverse();
+    // v25.11 — point every gallery record at its stored bytes (see captureGalleryMedia), so the
+    // gallery survives the provider links expiring. Best-effort; failures leave the links in place.
+    try{ await rehydrateGalleryMedia(); }catch(e){ console.warn("rehydrateGalleryMedia failed",e); }
     // v25.3 — point portraits/covers/map/location images at their stored bytes (and migrate
     // legacy inline base64 / capture legacy remote links). Best-effort; renders refresh inside.
     try{ await rehydrateStaticImages(); }catch(e){ console.warn("rehydrateStaticImages failed",e); }
@@ -5623,6 +5742,41 @@ async function hydrateMedia(){
     const gal=document.getElementById('galleryGrid'); if(gal) renderGallery();
     if(typeof syncSceneDock==="function")try{syncSceneDock();}catch(e){}
   }catch(e){ console.warn("hydrateMedia failed",e); _mediaHydrated=true; }
+}
+// v25.11 — boot pass for gallery media. One key sweep tells us which records have stored bytes;
+// the newest window is materialized into object URLs right away and the rest are left marked
+// `stored` for ensureGalleryUrls to hydrate when the gallery actually shows them (an object URL
+// pins its blob for the session, so materializing thousands at once would be wasteful). Records
+// with no stored bytes keep their remote link and are captured in the background, so history from
+// before this version is saved the first time it's still reachable.
+async function rehydrateGalleryMedia(){
+  let keys=[]; try{ keys=await mediaDB.kvKeys(); }catch(e){}
+  const have=new Set(keys.filter(k=>typeof k==="string"&&k.startsWith("gmedia:")).map(k=>k.slice(7)));
+  const plan=[[state.images||[],GM_BOOT_IMAGES],[state.videos||[],GM_BOOT_VIDEOS]];
+  for(const [list,window] of plan){
+    const start=Math.max(0,list.length-window);
+    for(let i=0;i<list.length;i++){
+      const r=list[i]; if(!r||!r.id)continue;
+      // A blob: url from a previous session is a dead pointer — the bytes (if any) are re-attached
+      // below; otherwise fall back to the record's remote link.
+      if(typeof r.url==="string"&&r.url.startsWith("blob:")) r.url=r.remote||"";
+      if(!have.has(r.id)) continue;
+      r.stored=true; _gmCaptured.add(r.id);
+      if(i<start){ r.url=""; continue; }              // outside the window → hydrated on demand
+      let blob=null; try{ blob=await mediaDB.kvGet(_gmKey(r.id)); }catch(e){}
+      if(blob&&blob.size) _gmSetUrl(r,blob);
+      else if(r.remote) r.url=r.remote;
+    }
+  }
+  // Scenes snapshot each clip's url; re-point them at the clip's own (now durable) video record.
+  try{
+    const byId=new Map((state.videos||[]).filter(v=>v&&v.id).map(v=>[v.id,v]));
+    (state.scenes||[]).forEach(s=>(s&&s.clips||[]).forEach(c=>{
+      const v=c&&byId.get(c.id); if(v&&v.url&&v.url!==c.url) c.url=v.url;
+    }));
+  }catch(e){}
+  // Anything still unstored (legacy records with a live link) gets saved now, in the background.
+  _gmCaptureAll(state.images); _gmCaptureAll(state.videos);
 }
 // Make every diary, image and video UNIVERSE-bound (and keep them character-bound). New records are
 // already stamped at creation; this backfills legacy records that carry a characterId/ownerId but no
@@ -6232,7 +6386,8 @@ async function modelslabImage(prompt,negative,rule){
     prompt,
     negative_prompt:negative||"low quality, blurry, deformed, bad anatomy, watermark, text",
     width:String(w),height:String(h),
-    samples:"1",num_inference_steps:String((rule&&rule.steps)||state.steps||25),guidance_scale:7.5,
+    samples:"1",num_inference_steps:String((rule&&rule.steps)||state.steps||25),
+    guidance_scale:imgGuidance(rule)||7.5,   // v25.11: honour the CFG setting; 7.5 stays the default
     safety_checker:"no",enhance_prompt:"no",
     scheduler:"DPMSolverMultistepScheduler"
   };
@@ -6427,11 +6582,36 @@ function atlasLoras(rule){
   if(!(scale>=0)) scale=1;
   return [{path:civitaiLoraUrl(p), scale}];
 }
+/* ===== v25.11 — GUIDANCE SCALE (CFG) =========================================
+   Z-Image REJECTS a request that carries a negative_prompt with guidance_scale ≤ 1:
+     "[1010001] Invalid request parameters: When negative_prompt is set for Z-Image,
+      guidance_scale must be greater than 1."
+   The turbo distill is CFG-free (guidance 1.0) by default, so a negative prompt has nothing to
+   steer against — and every rule ships a negative prompt, which is why z-image/turbo-lora failed
+   on every generation. Guidance is a real setting now (per-rule → global default → provider
+   default), and on Z-Image with a negative prompt it is floored above 1 automatically so the call
+   can never be rejected, whatever the sliders say. */
+const ZIMAGE_NEG_CFG=2.5;   // workable CFG for z-image once a negative prompt is in play
+function isZImageModel(model){ return /z[-_ ]?image/i.test(String(model||"")); }
+// Effective guidance for an image call: the rule's own value, else the global default, else 0
+// ("auto" — the field is omitted entirely and the provider uses whatever it normally would).
+function imgGuidance(rule){
+  let g=parseFloat(rule&&rule.guidance);
+  if(!(g>0)) g=parseFloat(state.imgGuidance);
+  return (g>0)?g:0;
+}
+// Floor the guidance for a model/negative-prompt combination the provider would reject.
+function guidanceFor(model,negative,rule){
+  let g=imgGuidance(rule);
+  if(negative && isZImageModel(model) && !(g>1)) g=ZIMAGE_NEG_CFG;
+  return g;
+}
 async function atlasImage(prompt,negative,rule){
   const model=(rule&&rule.model_id)||state.imgModel||"seedream-3.0";
   const body={model,prompt};
   if(negative)body.negative_prompt=negative;
   body.size=(rule&&rule.size)||RATIOS[curImgRatioKey()]||"576x1024";
+  {const g=guidanceFor(model,body.negative_prompt,rule); if(g>0)body.guidance_scale=g;}
   const loras=atlasLoras(rule); if(loras)body.loras=loras;
   const label="Image generation (AtlasCloud)"+(rule&&rule.label?" · "+rule.label:"");
   return await atlasGenerate("image",body,label,null);
@@ -6466,6 +6646,9 @@ async function falImage(prompt,negative,rule){
     acceleration:"regular",
     loras
   };
+  // v25.11 — CFG: sent only when the user actually set one (rule, else global default). fal's
+  // z-image is CFG-free at 1.0, so "auto" (0) stays out of the payload entirely.
+  {const g=guidanceFor(model,null,rule); if(g>0)body.guidance_scale=g;}
   const url=FAL_RUN+model.replace(/^\/+/,"");
   const entry=dbg("Image generation (fal.ai)"+(rule&&rule.label?" · "+rule.label:""),"fal.ai",url,Object.assign({},body,{loras:loras.length?loras:"[]"}));
   let res;
@@ -12233,6 +12416,7 @@ function deleteUniverse(){
   const keepVid=v=>!(v && v.universeId===delId);
   state.images=(state.images||[]).filter(keepImg);
   state.videos=(state.videos||[]).filter(keepVid);
+  if(typeof pruneGalleryMedia==="function")pruneGalleryMedia();   // v25.11: drop their stored bytes too
   // The universe itself.
   state.universes=state.universes.filter(u=>u.id!==delId);
   if(state.curUniverse===delId)state.curUniverse=state.universes[0]?state.universes[0].id:null;
@@ -18735,16 +18919,13 @@ async function illustrate(mid,replyText,force){
     msg.characterId=_charId;
     // v19.3: this character's continuity is now THIS frame (their own latest prompt, no one else's).
     if(chat){ if(!chat.imgPromptBy||typeof chat.imgPromptBy!=="object")chat.imgPromptBy={}; chat.imgPromptBy[_spkKey]=finalPrompt; }
-    state.images.push({id:"img_"+Date.now(),url,prompt:finalPrompt,character:cast.map(c=>c.name).join(", "),characterId:_charId,universeId:chat?chat.universeId:null,date:Date.now(),frame:_frame});
-    // Bound in-memory media growth ONLY for heavy base64 data-URLs (~1MB each). Remote provider
-    // URLs (http(s) — ModelsLab R2, AtlasCloud, dashscope) are a few hundred bytes and durable, so
-    // never evict those: keeping them lets the gallery + chat survive reload. Only base64 is dropped.
-    const IMG_MEM_CAP=24, isHeavy=u=>typeof u==="string"&&u.startsWith("data:");
-    const heavy=state.images.filter(x=>x&&isHeavy(x.url));
-    if(heavy.length>IMG_MEM_CAP){
-      let toFree=heavy.length-IMG_MEM_CAP;
-      for(let i=0;i<state.images.length&&toFree>0;i++){ const x=state.images[i]; if(x&&isHeavy(x.url)){x.url="";x.evicted=true;toFree--;} }
-    }
+    const _rec={id:"img_"+Date.now(),url,prompt:finalPrompt,character:cast.map(c=>c.name).join(", "),characterId:_charId,universeId:chat?chat.universeId:null,date:Date.now(),frame:_frame};
+    state.images.push(_rec);
+    captureGalleryMedia(_rec);   // v25.11: copy the bytes into IndexedDB before the link can expire
+    // v25.11 — the old IMG_MEM_CAP pass (which blanked the url of all but the newest 24 base64
+    // images, losing them for good) is gone: captureGalleryMedia moves the bytes out of the record
+    // and into IndexedDB, so a record is a few hundred bytes whatever the provider returned.
+    const isHeavy=u=>typeof u==="string"&&u.startsWith("data:");
     // Free base64 from on-message scenes scrolled outside the render window. Remote-URL scenes keep
     // a durable imgSrc so refreshBubble can restore them; base64 ones drop to hadImg (regenerate).
     if(chat){
@@ -18863,15 +19044,11 @@ async function animateScene(mid){
     // This initial clip becomes the BASE the Movie button extends. "Latest video = base": every
     // Animate or Extend updates this pointer, so the next Extend always appends onto the newest clip.
     if(chat){ chat.extendBaseUrl=httpsMedia(videoUrl); markChatDirty(chat); }
-    state.videos.push({id:"vid_"+Date.now(),url:videoUrl,prompt:vidPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now()});
-    // Cap in-memory video base64/blob URLs the same way images are capped (IMG_MEM_CAP). Without
-    // this, a long session retains every full-res video in memory (~0.8MB+ each) and climbs past
-    // 30MB after a few dozen, which on a phone gets the tab killed and reloaded (data-loss symptom).
-    // Persistence already keeps the recent window in IndexedDB; we only evict the heavy url here.
-    const VID_MEM_CAP=12;
-    if(state.videos.length>VID_MEM_CAP){
-      for(let i=0;i<state.videos.length-VID_MEM_CAP;i++){ if(state.videos[i]&&state.videos[i].url){state.videos[i].url="";state.videos[i].evicted=true;} }
-    }
+    {const _rec={id:"vid_"+Date.now(),url:videoUrl,prompt:vidPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now()};
+     state.videos.push(_rec); captureGalleryMedia(_rec);}   // v25.11: bytes → IndexedDB
+    // v25.11 — the old VID_MEM_CAP pass is gone. It blanked the url of every clip beyond the newest
+    // 12 REGARDLESS of weight, so provider links (a few hundred bytes) were thrown away too and the
+    // video gallery emptied itself as you played. The frames now live in IndexedDB instead.
     persistVideos();persistChats();refreshBubble(mid);
   }catch(err){
     msg.vidState="error";persistChats();refreshBubble(mid);
@@ -18953,11 +19130,8 @@ async function movieScene(mid){
     msg.vidState="done";msg.vidPrompt=extPrompt;msg.isExtend=true;
     // The extended clip is now the LATEST video — the next Extend appends onto THIS one.
     chat.extendBaseUrl=durable;markChatDirty(chat);
-    state.videos.push({id:"vid_"+Date.now(),url:videoUrl,prompt:extPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now(),extend:true});
-    const VID_MEM_CAP=12;
-    if(state.videos.length>VID_MEM_CAP){
-      for(let i=0;i<state.videos.length-VID_MEM_CAP;i++){ if(state.videos[i]&&state.videos[i].url){state.videos[i].url="";state.videos[i].evicted=true;} }
-    }
+    {const _rec={id:"vid_"+Date.now(),url:videoUrl,prompt:extPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now(),extend:true};
+     state.videos.push(_rec); captureGalleryMedia(_rec);}   // v25.11: bytes → IndexedDB (no cap)
     persistVideos();persistChats();refreshBubble(mid);
   }catch(err){
     msg.vidState="error";persistChats();refreshBubble(mid);
@@ -19061,12 +19235,12 @@ function closeGalFolder(){ _galFolder=null; renderGallery(); }
 // Delete one image from the gallery (and free it from IndexedDB on next persist).
 function delGalleryImage(id){
   const i=state.images.findIndex(x=>x&&x.id===id); if(i<0)return;
-  state.images.splice(i,1); persistImages(); updateStorage(); renderGallery();
+  state.images.splice(i,1); dropGalleryMedia(id); persistImages(); updateStorage(); renderGallery();
   toast("Image deleted");
 }
 function delGalleryVideo(id){
   const i=state.videos.findIndex(x=>x&&x.id===id); if(i<0)return;
-  state.videos.splice(i,1); if(typeof persistVideos==="function")persistVideos();
+  state.videos.splice(i,1); dropGalleryMedia(id); if(typeof persistVideos==="function")persistVideos();
   // A deleted clip leaves every scene it was part of.
   let sceneTouched=false;
   (state.scenes||[]).forEach(s=>{ if(s&&Array.isArray(s.clips)){ const n=s.clips.length; s.clips=s.clips.filter(c=>c&&c.id!==id); if(s.clips.length!==n)sceneTouched=true; } });
@@ -19106,8 +19280,20 @@ function renderGallery(){
     <button class="galTab ${_galTab==='videos'?'on':''}" onclick="setGalTab('videos')">${icon("film")} Videos${hasVid?` (${hasVid})`:""}</button>`;
   el.appendChild(tabs);
 
+  // v25.11 — history older than the boot window carries its bytes in IndexedDB but no live object
+  // URL yet. Hydrate whatever this universe's tab needs, then re-render once if anything appeared.
+  _galHydrateScope();
   if(_galTab==='videos'){ _renderGalVideos(el); return; }
   _renderGalImages(el);
+}
+let _galHydrating=false;
+function _galHydrateScope(){
+  if(_galHydrating)return;
+  const pend=_galScope(_galTab==='videos'?state.videos:state.images).filter(r=>r&&!r.url&&r.stored);
+  if(!pend.length)return;
+  _galHydrating=true;
+  ensureGalleryUrls(pend).then(n=>{ _galHydrating=false; if(n)renderGallery(); })
+    .catch(()=>{ _galHydrating=false; });
 }
 
 // v28 — the "Create image (Playground)" button shown in the Images tab (folder view + open folder).
@@ -19691,7 +19877,8 @@ async function pgGenerate(){
     const uni=curUniverseObj();
     const rec={id:"img_"+Date.now(),url,prompt:finalPrompt,character:actor.name,characterId:actor.id,
                universeId:uni?uni.id:null,date:Date.now(),frame:_frame,playground:true};
-    state.images.push(rec); persistImages(); if(typeof updateStorage==="function")updateStorage();
+    state.images.push(rec); captureGalleryMedia(rec);   // v25.11: bytes → IndexedDB
+    persistImages(); if(typeof updateStorage==="function")updateStorage();
     _pg.resultId=rec.id;
     renderGallery();
     toast(`Image saved to ${actor.name}'s gallery`);
@@ -25542,6 +25729,9 @@ function renderRules(kind){
         <input type="text" data-k="negative" value="${esc(r.negative||'')}" placeholder="low quality, blurry…">
         <label>Inference steps (${r.steps||state.steps||25}) — higher = more detail/slower; z-image/turbo ignores this</label>
         <input type="range" data-k="steps" data-num="1" min="4" max="50" step="1" value="${r.steps||state.steps||25}" style="width:100%">
+        <label>Guidance scale / CFG (${r.guidance>0?r.guidance:'auto'}) — how hard the model is pushed to obey the prompt</label>
+        <input type="range" data-k="guidance" data-num="1" data-auto="1" min="0" max="12" step="0.5" value="${r.guidance>0?esc(String(r.guidance)):'0'}" style="width:100%">
+        <div class="desc" style="margin:-2px 0 6px">0 = auto (the provider's own default, and the global default below it). <b>Z-Image needs more than 1 whenever a negative prompt is set</b> — left on auto it is raised to ${ZIMAGE_NEG_CFG} automatically for z-image rules. Turbo/distilled models look best at 1–3; regular models at 5–8.</div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
           <label style="margin:0;flex:1">POV scene <span class="desc" style="display:block;font-weight:400">First-person camera. This character's exact appearance is auto-injected into the image.</span></label>
           <label class="switchLbl" style="flex:none"><input type="checkbox" data-k="pov" ${r.pov?'checked':''}><span class="sl"></span></label>
@@ -25567,7 +25757,11 @@ function renderRules(kind){
           if(inp.type==='checkbox') r[key]=inp.checked;
           else if(inp.dataset.num) r[key]=(parseFloat(inp.value)||0);
           else r[key]=inp.value;
-          if(inp.dataset.num){ const lb=inp.previousElementSibling; if(lb&&lb.tagName==='LABEL') lb.textContent=lb.textContent.replace(/\((\d+)\)/,'('+inp.value+')'); }
+          // Live "(value)" readout in the slider's own label. data-auto sliders show "(auto)" at 0,
+          // and the pattern accepts decimals + "auto" so a CFG of 2.5 doesn't stop updating.
+          if(inp.dataset.num){ const lb=inp.previousElementSibling;
+            const shown=(inp.dataset.auto&&!(parseFloat(inp.value)>0))?'auto':inp.value;
+            if(lb&&lb.tagName==='LABEL') lb.textContent=lb.textContent.replace(/\((?:auto|\d+(?:\.\d+)?)\)/,'('+shown+')'); }
           if(key==='label'){ const nm=head.querySelector('.ruleName'); if(nm)nm.textContent=inp.value||'(unnamed rule)'; }
         });
       });
@@ -25608,7 +25802,7 @@ function addRule(kind){
     rulesFor(kind).push({id,label:"New rule",when:"Describe the kind of shot this model is best for.",
       provider:"default",ratio:"",
       model_id:"realtime_t2i",endpoint:"images/text2img",
-      lora_model:"",negative:"",steps:(state.steps||25),promptStyle:"",pov:false,enabled:true});
+      lora_model:"",negative:"",steps:(state.steps||25),guidance:0,promptStyle:"",pov:false,enabled:true});
   }
   _ruleOpen[kind]=id;   // open the new rule for editing immediately
   renderRules(kind);
@@ -26277,6 +26471,8 @@ function syncSettingsUI(){
   document.getElementById('setRouteOn').checked=state.routeOn;
   document.getElementById('setRouterModel').value=state.routerModel;
   {const e=document.getElementById('setSteps'); if(e)e.value=state.steps;} {const v=document.getElementById('stepsVal'); if(v)v.textContent=state.steps;}
+  {const e=document.getElementById('setImgGuidance'); if(e)e.value=state.imgGuidance||0;}
+  {const v=document.getElementById('imgGuidanceVal'); if(v)v.textContent=(state.imgGuidance>0?state.imgGuidance:'auto');}
   renderRules('img');renderRules('vid');
   setProvSeg('imgProvSeg',state.imgProvider);
   setProvSeg('vidProvSeg',state.vidProvider);
@@ -26457,6 +26653,7 @@ function saveSettings(notify){
   state.routeOn=document.getElementById('setRouteOn').checked;
   state.routerModel=document.getElementById('setRouterModel').value.trim()||"openai/gpt-4o-mini";
   {const e=document.getElementById('setSteps'); if(e)state.steps=+e.value;}
+  {const e=document.getElementById('setImgGuidance'); if(e)state.imgGuidance=Math.max(0,parseFloat(e.value)||0);}
   state.autoImg=document.getElementById('setAutoImg').checked;
   state.vidSound=document.getElementById('setVidSound').checked;
   state.memModel=document.getElementById('setMemModel').value.trim()||"deepseek/deepseek-v3.2";
@@ -26557,6 +26754,7 @@ function saveSettings(notify){
   store.set(K.imgRules,state.imgRules);store.set(K.vidRules,state.vidRules);
   store.set(K.routeOn,state.routeOn);store.setRaw(K.routerModel,state.routerModel);store.setRaw(K.routerPrompt,state.routerPrompt);
   store.setRaw(K.steps,state.steps);
+  store.setRaw(K.imgGuidance,String(state.imgGuidance||0));
   store.setRaw(K.vidPrompt,state.vidPrompt);store.setRaw(K.vidDur,state.vidDur);store.setRaw(K.vidRes,state.vidRes);store.set(K.vidSound,state.vidSound);
   store.setRaw(K.moviePrompt,state.moviePrompt);store.setRaw(K.extendPrompt,state.extendPrompt);
   store.setRaw(K.movieSegs,String(state.movieSegs||6));
@@ -26920,8 +27118,8 @@ async function importDispatch(file){
 function confirmClear(w){
   if(w==='chats'&&confirm("Delete ALL chats?")){state.chats={};state.curChat=null;flushPersistChats();try{localStorage.removeItem(K.chats);}catch(e){}startSceneFor(state.curUniverse);renderChat();toast("Cleared");updateStorage();}
   if(w==='memory'&&confirm("Delete ALL memories?")){state.memory=[];persistMemory();try{localStorage.removeItem(K.memory);}catch(e){}renderMemory();toast("Cleared");updateStorage();}
-  if(w==='images'&&confirm("Delete ALL gallery images and videos? (Scenes built from videos are removed too.)")){state.images=[];persistImages();state.videos=[];state.scenes=[];persistVideos();persistScenes();renderGallery();toast("Cleared");updateStorage();}
-  if(w==='videos'&&confirm("Delete ALL gallery videos? (Scenes built from them are removed too.)")){state.videos=[];state.scenes=[];persistVideos();persistScenes();renderGallery();toast("Cleared");}
+  if(w==='images'&&confirm("Delete ALL gallery images and videos? (Scenes built from videos are removed too.)")){state.images=[];persistImages();state.videos=[];state.scenes=[];persistVideos();persistScenes();pruneGalleryMedia();renderGallery();toast("Cleared");updateStorage();}
+  if(w==='videos'&&confirm("Delete ALL gallery videos? (Scenes built from them are removed too.)")){state.videos=[];state.scenes=[];persistVideos();persistScenes();pruneGalleryMedia();renderGallery();toast("Cleared");}
 }
 /* v24.4 — FULL UNIVERSE RESET. The old "wipe memories" only dropped state.memory; every other
    layer of evolved play state survived — generated relationship sheets, the per-chat feeling axes,
@@ -27072,6 +27270,9 @@ document.getElementById('chatInput').addEventListener('keydown',e=>{if(e.key==='
 ['setTokens','setTemp','setFont','setSteps','setGmEvery','setMcCap','setSceneMin','setSceneMax','setRevealCps'].forEach(id=>{const _el=document.getElementById(id); if(!_el)return; _el.addEventListener('input',e=>{
   const map={setTokens:'tokVal',setTemp:'tempVal',setFont:'fontVal',setSteps:'stepsVal',setGmEvery:'gmEveryVal',setMcCap:'mcCapVal',setSceneMin:'sceneMinVal',setSceneMax:'sceneMaxVal',setRevealCps:'revealVal'};const lbl=document.getElementById(map[id]); if(lbl)lbl.textContent=e.target.value;
   if(id==='setFont')document.body.style.fontSize=e.target.value+'px';});});
+// v25.11 — global guidance/CFG slider: live label, showing "auto" at 0 (field omitted from calls).
+{const g=document.getElementById('setImgGuidance'), gv=document.getElementById('imgGuidanceVal');
+ if(g&&gv) g.addEventListener('input',()=>{ gv.textContent=(parseFloat(g.value)>0?g.value:'auto'); });}
 // Global sampling sliders: live value label on drag; on-toggle enables/disables the slider.
 [['setTopP','setTopPOn','topPVal',2],['setTopK','setTopKOn','topKVal',0],['setFreqPen','setFreqPenOn','freqPenVal',2],['setPresPen','setPresPenOn','presPenVal',2]].forEach(([rngId,onId,valId,dec])=>{
   const rng=document.getElementById(rngId), on=document.getElementById(onId), val=document.getElementById(valId);

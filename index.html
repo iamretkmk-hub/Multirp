@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6150,6 +6150,10 @@ function appendOneBubble(m){
   if(_renderedChatId!==state.curChat){ renderChat(); if(typeof reflectModes==='function')reflectModes(); return; }
   if(list.querySelector('[data-mid="'+m.mid+'"]')) return;   // already on screen
   const wasAtBottom=isNearBottom(list);
+  // v26.6 — decide FOLLOW before touching the DOM. The front-trim below must know whether we are
+  // about to pin to the bottom, because restoring the reader's anchor and then pinning are two
+  // different destinations and doing both makes the view bounce.
+  const _following = wasAtBottom || _followAfterSend;
   const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid);
   // Front-trim to the render window. The OLD approach summed getBoundingClientRect().height of the
   // removed nodes and subtracted it from scrollTop — but that height is wrong when a removed bubble
@@ -6161,9 +6165,15 @@ function appendOneBubble(m){
   let nodes=list.querySelectorAll('[data-mid]');
   if(nodes.length>RENDER_WINDOW){
     const ref=nodes[nodes.length-1];            // newest node always survives the front-trim
-    const beforeTop=ref.offsetTop - list.scrollTop;
+    const beforeTop=_following?0:(ref.offsetTop - list.scrollTop);
     while(nodes.length>RENDER_WINDOW){ list.removeChild(nodes[0]); nodes=list.querySelectorAll('[data-mid]'); }
-    if(ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
+    // v26.6 — restore the reader's anchor ONLY when we are not about to pin to the bottom.
+    // Following readers used to get BOTH: the anchor put them back where they were (i.e. one
+    // bubble-height UP, since the new content had just been added), and pinChatBottomSoon then
+    // pulled them down again — a visible up-then-down bounce on EVERY appended message, several
+    // times per turn. Trimming without the restore lets the browser clamp scrollTop into the
+    // shortened content, and the pin below places the view once, in one direction.
+    if(!_following && ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
   }
   _renderedCount=Math.min(curChat().messages.length,RENDER_WINDOW);
   // Follow to the bottom only if the user is actually following. Previously `_presentPlaying` alone
@@ -6172,7 +6182,6 @@ function appendOneBubble(m){
   // read yanked the view down (the "GM/event message makes the chat jump" bug; character replies you
   // sent were fine because _followAfterSend was set). Now a presented beat only pulls the view down
   // if you were already at the bottom or you sent this turn; otherwise it surfaces the "↓ New" pill.
-  const _following = wasAtBottom || _followAfterSend;
   if(_following){ pinChatBottomSoon(); }
   else { showNewMsgPill(); }
 }
@@ -16776,6 +16785,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
   if(_renderedChatId!==state.curChat || !list.querySelector('.bubble,[data-mid]')){ renderChat(); return; }
   // Capture whether the user is following the conversation BEFORE we mutate the DOM.
   const wasAtBottom=isNearBottom(list);
+  const _following = wasAtBottom || _followAfterSend;   // v26.6 — the front-trim below needs this too
   const msgs=chat.messages;
   // New messages are always appended to the END of chat.messages, so instead of building a
   // Set over the whole transcript and scanning all of it (O(total) per turn), walk backward
@@ -16805,14 +16815,16 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
     let nodes=list.querySelectorAll('[data-mid]');
     if(nodes.length>RENDER_WINDOW){
       const ref=nodes[nodes.length-1];
-      const beforeTop=ref.offsetTop - list.scrollTop;
+      const beforeTop=_following?0:(ref.offsetTop - list.scrollTop);
       while(nodes.length>RENDER_WINDOW){ list.removeChild(nodes[0]); nodes=list.querySelectorAll('[data-mid]'); }
-      if(ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
+      // v26.6 — see appendOneBubble: restoring the anchor and then pinning to the bottom are two
+      // different destinations, and doing both bounced the view on every appended message.
+      if(!_following && ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
     }
     _renderedCount=Math.min(msgs.length,RENDER_WINDOW);
     // Only follow to the bottom if the user was already there (or just sent a message this turn);
     // otherwise keep their position and let them know new content arrived.
-    if(wasAtBottom||_followAfterSend){ pinChatBottomSoon(); }
+    if(_following){ pinChatBottomSoon(); }
     else { showNewMsgPill(); }
   }
   renderImageRail();

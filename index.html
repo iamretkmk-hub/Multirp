@@ -3115,11 +3115,6 @@ THE BASE PROMPT (adjust this — do not start over):
 
 Output the lightly-adjusted prompt now.`;
 
-// Out-of-character command rules, injected into every roleplay prompt.
-const DEFAULT_OOC=`- If {{user}} types something inside (parentheses), treat it as an OUT-OF-CHARACTER command, not as something their character said or did.
-- {{user}} may use this to change the location, set up an action, steer the scene, or ask for a different direction.
-- Do NOT reply to an OOC command as in-scene dialogue. Instead, carry out its intent and respond with the in-scene outcome.`;
-
 // ---- Multi-dimensional relationships ----
 // Each ordered pair (how A feels about B) is tracked across several axes, each on a
 // -100..+100 scale. Stored per chat as chat.relVals[pairKey] = {trust,affection,desire,respect,comfort,desc}.
@@ -4292,6 +4287,11 @@ function splitSystemSections(text){
 // cleanly: relationships → one child per person; SCENE RIGHT NOW → location /
 // sub-areas / presence / each tracker; <character_you_play> → one child per XML
 // field; the image-prompt user message → character sheet / continuity / exchange.
+// Human-readable labels for the character-sheet XML field names (the tag can't carry spaces).
+const _CAP_LABELS={play_notes:"play notes",how_you_behave:"how you behave",goals_ambitions:"goals & ambitions",
+  what_you_quietly_want:"WHAT YOU QUIETLY WANT",your_quests:"your quests",speaking_style:"speaking style",
+  where_you_live:"where you live"};
+function _capLabel(tag){ return _CAP_LABELS[tag]||tag; }
 function _subCapsules(title,body){
   const t=String(title||""), b=String(body||"");
   // --- RELATIONSHIPS: split per person (#1). Handles both the new "• [Name — tie]\n  desc"
@@ -4311,16 +4311,18 @@ function _subCapsules(title,body){
       return kids;
     }
   }
-  // --- SCENE RIGHT NOW: location / sub-areas / presence / each tracker (#2). ---
+  // --- SCENE RIGHT NOW: brief / current day / location / sub-areas / privacy / each tracker. ---
   if(/SCENE RIGHT NOW/i.test(t)){
     const kids=[]; const lines=b.split("\n");
     let buf=[],lbl="scene";
-    const flush=()=>{ if(buf.length){kids.push({label:lbl,text:buf.join("\n").trim()}); buf=[];} };
+    const flush=()=>{ if(buf.length){const x=buf.join("\n").trim(); if(x)kids.push({label:lbl,text:x}); buf=[];} };
     for(const ln of lines){
-      if(/^>>\s*YOUR CURRENT LOCATION/i.test(ln)){ flush(); lbl="current location"; buf.push(ln); }
-      else if(/^These are the sub-areas/i.test(ln)){ flush(); lbl="sub-areas"; buf.push(ln); }
-      else if(/^(Also physically present|You are alone)/i.test(ln)){ flush(); lbl="who is present"; buf.push(ln); }
-      else if(/^(STORY TRACKERS|YOUR PERSONAL TRACKERS)/i.test(ln)){ flush(); lbl="trackers"; buf.push(ln); }
+      if(/^⚠️ WHAT JUST CHANGED/i.test(ln)){ flush(); lbl="what just changed"; buf.push(ln); }
+      else if(/^CURRENT DAY:/i.test(ln)){ flush(); lbl="CURRENT DAY"; buf.push(ln); }
+      else if(/^⚠️\s*YOUR CURRENT LOCATION/i.test(ln)){ flush(); lbl="current location"; buf.push(ln); }
+      else if(/^SUB-AREAS:/i.test(ln)){ flush(); lbl="sub-areas"; buf.push(ln); }
+      else if(/^PRIVACY:/i.test(ln)){ flush(); lbl="privacy"; buf.push(ln); }
+      else if(/^(STORY TRACKERS|YOUR PERSONAL TRACKERS|PUBLICLY VISIBLE)/i.test(ln)){ flush(); lbl="trackers"; buf.push(ln); }
       else if(/^\[\s+\S/.test(ln) && lbl==="trackers"){ /* one tracker per child */ flush(); lbl="tracker"; buf.push(ln); flush(); lbl="trackers"; }
       else buf.push(ln);
     }
@@ -4329,14 +4331,26 @@ function _subCapsules(title,body){
     const cleaned=kids.filter(k=>!(k.label==="trackers" && /TRACKERS[^\n]*:?\s*$/i.test(k.text.trim())));
     if(cleaned.length>1) return cleaned;
   }
-  // --- <character_you_play>: one child per inner XML field (#7). ---
-  if(/^<character_you_play>/.test(t)){
-    // strip the outer wrapper so its own tag doesn't swallow the inner fields
+  // --- CHARACTER SHEETS (v30): "⚠️ THIS IS WHO YOU ARE ROLEPLAYING AS ⚠️" and
+  //     "⚠️ THIS IS WHO YOU ARE RESPONDING TO ⚠️" — one child per inner XML field. ---
+  if(/THIS IS WHO YOU ARE (ROLEPLAYING AS|RESPONDING TO)/i.test(t)||/^<character_you_play>/.test(t)){
     let inner=b.replace(/^[\s\S]*?<character_you_play>/,"").replace(/<\/character_you_play>[\s\S]*$/,"");
     const kids=[]; const re=/<([a-z_]+)>([\s\S]*?)<\/\1>/g; let m2;
     const head=inner.split("<")[0].trim();
     if(head) kids.push({label:"identity",text:head});
-    while((m2=re.exec(inner))){ kids.push({label:m2[1],text:m2[0].trim()}); }
+    while((m2=re.exec(inner))){ kids.push({label:_capLabel(m2[1]),text:m2[0].trim()}); }
+    if(kids.length>1) return kids;
+  }
+  // --- MEMORY BLOCKS (v30): the instruction, then one child per numbered memory. ---
+  if(/THESE ARE YOUR (RECENT|DISTANT) MEMORIES/i.test(t)){
+    const kids=[]; const lines=b.split("\n"); let buf=[],lbl="instruction";
+    const flush=()=>{ if(buf.length){const x=buf.join("\n").trim(); if(x)kids.push({label:lbl,text:x}); buf=[];} };
+    for(const ln of lines){
+      const m3=ln.match(/^Memory\s+(\d+):/i);
+      if(m3){ flush(); lbl="Memory "+m3[1]; buf.push(ln); }
+      else buf.push(ln);
+    }
+    flush();
     if(kids.length>1) return kids;
   }
   // --- IMAGE-PROMPT user message: continuity / latest exchange (#11). v25: no character sheet. ---
@@ -10474,10 +10488,9 @@ async function _fireArrival(chat,subId,item){
             const q=[item.title,item.desc].filter(Boolean).map(String).join(" — ")||state.user;
             const r=await retrieveMemories(q,chat,p.id);
             const rec=(r.recent||[]).map(m=>memInjectText(m)).filter(Boolean);
-            const dia=(r.diary||[]).map(m=>memInjectText(m)).filter(Boolean);
             const lt=(r.longterm||[]).map(m=>memInjectText(m)).filter(Boolean);
+            // v30 — the DIARY tier is never injected into a payload; it is the player's artifact.
             if(rec.length)X.push("# RECENT MEMORIES (yours — shape your tone, don't recite)\n"+rec.map(t=>"- "+t).join("\n"));
-            if(dia.length)X.push("# YOUR DIARY (earlier days)\n"+dia.map(t=>"- "+t).join("\n"));
             if(lt.length)X.push("# YOUR LONG-TERM MEMORY\n"+lt.map(t=>"- "+t).join("\n"));
           }
         }catch(e){}
@@ -14381,14 +14394,16 @@ function memoryBlocks(injectedMemories,which){
   else { recent=injectedMemories.recent||[];
          diary=injectedMemories.diary||injectedMemories.distant||[];    // "distant" kept as a legacy alias for the diary tier
          longterm=injectedMemories.longterm||[]; }
-  const fmt=m=>{const d=m.gameDay?`Day ${m.gameDay}`:"";return `- ${memInjectText(m)}${d?` (${d})`:""}${m.location?` [${m.location}]`:""}`;};
+  // v30 — one numbered entry per memory ("Memory 1: …"), so the model can hold them apart and
+  // refer to a specific one instead of blurring a bullet list into general vibes.
+  const fmt=(m,i)=>{const d=m.gameDay?`Day ${m.gameDay}`:"";return `Memory ${i+1}: ${memInjectText(m)}${d?` (${d})`:""}${m.location?` [${m.location}]`:""}`;};
   const out=[];
   if((which==="recent"||which==="all") && recent.length)
-    out.push(blkTpl("mem_recent_header")+"\n"+recent.map(fmt).join("\n"));
-  if((which==="diary"||which==="distant"||which==="all") && diary.length)
-    out.push(blkTpl("mem_distant_header")+"\n"+diary.map(fmt).join("\n"));
-  if((which==="longterm"||which==="all") && longterm.length)
-    out.push(blkTpl("mem_longterm_header")+"\n"+longterm.map(fmt).join("\n"));
+    out.push(blkTpl("mem_recent_header")+"\n"+blkTpl("mem_recent_instr")+"\n\n"+recent.map(fmt).join("\n"));
+  // v30 — the DIARY tier is no longer injected anywhere: diaries are the player's artifact, not
+  // payload material. `diary` stays parsed above so retrieval callers don't have to change shape.
+  if((which==="longterm"||which==="distant"||which==="all") && longterm.length)
+    out.push(blkTpl("mem_distant_header")+"\n"+blkTpl("mem_distant_instr")+"\n\n"+longterm.map(fmt).join("\n"));
   return out;
 }
 // Build one character's identity block with XML-delimited fields. Stronger structure than flat
@@ -14497,23 +14512,96 @@ function fillLookEditor(look){
 // text without the token. The formal prompt TEMPLATES already substitute {{user}} via fillTpl;
 // this covers the CONTENT fields that previously passed {{user}} through verbatim.
 function subUser(s){ return (s||"").replace(/\{\{user\}\}/g, state.user||"You"); }
+/* Build one character's identity sheet as labeled XML fields, in the order the payload reads them:
+   identity → backstory → personality → how they behave → goals → what they quietly want →
+   appearance → wardrobe → where they live.
+   opts.self       — this is the speaking character (unlocks private fields: quests, quiet wants).
+   opts.quietWant  — the "what you quietly want" prose (a live intent aim), self only.
+   opts.styleTail  — omit <speaking_style>; it is emitted post-dialogue as its own block instead.
+   opts.noWho      — the caller already wrote the identity line (bio_intro); don't repeat it. */
 function charBioBlock(c,opts){
   opts=opts||{};
-  const who=opts.self?`You are ${c.name}.`:`${c.name}:`;
+  const who=opts.noWho?"":(opts.self?`You are ${c.name}.`:`${c.name}:`);
   const L=[];
   if(c.instructions) L.push(`  <play_notes>${subUser(c.instructions)}</play_notes>`);
+  if(c.backstory)    L.push(`  <backstory>${subUser(c.backstory)}</backstory>`);
   if(c.personality)  L.push(`  <personality>${subUser(c.personality)}</personality>`);
-  if(c.traits)       L.push(`  <core_traits>\n${subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n")}\n  </core_traits>`);
-  if(c.goals)        L.push(`  <goals_ambitions>${subUser(c.goals)}</goals_ambitions>`);
+  // v30 — was <core_traits>, a bare five-axis dump. Same authored data, framed as what it actually
+  // is: playable rules ("this sets me off → this is what I do"), which is what the model can use.
+  if(c.traits)       L.push(`  <how_you_behave>Rules for how you act — the situation that sets each one off, then the thing you actually do:\n${subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n")}\n  </how_you_behave>`);
   // v23.2 — CHARACTER QUESTS: only the character THEMSELVES knows their own quests (never injected
   // into others' views of them). Covers scene replies and text replies alike.
   if(opts.self){ try{ const _cq=charQuestSheetLines(c); if(_cq) L.push(`  <your_quests>\n${_cq.split("\n").map(t=>"    "+t).join("\n")}\n  </your_quests>`); }catch(e){} }
-  if(c.backstory)    L.push(`  <backstory>${subUser(c.backstory)}</backstory>`);
-  if(c.style)        L.push(`  <speaking_style>${subUser(c.style)}</speaking_style>`);
+  if(c.goals)        L.push(`  <goals_ambitions>${subUser(c.goals)}</goals_ambitions>`);
+  // v30 — the private aim that used to be its own "# WHAT YOU QUIETLY WANT" section now sits with
+  // the goals it belongs to. Self only: nobody else can read your intentions.
+  if(opts.self&&opts.quietWant) L.push(`  <what_you_quietly_want>${opts.quietWant}</what_you_quietly_want>`);
+  // v30 — for the speaking character the voice is delivered AFTER the dialogue (style_header block),
+  // right where the line gets written. Bystander sheets keep it inline.
+  if(c.style && !opts.styleTail) L.push(`  <speaking_style>${subUser(c.style)}</speaking_style>`);
   {const _lk=lookProse(c.look); if(_lk) L.push(`  <appearance>${subUser(_lk)}</appearance>`);}
   if(c.wardrobe) L.push(`  <wardrobe>Their usual clothing (dress them plausibly from this, fitting the scene and time of day): ${subUser(String(c.wardrobe).slice(0,400))}</wardrobe>`);
-  if(opts.locLine)   L.push(`  <home_base>${subUser(opts.locLine.replace(/^Location:\s*/,""))}</home_base>`);
-  return `${who}\n${L.join("\n")}`;
+  // v30 — was <home_base>, which was fed the character's CURRENT location (already stated,
+  // authoritatively, in SCENE RIGHT NOW). This is the place they actually live.
+  {try{ const _h=homeLocOf(c); if(_h) L.push(`  <where_you_live>${subUser(_h.name+(_h.description?` — ${_h.description}`:""))}</where_you_live>`); }catch(e){}}
+  return who?`${who}\n${L.join("\n")}`:L.join("\n");
+}
+
+/* The character's live private intent, split into the two places it belongs:
+     .quietWant — a standing aim (target absent, or the player). Goes in the bio, under the goals.
+     .coloring  — a this-turn coloring toward someone who is IN the room. Goes in the tail.
+   Exactly one is ever set, so a scheme is never stated twice in one payload. */
+function intentParts(chat,selfId){
+  const out={quietWant:"",coloring:""};
+  try{
+    if(state.intentOn===false||!chat||!Array.isArray(chat.intents)||!selfId)return out;
+    const presentSet=new Set(presentCast(chat).map(c=>c.id));
+    const live=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent"
+      && i.targetId && i.targetId!=="__user__" && presentSet.has(i.targetId));
+    if(live.length){
+      // strongest one wins the beat (don't pile multiple colorings on one turn)
+      const it=live.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
+      out.coloring=fillTpl(blkTpl(it.valence==="warm"?"intent_warm":"intent_hostile"),
+        {target:it.targetName||"them",kind:it.kind,aim:it.aim});
+      return out;
+    }
+    // No present-target coloring, but they may still be nursing a plan (target absent, or the
+    // player). Surface it under their goals so they stay goal-driven across scenes.
+    const own=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent" && i.aim);
+    if(own.length){
+      const it=own.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
+      out.quietWant=fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm":"intent_aim_cool"),
+        {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),kind:it.kind,aim:it.aim});
+    }
+  }catch(e){}
+  return out;
+}
+
+/* The last real DIALOGUE line this character is answering — not a day marker, a presence note, a
+   travel beat, GM narration, or one of their own lines. Returns {name,text} or null.
+   Other characters' lines are reduced to what was actually SPOKEN (narration privacy), matching
+   what castHistory already delivers, so the highlight never reveals more than the transcript did. */
+function lastDialogueLine(chat,selfP){
+  try{
+    const msgs=(chat&&chat.messages)||[];
+    for(let i=msgs.length-1;i>=0;i--){
+      const m=msgs[i];
+      if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
+      if(!m.content||!String(m.content).trim())continue;
+      if(m.role==='user'){
+        if(m.whisperTo && selfP && m.whisperTo!==selfP.id)continue;   // not yours to hear
+        return {name:state.user,text:String(m.content).trim()};
+      }
+      const sp=m.speaker||"";
+      if(!sp||/^Narrator$/i.test(sp))continue;
+      if(selfP && ((m.speakerId&&m.speakerId===selfP.id)||sp===selfP.name))continue;   // your own line
+      if(selfP && Array.isArray(m.present) && !witnessedBy(m,selfP))continue;          // you weren't there
+      let text=String(m.content);
+      if(selfP && state.narrPrivacy!==false){ text=spokenOnly(text)||""; if(!text.trim())continue; }
+      return {name:sp,text:text.trim()};
+    }
+  }catch(e){}
+  return null;
 }
 /* ============================ GENRE PACK (v20) ============================
    Per-universe genre flavor injected as labeled BLOCKS into every genre-sensitive prompt WITHOUT
@@ -14543,27 +14631,35 @@ function _gpTail(section,chat,asPrefix){
   return asPrefix?(b+"\n\n"):("\n\n"+b);
 }
 
-/* ===== PAYLOAD LAYOUT SYSTEM (v19) ============================================
+/* ===== PAYLOAD LAYOUT SYSTEM (v19, restructured v30) ==========================
    Each reply payload (Solo / Multi-character / Gamemaster reaction) is an ORDERED LIST of
-   blocks. Block CONTENT is produced exactly as before (the code below is the old builders,
-   restructured to return a {blockId: content} map instead of a joined string); block ORDER
-   comes from state.payloadLayouts[key] (user-editable in Settings → Payloads), falling back
-   to the default order below — which reproduces the previous hardcoded payload byte-for-byte.
-   The special "__history__" block marks where the chat transcript sits: blocks BEFORE it are
-   joined into the pre-dialogue system message, blocks AFTER it into the post-dialogue tail
-   system message. Nothing is locked: moving a tail block above the dialogue is allowed (with
-   the known drift trade-off), and the three payloads are ordered independently. */
-/* (!) COUPLING GUARDS FOR FUTURE EDITS (read before touching anything payload-related):
-   1. ADDING/REMOVING A BLOCK = 4 places: (a) produce it in buildSystemPromptBlocks /
-      buildCharPromptBlocks / buildTailBlocks under the block id; (b) add the id to the
-      `order` array of EVERY payload that should carry it — solo, multi, AND gm. (!) gm SHARES
-      solo's `blocks` map but has its OWN `order` array (this exact asymmetry caused a shipped
-      bug in v19.2 — trackers/calendar were missed in gm.order). (c) add the `blocks{}` entry;
-      (d) if it wraps fixed text, wire the fragment 3-leg (see BLOCK_TPL_DEFAULTS header).
-   2. The three reply paths must stay SYMMETRIC in block CONTENT (producers); ORDER may
-      diverge (user decision, 2B). Never fix a producer in one path only.
-   3. Saved user layouts self-heal: payloadOrder() re-inserts blocks a saved layout doesn't
-      know at their default position — adding a block needs NO migration.
+   blocks. Block CONTENT comes from buildCharPromptBlocks (pre-dialogue) and buildTailBlocks
+   (post-dialogue), each returning a {blockId: content} map; block ORDER comes from
+   state.payloadLayouts[key] (user-editable in Settings → Payloads), falling back to
+   REPLY_ORDER below. The special "__history__" block marks where the chat transcript sits:
+   blocks BEFORE it are joined into the pre-dialogue system message, blocks AFTER it into the
+   post-dialogue tail system message. Nothing is locked: moving a tail block above the dialogue
+   is allowed (with the known drift trade-off), and the three payloads order independently.
+
+   THE SHAPE (v30), in default order:
+     universal (task · universe setting · formatting + story language)
+     → who you are (bio · relationships · scenario · others present)
+     → who you are responding to (their card · the player's, when they're not the target
+       · how you feel toward them)
+     → what you remember (distant, then recent)
+     → [ THE DIALOGUE ]
+     → the line you are answering · how you speak · the scene right now · guidance · guardrails
+
+   (!) COUPLING GUARDS FOR FUTURE EDITS (read before touching anything payload-related):
+   1. ADDING/REMOVING A BLOCK = 3 places: (a) produce it in buildCharPromptBlocks or
+      buildTailBlocks under the block id; (b) add the id to REPLY_ORDER; (c) add the
+      REPLY_BLOCKS{} entry; (d) if it wraps fixed text, wire the fragment 3-leg (see the
+      BLOCK_TPL_DEFAULTS header). All three payloads share ONE block map (REPLY_BLOCKS) and
+      one default order, so there is no longer a per-payload asymmetry to miss.
+   2. There is ONE content producer for every reply path — every reply is one character
+      speaking as themselves. Do not reintroduce a per-path producer.
+   3. Saved user layouts self-heal: payloadOrder() drops ids it no longer knows and re-inserts
+      blocks a saved layout doesn't know at their default position — no migration needed.
    4. Do NOT rename block ids — saved layouts reference them by string; a rename loses the
       user's placement (the block re-inserts at its default position).
    5. (!) WHEN REWRITING THE PAYLOAD SETTINGS UI: v19.1's span replacement silently DROPPED
@@ -14571,72 +14667,62 @@ function _gpTail(section,chat,asPrefix){
       prompt saving and the reorder arrows until v19.21. node --check cannot catch this —
       the call sites are inside HTML template strings. After any UI rewrite, sweep: every
       function named in an onclick/oninput in the generated HTML must still be defined. */
+/* v30 — ONE BLOCK SET FOR ALL THREE PAYLOADS. Every reply is one character speaking for
+   themselves (the turn router made the whole-cast "Name:" script obsolete), so solo, multi and
+   gamemaster share the same producers and the same block map; only the ORDER arrays are separate,
+   so a user can still tune each path independently. */
+const REPLY_ORDER=["task","world","format",
+  "your_bio","relationships","scenario","others_present",
+  "response_target","player","feelings",
+  "distant_memories","recent_memories","situation",
+  "__history__",
+  "last_line","speaking_style","scene_now","calendar","quests","private_intent",
+  "response_guidance","final_guardrails","spoken_delivery"];
+const REPLY_BLOCKS={
+  task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
+  world:{label:"Universe setting",kind:"dyn",desc:"The current universe's setting text. Universal — true for every character."},
+  format:{label:"Formatting rules",kind:"prompt",promptKey:"formatRules",desc:"Asterisks/underscores/quotes formatting contract, plus the player's selected story language. Universal — true for every character."},
+  your_bio:{label:"⚠️ Who you are roleplaying as",kind:"dyn",desc:"The identity sheet of the ONE character this payload speaks as: identity, backstory, personality, how they behave, quests, goals & ambitions, what they quietly want, appearance, wardrobe, where they live."},
+  relationships:{label:"Your relationships",kind:"dyn",desc:"This character's full relationship sheet ([here now] marks who is present)."},
+  scenario:{label:"Scenario",kind:"dyn",desc:"The character's scenario, when set."},
+  others_present:{label:"Others present",kind:"dyn",desc:"Short list of who else is within earshot."},
+  response_target:{label:"⚠️ Who you are responding to",kind:"dyn",desc:"The person this turn is aimed at — the player OR another character — with their backstory and appearance."},
+  player:{label:"Player character",kind:"dyn",desc:"Who the human player is. Rendered only when the response target is someone else, so the player never drops out of the payload."},
+  feelings:{label:"How you feel toward them",kind:"dyn",desc:"Considered + momentary relationship prose toward the response target (or the stranger notice on a first encounter)."},
+  distant_memories:{label:"Distant memories",kind:"dyn",desc:"Long-term, condensed recollections, numbered. (Diaries are never injected.)"},
+  recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered, with the rule that anything not listed did not happen."},
+  situation:{label:"Situation (entering/leaving)",kind:"dyn",desc:"Only appears when this character is arriving to or leaving the scene this turn."},
+  __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript (witness-scoped for this character). Blocks below this line are delivered AFTER the dialogue."},
+  last_line:{label:"⚠️ The line you are responding to",kind:"dyn",desc:"The last real DIALOGUE line in the transcript — not a day marker, presence note, travel beat or narration — pulled out and highlighted."},
+  speaking_style:{label:"⚠️ How you speak",kind:"dyn",desc:"This character's voice, delivered where the line actually gets written."},
+  scene_now:{label:"Scene right now",kind:"dyn",desc:"How to read the situation, then CURRENT DAY · your current location · sub-areas · privacy (who can hear you, who is one door away) · your trackers."},
+  calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
+  quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text) — so the people a quest is about actually know their part of it."},
+  private_intent:{label:"Private intent coloring",kind:"dyn",desc:"A one-turn instruction when this character holds a live scheme/warmth toward someone PRESENT. (A standing aim toward someone absent rides in the bio, under the goals.)"},
+  response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to, and what the turn has to do."},
+  final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing, consistency, and the no-fabricated-past rules."},
+  spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"While voicing is on with the xAI engine: the delivery-tag coaching (xAI TTS renders the tags expressively; they're hidden on screen). Otherwise, while recent replies still carry the markup: the format reset that orders the model to drop it."}
+};
 const PAYLOAD_DEFS={
   solo:{
     label:"Solo Reply",
-    desc:"One model voices the scene (single-character chats; also the whole-scene prompt when several characters are present in solo mode).",
-    order:["task","world","format","genre_voice","characters","player","ooc","distant_memories","multi_format","__history__","scene_now","trackers","calendar","quests","private_intent","recent_memories","response_guidance","feelings","final_guardrails","spoken_delivery"],
-    blocks:{
-      task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles)."},
-      world:{label:"Universe / world setting",kind:"dyn",desc:"The current universe's setting text."},
-      format:{label:"Formatting rules",kind:"prompt",promptKey:"formatRules",desc:"Asterisks/underscores/quotes formatting contract."},
-      genre_voice:{label:"Genre pack voice",kind:"dyn",desc:"Per-universe tone/register flavor. Empty when the universe has no genre pack."},
-      characters:{label:"Character bio(s) + relationships + scenario",kind:"dyn",desc:"The character card(s) the model plays, their relationship sheets, and the scenario."},
-      player:{label:"Player character",kind:"dyn",desc:"Who the human player is in this story."},
-      ooc:{label:"Out-of-character commands",kind:"dyn",desc:"The OOC command contract."},
-      distant_memories:{label:"Distant memories",kind:"dyn",desc:"Consolidated/background-tier memories."},
-      multi_format:{label:"Multi-character format",kind:"dyn",desc:"Name-prefix format rules. Only appears when several characters are present in a solo-mode scene."},
-      __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript. Blocks below this line are delivered AFTER the dialogue."},
-      scene_now:{label:"Scene right now",kind:"dyn",desc:"Day/time, authoritative location, sub-area privacy, who is present."},
-      trackers:{label:"Tracker state",kind:"dyn",desc:"Visible/shared tracker lines ([ … ]) for this scene. Own block since v19.2 — movable; the tracker ENGINE prompt lives in Engine payloads → Tracker Engine."},
-      calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
-      quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text) — so the people a quest is about actually know their part of it."},
-      private_intent:{label:"Private intent coloring",kind:"dyn",desc:"A one-turn instruction when this character holds a live scheme/warmth toward someone present."},
-      recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories (background — shape behaviour, not recited)."},
-      response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
-      feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Considered + momentary relationship prose (or the stranger notice on a first encounter)."},
-      final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"While voicing is on with the xAI engine: the delivery-tag coaching (xAI TTS renders the tags expressively; they're hidden on screen). Otherwise, while recent replies still carry the markup: the format reset that orders the model to drop it."}
-    }
+    desc:"The reply payload when exactly one character is present.",
+    order:REPLY_ORDER.slice(),
+    blocks:REPLY_BLOCKS
   },
   multi:{
     label:"Multi-Character Reply",
-    desc:"Built once PER CHARACTER in a multi-character chain — each responder gets their own copy.",
-    order:["task","world","format","genre_voice","your_bio","relationships","scenario","others_present","player","ooc","distant_memories","situation","__history__","scene_now","trackers","calendar","quests","private_intent","recent_memories","response_guidance","feelings","final_guardrails","spoken_delivery"],
-    blocks:{
-      task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction."},
-      world:{label:"Universe / world setting",kind:"dyn",desc:"The current universe's setting text."},
-      format:{label:"Formatting rules",kind:"prompt",promptKey:"formatRules",desc:"Asterisks/underscores/quotes formatting contract."},
-      genre_voice:{label:"Genre pack voice",kind:"dyn",desc:"Per-universe tone/register flavor."},
-      your_bio:{label:"Your character bio",kind:"dyn",desc:"The card of the ONE character this copy of the payload speaks as."},
-      relationships:{label:"Your relationships",kind:"dyn",desc:"This character's full relationship sheet ([here now] marks presence)."},
-      scenario:{label:"Scenario",kind:"dyn",desc:"The character's scenario, when set."},
-      others_present:{label:"Others present",kind:"dyn",desc:"Short list of who else is within earshot."},
-      player:{label:"Player character",kind:"dyn",desc:"Who the human player is."},
-      ooc:{label:"Out-of-character commands",kind:"dyn",desc:"The OOC command contract."},
-      distant_memories:{label:"Distant memories",kind:"dyn",desc:"Consolidated/background-tier memories."},
-      situation:{label:"Situation (entering/leaving)",kind:"dyn",desc:"Only appears when this character is arriving to or leaving the scene this turn."},
-      __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript (witness-scoped for this character). Blocks below are delivered AFTER it."},
-      scene_now:{label:"Scene right now",kind:"dyn",desc:"Day/time, location, privacy, presence."},
-      trackers:{label:"Tracker state",kind:"dyn",desc:"Visible/shared tracker lines ([ … ]) for this scene. Own block since v19.2 — movable; the tracker ENGINE prompt lives in Engine payloads → Tracker Engine."},
-      calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
-      quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text)."},
-      private_intent:{label:"Private intent coloring",kind:"dyn",desc:"One-turn coloring from a live intent toward someone present."},
-      recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories."},
-      response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to."},
-      feelings:{label:"How you feel toward the target",kind:"dyn",desc:"Relationship prose or the stranger notice."},
-      final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing rules."},
-      spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"Delivery-tag coaching while voicing with xAI; the format reset while old markup lingers otherwise."}
-    }
+    desc:"Built once PER CHARACTER in a multi-character scene — the turn router picks who speaks, and each responder gets their own copy of this payload and writes their own line.",
+    order:REPLY_ORDER.slice(),
+    blocks:REPLY_BLOCKS
   },
   gm:{
     label:"Gamemaster Reaction",
-    desc:"A character reacting to a hidden gamemaster beat. Same block set as the Solo payload, ordered independently.",
-    order:["task","world","format","genre_voice","characters","player","ooc","distant_memories","multi_format","__history__","scene_now","trackers","calendar","quests","private_intent","recent_memories","response_guidance","feelings","final_guardrails","spoken_delivery"],
-    blocks:null   // filled below — shares the solo block map (same producers)
+    desc:"A character reacting to a hidden gamemaster beat. Same blocks, ordered independently.",
+    order:REPLY_ORDER.slice(),
+    blocks:REPLY_BLOCKS
   }
 };
-PAYLOAD_DEFS.gm.blocks=PAYLOAD_DEFS.solo.blocks;
 
 /* Effective block order for a payload: the saved user order, sanitized (unknown ids dropped;
    blocks added in a NEWER app version that the saved layout doesn't know are inserted at their
@@ -14671,7 +14757,10 @@ function payloadRemovedSet(key){
    post-dialogue tail message. Either side may come back "" (user moved everything to one
    side) — the THREE call sites (solo sendMessage, multi playCharacterTurn, gm
    playSingleReaction) each skip an empty system message; keep that if(_pl.head/_pl.tail)
-   pattern when adding a new call site, and gate it on the right layout key. */
+   pattern when adding a new call site, and gate it on the right layout key.
+   (!) Every call site must also pass the response target through BOTH halves — {chat,
+   targetName,targetId} to the head builder and the same to buildTailBlocks — or the
+   "who you are responding to" block and the guidance will name different people. */
 function buildPayload(layoutKey, headBlocks, tailBlocks){
   const all=Object.assign({},headBlocks,tailBlocks);
   const head=[],tail=[]; let afterHist=false;
@@ -14693,26 +14782,27 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
 (function _attachBlockTpls(){
   const T={
     task:["task"],world:["world_header"],format:["format_header","narr_shape"],
-    characters:["role_multi","bio_intro_solo","rel_wrap_multi","rel_header","scenario_header"],
-    your_bio:["bio_intro_multi"],relationships:["rel_header"],scenario:["scenario_header"],
+    your_bio:["bio_header","bio_intro","intent_aim_warm","intent_aim_cool"],
+    relationships:["rel_header"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
+    response_target:["target_header","target_player","target_char","target_bg","target_look"],
     player:["player_intro","player_bg","player_look"],
-    ooc:["ooc"],multi_format:["multi_format"],
     situation:["situation_leaving","situation_arriving"],
-    scene_now:["scene_header","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_alone","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
-    private_intent:["intent_warm","intent_hostile","intent_aim_warm","intent_aim_cool"],
-    recent_memories:["mem_recent_header"],distant_memories:["mem_distant_header","mem_longterm_header"],
+    last_line:["last_line_header","last_line_footer"],
+    speaking_style:["style_header"],
+    scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
+    private_intent:["intent_warm","intent_hostile"],
+    recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
-    final_guardrails:["heat_advance","rails_header","rail_voice","rail_single_multi","rail_single_solo","rail_dialogue","rail_beat","rail_question","rail_consistent_known","rail_consistent_stranger"],
+    final_guardrails:["heat_advance","rails_header","rail_voice","rail_single_solo","rail_beat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
-  const SCOPE={world:"universe",genre_voice:"universe",characters:"chat",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",player:"chat",distant_memories:"chat",recent_memories:"chat",scene_now:"chat",trackers:"chat",calendar:"chat",quests:"chat"};
-  [PAYLOAD_DEFS.solo.blocks,PAYLOAD_DEFS.multi.blocks].forEach(bl=>{
-    Object.keys(bl).forEach(id=>{
-      if(T[id])bl[id].tpls=T[id];
-      if(SCOPE[id])bl[id].scope=SCOPE[id];
-    });
+  const SCOPE={world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
+  // All three payloads share ONE block map now, so a single pass covers them.
+  Object.keys(REPLY_BLOCKS).forEach(id=>{
+    if(T[id])REPLY_BLOCKS[id].tpls=T[id];
+    if(SCOPE[id])REPLY_BLOCKS[id].scope=SCOPE[id];
   });
   // Dev-time drift guard (W6-style): every fragment referenced by a block must exist in the
   // defaults, and every default must be reachable from some block — otherwise a fragment is
@@ -14861,8 +14951,7 @@ const ENGINE_PAYLOAD_DEFS=[
    unknown placeholders render LITERALLY into the model's input. Changing a producer's map =
    update the fragment default AND consider users' customized fragments — there is NO
    _refreshPipe for fragments; a customized override is kept as-is across default upgrades.
-   (!) NO per-universe layer for fragments (deliberate). (!) DEFAULT_OOC must stay defined
-   ABOVE this object (referenced at definition time). Backticks/${ inside values must be
+   (!) NO per-universe layer for fragments (deliberate). Backticks/${ inside values must be
    escaped (template literal). */
 const BLOCK_TPL_DEFAULTS={
   // v19.5 — shown INSTEAD of spoken_delivery right after a voice session ends, while the recent
@@ -14881,41 +14970,53 @@ Make it DIALOGUE-RICH: spoken lines carry the scene — alive, reactive, overlap
 Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
 1. NARRATION FIRST — one compact narration paragraph wrapped in *asterisks*: scene, action, body language. NO quoted speech inside it.
 2. THEN DIALOGUE ONLY — the character's spoken lines in "quotes". Nothing after the first quote but speech: no narration, no *actions*, no stage directions between or after the lines.`,
-  // --- head: shared ---
+  // --- head: UNIVERSAL — valid for every character in every scene ---
   task:`# TASK\nYou are {{char}}. Your task is to embody your personality fully and generate responses as someone with your responsibility would.`,
-  world_header:`# UNIVERSE / WORLD SETTING`,
+  world_header:`# UNIVERSE SETTING`,
   format_header:`# FORMATTING RULES`,
   scenario_header:`# SCENARIO`,
-  player_intro:`# PLAYER CHARACTER\n{{user}} is the human player in this roleplay.`,
-  player_bg:`Background: {{bio}}`,
-  player_look:`Appearance: {{look}}`,
-  ooc:`# OUT OF CHARACTER COMMANDS\n`+DEFAULT_OOC,
-  // --- head: solo/gm ---
-  role_multi:`# ROLE\nYou are the narrator and voice of MULTIPLE characters in an immersive roleplay with {{user}}: {{names}} and {{last}}. Stay fully in character for each. Never break character or mention being an AI.`,
-  bio_intro_solo:`You are {{char}}, a character in an immersive roleplay with {{user}}. Stay fully in character at all times. Never break character or mention being an AI.`,
-  rel_wrap_multi:`{{char}}'s established ties (hold whether present or not; [here now] = in this scene):`,
+  // --- head: THE CHARACTER YOU PLAY ---
+  bio_header:`# ⚠️ THIS IS WHO YOU ARE ROLEPLAYING AS ⚠️`,
+  bio_intro:`You are {{char}}. Stay fully in character as {{char}} only, at all times. Never break character or mention being an AI.`,
   rel_header:`# {{char}}'s RELATIONSHIPS (who the people in your life are to you)\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.`,
-  multi_format:`# MULTI-CHARACTER FORMAT\nPrefix each character's turn with their name and a colon on its own line, e.g.\n{{first}}: ...\nOnly voice the characters who would naturally be present and involved in this beat; you do not have to use every character every turn. Let {{user}} drive their own actions.`,
-  // --- head: multi-character path ---
-  bio_intro_multi:`You are {{char}}, one character in a multi-character roleplay with {{user}}. Stay fully in character as {{char}} only. Never break character or mention being an AI.`,
   others_header:`# OTHERS PRESENT (within earshot)`,
   others_footer:`These people, together with {{user}}, are the ONLY people present right now. Address {{user}} or any of them by name, but don't bring in, reply to, or refer to anyone who isn't here as though they were.`,
+  // --- head: THE PERSON YOU ARE RESPONDING TO ---
+  target_header:`# ⚠️ THIS IS WHO YOU ARE RESPONDING TO ⚠️`,
+  target_player:`{{target}} is the human player in this roleplay. Your reply this turn is aimed at {{target}}.`,
+  target_char:`{{target}} is another character, here in the scene with you. Your reply this turn is aimed at {{target}}.`,
+  target_bg:`<backstory>{{bio}}</backstory>`,
+  target_look:`<appearance>{{look}}</appearance>`,
+  // Rendered ONLY when the response target is NOT the player, so the player never drops out of the payload.
+  player_intro:`# PLAYER CHARACTER\n{{user}} is the human player in this roleplay — in the story with you, even though this particular reply is aimed at someone else.`,
+  player_bg:`Background: {{bio}}`,
+  player_look:`Appearance: {{look}}`,
   situation_leaving:`# SITUATION\n{{char}} is leaving the scene right now. Give a brief parting beat — a final line, gesture, or exit consistent with why you're going. Keep it short.`,
   situation_arriving:`# SITUATION\n{{char}} has just entered the scene. Give a brief entrance beat — how you arrive and your first words or action as you join.`,
   // --- tail: scene ---
   scene_header:`# SCENE RIGHT NOW`,
-  scene_loc:`>> YOUR CURRENT LOCATION: {{where}}. THIS IS WHERE YOU ARE RIGHT NOW. << (This location is authoritative for this turn — it overrides any usual or home location.)`,
+  // Opening brief: how to READ the rest of this block. Rendered as the "scene" part.
+  scene_intro:`This is your live situation. Do not recite it — let it shape what you do.
+- CURRENT DAY is your anchor for time. Judge how long ago a memory or event was and refer to it the way a person would: if it is Day 5 now and it happened on Day 4, that is "yesterday"; a few days back is "the other day"; long ago is "a while ago". Never say a day number out loud.
+- TIME OF DAY sets what is plausible right now — who is awake, what is open, what fits the hour. Let it bound what you suggest and what you do.
+- YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.
+- PRIVACY sets how freely you speak. Alone, you can be open and intimate. With others in earshot, weigh what each of them is to you before you speak: guard secrets, choose your words, pick who you aim a line at. Someone whose presence makes the moment dangerous should change how you react — not always the same way, but never ignored.
+- YOUR TRACKERS are real conditions about you. They shape mood, choices, and what is at stake. Act on them instead of leaving them unused.`,
+  scene_day:`CURRENT DAY: Day {{day}}{{period}}`,
+  scene_loc:`⚠️ YOUR CURRENT LOCATION: {{where}}. THIS IS WHERE YOU ARE RIGHT NOW. ⚠️`,
   scene_loc_sub:` — specifically the {{sub}}`,
   // Whose ground this is — home/host dynamics. Fires only when the current place has a resident.
   scene_here_yours:`This place is YOUR home — you live here. You are on your own ground: everyone else present is a guest or visitor unless they're noted as living here too. Carry the ease, ownership, and small authority of someone in their own space.`,
   scene_here_host:`This place is {{host}}'s home — {{host}} lives here and you do not. You are a guest/visitor on their ground, not your own. Let that show: it is {{host}}'s space and {{host}} is the host here.`,
-  scene_subareas:`These are the sub-areas inside {{loc}} (and how private each is): {{areas}}.\nYou are in the {{sub}} with {{target}}. Each sub-area is its own earshot — people in another sub-area can't hear you here. If you want privacy you may suggest moving to a more private sub-area.`,
-  scene_privacy:`Privacy here: {{label}}.`,
-  scene_present:`Physically present with you right now — and the ONLY people who can see or hear you — are: {{names}}. Speak and react only to those here. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot, so don't talk to them or act as if they can respond.`,
-  scene_alone:`You are alone with {{target}} right now — no one else is present or within earshot. Do not address or bring in anyone who isn't here.`,
+  scene_subareas:`SUB-AREAS: these are the sub-areas inside {{loc}} (and how private each is): {{areas}}.\nYou are in the {{sub}}. Each sub-area is its own earshot — people in another sub-area cannot hear you here. If you want privacy you may suggest moving to a more private sub-area.`,
+  scene_privacy:`PRIVACY: {{label}}.`,
+  scene_present:`PRIVACY: you are NOT alone. Here in the room with you, seeing and hearing everything you say and do: {{names}}. They are the ONLY people who can see or hear you. Speak and react only to them. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot.`,
+  scene_alone:`PRIVACY: you are currently alone with {{target}} — no one else is present or within earshot. Do not address or bring in anyone who isn't here.`,
+  // Same location, other sub-area: they can't hear you, but they can walk in.
+  scene_nearby:`Not in this room, but elsewhere in {{loc}}: {{names}}. They cannot hear what you say here — but they could come in at any moment.`,
   // v19.71 — shown INSTEAD of scene_present/scene_alone when the VIEWER is in a different sub-area
   // than everyone else (e.g. a fresh arrival standing at the entrance).
-  scene_apart:`You are at {{sub}}, apart from the others. You cannot see or hear what happens in the other areas — you only know what you could perceive from here.`,
+  scene_apart:`PRIVACY: you are at {{sub}}, apart from everyone else. You cannot see or hear what happens in the other areas — you only know what you could perceive from here.`,
   // --- tail: transition awareness — a blunt call-out of what changed since your last reply.
   // Emitted at the TOP of SCENE RIGHT NOW only when something actually just changed; otherwise absent.
   scene_changed_header:`⚠️ WHAT JUST CHANGED (this happened moments ago — react to it before anything else, and stay consistent with it):`,
@@ -14929,17 +15030,23 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
   // v22 — SELF-AWARENESS of a plan whose target isn't in the room (or is the player). Keeps the holder
   // goal-driven and consistent with their own intent across scenes and texts, without exposing a scheme.
-  intent_aim_warm:`# WHAT YOU QUIETLY WANT\nPrivately, you are working toward something with {{target}}: {{aim}} (a {{kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
-  intent_aim_cool:`# WHAT YOU QUIETLY WANT\nPrivately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
+  intent_aim_warm:`Privately, you are working toward something with {{target}}: {{aim}} (a {{kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
+  intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
-  mem_recent_header:`# RELEVANT MEMORIES\nThings you personally did, saw, or learned that bear on THIS moment — stay consistent with these:`,
-  mem_distant_header:`# YOUR DIARY\nShort entries you wrote on earlier days — how you remember what happened then. Treat as background you carry, not something to recite:`,
-  mem_longterm_header:`# YOUR LONG-TERM MEMORY\nDurable recollections condensed from many past events — the lasting things you carry. Background, not something to recite:`,
+  mem_recent_header:`# ⚠️ THESE ARE YOUR RECENT MEMORIES ⚠️`,
+  mem_recent_instr:`Things you personally did, saw, or learned. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
+Whenever you or anyone else reaches for the past, read this list first. It is the whole of what you remember. If something is not written here, it did not happen and you do not know it — never invent a past event, a shared history, or a conversation to fill the gap.`,
+  mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
+  mem_distant_instr:`Older, condensed recollections — the lasting things you carry from further back. They are background: they colour who you are and how you read people, but you do not recite them. The same rule holds as for your recent memories: if it is not written here, you do not remember it.`,
   // --- tail: guidance ---
-  guidance_open:`# RESPONSE GUIDANCE\nYou are {{self}}. Continue the scene with your single next turn`,
-  guidance_target:`, responding to {{target}}`,
-  guidance_close:`. Advance the moment and leave room for {{who}} to react.`,
-  guidance_reply:`You are replying to {{target}}'s most recent message — the final line in the transcript above. Respond to what {{target}} actually just said or did. If that line was aimed at someone else, react as yourself to it rather than answering in the other person's place, and don't answer a question that wasn't put to you.`,
+  guidance_open:`# RESPONSE GUIDANCE\nWrite one turn, as {{self}}, and stop`,
+  guidance_target:`. It is aimed at {{target}}`,
+  guidance_close:`. Move the moment forward — do something, change something, let something land — and leave {{who}} room to answer.`,
+  guidance_reply:`Answer the highlighted line above: that is what {{target}} just said or did, and it is what you are reacting to. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
+  // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
+  last_line_header:`# ⚠️ THIS IS THE LINE YOU ARE RESPONDING TO ⚠️`,
+  last_line_footer:`Everything above this is context. THIS is the line your next turn answers.`,
+  style_header:`# ⚠️ HOW YOU SPEAK ⚠️\nThis is your voice. Write the line the way this describes — rhythm, vocabulary, what you do and don't say out loud:`,
   // --- tail: feelings ---
   feel_header:`# HOW YOU FEEL TOWARD {{target_up}}\nThese are your private feelings — let them shape how you speak and act, but never state them outright.`,
   feel_lasting:`LASTING / CONSIDERED VIEW (your settled, filtered opinion — this is the real foundation and should govern your behaviour): {{desc}}`,
@@ -14952,14 +15059,16 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   stranger:`# YOU DON'T KNOW {{target_up}} YET\nYou have no prior history, evaluation, or relationship with {{target}} — this is effectively a stranger to you. React as a real person would to someone they've just encountered: with the reserve, politeness, wariness, curiosity, or indifference your character would actually show. Do NOT display warmth, flirtation, trust, rivalry, or emotional investment you have not earned. Let any rapport build gradually from how they actually behave toward you.`,
   // --- tail: guardrails ---
   rails_header:`# FINAL GUARDRAILS`,
-  rail_voice:`Speak and act ONLY as {{self}} — a single response in your own voice, never a script of several characters, and never voicing {{user}}, the narrator, or anyone else.`,
-  rail_single_multi:`Write ONLY {{self}}'s turn — a single response, never a script of several characters.`,
-  rail_single_solo:`Write a single in-character response.`,
-  rail_dialogue:`Lead with dialogue and action. Keep narration thin — a light connective layer, not the substance. Avoid long stacked stage directions.`,
-  rail_beat:`One emotional beat is stronger than five. Don't resolve everything in one reply; leave things unsaid.`,
-  rail_question:`Do NOT end with a reflexive question aimed at {{who}}. End on what you DO or leave a beat open instead.`,
-  rail_consistent_known:`Stay consistent with your established voice, mood, and the relationship above — don't reset between replies.`,
-  rail_consistent_stranger:`Stay consistent with your established voice and mood — don't reset between replies. Remember you do not know {{who}} yet; don't manufacture familiarity.`,
+  rail_voice:`You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth or the narrator's.`,
+  rail_single_solo:`One reply. Not a scene, not a chain of exchanges — one turn.`,
+  rail_beat:`One emotional beat lands harder than five. Don't resolve everything in a single reply; leave things unsaid.`,
+  rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO, or on a beat left hanging.`,
+  rail_consistent_known:`Hold your voice, your mood, and the relationship you already have. You do not reset between replies.`,
+  rail_consistent_stranger:`Hold your voice and your mood — you do not reset between replies. And remember you do not know {{who}} yet: don't manufacture familiarity you haven't earned.`,
+  rail_facts:`Hold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.`,
+  rail_pushback:`If {{user}} states something that contradicts a fact you clearly know — your identity, your relationships, your history, who owns what — do not just accept it. Correct it, doubt it, or push back the way you actually would, then carry on. But an unfamiliar face, a new event, or a detail you simply have no memory of is the story moving: take it as real and respond to it rather than arguing with it.`,
+  rail_nofabricate:`Never invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene and it is not in the memories or background you were given, you do not have it.`,
+  rail_unknown_past:`If {{user}} brings up something from the past, check your memories. If it is there, it happened. If it is NOT there, don't accept it as fact and don't invent details to match — react as yourself to not recalling it: say it doesn't sound familiar, that you don't remember it that way, or ask them to remind you. Your memory can have holes, so word it as uncertainty ("I don't remember that…") rather than a flat denial — unless it contradicts something you clearly DO know, in which case push back as above.`,
   // --- tail: spoken delivery (whole block; was SPOKEN_DELIVERY_BLOCK) ---
   // v24.3 — ACTIVE again: rendered into the spoken_delivery slot whenever voicing is on with the
   // xAI engine (buildTailBlocks), so the model writes expressive delivery tags xAI TTS renders
@@ -14986,98 +15095,16 @@ function blkTpl(key){
   return (typeof o==="string"&&o.trim())?o:(BLOCK_TPL_DEFAULTS[key]||"");
 }
 
-/* (!) EQUIVALENCE DISCIPLINE: the default layout + default fragments reproduce the pre-v19
-   payload byte-for-byte (Node-harness verified at v19/v19.2). Preserve that for untouched
-   installs: change fixed text via the fragment defaults, not inline literals, and re-run an
-   old-vs-new comparison when restructuring. ALL fixed prose in these three producers MUST go
-   through blkTpl() — an inline literal is invisible in the Settings editor and breaks the
-   "everything constant is editable" contract. */
-/* Block producers for the Solo / Gamemaster payloads. This is the former buildSystemPrompt,
-   restructured: identical content, but each section lands in a named block instead of a fixed
-   push order. With the default layout, buildPayload joins them into the exact same string. */
-function buildSystemPromptBlocks(injectedMemories){
-  const cast=presentCast();   // build around who is actually present
-  const multi=cast.length>1;
-  const chat=curChat();
-  const B={};   // blockId → "# HEADER\n...content"
-  const charName=multi?"the characters":((cast[0]||curCast()[0]||{}).name||"the character");
-
-  // task — the core directive comes first.
-  {let task=fillTpl(blkTpl("task"),{char:charName});
-   const base=(up("baseInstruction")||"").trim();
-   if(base)task+=`\n\n${base}`;
-   B.task=task;}
-
-  // world — UNIVERSE / WORLD SETTING
-  const _uni=curUniverseObj();
-  if(_uni&&_uni.setting&&_uni.setting.trim())B.world=`${blkTpl("world_header")}\n${_uni.setting.trim()}`;
-
-  // format — FORMATTING RULES; if the prompt already starts with its own "#" header, don't
-  // wrap it in a second one (that produced an empty-looking duplicate header).
-  {const _fr=(up("formatRules")||"").trim();
-   if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
-   if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
-   // Player-selected story language — appended last so it overrides any language rule above.
-   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
-
-  // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
-  {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
-
-  // characters — CHARACTER BIO(S) (+ embedded relationships + scenario), grouped into one block.
-  {const parts=[];
-  if(multi){
-    const names=cast.map(c=>c.name);
-    parts.push(fillTpl(blkTpl("role_multi"),{user:state.user,names:names.slice(0,-1).join(", "),last:names[names.length-1]}));
-    cast.forEach(c=>{
-      const loc=charLocationLine(c);
-      let cb=`<character name="${c.name}">\n`+charBioBlock(c,{self:false,locLine:loc});
-      const sheet=relSheetBlockFull(c);
-      if(sheet)cb+=`\n  <relationships>${fillTpl(blkTpl("rel_wrap_multi"),{char:c.name})}\n${sheet}</relationships>`;
-      cb+=`\n</character>`;
-      parts.push(cb);
-    });
-    const scen=cast.map(c=>c.scenario).filter(Boolean)[0];
-    if(scen)parts.push(`${blkTpl("scenario_header")}\n${scen}`);
-  }else{
-    const p=cast[0]||curCast()[0];
-    if(p){
-      const loc=charLocationLine(p);
-      let rb=`<character_you_play>\n${fillTpl(blkTpl("bio_intro_solo"),{char:p.name,user:state.user})}\n`+
-             charBioBlock(p,{self:true,locLine:loc})+`\n</character_you_play>`;
-      parts.push(rb);
-      // RELATIONSHIPS — right after the bio. A character always knows their OWN relationships
-      // (family, history, rivalries) whether or not those people are physically present — otherwise
-      // they invent a stranger out of their own mother. We load the FULL sheet (their own knowledge,
-      // not a leak), and mark who is actually nearby right now so they act on presence correctly.
-      {const sheet=relSheetBlockFull(p);
-       if(sheet)parts.push(`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`);}
-      if(p.scenario)parts.push(`${blkTpl("scenario_header")}\n${p.scenario}`);
-    }
-  }
-  if(parts.length)B.characters=parts.join("\n\n");}
-
-  // player — PLAYER BIO: who the human player is in this story (NOT necessarily who you're
-  // replying to this turn; the actual target is tagged inline on the last message and
-  // re-stated in the post-dialogue guidance block).
-  {let pb=fillTpl(blkTpl("player_intro"),{user:state.user});
-   if(state.userBio&&state.userBio.trim())pb+=`\n${fillTpl(blkTpl("player_bg"),{bio:state.userBio.trim()})}`;
-   if(state.userLook&&state.userLook.trim())pb+=`\n${fillTpl(blkTpl("player_look"),{look:state.userLook.trim()})}`;
-   B.player=pb;}
-
-
-  // ooc — OUT OF CHARACTER COMMANDS (default position: low; rare edge case).
-  B.ooc=fillTpl(blkTpl("ooc"),{user:state.user});
-
-  // distant_memories — DISTANT tier only (background). RECENT memories live in the tail blocks.
-  {const dm=memoryBlocks(injectedMemories,"diary").concat(memoryBlocks(injectedMemories,"longterm")); if(dm.length)B.distant_memories=dm.join("\n\n");}
-
-  // multi_format
-  if(multi){
-    const names=cast.map(c=>c.name);
-    B.multi_format=fillTpl(blkTpl("multi_format"),{first:names[0],user:state.user});
-  }
-
-  return B;
+/* SOLO / GAMEMASTER head blocks. Since the turn router landed, EVERY reply — solo, multi, or a
+   gamemaster reaction — is one character speaking for themselves, so all three payloads are built
+   from the same per-character producer below. (The old "one model voices the whole cast with
+   Name: prefixes" branch is gone: both call sites are gated on a single present character, so it
+   had been unreachable for several versions.) */
+function buildSystemPromptBlocks(injectedMemories,opts){
+  const cast=presentCast();
+  const p=cast[0]||curCast()[0];
+  if(!p)return {};
+  return buildCharPromptBlocks(p,cast.slice(1),injectedMemories,null,opts);
 }
 
 /* SCENE-WRITER BRIEFING for a character an event is bringing into the scene.
@@ -15132,17 +15159,68 @@ function briefDesc(s,max){
   const sp=c.lastIndexOf(" "); if(sp>=max*0.5) c=c.slice(0,sp);
   return c.replace(/[\s,;:—-]+$/,"")+"…";
 }
-function buildCharPromptBlocks(p,others,injectedMemories,addressed){
-  const chat=curChat();
-  const B={};
+/* HOW YOU FEEL TOWARD <target> — the considered view (settled, governs behaviour), the momentary
+   charge (impulsive, colors this beat only), and the first-encounter notice when there is no
+   relationship at all. Prose only, never numbers. Returned as {text, knowsTarget} because the
+   guardrails need to know whether this person is still a stranger. */
+function feelingsBlock(chat,selfId,targetId,targetName){
+  const parts=[]; let knowsTarget=true;
+  if(!state.relOn||!chat||!targetId)return {text:"",knowsTarget};
+  const o=relObj(chat,selfId,targetId);
+  const desc=relDescription(o);
+  const hasEval=relHasContent(o);
+  const considered=relConsideredProse(o);
+  const momentary=relMomentaryProse(o);
+  const hasDesc=!!(desc && desc.trim() && !/^Roughly:/.test(desc.trim()) && hasEval);
+  if(hasDesc || considered || momentary){
+    let fb=fillTpl(blkTpl("feel_header"),{target_up:(targetName||"THEM").toUpperCase()});
+    if(hasDesc) fb+=`\n\n${fillTpl(blkTpl("feel_lasting"),{desc:desc.trim()})}`;
+    else if(considered) fb+=`\n\n${fillTpl(blkTpl("feel_lasting_alt"),{considered:considered})}`;
+    if(momentary){
+      fb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary})}`;
+      // The verbose, playable "how it colors your next reply" note from the latest fast read. Only
+      // while there IS a live momentary lean — once the fast axes decay, the note is stale.
+      if(o.stNote && o.stNote.trim()) fb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
+      const tension=relImpulseTension(o);
+      if(tension==="desire") fb+=" "+blkTpl("feel_tension_desire");
+      else if(tension==="anger") fb+=" "+blkTpl("feel_tension_anger");
+      else if(tension==="fear") fb+=" "+blkTpl("feel_tension_fear");
+    }
+    parts.push(fb);
+  }
+  // FIRST ENCOUNTER (player only): no recorded relationship yet → they don't know this person.
+  // An AUTHORED tie from the character sheet ("brother", "wife") still counts as knowing them,
+  // even before any rapport has been SCORED in play — hasEval only reflects runtime scoring.
+  if(targetId==="__user__" && !hasEval){
+    const _tie=relSheetEntry(resolveChar(selfId,chat),"__user__");
+    const _authored=!!(_tie && (_tie.tie||_tie.relationship) && !/^stranger$/i.test((_tie.tie||"").trim()));
+    if(!_authored){
+      knowsTarget=false;
+      parts.push(fillTpl(blkTpl("stranger"),{target_up:(targetName||state.user).toUpperCase(),target:(targetName||state.user)}));
+    }
+  }
+  return {text:parts.join("\n\n"),knowsTarget};
+}
 
+/* Build the PRE-DIALOGUE system blocks for the ONE character who is speaking this turn. Every
+   reply path uses this (see buildSystemPromptBlocks) — there is no whole-cast variant.
+   opts: {chat, targetName, targetId} — who this reply is aimed at. The target may be the player
+   or another character; the "who you are responding to" block is built for whoever it is. */
+function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
+  opts=opts||{};
+  const chat=opts.chat||curChat();
+  const B={};
+  const targetId=(opts.targetId===undefined)?"__user__":opts.targetId;
+  const targetName=opts.targetName||((targetId==="__user__")?state.user:"");
+
+  // ===== UNIVERSAL — true for every character in every scene, so it leads the payload. =====
   // task
   {let task=fillTpl(blkTpl("task"),{char:p.name});
    const base=(up("baseInstruction")||"").trim();
    if(base)task+=`\n\n${base}`;
    B.task=task;}
 
-  // world — UNIVERSE / WORLD SETTING
+  // world — UNIVERSE SETTING
   const _uni=curUniverseObj();
   if(_uni&&_uni.setting&&_uni.setting.trim())B.world=`${blkTpl("world_header")}\n${_uni.setting.trim()}`;
 
@@ -15154,19 +15232,16 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed){
    // Player-selected story language — appended last so it overrides any language rule above.
    B.format=(B.format?B.format+"\n\n":"")+langDirective();}
 
-  // genre_voice — GENRE PACK voice (v20): per-universe tone/register flavor; empty when no pack exists.
-  {const _gv=genrePackBlock("voice",_uni); if(_gv)B.genre_voice=_gv;}
+  // ===== WHO YOU ARE =====
+  // your_bio — the identity sheet. The private aim ("what you quietly want") rides with the goals;
+  // the speaking style is held back for the post-dialogue block, where the line actually gets written.
+  const _intent=intentParts(chat,p.id);
+  B.your_bio=`${blkTpl("bio_header")}\n${fillTpl(blkTpl("bio_intro"),{char:p.name,user:state.user})}\n`+
+             charBioBlock(p,{self:true,noWho:true,styleTail:true,quietWant:_intent.quietWant});
 
-  // your_bio — XML-delimited so this dense, load-bearing identity (incl. traits & goals)
-  // survives attention far better than flat key:value lines.
-  {const loc=charLocationLine(p,chat);
-   let rb=`<character_you_play>\n${fillTpl(blkTpl("bio_intro_multi"),{char:p.name,user:state.user})}\n`+
-          charBioBlock(p,{self:true,locLine:loc})+`\n</character_you_play>`;
-   B.your_bio=rb;}
-
-  // relationships — right after the bio: this character's FULL sheet (their own knowledge —
-  // family, history, rivalries hold whether or not those people are present; otherwise they treat
-  // their own mother as a stranger), with [here now] marking who is actually nearby.
+  // relationships — this character's FULL sheet (their own knowledge — family, history, rivalries
+  // hold whether or not those people are present; otherwise they treat their own mother as a
+  // stranger), with [here now] marking who is actually nearby.
   {const sheet=relSheetBlockFull(p);
    if(sheet)B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`;}
 
@@ -15179,18 +15254,35 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed){
     B.others_present=ob;
   }
 
-  // player — PLAYER BIO (the human player; the per-turn target is tagged inline + in the tail)
-  {let pb=fillTpl(blkTpl("player_intro"),{user:state.user});
-   if(state.userBio&&state.userBio.trim())pb+=`\n${fillTpl(blkTpl("player_bg"),{bio:state.userBio.trim()})}`;
-   if(state.userLook&&state.userLook.trim())pb+=`\n${fillTpl(blkTpl("player_look"),{look:state.userLook.trim()})}`;
-   B.player=pb;}
+  // ===== WHO YOU ARE RESPONDING TO — the player OR another character, whoever it actually is. =====
+  {
+    const isPlayer=(targetId==="__user__"||!targetId);
+    const tName=targetName||state.user;
+    let bio="",look="";
+    if(isPlayer){ bio=(state.userBio||"").trim(); look=(state.userLook||"").trim(); }
+    else { const t=resolveChar(targetId,chat)||(others||[]).find(o=>o.name===tName);
+           if(t){ bio=subUser(String(t.backstory||"")).trim(); look=subUser(lookProse(t.look)||"").trim(); } }
+    let tb=`${blkTpl("target_header")}\n`+fillTpl(blkTpl(isPlayer?"target_player":"target_char"),{target:tName});
+    if(bio) tb+=`\n${fillTpl(blkTpl("target_bg"),{bio:bio})}`;
+    if(look)tb+=`\n${fillTpl(blkTpl("target_look"),{look:look})}`;
+    B.response_target=tb;
+    // The player never drops out of the payload: when the reply is aimed at another character,
+    // {{user}} still gets their own (shorter) card right after.
+    if(!isPlayer){
+      let pb=fillTpl(blkTpl("player_intro"),{user:state.user});
+      if(state.userBio&&state.userBio.trim())pb+=`\n${fillTpl(blkTpl("player_bg"),{bio:state.userBio.trim()})}`;
+      if(state.userLook&&state.userLook.trim())pb+=`\n${fillTpl(blkTpl("player_look"),{look:state.userLook.trim()})}`;
+      B.player=pb;
+    }
+  }
 
+  // feelings — how you feel about the person you are answering. Sits with them, not at the very
+  // end: it is part of knowing who they are to you.
+  {const f=feelingsBlock(chat,p.id,targetId,targetName); if(f.text)B.feelings=f.text;}
 
-  // ooc — OUT OF CHARACTER COMMANDS (default position: low; rare edge case).
-  B.ooc=fillTpl(blkTpl("ooc"),{user:state.user});
-
-  // distant_memories — DISTANT tier only (background). RECENT memories live in the tail blocks.
-  {const dm=memoryBlocks(injectedMemories,"diary").concat(memoryBlocks(injectedMemories,"longterm")); if(dm.length)B.distant_memories=dm.join("\n\n");}
+  // ===== WHAT YOU REMEMBER — distant first, then recent (freshest closest to the dialogue). =====
+  {const dm=memoryBlocks(injectedMemories,"longterm"); if(dm.length)B.distant_memories=dm.join("\n\n");}
+  {const rm=memoryBlocks(injectedMemories,"recent");   if(rm.length)B.recent_memories=rm.join("\n\n");}
 
   // situation — entrance/exit note only (the generic "voice only your turn" rules live in the
   // post-dialogue FINAL GUARDRAILS so they fire closest to generation).
@@ -15304,157 +15396,137 @@ function _recentVoiceMarkup(chat){
 }
 function buildTailBlocks(opts){
   const {chat,selfName,selfId,targetName,targetId,multi,injected}=opts||{};
+  const selfP=(opts&&opts.selfP)||(selfId?resolveChar(selfId,chat):null);
   const B={};
 
-  // (0) SCENE RIGHT NOW — placed in the tail (closest to generation) so the model can't drift on
-  //     where the character is, who's in the room, or the time. This is the single biggest cause
-  //     of roleplay slips, so it sits last-but-for the guidance, not buried thousands of tokens up.
+  // (1) THE LINE YOU ARE RESPONDING TO. The transcript ends with whatever happened last — which is
+  //     often a presence note, a travel beat or GM narration, not a line anyone said to you. Pull
+  //     the last real DIALOGUE line back out and put it right here, alone, so the model answers a
+  //     line instead of answering the furniture.
+  {
+    const ll=lastDialogueLine(chat,selfP);
+    if(ll)B.last_line=`${blkTpl("last_line_header")}\n${ll.name}: ${ll.text}\n\n${blkTpl("last_line_footer")}`;
+  }
+
+  // (2) HOW YOU SPEAK — the character's voice, delivered at the point the line gets written rather
+  //     than buried thousands of tokens up in the bio.
+  if(selfP&&selfP.style&&String(selfP.style).trim())B.speaking_style=`${blkTpl("style_header")}\n${subUser(selfP.style).trim()}`;
+
+  // (3) SCENE RIGHT NOW — closest to generation so the model can't drift on where the character is,
+  //     who is in the room, or the time. This is the single biggest cause of roleplay slips.
+  //     Shape: intro brief · CURRENT DAY · YOUR CURRENT LOCATION · SUB-AREAS · PRIVACY · TRACKERS.
   if(chat){
-    const ssBits=[];
-    ssBits.push(`Day ${chat.gameDay||1}`);
-    {const per=(typeof chatPeriod==="function")?chatPeriod(chat):""; if(per)ssBits.push(per);}
-    if(chat.location&&chat.location.trim()){
-      let where=`at ${chat.location.trim()}`;
-      try{ const here=chat.locationId?locById(chat.locationId):null;
-        if(here&&Array.isArray(here.sublocations)&&here.sublocations.length>1){
-          const pSub=subById(here,curSubId(chat)); if(pSub)where+=` (in the ${pSub.name})`;
-        }
-      }catch(e){}
-      ssBits.push(where);
-    }
-    // who else is physically here (besides this character)
-    let othersHere="";
+    let _viewer=null, othersHere="", nearbyHere="";
     try{
-      // v19.71 — VIEWER-AWARE presence: the scene must be described from where THIS character
-      // stands, not from the player's spot. "With you" = same sub-area (earshot) only; the player
-      // counts when they share it. A GM arrival at the entrance is no longer told they are in the
-      // player's area with everyone else.
+      // v19.71 — VIEWER-AWARE presence: the scene is described from where THIS character stands,
+      // not from the player's spot. "With you" = same sub-area (earshot) only; the player counts
+      // when they share it. A GM arrival at the entrance is no longer told they are in the player's
+      // area with everyone else.
       const _vSub=(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat);
       const _pSubNow=curSubId(chat);
       const _sameSub=id=>((chat.subPos&&chat.subPos[id])||_pSubNow)===_vSub;
       // v19.72 — the presence list carries the VIEWER's OWN tie to each person ("Alev Alemdar —
       // your wife"), so the social stakes of who is standing here are visible at the point of
-      // highest attention, not only in the relationship sheet far up the payload. Ties come from
-      // the viewer's own relationships map (their knowledge — nothing secret can leak), and are
-      // viewer-relative by construction. No tie on record → bare name, as before.
+      // highest attention. Ties come from the viewer's own relationships map (their knowledge —
+      // nothing secret can leak). No tie on record → bare name.
       const _vp=selfId?(state.personas||[]).find(x=>x&&x.id===selfId):null;
       const _withTie=(id,nm)=>{ try{ const e=_vp&&relSheetEntry(_vp,id);
         const t=e&&e.tie?String(e.tie).trim().slice(0,40):""; return t?`${nm} — your ${t}`:nm; }catch(e){ return nm; } };
-      othersHere=presentCast(chat).filter(c=>c.id!==selfId&&_sameSub(c.id)).map(c=>_withTie(c.id,c.name)).join(", ");
-      _viewer={sub:_vSub,playerHere:(_vSub===_pSubNow),withTie:_withTie};
+      const _subName=id=>{ try{ const _h=chat.locationId?locById(chat.locationId):null;
+        const _s=_h&&subById(_h,(chat.subPos&&chat.subPos[id])||_pSubNow); return (_s&&_s.name)||""; }catch(e){ return ""; } };
+      const _here=presentCast(chat).filter(c=>c.id!==selfId);
+      const _playerHere=(_vSub===_pSubNow);
+      const inRoom=_here.filter(c=>_sameSub(c.id)).map(c=>_withTie(c.id,c.name));
+      if(selfId&&_playerHere)inRoom.unshift(_withTie("__user__",state.user));
+      othersHere=inRoom.join(", ");
+      // Same building, different room: out of earshot, but they can walk in at any moment.
+      const nearby=_here.filter(c=>!_sameSub(c.id)).map(c=>{ const s=_subName(c.id); return s?`${c.name} (in the ${s})`:c.name; });
+      if(selfId&&!_playerHere){ const s=_subName("__user__"); nearby.unshift(s?`${state.user} (in the ${s})`:state.user); }
+      nearbyHere=nearby.join(", ");
+      _viewer={sub:_vSub,playerHere:_playerHere,withTie:_withTie};
     }catch(e){}
-    let _viewer=null;
-    let sn=`${blkTpl("scene_header")}\n${ssBits.join(", ")}.`;
+
+    const lines=[blkTpl("scene_intro")];
+    // CURRENT DAY (+ time of day) — the anchor everything else is judged against.
+    {const per=(typeof chatPeriod==="function")?chatPeriod(chat):"";
+     lines.push(fillTpl(blkTpl("scene_day"),{day:String(chat.gameDay||1),period:per?`, ${per}`:""}));}
+    // YOUR CURRENT LOCATION (+ whose ground it is).
+    const _here2=(()=>{try{return chat.locationId?locById(chat.locationId):null;}catch(e){return null;}})();
     if(chat.location&&chat.location.trim()){
-      const _here2=(()=>{try{return chat.locationId?locById(chat.locationId):null;}catch(e){return null;}})();
       let _curSubName="";
       try{ if(_here2&&Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){ const _ps=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat)); if(_ps)_curSubName=_ps.name; } }catch(e){}
       const _where=chat.location.trim()+(_curSubName?fillTpl(blkTpl("scene_loc_sub"),{sub:_curSubName}):"");
-      sn+=`\n${fillTpl(blkTpl("scene_loc"),{where:_where})}`;
+      let loc=fillTpl(blkTpl("scene_loc"),{where:_where});
       // Whose ground is this? If the current place has resident(s), anchor the host/guest dynamic so
-      // a character behaves like the owner in their own home and like a visitor in someone else's —
-      // part of "whose home they are in" continuity. Fires only when a resident tie actually exists.
+      // a character behaves like the owner in their own home and like a visitor in someone else's.
       try{
         const _res=_here2?residentsOf(_here2):[];
         if(_res.length){
-          if(selfId && _res.some(r=>r.id===selfId)){
-            sn+=`\n${blkTpl("scene_here_yours")}`;
-          }else{
-            const _host=_res.map(r=>r.name).filter(Boolean).join(" & ");
-            if(_host) sn+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_host})}`;
-          }
+          if(selfId && _res.some(r=>r.id===selfId)) loc+=`\n${blkTpl("scene_here_yours")}`;
+          else { const _host=_res.map(r=>r.name).filter(Boolean).join(" & ");
+                 if(_host) loc+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_host})}`; }
         }
       }catch(e){}
+      lines.push(loc);
     }
-    // Sub-areas (privacy) + how private each area / the venue is, so a character can reason about
-    // discretion ("not here, too many ears — let's move to the back"). Mirrors the director context.
+    // SUB-AREAS (and how private each is), so a character can reason about discretion.
     try{
-      const here=chat.locationId?locById(chat.locationId):null;
-      if(here){
-        ensureSublocations(here);
-        if(Array.isArray(here.sublocations)&&here.sublocations.length>1){
-          const pSub=subById(here,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat));   // v19.71: the VIEWER's area
-          const areaList=here.sublocations.map(s=>`${s.name} — ${gossipLabel(areaGossipChance(here,s.id))}`).join("; ");
-          sn+=`\n${fillTpl(blkTpl("scene_subareas"),{loc:here.name,areas:areaList,sub:(pSub?pSub.name:"Entrance"),target:(targetName||state.user)})}`;
+      if(_here2){
+        ensureSublocations(_here2);
+        if(Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){
+          const pSub=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat));   // the VIEWER's area
+          const areaList=_here2.sublocations.map(s=>`${s.name} — ${gossipLabel(areaGossipChance(_here2,s.id))}`).join("; ");
+          lines.push(fillTpl(blkTpl("scene_subareas"),{loc:_here2.name,areas:areaList,sub:(pSub?pSub.name:"Entrance"),target:(targetName||state.user)}));
         }else{
-          sn+=`\n${fillTpl(blkTpl("scene_privacy"),{label:gossipLabel(locGossipChance(here))})}`;
+          lines.push(fillTpl(blkTpl("scene_privacy"),{label:gossipLabel(locGossipChance(_here2))}));
         }
       }
     }catch(e){}
-    // v19.71 — three presence cases from the VIEWER's earshot: (a) someone (incl. the player)
-    // shares their sub-area → list them; (b) nobody does → they are APART (never "alone with
-    // {{user}}" when the user is in another room); (c) player-view / no selfId → old behaviour.
+    // PRIVACY — who can actually hear you, and who is one door away.
     {
       const v=(typeof _viewer==="object"&&_viewer)||{sub:curSubId(chat),playerHere:true};
-      const names=[];
-      if(selfId&&v.playerHere)names.push(v.withTie?v.withTie("__user__",targetName||state.user):(targetName||state.user));
-      if(othersHere)names.push(othersHere);
-      const withList=selfId?names.join(", "):othersHere;
-      if(withList){ sn+=`\n${fillTpl(blkTpl("scene_present"),{names:withList})}`; }
-      else if(selfId&&!v.playerHere){
+      const withList=selfId?(othersHere||""):othersHere;
+      let priv;
+      if(selfId&&!v.playerHere&&!withList){
         let _sn="the entrance";
-        try{ const _h=chat.locationId?locById(chat.locationId):null; const _s=_h&&subById(_h,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
-        sn+=`\n${fillTpl(blkTpl("scene_apart"),{sub:_sn})}`;
+        try{ const _s=_here2&&subById(_here2,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
+        priv=fillTpl(blkTpl("scene_apart"),{sub:_sn});
+      }else if(withList){
+        priv=fillTpl(blkTpl("scene_present"),{names:withList});
+      }else{
+        // Alone = only the player shares your earshot, so it is the PLAYER you are alone with —
+        // not whoever this turn happens to be aimed at.
+        priv=fillTpl(blkTpl("scene_alone"),{target:state.user});
       }
-      else { sn+=`\n${fillTpl(blkTpl("scene_alone"),{target:(targetName||state.user)})}`; }
+      if(nearbyHere)priv+=`\n${fillTpl(blkTpl("scene_nearby"),{loc:(_here2&&_here2.name)||chat.location||"here",names:nearbyHere})}`;
+      lines.push(priv);
     }
+    // YOUR TRACKERS — real conditions about you, read as part of the live situation (v30: folded
+    // back into SCENE RIGHT NOW, where the brief above tells the model what to do with them).
+    try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)lines.push(tc); }catch(e){}
+
+    let sn=`${blkTpl("scene_header")}\n${lines.filter(Boolean).join("\n\n")}`;
     // If the scene just shifted (place/time/who's here), lead the block with a blunt call-out of
     // exactly what changed since this character last spoke, so they react to it instead of drifting.
-    {const chg=sceneChangeNotice(chat,selfId); if(chg)sn=`${chg}\n\n${sn}`;}
+    {const chg=sceneChangeNotice(chat,selfId); if(chg)sn=`${blkTpl("scene_header")}\n${chg}\n\n${lines.filter(Boolean).join("\n\n")}`;}
     B.scene_now=sn;
-    // v19.2 — trackers & calendar are their OWN movable blocks now (previously appended inside
-    // SCENE RIGHT NOW with a plain newline; as separate blocks they join with the standard
-    // blank-line separator and can be repositioned independently).
-    try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)B.trackers=tc; }catch(e){}
+
     {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName):""; if(cl)B.calendar=cl;}
     // quests — per-character awareness of the active quests this character is named in (key
     // figure, listed cast, or named in the quest text). Same scoping idea as the calendar line.
     try{ const qc=(typeof questContextFor==="function")?questContextFor(chat,selfName,selfId):""; if(qc)B.quests=qc; }catch(e){}
   }
 
-  // (0b) OFFSTAGE-INTENT COLORING (char-to-char, single beat). If this speaking character holds a
-  // live private intent (a brewing/armed scheme or warmth) toward someone ALSO present in the scene,
-  // inject ONE concrete, this-turn instruction so the hidden current shows in how they treat that
-  // person right now. Deliberately blunt and present-tense (NOT "sustain a subtle undercurrent") so a
-  // mid-range model can actually follow it. Placed in the tail for maximum compliance.
-  try{
-    if(state.intentOn!==false && chat && Array.isArray(chat.intents) && selfId){
-      const presentSet=new Set(presentCast(chat).map(c=>c.id));
-      // this character's live intents whose target is ALSO in the room (not the player)
-      const live=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent"
-        && i.targetId && i.targetId!=="__user__" && presentSet.has(i.targetId));
-      if(live.length){
-        // strongest one wins the beat (don't pile multiple colorings on one turn)
-        const it=live.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
-        const tName=it.targetName||"them";
-        const warm=(it.valence==="warm");
-        const line = fillTpl(blkTpl(warm?"intent_warm":"intent_hostile"),{target:tName,kind:it.kind,aim:it.aim});
-        B.private_intent=line;
-      }else{
-        // AWARENESS: no present-target coloring fired, but this character may still be nursing a plan
-        // (target absent, or the player). Surface it softly so they stay goal-driven and consistent
-        // across scenes — warm intents get pursued, schemes are held close, neither is exposed.
-        const own=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent" && i.aim);
-        if(own.length){
-          const it=own.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
-          const tName=it.targetId==="__user__"?state.user:(it.targetName||"someone");
-          const warm=(it.valence==="warm");
-          B.private_intent=fillTpl(blkTpl(warm?"intent_aim_warm":"intent_aim_cool"),{target:tName,kind:it.kind,aim:it.aim});
-        }
-      }
-    }
-  }catch(e){}
+  // (4) OFFSTAGE-INTENT COLORING (char-to-char, single beat). When this character holds a live
+  //     private intent toward someone ALSO present, one concrete this-turn instruction makes the
+  //     hidden current show in how they treat that person right now. (A standing aim whose target
+  //     ISN'T here rides in the bio instead, under the goals — see intentParts.)
+  {const _c=intentParts(chat,selfId).coloring; if(_c)B.private_intent=_c;}
 
-  // (0c) RECENT MEMORIES — moved here from the head so their freshness sits closest to generation
-  //      and can override anything in the transcript they contradict. Distant memories stay in the head.
-  try{ const rm=memoryBlocks(injected,"recent"); if(rm.length)B.recent_memories=rm.join("\n\n"); }catch(e){}
-
-  // (1) RESPONSE GUIDANCE
+  // (5) RESPONSE GUIDANCE
   let g=fillTpl(blkTpl("guidance_open"),{self:selfName});
   if(targetName) g+=fillTpl(blkTpl("guidance_target"),{target:targetName});
   g+=fillTpl(blkTpl("guidance_close"),{who:targetName||state.user});
-  // Explicitly name who/what is being replied to (replaces the old inline em-dash tag that
-  // weaker models echoed into prose). The last message in the transcript is their line.
   if(targetName) g+=`\n${fillTpl(blkTpl("guidance_reply"),{target:targetName})}`;
   // ABSENT-ADDRESSEE GUARD. If {{user}}'s latest line names a character who is NOT in the room, the
   // responder must NOT answer as that person (the classic "you address Y, present X replies as Y" bug).
@@ -15482,79 +15554,30 @@ function buildTailBlocks(opts){
   }catch(e){}
   B.response_guidance=g;
 
-  // (2) HOW YOU FEEL TOWARD <target> — THREE labeled facets, prose only, never any numbers:
-  //     considered (slow/trait, filtered, drives personality), momentary (fast/state, impulsive,
-  //     colors this beat only), and the social graph (who they are to each other).
-  const _feel=[];   // considered/momentary prose + (or) the stranger notice — one block
-  let knowsTarget=true;
-  if(state.relOn && chat && targetId){
-    const o=relObj(chat,opts.selfId,targetId);
-    const desc=relDescription(o);
-    const hasEval=relHasContent(o);
-    const considered=relConsideredProse(o);
-    const momentary=relMomentaryProse(o);
-    if((desc && desc.trim() && !/^Roughly:/.test(desc.trim()) && hasEval) || considered || momentary){
-      let fb=fillTpl(blkTpl("feel_header"),{target_up:(targetName||"THEM").toUpperCase()});
-      if(desc && desc.trim() && !/^Roughly:/.test(desc.trim()) && hasEval){
-        fb+=`\n\n${fillTpl(blkTpl("feel_lasting"),{desc:desc.trim()})}`;
-      } else if(considered){
-        fb+=`\n\n${fillTpl(blkTpl("feel_lasting_alt"),{considered:considered})}`;
-      }
-      if(momentary){
-        fb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary})}`;
-        // The verbose, playable "how it colors your next reply" note from the latest fast read.
-        // Only while there's an actual live momentary lean (momentary non-empty) — once the fast
-        // axes decay back down, the note is stale and we stop surfacing it rather than clearing it.
-        if(o.stNote && o.stNote.trim()){
-          fb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
-        }
-        const tension=relImpulseTension(o);
-        if(tension==="desire") fb+=" "+blkTpl("feel_tension_desire");
-        else if(tension==="anger") fb+=" "+blkTpl("feel_tension_anger");
-        else if(tension==="fear") fb+=" "+blkTpl("feel_tension_fear");
-      }
-      _feel.push(fb);
-    }
-    // FIRST ENCOUNTER (player only): if there is no recorded relationship/evaluation toward the
-    // user yet, the character does not know them. Tell the model so it stops acting familiar.
-    // BUT: an AUTHORED tie/relationship (from the character sheet, e.g. "brother", "wife",
-    // "king and master") means they are NOT a stranger even before any rapport has been *scored*
-    // in play. hasEval only reflects runtime-scored axes/desc, so also gate on the authored sheet —
-    // otherwise a fully-authored bond (Sistua → her brother/king) wrongly triggers the stranger block.
-    const _selfP=resolveChar(opts.selfId,chat);
-    const _authoredTie=relSheetEntry(_selfP,"__user__");
-    const _hasAuthoredTie=!!(_authoredTie && (_authoredTie.tie || _authoredTie.relationship)
-      && !/^stranger$/i.test((_authoredTie.tie||"").trim()));
-    if(targetId==="__user__" && !hasEval && !_hasAuthoredTie){
-      knowsTarget=false;
-      _feel.push(fillTpl(blkTpl("stranger"),{target_up:(targetName||state.user).toUpperCase(),target:(targetName||state.user)}));
-    }
-  }
-
-  // (3) FINAL GUARDRAILS — deduplicated, fires last.
-  // Deduplicated: rail_voice now folds in the single-turn rule (was rail_single_multi), and
-  // rail_dialogue was dropped — "lead with dialogue / thin narration" is already stated in full in
-  // the FORMATTING RULES block. Solo scenes keep a tiny single-response nudge.
+  // (6) FINAL GUARDRAILS — fires last, closest to generation. The consistency rules (hold your
+  //     facts, push back on contradictions, never fabricate a past) used to be a wall of prose in
+  //     the shipped default; they are individual fragments now, so each one is editable on its own.
+  const knowsTarget=feelingsBlock(chat,selfId,targetId,targetName).knowsTarget;
   const rails=[
     fillTpl(blkTpl("rail_voice"),{self:selfName,user:state.user}),
-    ...(multi?[]:[blkTpl("rail_single_solo")]),
+    blkTpl("rail_single_solo"),
     blkTpl("rail_beat"),
     fillTpl(blkTpl("rail_question"),{who:targetName||state.user}),
     knowsTarget
       ? blkTpl("rail_consistent_known")
-      : fillTpl(blkTpl("rail_consistent_stranger"),{who:targetName||state.user})
+      : fillTpl(blkTpl("rail_consistent_stranger"),{who:targetName||state.user}),
+    blkTpl("rail_facts"),
+    fillTpl(blkTpl("rail_pushback"),{user:state.user}),
+    blkTpl("rail_nofabricate"),
+    fillTpl(blkTpl("rail_unknown_past"),{user:state.user})
   ].filter(Boolean);
-  if(_feel.length)B.feelings=_feel.join("\n\n");
   B.final_guardrails=`${blkTpl("rails_header")}\n`+rails.map(r=>`- ${r}`).join("\n");
 
-  // v24.3 — delivery-tag coaching RESTORED for the xAI engine: while replies are being voiced
-  // through xAI TTS, ask the model to write expressive delivery tags inside the dialogue quotes
-  // (the spoken_delivery block). The tags never show on screen (_dispText strips them at the
-  // display layer) but PASS THROUGH to xAI synthesis, which renders them expressively —
-  // ttsCleanText keeps them for the xai engine and still strips them for Inworld. When voicing
-  // is OFF, the old counter-order applies: if the recent replies still carry the markup (a voice
-  // session just ended, or the model imitating its own history), send the format reset instead.
-  // Self-decaying: once clean replies push the marked ones out of the window, it stops rendering.
+  // v24.3 — delivery-tag coaching for the xAI engine: while replies are being voiced through xAI
+  // TTS, ask the model to write expressive delivery tags inside the dialogue quotes. The tags never
+  // show on screen (_dispText strips them) but PASS THROUGH to xAI synthesis. When voicing is OFF
+  // and the recent replies still carry the markup, send the format reset instead — self-decaying,
+  // it stops rendering once clean replies push the marked ones out of the window.
   if((state.autoSpeak||state.narrMode)&&(state.ttsEngine||"xai")==="xai"){
     B.spoken_delivery=blkTpl("spoken_delivery");
   }else if(chat && _recentVoiceMarkup(chat)){
@@ -17287,9 +17310,10 @@ async function sendMessage(){
     }
     // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
     // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
+    const _tOpts={ chat, targetName:state.user, targetId:"__user__" };
     const _pl=buildPayload("solo",
-      buildSystemPromptBlocks(injected),
-      buildTailBlocks({ chat, selfId:solo.id, selfName:solo.name,
+      buildSystemPromptBlocks(injected,_tOpts),
+      buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
         targetName:state.user, targetId:"__user__", multi:false, injected }));
     // Build this character's history through the SAME witness/scene-scoped builder the multi-character
     // path uses, so a solo responder never inherits dialogue from before they arrived or that they
@@ -17478,10 +17502,9 @@ async function buildTextReplySystem(chat,p){
       const q=textThreadMsgs(chat,p.id).slice(-4).map(m=>m.content).join("\n")||state.user;
       const r=await retrieveMemories(q,chat,p.id);
       const rec=(r.recent||[]).map(m=>memInjectText(m)).filter(Boolean);
-      const dia=(r.diary||[]).map(m=>memInjectText(m)).filter(Boolean);
       const lt=(r.longterm||[]).map(m=>memInjectText(m)).filter(Boolean);
+      // v30 — the DIARY tier is never injected into a payload; it is the player's artifact.
       if(rec.length)parts.push("# RECENT MEMORIES (yours — shape your tone, don't recite)\n"+rec.map(t=>"- "+t).join("\n"));
-      if(dia.length)parts.push("# YOUR DIARY (earlier days)\n"+dia.map(t=>"- "+t).join("\n"));
       if(lt.length)parts.push("# YOUR LONG-TERM MEMORY\n"+lt.map(t=>"- "+t).join("\n"));
     }
   }catch(e){}
@@ -18592,24 +18615,18 @@ async function playCharacterTurn(chat,p,addressed){
     // model actually sees last (e.g. it said "responding to Emre" while the last line was Cansu's).
     let targetName=state.user, targetId="__user__";
     {
-      const msgs=chat.messages||[];
-      let ls=null;
-      for(let i=msgs.length-1;i>=0;i--){ const m=msgs[i];
-        if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote)continue;
-        const who=(m.role==='user')?state.user:(m.speaker||"");
-        if(!who||who===p.name||m.speakerId===p.id||/^Narrator$/i.test(who))continue;
-        ls=who; break;
-      }
+      const ll=lastDialogueLine(chat,p);   // the SAME line the tail highlights — never a different person
+      const ls=ll&&ll.name;
       if(ls){
         if(ls===state.user){ targetName=state.user; targetId="__user__"; }
         else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=ls; targetId=null; } }
       }
       if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
     }
-    // v19 payload assembly: block content unchanged; block ORDER from the "multi" payload layout.
+    // v19 payload assembly: block content per character; block ORDER from the "multi" payload layout.
     const _pl=buildPayload("multi",
-      buildCharPromptBlocks(p,others,injected,addressed),
-      buildTailBlocks({ chat, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected }));
+      buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
+      buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected }));
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
     const messages=[];
@@ -24960,8 +24977,8 @@ async function playSingleReaction(chat,p,eventText){
     }catch(e){injected={recent:[],diary:[],longterm:[]};}}
     // v19 payload assembly: block content unchanged; block ORDER from the "gm" payload layout.
     const _pl=buildPayload("gm",
-      buildSystemPromptBlocks(injected),
-      buildTailBlocks({ chat, selfId:p.id, selfName:p.name,
+      buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" }),
+      buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
         targetName:state.user, targetId:"__user__", multi:false, injected }));
     // Same witness/scene-scoped history as every other character reply (see castHistory) — so a
     // gamemaster-prompted responder also never inherits dialogue from before they arrived.

@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4356,7 +4356,7 @@ function _subCapsules(title,body){
   // --- IMAGE-PROMPT user message: continuity / latest exchange (#11). v25: no character sheet. ---
   if(/LATEST EXCHANGE/i.test(b) && /(CONTINUITY REFERENCE|No previous image)/i.test(b)){
     const kids=[];
-    const parts=b.split(/\n(?=(?:CHARACTER SHEET|CONTINUITY REFERENCE|LATEST EXCHANGE|\(No previous image))/);
+    const parts=b.split(/\n(?=(?:WARDROBE|DRESSING CONTEXT|CHARACTER SHEET|CONTINUITY REFERENCE|LATEST EXCHANGE|\(No previous image))/);
     parts.forEach(p2=>{
       const lbl=(p2.match(/^([A-Z][A-Z ]+)/)||[])[1];
       kids.push({label:lbl?lbl.trim().toLowerCase():"frame",text:p2.trim()});
@@ -18907,6 +18907,65 @@ function _imgLocationClause(chat){
 function _imgSpeakerAppearance(speaker){
   try{ if(!speaker)return ""; const l=lookProse(speaker.look)||""; return l?String(l).replace(/\s+/g," ").trim():""; }catch(e){ return ""; }
 }
+
+/* ===== v26.1 — WARDROBE + DRESSING CONTEXT for the image writer =========================
+   Appearance (face/hair/build) is stamped on the tail in code precisely so the model can't
+   paraphrase it — but CLOTHING is the one part of the look that cannot work that way. A wardrobe
+   is a SET of outfits, and something has to CHOOSE from it; the choice depends on where the
+   character is, what time and day it is, and what the day holds. So the wardrobe reaches the
+   writer as OPTIONS, together with the facts needed to pick one, and the frame guide states the
+   order of authority: the latest exchange beats the continuity reference, which beats the wardrobe.
+   The dressing context is decision material ONLY — the guide forbids writing the place, the time
+   or the light into the prompt, because those are still appended deterministically. */
+function _imgWardrobeBlock(character){
+  try{
+    const w=(character&&character.wardrobe)?subUser(String(character.wardrobe)).replace(/\s+/g," ").trim():"";
+    if(!w)return "";
+    return `WARDROBE — the outfits this character owns and dresses from. These are OPTIONS, not the current outfit:\n${w.slice(0,600)}\n`+
+      `Choose the ONE that fits the dressing context below and write its garments WITH their colours. Don't invent clothes that aren't here unless the latest exchange puts them there.`;
+  }catch(e){ return ""; }
+}
+/* What the character has on today, as far as the calendar knows — the "occasion" half of the
+   dressing decision (a dinner, a visit, a job) so an evening plan can pull an evening outfit.
+   Scoped like calendarContextLine: entries naming this character, plus general/player-owned ones. */
+function _imgOccasionLine(chat,name){
+  try{
+    const c=chat||curChat(); if(!c||typeof chatCalendar!=="function")return "";
+    const today=c.gameDay||1, per=(typeof chatPeriod==="function")?chatPeriod(c):"";
+    const sn=String(name||"").toLowerCase();
+    const today_=chatCalendar(c).filter(e=>e&&e.day===today).filter(e=>{
+      const who=(e.who||"").toLowerCase(); return !who.trim()||!sn||who.includes(sn);
+    });
+    if(!today_.length)return "";
+    const now=today_.filter(e=>e.period&&per&&e.period===per);   // prefer what is happening in THIS part of the day
+    return (now.length?now:today_).slice(0,2).map(e=>{
+      let where=""; try{ where=(e.locationId&&locById(e.locationId)||{}).name||e.where||""; }catch(_){ where=e.where||""; }
+      return `${e.title}${e.period?` (${e.period})`:""}${e.who?` with ${e.who}`:""}${where?` at ${where}`:""}`;
+    }).join("; ");
+  }catch(e){ return ""; }
+}
+/* o: {day, period, place, occasion} — place is already-composed prose (name — description). */
+function _imgDressingContext(o){
+  o=o||{};
+  const rows=[];
+  const when=[o.day?`Day ${o.day}`:"",o.period||""].filter(Boolean).join(", ");
+  if(when)rows.push(`- When: ${when}`);
+  if(o.place)rows.push(`- Where: ${String(o.place).replace(/\s+/g," ").trim()}`);
+  if(o.occasion)rows.push(`- What the day holds: ${o.occasion}`);
+  if(!rows.length)return "";
+  return `DRESSING CONTEXT — these facts decide WHICH outfit, and nothing else. Never write the place, the time of day, or the light into the prompt; they are appended automatically:\n`+rows.join("\n");
+}
+// The place, phrased for a dressing decision: where they are and what kind of place it is.
+function _imgDressingPlace(loc,sub){
+  try{
+    if(!loc)return "";
+    const bits=[loc.name+(sub&&sub.name?` — ${sub.name}`:"")];
+    bits.push(loc.type==='home'?"a private home":"a place other people can see them in");
+    if(loc.description)bits.push(String(loc.description).slice(0,140));
+    if(sub&&sub.description)bits.push(String(sub.description).slice(0,120));
+    return bits.filter(Boolean).join(", ");
+  }catch(e){ return ""; }
+}
 /* v28 — the image-writer guidance strings are shared between the roleplay pipeline (illustrate)
    and the gallery PLAYGROUND, so both write prompts under identical rules. Content unchanged. */
 const IMG_WRITER_FOUNDATION=`# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated string of only what is physically VISIBLE in this one frame. Describe the pose, expression, contact and clothing STATE from the LATEST EXCHANGE; ignore mood words and dialogue meaning. Refer to people generically (Man / Woman / Girl) — do NOT use names, and do NOT describe anyone's face, hair, or build: each character's appearance is AUTO-INJECTED after your text, so writing it yourself only fights the injected version. Draw ONLY the one character whose line this is (plus the faceless viewer if the exchange clearly has them together); the viewer/player is faceless — never write his appearance — and never add a second character the exchange did not put in contact with them. Output NO square brackets and NO "|" — write the real chosen values.`;
@@ -18918,6 +18977,7 @@ const IMG_WRITER_FRAME_GUIDE=
   `- Output the finished prompt in ENGLISH regardless of the language of the exchange. The LATEST EXCHANGE is authoritative for what is happening NOW — if it changes clothing, pose, who is touching whom, or the act, fill the brackets to reflect that; do not carry a stale state forward.\\n`+
   `- CRITICAL — DROP THE BRACKETS: every [bracket] is a fill-in slot, NOT literal text. Replace each one with the actual chosen words. The finished prompt must contain NO square brackets and NO "|" characters — never output "[hair and build]" or "[place]" or "option a|option b"; write the real value you picked.\\n`+
   `- LOCATION & LIGHTING ARE HANDLED FOR YOU: the setting/place and the time-of-day lighting are appended automatically AFTER your text. Do NOT write a location, background, setting, or lighting phrase, and if the scene-type template has a Location or Lighting slot, leave it out — never decide the place or the light from the exchange.\\n`+
+  `- CLOTHING — WHAT THEY ARE WEARING, in this order of authority. (1) The LATEST EXCHANGE wins: if it strips, opens, soaks, borrows or swaps an outfit, draw that state, whatever the wardrobe says. (2) Otherwise, if a CONTINUITY REFERENCE is present, keep the SAME outfit it describes — a person does not change clothes between two frames of one scene. (3) Only with no continuity reference — a fresh scene, a new place, a new day — pick ONE outfit from the WARDROBE, the entry that suits the DRESSING CONTEXT: at home vs. out where others can see them, day vs. evening, an ordinary hour vs. an occasion the day holds. Name the garments with the wardrobe's own colours, and dress for the hour and the place without ever writing the hour or the place into the prompt.\\n`+
   `- If NO scene-type block is present above, write a single concise comma-separated English prompt of only what is visible this frame (pose, expression, clothing, action — NO face/hair/build, NO location or lighting), keeping the viewer faceless and drawing only the one character whose line this is.`;
 async function illustrate(mid,replyText,force){
   const msg=findMsg(mid);if(!msg)return;
@@ -19017,10 +19077,28 @@ async function illustrate(mid,replyText,force){
     const _foundation=(!_isNewStyle)?`\n\n${FOUNDATION_PROMPT}`:``;
     const _classStyle=_rawStyle?`\n\n${_rawStyle}`:"";
     const sys=up("rewritePrompt")+_foundation+_classStyle+IMG_WRITER_FRAME_GUIDE;
-    // NOTE: the CHARACTER SHEET is deliberately NOT sent — appearances are auto-injected in code (see the
-    // deterministic tail below), so the writer only receives this character's own continuity + the exchange.
-    const usr=(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)+
-      `LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
+    // NOTE: the CHARACTER SHEET is deliberately NOT sent — face/hair/build are auto-injected in code
+    // (see the deterministic tail below). CLOTHING is the exception: a wardrobe is a set of options
+    // and the writer has to CHOOSE, so it goes in with the facts that decide the choice. Blocks are
+    // ordered by rising authority — wardrobe, then continuity, then the exchange — matching the
+    // order the frame guide states.
+    let _dress="";
+    {
+      const _wb=_imgWardrobeBlock(speaker);
+      let _loc=null,_sub=null;
+      try{ _loc=chat&&chat.locationId?locById(chat.locationId):null; _sub=_loc?subById(_loc,curSubId(chat)):null; }catch(e){}
+      const _dc=_imgDressingContext({
+        day:(chat&&chat.gameDay)||null,
+        period:(typeof chatPeriod==="function"&&chat)?chatPeriod(chat):"",
+        place:_imgDressingPlace(_loc,_sub)||(chat&&chat.location)||"",
+        occasion:_imgOccasionLine(chat,who)
+      });
+      // The dressing context is only worth sending when there is a wardrobe to choose FROM.
+      _dress=_wb?[_wb,_dc].filter(Boolean).join("\n\n")+"\n\n":"";
+    }
+    const usr=_dress
+      +(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
+      +`LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
     const rewritten=await chatCompletion([
       {role:"system",content:sys},
       {role:"user",content:usr}
@@ -20046,7 +20124,20 @@ async function pgWritePrompt(){
     const _classStyle=_rawStyle?`\n\n${_rawStyle}`:"";
     const sys=up("rewritePrompt")+_foundation+_classStyle+IMG_WRITER_FRAME_GUIDE;
     const brief=(_pg.idea||"").trim()||`${actor?actor.name:"She"} is here in this pose — a natural, candid moment.`;
-    const usr=`(No previous image — describe the scene fresh.)\n\nLATEST EXCHANGE (what just happened — the authority on the current moment):\nNarrator: ${brief}`;
+    // Same wardrobe treatment as the roleplay pipeline, built from the playground's own pickers
+    // (no game day or calendar here — place and time of day are what the user chose).
+    let _dress="";
+    {
+      const _wb=_imgWardrobeBlock(actor);
+      let _loc=null,_sub=null;
+      try{ if(_pg.locMode!=="free"&&_pg.locId){ _loc=locById(_pg.locId); _sub=(_loc&&_pg.subId)?subById(_loc,_pg.subId):null; } }catch(e){}
+      const _dc=_imgDressingContext({
+        period:_pg.period||"",
+        place:_imgDressingPlace(_loc,_sub)||_pgLocationClause()
+      });
+      _dress=_wb?[_wb,_dc].filter(Boolean).join("\n\n")+"\n\n":"";
+    }
+    const usr=_dress+`(No previous image — describe the scene fresh.)\n\nLATEST EXCHANGE (what just happened — the authority on the current moment):\nNarrator: ${brief}`;
     const rewritten=await chatCompletion([
       {role:"system",content:sys},
       {role:"user",content:usr}

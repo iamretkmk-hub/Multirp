@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8885,6 +8885,42 @@ function charSubId(chat,pid){
   if(s && subById(l,s))return s;
   return entranceSubId(l); // unknown → treat as at the entrance with the rest of the scene
 }
+/* v26.5 — THE PLAYER FOLLOWS THE SCENE.
+   Characters are moved between sub-areas by the presence tracker; the player only ever moved
+   through "Move to area". So a character could walk to the kitchen mid-conversation and the player
+   stayed stamped at the entrance — the app then believed the two were out of earshot while they
+   went on talking for turns, and every payload told the responder that the person they were
+   answering could not hear them.
+   Rule: the player is never stranded in an empty area they did not choose. If nobody shares their
+   area and every present character is in ONE other area of this place, the player is with them.
+   With two or more present the player still has company when one steps away, so this cannot fire;
+   and an explicit "Move to area" (chat.subSelf) is respected until company reaches them again.
+   Returns true when it actually moved the player. */
+function syncPlayerSubArea(chat){
+  try{
+    const c=chat||curChat(); if(!c||!c.locationId)return false;
+    const l=locById(c.locationId); if(!l)return false;
+    ensureSublocations(l);
+    if(!Array.isArray(l.sublocations)||l.sublocations.length<2)return false;
+    const here=curSubId(c);
+    const present=presentCast(c);
+    if(!present.length)return false;
+    // Company in the player's own area: nothing to heal, and their "leave me alone" choice is spent.
+    if(present.some(p=>charSubId(c,p.id)===here)){ if(c.subSelf){ c.subSelf=false; markChatDirty&&markChatDirty(c); } return false; }
+    if(c.subSelf)return false;                         // they walked off deliberately — leave them there
+    const areas=new Set(present.map(p=>charSubId(c,p.id)));
+    if(areas.size!==1)return false;                    // the cast is scattered — don't guess where the player is
+    const dest=[...areas][0];
+    if(!dest||dest===here)return false;
+    c.subId=dest;
+    const s=subById(l,dest);
+    c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+      content:`— ${state.user} is in the ${(s&&s.name)||"same area"}, with ${present.map(p=>p.name).join(", ")} —`,
+      img:null,imgState:"idle",vidState:"idle",video:null});
+    markChatDirty&&markChatDirty(c); persistChats();
+    return true;
+  }catch(e){ return false; }
+}
 // The base gossip chance (0..1) for a location, applying its type default when unset.
 function locGossipChance(l){
   if(!l)return 0;
@@ -9205,7 +9241,7 @@ async function travelTo(locId,companionIds,opts){
   chat.location=dest.name; chat.locationId=dest.id;
   // Arriving drops everyone at the ENTRANCE of the destination (areas reset per location).
   ensureSublocations(dest);
-  chat.subId=entranceSubId(dest);
+  chat.subId=entranceSubId(dest); chat.subSelf=false;   // v26.5 — a new place, a fresh scene
   chat.subPos=chat.subPos||{};
   const entr=chat.subId;
   present.forEach(p=>{ chat.subPos[p.id]=entr; });
@@ -9346,6 +9382,9 @@ function moveToSub(subId,companionIds){
   const s=subById(l,subId); if(!s)return;
   if(!chat.subPos)chat.subPos={};
   chat.subId=subId;
+  // v26.5 — the player CHOSE this area; syncPlayerSubArea must not drag them back out of it.
+  // The flag is spent the moment company shares the area again (see syncPlayerSubArea).
+  chat.subSelf=true;
   (companionIds||[]).forEach(id=>{ chat.subPos[id]=subId; });
   // Note who moved with you, for the scene.
   const names=(companionIds||[]).map(id=>{ const p=resolveChar(id,chat); return p?p.name:null; }).filter(Boolean);
@@ -15744,6 +15783,15 @@ function curChat(){
    - Portrait keeps inline images; the rail is hidden by CSS but the pin still freezes
      auto-gen and shows a small sticky pinned banner above the list. */
 let _heatSeq=0,_heatBusy=false,_heatNoImg=false;   // v19.5 heat-of-the-moment state
+/* v26.5 — DIRECTOR CANCELLATION. Gamemaster reactions run fire-and-forget while the player is free
+   to keep typing, so a character could be generating their reaction to a GM beat at the very moment
+   sendMessage started their reply to the player's line: two turns for one character, both answering
+   the same moment, landing back to back (the "Duygu replies twice" bug — one reply from
+   playSingleReaction, one from the solo path, with the player's line stranded above both).
+   Any player turn bumps this; a director reaction that finishes after the bump is dropped rather
+   than pushed. The player's own turn already answers the beat, and the beat itself stays on screen.
+   Same shape as _heatSeq above. */
+let _dirSeq=0;
 // (v24.3 — the v19.97 per-beat repeat detector is gone with the beat loop: heat is one
 // extended generation now, so there is no next beat to loop into. _heatNoImg stays declared
 // for autoImgActive but is never raised — the single heat response gets its auto image.)
@@ -17384,6 +17432,7 @@ async function sendMessage(){
   }
 
   _heatSeq++;   // v19.5: any player turn (typed or spoken) cancels a running heat burst
+  _dirSeq++;    // v26.5: ...and supersedes a director reaction still being generated
   // ----- AUTO-RP: rewrite the player's terse input into a short in-voice turn before sending. -----
   // Runs only when the toggle is on. Best-effort: if it fails or returns nothing, the raw text is
   // used. The input is locked with a hint while it converts so the player sees it's working.
@@ -17410,6 +17459,9 @@ async function sendMessage(){
   // bottom, which (with front-trimming) could otherwise leave the view parked up the transcript.
   {const _list=document.getElementById('chatList'); if(_list){setScrollTop(_list,_list.scrollHeight);} if(typeof hideNewMsgPill==="function")hideNewMsgPill();}
 
+  // v26.5 — before anything routes, make sure the player is not stranded in an area the scene has
+  // walked out of (see syncPlayerSubArea). This also repairs saves already stuck in that state.
+  if(syncPlayerSubArea(chat))appendNewBubbles();
   // ----- Nobody nearby: the user is speaking to themselves. Let directors react, no character speaks. -----
   const present=presentCast(chat);
   if(present.length===0){
@@ -18072,7 +18124,7 @@ async function sendWhisper(chat,rest){
     if(target)body=parts.join(" ").trim(); }
   if(!target){ toast("Whisper: no one here by that name. Usage: /whisper Name message"); return; }
   if(!body){ toast("Usage: /whisper "+target.name+" <message>"); return; }
-  _heatSeq++;
+  _heatSeq++; _dirSeq++;
   chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
   chat.lastActive=Date.now(); _followAfterSend=true;
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
@@ -18728,6 +18780,7 @@ async function runHeatBursts(chat){
 }
 // One character produces one message, shown with its own name/avatar.
 async function playCharacterTurn(chat,p,addressed){
+  const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see _dirSeq)
   const present=presentCast(chat);
   const others=present.filter(c=>c.id!==p.id);   // only characters actually present
   const list=document.getElementById('chatList');
@@ -18810,6 +18863,10 @@ async function playCharacterTurn(chat,p,addressed){
     // Empty reply (model returned nothing even after the token-bump retry) — don't push a blank
     // bubble or run image/voice on nothing. Skip this character's turn cleanly.
     if(!cleaned){ toast(""+p.name+": empty reply (try raising Max tokens in Settings)"); return false; }
+    // v26.5 — the player took their turn while this was generating (a gamemaster reaction racing
+    // the player's own reply). Their turn answers the same moment, so drop this one rather than
+    // giving one character two replies to it.
+    if(_seq!==_dirSeq)return false;
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
     stampStatus(chat,msg);chat.messages.push(msg);
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
@@ -18952,6 +19009,9 @@ async function runPresenceTracker(chat){
           img:null,imgState:"idle",vidState:"idle",video:null};
         if(!_mergeIntoLastPresenceNote(chat,note))chat.messages.push(note);
         persistChats();appendNewBubbles();updateChatHeader();
+        // v26.5 — if that move left the player alone in their area while the whole scene walked
+        // into another one, the player went with them.
+        if(syncPlayerSubArea(chat)){ appendNewBubbles(); updateChatHeader(); }
       }
     }
     // The Scene Writer owns the entrance of an active event's approaching participant.
@@ -20986,7 +21046,7 @@ async function endDay(){
     }
     if(chat.locationId){
       const here=locById(chat.locationId);
-      if(here){ ensureSublocations(here); chat.subId=entranceSubId(here); }
+      if(here){ ensureSublocations(here); chat.subId=entranceSubId(here); chat.subSelf=false; }
     }
     chat.subPos={};            // everyone's sub-area is re-established on the new day
     chat.companionLock={};     // yesterday's companions don't carry into the new morning
@@ -25183,8 +25243,10 @@ function offerSaveTemp(chatId,tid){
 async function gamemasterReactions(chat){
   const cap=Math.min(2,Math.max(1,state.mcChainCap||4));   // brief reaction, not a full chain
   let turns=0,lastSpeaker=null;
+  const _seq=_dirSeq;   // v26.5 — abandon the whole chain the moment the player takes their turn
   const spokenThisChain=new Set();   // no character reacts twice to the same event
   while(turns<cap){
+    if(_seq!==_dirSeq)break;
     // v19.71 — EARSHOT pool, not the whole location: a character standing at the entrance (e.g. a
     // fresh GM arrival) is "present" at the venue but cannot perceive a beat happening in an inner
     // area, so they must not be picked to react to it. Same scoping the reply paths use.
@@ -25241,8 +25303,12 @@ async function playSingleReaction(chat,p,eventText){
     if(_pl.head)_msgs.push({role:"system",content:_pl.head});
     _msgs.push(...taggedHistory);
     if(_pl.tail)_msgs.push({role:"system",content:_pl.tail});
+    const _seq=_dirSeq;
     const reply=await chatCompletion(_msgs,rpModel(),{rp:true,dbg:"Roleplay reply (gamemaster reaction)"});
     typing.remove();
+    // v26.5 — the player spoke while this was generating: their turn already answers the beat, so
+    // pushing this too would give ONE character two replies to the same moment.
+    if(_seq!==_dirSeq)return;
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null};
     stampStatus(chat,msg);chat.messages.push(msg);
     persistChats();appendNewBubbles();

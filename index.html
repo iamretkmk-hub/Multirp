@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11322,7 +11322,8 @@ async function runShortTermRel(chat){
       // the roleplay payload's RIGHT-NOW FEELING block so the momentary charge reaches the actor as
       // playable behaviour, not just as intensity words. Sibling of o.st (never an axis key, so no
       // clamp/decay touches it); goes stale-but-harmless once the fast axes decay (gated at injection).
-      if(touched && j.note && String(j.note).trim()){ o.stNote=String(j.note).trim().slice(0,300); o.stNoteDay=chat.gameDay||1; }
+      // v26.8 — was slice(0,300), which cut mid-word and shipped the fragment to the model as-is.
+      if(touched && j.note && String(j.note).trim()){ o.stNote=briefDesc(String(j.note).trim(),300); o.stNoteDay=chat.gameDay||1; }
       // Log a compact episode for end-of-day consolidation (cap the log).
       if(touched){
         o.episodes.push({day:chat.gameDay||1, d:REL_FAST.map(k=>Math.round(o.st[k])), note:(j.note||"").slice(0,180)});
@@ -26757,6 +26758,23 @@ function plqTplInput(el){
   store.set(K.blockTpls,state.blockTpls);
   document.querySelectorAll(`textarea[data-btpl="${CSS.escape(k)}"]`).forEach(t=>{ if(t!==el)t.value=el.value; });
 }
+/* v26.8 — is this fragment overridden by the user (i.e. not the shipped default)? */
+function _tplCustomized(k){
+  const o=state.blockTpls&&state.blockTpls[k];
+  return typeof o==="string" && o.trim() && o!==BLOCK_TPL_DEFAULTS[k];
+}
+/* Reset every customized fragment in one block. Bulk and irreversible (there is no undo — see the
+   note on plqInput), so this one asks first. */
+function plqTplResetMany(pKey,keys){
+  const list=String(keys||"").split(",").filter(k=>k && (k in BLOCK_TPL_DEFAULTS) && _tplCustomized(k));
+  if(!list.length){ toast("Nothing customized here"); return; }
+  if(!confirm(`Reset ${list.length} customized fragment${list.length===1?"":"s"} to the shipped default? Your edits to ${list.length===1?"it":"them"} cannot be recovered.`))return;
+  state.blockTpls=state.blockTpls||{};
+  list.forEach(k=>delete state.blockTpls[k]);
+  store.set(K.blockTpls,state.blockTpls);
+  renderPayloadEditor(pKey);
+  toast(`Reset ${list.length} fragment${list.length===1?"":"s"} to default`);
+}
 function plqTplReset(k){
   if(!(k in BLOCK_TPL_DEFAULTS))return;
   if(state.blockTpls)delete state.blockTpls[k];
@@ -26838,12 +26856,15 @@ function _plqBlockInner(pKey,b){
   if(b.kind==="dyn"){
     let out="";
     if(Array.isArray(b.tpls)&&b.tpls.length){
-      out+=`<details><summary>Fixed text (editable — ${b.tpls.length} fragment${b.tpls.length===1?"":"s"})</summary>`
-        +b.tpls.map(k=>{const tid=`tpl_${pKey}_${k}`;return `<div style="margin-top:8px"><label style="font-size:11px;opacity:.75">${esc(_blkTplLabel(k))}</label>
+      const custom=b.tpls.filter(_tplCustomized);
+      out+=`<details><summary>Fixed text (editable — ${b.tpls.length} fragment${b.tpls.length===1?"":"s"}`
+        +(custom.length?` · <b>${custom.length} customized</b>`:``)+`)</summary>`
+        +(custom.length?`<button class="btn sec small" style="width:auto;padding:6px 10px;margin:6px 0" onclick="plqTplResetMany('${pKey}','${custom.join(",")}')">Reset ${custom.length} customized fragment${custom.length===1?"":"s"} to default</button>`:``)
+        +b.tpls.map(k=>{const tid=`tpl_${pKey}_${k}`;const _c=_tplCustomized(k);return `<div style="margin-top:8px"><label style="font-size:11px;opacity:.75">${esc(_blkTplLabel(k))}${_c?` <span style="color:var(--accent);font-weight:600">● customized</span>`:``}</label>
           <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)">${esc(blkTpl(k))}</textarea>
           <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>
           <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button></div>`;}).join("")
-        +`<div class="plqShared">{{placeholders}} are filled with live story data at build time — keep the ones you need. Saved instantly; blank = default.</div></details>`;
+        +`<div class="plqShared">{{placeholders}} are filled with live story data at build time — keep the ones you need. Saved instantly; blank = default. A fragment marked <b>● customized</b> is YOUR text, not the shipped one — it stays as you wrote it across app updates, so an old override can end up repeating what a newer default already says.</div></details>`;
     }
     if(b.scope){
       const sc=b.scope==="universe"?"universe-specific":b.scope==="global-rules"?"edited elsewhere (see its own editor)":"chat-specific";

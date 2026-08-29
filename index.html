@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8475,6 +8475,61 @@ function castBackstorySheet(chat){
   const lines=cast.filter(c=>c&&c.backstory&&c.backstory.trim())
     .map(c=>`- ${c.name}: ${c.backstory.trim()}`);
   return lines.join("\n");
+}
+
+/* v26.4 — THE DIRECTOR'S OWN LOG. The Gamemaster had no record of what it had already staged:
+   repetition was prevented only by whatever beats happened to still sit in the recent window, so
+   across a long chat it could send the same person through the same door for the same reason.
+   Each authored beat is logged here (bounded, persisted with the chat since _slimChat only strips
+   underscore-prefixed keys) and closed out with its outcome when the event resolves. */
+const DIRECTOR_LOG_MAX=10;
+function logDirectorEvent(chat,text){
+  try{
+    if(!chat||!text)return;
+    if(!Array.isArray(chat.eventLog))chat.eventLog=[];
+    chat.eventLog.push({day:chat.gameDay||1,
+      period:(typeof chatPeriod==="function")?chatPeriod(chat):"",
+      text:String(text).replace(/\s+/g," ").trim().slice(0,180)});
+    if(chat.eventLog.length>DIRECTOR_LOG_MAX)chat.eventLog=chat.eventLog.slice(-DIRECTOR_LOG_MAX);
+    markChatDirty&&markChatDirty(chat);
+  }catch(e){}
+}
+// Close the newest still-open entry when its event ends, so the log reads as outcomes, not just starts.
+function closeDirectorEvent(chat,how){
+  try{
+    const log=chat&&chat.eventLog;
+    if(!Array.isArray(log)||!log.length)return;
+    for(let i=log.length-1;i>=0;i--){ if(!log[i].outcome){ log[i].outcome=String(how||"it passed").replace(/\s+/g," ").trim().slice(0,120); break; } }
+    markChatDirty&&markChatDirty(chat);
+  }catch(e){}
+}
+function directorEventLog(chat){
+  try{
+    const log=chat&&chat.eventLog;
+    if(!Array.isArray(log)||!log.length)return "";
+    const live=!!(chat.activeEvent&&!chat.activeEvent.resolved);
+    const lines=log.map((e,i)=>{
+      const open=!e.outcome&&live&&i===log.length-1;   // only the newest entry can still be running
+      return `- Day ${e.day}${e.period?`, ${e.period}`:""}: ${e.text}${e.outcome?` → ${e.outcome}`:(open?" → still unfolding right now":"")}`;
+    });
+    return `EVENTS YOU HAVE ALREADY STAGED (your own past beats):\n${lines.join("\n")}\n`+
+      `Do not repeat one of these. Vary who arrives, what pulls them in, and what it costs — and prefer picking up a thread one of them left open over opening a new one.`;
+  }catch(e){ return ""; }
+}
+
+/* v26.4 — GAP 6: what the people in the scene look like. The Gamemaster author already received
+   appearances with its present-cast sheet; the Scene Writer — the engine that actually narrates
+   an arrival — received none, not even for the character it is walking through the door.
+   Present cast plus any extra ids (the event's participant, who may still be approaching). */
+function castLookSheet(chat,extraIds){
+  try{
+    const seen=new Set(), out=[];
+    const add=p=>{ if(!p||!p.id||seen.has(p.id))return; seen.add(p.id);
+      const l=lookProse(p.look); if(l)out.push(`- ${p.name}: ${subUser(l).replace(/\s+/g," ").trim()}`); };
+    (presentCast(chat)||[]).forEach(add);
+    (extraIds||[]).forEach(id=>{ if(id)add((state.personas||[]).find(p=>p&&p.id===id)); });
+    return out.join("\n");
+  }catch(e){ return ""; }
 }
 
 /* v26.2 — WHAT HAS ALREADY HAPPENED, for the director engines.
@@ -16389,7 +16444,7 @@ function toggleDnd(){
   if(chat.dnd){
     // ON: freeze — resolve any ongoing event so the Scene Writer stops advancing it, and block all
     // director activity (gated in maybeGamemaster/runSceneWriter/checkArmedPlans/maybeSpawnConfrontation).
-    if(chat.activeEvent && !chat.activeEvent.resolved){ chat.activeEvent.resolved=true; }
+    if(chat.activeEvent && !chat.activeEvent.resolved){ chat.activeEvent.resolved=true; closeDirectorEvent(chat,"cut short — do not disturb"); }
   }else{
     // OFF: start FRESH. Discard any lingering/pending event entirely (don't resume it) and DISARM any
     // staged plans so nothing fires the instant DND lifts. Character intents themselves are kept (they
@@ -24453,7 +24508,7 @@ async function maybeGamemaster(chat,force){
   // event/nudge is ever formed. This does NOT touch reply generation, memory, trackers, etc. — only
   // the director. A manual "force" (the user pressing Nudge/Confront) still overrides DND on purpose.
   if(chat && chat.dnd){
-    if(chat.activeEvent && !chat.activeEvent.resolved){ chat.activeEvent.resolved=true; markChatDirty&&markChatDirty(chat); }
+    if(chat.activeEvent && !chat.activeEvent.resolved){ chat.activeEvent.resolved=true; closeDirectorEvent(chat,"cut short — do not disturb"); markChatDirty&&markChatDirty(chat); }
     if(!force) return;
   }
   // While an event is active, the Scene Writer owns the scene; gamemaster stays out.
@@ -24494,13 +24549,16 @@ async function maybeGamemaster(chat,force){
     // author needs it so the beat it stages builds on the history instead of re-running it.
     const memBlock=directorMemoryDigest(chat,8);
     const memPart=memBlock?("\n\n"+memBlock):"";
+    // v26.4 — and what this director has already staged, so it stops re-running its own beats.
+    const logBlock=directorEventLog(chat);
+    const logPart=logBlock?("\n\n"+logBlock):"";
     // STAGE 1 — judge (skipped when manually forced; the user explicitly wants an event)
     var triggerContext="", energy="";
     if(!force){
       const judgeSys=fillTpl(up("gmJudge"),{user:state.user,sensitivity:state.gmSensitivity||"balanced"})+_gpTail("pacing",chat);   // v20 — genre defines what "stale" means
       const judgeOut=await chatCompletion([
         {role:"system",content:judgeSys},
-        {role:"user",content:(ctx?ctx+"\n\n":"")+(memBlock?memBlock+"\n\n":"")+`Recent exchange:\n${since}`+stagingBlock}
+        {role:"user",content:(ctx?ctx+"\n\n":"")+(memBlock?memBlock+"\n\n":"")+(logBlock?logBlock+"\n\n":"")+`Recent exchange:\n${since}`+stagingBlock}
       ],state.gmModel,{temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
       const j=parseJSON(judgeOut);
       // The judge now reports TWO independent signals: staleness (the scene has stalled) and a
@@ -24533,7 +24591,13 @@ async function maybeGamemaster(chat,force){
     const offstageSheet=cast.filter(c=>!present.some(pc=>pc.id===c.id)).map(c=>c.name).join("; ");
     const nudge=await chatCompletion([
       {role:"system",content:authorSys+"\n\n"+langDirective()},
-      {role:"user",content:(ctx?ctx+"\n\n":"")+`Characters present now: ${presentSheet}\n`+(offstageSheet?`Characters in this world who could arrive: ${offstageSheet}\n`:``)+`Day ${chat.gameDay||1}.`+memPart+`\n\nRecent exchange:\n${since}`+stagingBlock}
+      // v26.4 — the day/time is already stated once, authoritatively, in the CURRENT SCENE line of
+      // directorContext; it used to be repeated here as a bare "Day N."
+      {role:"user",content:(ctx?ctx+"\n\n":"")
+        +`Characters present now: ${presentSheet}`
+        +(offstageSheet?`\nCharacters in this world who could arrive: ${offstageSheet}`:``)
+        +memPart+logPart
+        +`\n\nRecent exchange:\n${since}`+stagingBlock}
     ],state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
     if(!clean)return;
@@ -24560,6 +24624,7 @@ async function playGamemasterBeat(chat,nudge){
       present:presentIds(chat).slice(),content:text,_reveal:true,
       img:null,imgState:"idle",vidState:"idle",video:null};
     stampStatus(chat,msg);chat.messages.push(msg);
+    logDirectorEvent(chat,text);   // v26.4 — the GM's own record of what it has staged
     persistChats();
     enqueuePresent(msg.mid);
 
@@ -24871,6 +24936,10 @@ async function runSceneWriter(chat){
     // was writing the story's next beat with no access to the story. Appended to the context message.
     let ctx=directorContext(chat,"scene");
     {const _mem=directorMemoryDigest(chat,8); if(_mem)ctx=(ctx?ctx+"\n\n":"")+_mem;}
+    // v26.4 — appearances. This engine narrates the entrance; it had no idea what anyone looks
+    // like, including the character it is walking through the door.
+    {const _lk=castLookSheet(chat,[ev.participant&&ev.participant.charId]);
+     if(_lk)ctx=(ctx?ctx+"\n\n":"")+`WHAT THESE PEOPLE LOOK LIKE (describe them from this — never invent a different appearance):\n${_lk}`;}
     // The player's most recent line — context only. NOTE: a player merely mentioning or addressing
     // the approaching character does NOT summon them. Only the narration genuinely arriving them
     // (the event's own entrance) brings them in. Words don't teleport people into the room.
@@ -25075,6 +25144,7 @@ async function runSceneWriter(chat){
 // Wind down an active event and offer to keep any temp character.
 async function resolveActiveEvent(chat,how){
   const ev=chat.activeEvent;if(!ev)return;
+  closeDirectorEvent(chat,how||"it passed");   // v26.4 — stamp the outcome on the GM's log entry
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,sysError:true,
     content:"— "+(how||"the event passes")+" —",img:null,imgState:"idle",vidState:"idle",video:null});
   // Send any temp participant back off and offer to save them.

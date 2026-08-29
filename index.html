@@ -892,7 +892,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -20244,14 +20244,35 @@ function openImg2Video(imgId){
   renderImg2Video();
   openModal('img2vidModal');
 }
-// The gallery images a finishing frame can be picked from: the same character first, then the rest
-// of the universe, newest first, minus the first frame itself.
+// The gallery images a finishing frame can be picked from: this universe only, the same character
+// first, then the rest, newest first, minus the first frame itself.
+// v27.2 — gallery history outside the boot window lives as bytes in IndexedDB with NO live url
+// (the record only carries `stored`), so requiring `r.url` here emptied the strip after a reload
+// even though the pictures were all still there. Those records are listed and hydrated on demand
+// by _i2vHydratePicks. The old `same.concat(rest).reverse()` also reversed the two groups as a
+// whole, putting the OTHER character's images first; the sort now happens after the reverse.
 function _i2vPickableImages(){
   const rec=_i2vRec(); if(!rec) return [];
-  const all=(state.images||[]).filter(r=>r&&r.url&&r.id!==rec.id);
-  const same=all.filter(r=>rec.characterId?r.characterId===rec.characterId:(r.character||"")===(rec.character||""));
-  const rest=all.filter(r=>same.indexOf(r)<0);
-  return same.concat(rest).reverse().slice(0,60);
+  const all=_galScope(state.images||[])
+    .filter(r=>r&&r.id!==rec.id&&(r.url||r.stored||r.remote))
+    .slice().reverse();                      // newest first
+  const isSame=r=>rec.characterId?r.characterId===rec.characterId:(r.character||"")===(rec.character||"");
+  return all.filter(isSame).concat(all.filter(r=>!isSame(r))).slice(0,60);
+}
+// Materialize the pictures behind any pick that has no live url yet, then redraw the strip. Mirrors
+// what the gallery grid does through _galHydrateScope. A record that was never captured but still
+// has its provider link is repointed at that link synchronously (nothing to load from IndexedDB).
+let _i2vHydrating=false;
+function _i2vHydratePicks(list){
+  let fixed=0;
+  (list||[]).forEach(r=>{ if(r&&!r.url&&!r.stored&&r.remote){ r.url=r.remote; fixed++; } });
+  const pend=(list||[]).filter(r=>r&&!r.url&&r.stored);
+  if(pend.length&&!_i2vHydrating){
+    _i2vHydrating=true;
+    ensureGalleryUrls(pend).then(n=>{ _i2vHydrating=false; if(n&&_i2v.pickLast)renderImg2Video(); })
+      .catch(()=>{ _i2vHydrating=false; });
+  }
+  return fixed>0;
 }
 function renderImg2Video(){
   const box=document.getElementById('img2vidBody'); if(!box)return;
@@ -20274,7 +20295,7 @@ function renderImg2Video(){
   };
   frames.appendChild(mkFrame(rec.url,"First frame"));
   const lastRec=_i2vLastRec();
-  if(lastRec) frames.appendChild(mkFrame(lastRec.url,"Finishing frame"));
+  if(lastRec&&lastRec.url) frames.appendChild(mkFrame(lastRec.url,"Finishing frame"));
   box.appendChild(frames);
 
   // ---- finishing image picker: the clip transitions from the first frame into this one ----
@@ -20293,6 +20314,7 @@ function renderImg2Video(){
     box.appendChild(row);
     if(_i2v.pickLast){
       const pick=_i2vPickableImages();
+      _i2vHydratePicks(pick);
       box.appendChild(_pgLabelEl(pick.length?"Tap the image the clip should end on.":"No other gallery images to pick from yet."));
       if(pick.length){
         const strip=document.createElement('div');
@@ -20301,15 +20323,18 @@ function renderImg2Video(){
           const c=document.createElement('div');
           c.style.cssText="position:relative;aspect-ratio:3/4;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#000;cursor:pointer"
             +(r.id===_i2v.lastImgId?";outline:3px solid var(--accent);outline-offset:-3px":"");
-          const im=document.createElement('img'); im.src=r.url; im.referrerPolicy="no-referrer";
-          im.style.cssText="width:100%;height:100%;object-fit:cover;display:block";
-          c.appendChild(im);
+          if(r.url){
+            const im=document.createElement('img'); im.src=r.url; im.referrerPolicy="no-referrer";
+            im.style.cssText="width:100%;height:100%;object-fit:cover;display:block";
+            c.appendChild(im);
+          }else c.style.opacity=".35";   // still loading its bytes; the strip redraws when it lands
           if(r.lastFrame){
             const t=document.createElement('div'); t.textContent="last frame";
             t.style.cssText="position:absolute;left:4px;bottom:4px;background:rgba(0,0,0,.6);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px";
             c.appendChild(t);
           }
-          c.onclick=()=>{ _i2v.lastImgId=r.id; _i2v.pickLast=false; renderImg2Video(); };
+          if(r.url) c.onclick=()=>{ _i2v.lastImgId=r.id; _i2v.pickLast=false; renderImg2Video(); };
+          else c.style.cursor="default";
           strip.appendChild(c);
         });
         box.appendChild(strip);

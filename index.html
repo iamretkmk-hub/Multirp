@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -10905,11 +10905,15 @@ function trackerContext(chat,viewerId){
         // a PRIVATE player tracker that has crossed its public threshold leaks to others, vaguely.
         publicLines.push(trackerPublicText(t,"__user__"));
       }
-      dashLines.push(line+(isPublic?"":" [private]"));
+      dashLines.push(line+(isPublic?"":` [private — only ${state.user} knows this]`));
     }else{
       // character-owned: render for the owning character (its own value)
       const line=render(owner);
-      dashLines.push(line);
+      // v26.3 — the null-viewer branch is read ONLY by the director engines, and it used to hand
+      // them every character tracker with no indication of which ones are still secret: a
+      // character-owned tracker is private to its owner until it crosses its public threshold.
+      // Unmarked, the director could stage a beat that says a secret out loud.
+      dashLines.push(line+(trackerIsPublic(t,trackerVal(c,t,owner))?"":` [private — only ${ownerLabel(owner)} knows this]`));
       if(forCharacter && viewerId===owner)ownLines.push(line);
       else if(!isDashboard && viewerId!==owner && trackerIsPublic(t,trackerVal(c,t,owner))){
         // this character's tracker has gone public — others get the VAGUE outside line (not the
@@ -10936,8 +10940,13 @@ function trackerContext(chat,viewerId){
     if(pubBlock)blocks.push(pubBlock);
     return blocks.join("\n\n");
   }
-  // dashboard / story-bar view: show everything
-  return dashLines.length?("STORY TRACKERS:\n"+dashLines.join("\n")):"";
+  // DIRECTOR view (viewerId null): everything, marked for what is secret. The only caller is
+  // directorContext — the Gamemaster and the Scene Writer are omniscient by design, but they were
+  // never told which of these the characters are actually keeping to themselves.
+  return dashLines.length?(
+    "ALL TRACKERS (your omniscient director's view — the characters do NOT share it):\n"+dashLines.join("\n")+
+    "\nAnything marked [private] is a secret its owner is keeping. Aim tension at it — but never write a beat that states it aloud, and never have it revealed without a cause the scene has earned."
+  ):"";
 }
 // A written overview of how the present characters currently feel (toward the player and
 // each other), using the stored descriptions. Fed to the director engines and the story bar.
@@ -10988,9 +10997,20 @@ function tickTrackersForDay(chat){
 // SAME shape, or they author events that don't fit what actually just happened. Keeping one number
 // here is what keeps their payloads aligned — change it in one place, they stay in step.
 const ENGINE_RECENT_TURNS=6;
+// v26.3 — the DIRECTOR window. The Gamemaster and the Scene Writer read the scene through this
+// slice, and 6 was too tight: one multi-character turn (a player line, two replies, a presence
+// note or two) could fill it end to end, so the engine deciding what happens next could be looking
+// at a window that no longer contained the player's last line. Their beats are short and they run
+// rarely (a cadence check, or one turn of an active event), so a wider view is cheap here.
+const DIRECTOR_RECENT_TURNS=12;
 function recentExchangeMsgs(chat,n){
   const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
-  return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg).slice(-(n||6))
+  // v26.3 — drop the player-only meta notices (world events, quest/calendar notices, day markers).
+  // They are UI lines, not scene content: no engine should read a quest notification as something
+  // that was said in the room, and every one of them used to eat a slot in this window.
+  // recentExchangeMsgsWithTexts already filtered exactly these — the two are consistent now.
+  return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg
+      &&!m.worldEvent&&!m.questNote&&!m.calNote&&!m.dayMarker).slice(-(n||6))
     .map(m=>({role:m.role==='user'?'user':'assistant',
               name:sanitizeName(m.role==='user'?state.user:(m.speaker||fallback)),
               content:m.content}));
@@ -24459,7 +24479,7 @@ async function maybeGamemaster(chat,force){
     // Recent exchange — drawn from the SAME shared window as the Scene Writer and Future events
     // tracker (see recentExchangeText). This excludes phone text messages, which used to leak into
     // the Gamemaster's view of the scene and make it author events that didn't fit what was happening.
-    const since=recentExchangeText(chat);
+    const since=recentExchangeText(chat,DIRECTOR_RECENT_TURNS);
     // STAGE-DIRECTION awareness: if any armed plan is waiting on a scene-condition (target alone, an
     // audience, the holder present), the GM may nudge the scene toward it. Empty in ordinary scenes,
     // so the GM behaves exactly as before when nothing is scheming. The GM never fires the plan or
@@ -24895,7 +24915,7 @@ async function runSceneWriter(chat){
     }
     const swMsgs=[{role:"system",content:sys+confrontGuidance+(force?`\n\nThis is the FINAL turn — you MUST resolve the event now.`:``)+(ev.turn<ev.minTurns?`\n\nThe event may NOT resolve yet (too early). Keep it going.`:``)+(arriveNow?`\n\nThe event's character (${ev.participant.name}) is arriving — bring them fully into the room THIS turn with one entrance line and set "bring_in":"${ev.participant.name}".`:``)+"\n\n"+langDirective()}];
     if(ctx)swMsgs.push({role:"user",name:"context",content:ctx});
-    recentExchangeMsgs(chat,ENGINE_RECENT_TURNS).forEach(m=>swMsgs.push(m));
+    recentExchangeMsgs(chat,DIRECTOR_RECENT_TURNS).forEach(m=>swMsgs.push(m));
     // The player's last line is ALREADY the final message in the recent-exchange block just pushed,
     // so we do NOT re-quote it here (that duplicated it in the payload and over-weighted it). We only
     // append the event-character status + the advance instruction.

@@ -894,7 +894,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v26.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8476,6 +8476,45 @@ function castBackstorySheet(chat){
     .map(c=>`- ${c.name}: ${c.backstory.trim()}`);
   return lines.join("\n");
 }
+
+/* v26.2 — WHAT HAS ALREADY HAPPENED, for the director engines.
+   Every character reply path retrieves memories; the Gamemaster and the Scene Writer never did.
+   Their whole view of the past was the 6-turn exchange window plus relationship descriptions —
+   so the one engine that decides WHAT HAPPENS NEXT was the only one blind to what came before,
+   free to stage a beat the cast has already lived.
+   Deliberately DETERMINISTIC (no genQuery/embedding call): these engines run on a cadence and on
+   every turn of an active event, so an extra retrieval round-trip per run is a real cost — and for
+   "don't repeat yourself" a recency/importance digest beats a semantic top-2 anyway. The pool is
+   visibleMemories(), already scoped to this universe and this cast. Diaries are never injected. */
+function directorMemoryDigest(chat,n){
+  try{
+    if(!state.mem||!Array.isArray(state.memory)||!state.memory.length)return "";
+    const pool=visibleMemories().filter(m=>m&&m.type!=="DIARY");
+    if(!pool.length)return "";
+    const today=(chat&&chat.gameDay)||curGameDay();
+    const who=new Set(); try{ (presentCast(chat)||[]).forEach(p=>{ if(p&&p.name)who.add(p.name.toLowerCase()); }); }catch(e){}
+    if(state.user)who.add(String(state.user).toLowerCase());
+    const curLoc=String((chat&&chat.location)||"").toLowerCase().trim();
+    const score=m=>{
+      const gap=Math.max(0,today-(m.gameDay||today));
+      let s=1/(1+gap*0.35);                                        // recency leads — a director needs "lately"
+      s+=Math.max(0,Math.min(1,m.importance||0))*0.6;              // then how much it mattered
+      const mp=(Array.isArray(m.people)?m.people:[]).map(x=>String(x).toLowerCase()).filter(Boolean);
+      if(mp.length&&who.size&&mp.some(x=>[...who].some(pn=>x===pn||x.includes(pn)||pn.includes(x))))s+=0.5;
+      const ml=String(m.location||"").toLowerCase().trim();
+      if(ml&&curLoc&&(ml===curLoc||ml.includes(curLoc)||curLoc.includes(ml)))s+=0.25;
+      return s;
+    };
+    const top=pool.map(m=>({m,s:score(m)}))
+      .sort((a,b)=>b.s-a.s||((b.m.gameDay||0)-(a.m.gameDay||0)))
+      .slice(0,Math.max(1,n||8))
+      .sort((a,b)=>(a.m.gameDay||0)-(b.m.gameDay||0));             // then read it as a story, oldest first
+    const nameOf=id=>{ const p=(state.personas||[]).find(x=>x&&x.id===id); return (p&&p.name)||"someone"; };
+    const lines=top.map(({m})=>`- ${m.gameDay?`Day ${m.gameDay}`:"earlier"} · ${nameOf(m.ownerId)}: ${memInjectText(m)}${m.location?` [${m.location}]`:""}`);
+    return `WHAT HAS ALREADY HAPPENED (the cast's own memories, oldest first — this is established history):\n${lines.join("\n")}\n`+
+      `Build on this instead of repeating it: never stage something that has already happened, and never contradict it. An unresolved thread here is better material than a new one.`;
+  }catch(e){ return ""; }
+}
 // A compact world+pressure-points context block for gamemaster/scene-writer user messages.
 // Current scene's time/place — surfaced to director engines and roleplay so events and
 // dialogue respect "it's night at the tavern" instead of drifting.
@@ -8592,9 +8631,25 @@ function directorContext(chat,mode){
     const lines=[];
     (state.personas||[]).filter(p=>p.universeId===chat.universeId && isActiveChar(p) && !present.has(p.id)).forEach(p=>{
       const at=pos[p.id]; const l=at?locById(at):null;
-      lines.push(`${p.name}: ${l?("at "+l.name+(l.description?` (${l.description.slice(0,80)})`:"")):"elsewhere / unavailable"}`);
+      let line=`${p.name}: ${l?("at "+l.name+(l.description?` (${l.description.slice(0,80)})`:"")):"elsewhere / unavailable"}`;
+      // v26.2 — the GM's ONE move is to bring an offstage character in, and gmAuthor tells it to
+      // "choose the character whose pressure point or tie most plausibly pulls them here". Those
+      // levers used to be present-cast only (castInterjectSheet/castGoalsSheet), so the GM had them
+      // for exactly the people it must NOT bring in, and picked a newcomer off a bare name. The
+      // offstage roster now carries what it is asked to choose on. GM mode only — the Scene Writer
+      // works with who is already in the room and doesn't need the whole world's interiors.
+      if(mode==="gm"){
+        const bits=[];
+        if(p.personality)bits.push(briefDesc(subUser(p.personality),110));
+        if(p.goals)bits.push(`wants: ${briefDesc(subUser(p.goals),90)}`);
+        if(p.interject)bits.push(`pressure point: ${briefDesc(subUser(p.interject),110)}`);
+        if(bits.length)line+=`\n    ${bits.join(" · ")}`;
+      }
+      lines.push(line);
     });
-    if(lines.length)parts.push("WHO IS WHERE (offstage):\n"+lines.join("\n"));
+    if(lines.length)parts.push((mode==="gm"
+      ? "WHO IS WHERE (offstage — these are the people you may bring in; choose on their pressure point or their tie):\n"
+      : "WHO IS WHERE (offstage):\n")+lines.join("\n"));
     // Venues and how private each is — lets a character propose moving somewhere quieter/safer.
     try{
       const venueLines=(curLocations()||[]).map(l=>`- ${l.name}: ${gossipLabel(locGossipChance(l))}`);
@@ -24414,13 +24469,18 @@ async function maybeGamemaster(chat,force){
     // directions (condition only, never the business itself).
     try{ const cqStage=charQuestStagingSummary(chat); if(cqStage)staging+=(staging?"\n\n":"")+cqStage; }catch(e){}
     const stagingBlock=staging?("\n\n"+staging):"";
+    // v26.2 — the story so far, from the cast's own memories. Computed ONCE and shared by both
+    // stages: the judge needs it to tell a stalled scene from one that is going in circles, and the
+    // author needs it so the beat it stages builds on the history instead of re-running it.
+    const memBlock=directorMemoryDigest(chat,8);
+    const memPart=memBlock?("\n\n"+memBlock):"";
     // STAGE 1 — judge (skipped when manually forced; the user explicitly wants an event)
     var triggerContext="", energy="";
     if(!force){
       const judgeSys=fillTpl(up("gmJudge"),{user:state.user,sensitivity:state.gmSensitivity||"balanced"})+_gpTail("pacing",chat);   // v20 — genre defines what "stale" means
       const judgeOut=await chatCompletion([
         {role:"system",content:judgeSys},
-        {role:"user",content:(ctx?ctx+"\n\n":"")+`Recent exchange:\n${since}`+stagingBlock}
+        {role:"user",content:(ctx?ctx+"\n\n":"")+(memBlock?memBlock+"\n\n":"")+`Recent exchange:\n${since}`+stagingBlock}
       ],state.gmModel,{temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
       const j=parseJSON(judgeOut);
       // The judge now reports TWO independent signals: staleness (the scene has stalled) and a
@@ -24453,7 +24513,7 @@ async function maybeGamemaster(chat,force){
     const offstageSheet=cast.filter(c=>!present.some(pc=>pc.id===c.id)).map(c=>c.name).join("; ");
     const nudge=await chatCompletion([
       {role:"system",content:authorSys+"\n\n"+langDirective()},
-      {role:"user",content:(ctx?ctx+"\n\n":"")+`Characters present now: ${presentSheet}\n`+(offstageSheet?`Characters in this world who could arrive: ${offstageSheet}\n`:``)+`Day ${chat.gameDay||1}.\n\nRecent exchange:\n${since}`+stagingBlock}
+      {role:"user",content:(ctx?ctx+"\n\n":"")+`Characters present now: ${presentSheet}\n`+(offstageSheet?`Characters in this world who could arrive: ${offstageSheet}\n`:``)+`Day ${chat.gameDay||1}.`+memPart+`\n\nRecent exchange:\n${since}`+stagingBlock}
     ],state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
     if(!clean)return;
@@ -24504,9 +24564,10 @@ async function setupActiveEvent(chat,eventText){
   try{
     const known=curCast().map(c=>c.name).join(", ");
     const ctx=directorContext(chat,"scene");
+    const _mem=directorMemoryDigest(chat,8);
     const out=await chatCompletion([
       {role:"system",content:up("sceneSetup")+_gpTail("stakes",chat)},
-      {role:"user",content:(ctx?ctx+"\n\n":"")+`Known characters already in the cast: ${known}\nPlayer: ${state.user}\n\nThe event just introduced:\n${eventText}`}
+      {role:"user",content:(ctx?ctx+"\n\n":"")+(_mem?_mem+"\n\n":"")+`Known characters already in the cast: ${known}\nPlayer: ${state.user}\n\nThe event just introduced:\n${eventText}`}
     ],state.gmModel,{temp:fnTemp("gm",0.4),max:fnTok("gm",200),dbg:"Scene writer: setup"});
     // If the classifier reply doesn't parse, still set up a minimal environment
     // event so the Scene Writer keeps driving the scene instead of going silent.
@@ -24786,7 +24847,10 @@ async function runSceneWriter(chat){
   const force=ev.turn>=ev.maxTurns;          // force-resolve at the cap
   try{
     const partInfo=ev.participant?`Event character: ${ev.participant.name} (${ev.participant.approaching?"approaching, NOT yet in the room":"in the room"}).`:"No character; environmental event.";
-    const ctx=directorContext(chat,"scene");
+    // v26.2 — the Scene Writer advances the event every turn it runs; without the cast's memories it
+    // was writing the story's next beat with no access to the story. Appended to the context message.
+    let ctx=directorContext(chat,"scene");
+    {const _mem=directorMemoryDigest(chat,8); if(_mem)ctx=(ctx?ctx+"\n\n":"")+_mem;}
     // The player's most recent line — context only. NOTE: a player merely mentioning or addressing
     // the approaching character does NOT summon them. Only the narration genuinely arriving them
     // (the event's own entrance) brings them in. Words don't teleport people into the room.

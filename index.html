@@ -895,7 +895,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7002,10 +7002,26 @@ async function ensureRefUrls(){
 function refPromptSheet(prelude){
   const pre=Array.isArray(prelude)?prelude:[];
   const r=vidRefs(); const out=pre.slice(); const off=pre.length;
-  r.image.forEach((x,i)=>out.push(`image ${i+1+off}${x.name?` — ${x.name}`:""}`));
-  r.video.forEach((x,i)=>out.push(`video ${i+1}${x.name?` — ${x.name}`:""}`));
-  r.audio.forEach((x,i)=>out.push(`audio ${i+1}${x.name?` — ${x.name}`:""}`));
+  r.image.forEach((x,i)=>out.push(`@image${i+1+off}${x.name?` — ${x.name}`:""}`));
+  r.video.forEach((x,i)=>out.push(`@video${i+1}${x.name?` — ${x.name}`:""}`));
+  r.audio.forEach((x,i)=>out.push(`@audio${i+1}${x.name?` — ${x.name}`:""}`));
   return out;
+}
+/* v27.6 — the model matches the @token the playground inserts (“@image1”), NOT the prose
+   “image 1” the schema text uses to describe it. A writer model and a hand-edited prompt both
+   produce the prose form, and the model then silently ignores the reference, so the spaced and
+   mis-cased variants are folded into the token right before the request goes out. Only indices
+   that correspond to something actually attached are rewritten — “image 4” with three
+   references stays as ordinary words. */
+function normalizeRefTokens(prompt,counts){
+  let s=String(prompt||"");
+  s=s.replace(/@\s*(image|video|audio)\s*#?\s*(\d{1,2})/gi,(m,k,n)=>"@"+k.toLowerCase()+parseInt(n,10));
+  s=s.replace(/(^|[^@\w])(image|video|audio)s?\s*#?\s*(\d{1,2})\b/gi,(m,pre,k,n)=>{
+    const kind=k.toLowerCase(), idx=parseInt(n,10);
+    if(!(idx>=1&&idx<=(counts[kind]||0))) return m;
+    return pre+"@"+kind+idx;
+  });
+  return s;
 }
 
 const VIDEO_RES=["480p","580p","720p","1080p"];
@@ -7140,6 +7156,12 @@ async function generateVideo(prompt,imageUrl,opts){
     if(rv.length) body.reference_videos=rv;
     // Audio needs at least one image or video alongside it, per the model's own contract.
     if(ra.length&&(imgs.length||rv.length)) body.reference_audios=ra;
+    // Last stop before the wire: fold any prose slot reference ("image 2") into the @token the
+    // model actually matches, bounded by what was really attached.
+    body.prompt=normalizeRefTokens(body.prompt,{
+      image:(body.reference_images||[]).length,
+      video:(body.reference_videos||[]).length,
+      audio:(body.reference_audios||[]).length});
   }
 
   const label="Video generation"+(rule&&rule.label?" \u00b7 "+rule.label:"")+" \u00b7 "+body.duration+"s";
@@ -7942,16 +7964,16 @@ function videoWriterSystem(rule,opts){
   if(vidSupportsRefs()&&(refCount()||vidIsRefOnly())){
     const refOnly=vidIsRefOnly();
     const pre=refOnly
-      ? ["image 1 — the still this clip is generated from (the scene exactly as it already looks)"]
-          .concat(opts.endPrompt?["image 2 — the frame the motion has to LAND ON at the end"]:[])
+      ? ["@image1 — the still this clip is generated from (the scene exactly as it already looks)"]
+          .concat(opts.endPrompt?["@image2 — the frame the motion has to LAND ON at the end"]:[])
       : [];
     const sheet=refPromptSheet(pre);
     sys+="\n\n## REFERENCE INPUTS ATTACHED TO THIS CLIP\n"
       +(refOnly
-        ? "This model has NO first-frame slot: everything it gets is a reference, and the still the clip comes from is reference image 1. Say what image 1 shows doing the motion. The model only uses a reference if your prompt POINTS AT IT by its slot name, written exactly like this:\n"
-        : "Extra material is being sent alongside the first frame. The model only uses a reference if your prompt POINTS AT IT by its slot name, written exactly like this:\n")
+        ? "This model has NO first-frame slot: everything it gets is a reference, and the still the clip comes from is @image1. Say what @image1 is doing. The model only uses a reference if your prompt POINTS AT IT by its @token, and these are the ones that exist:\n"
+        : "Extra material is being sent alongside the first frame. The model only uses a reference if your prompt POINTS AT IT by its @token, and these are the ones that exist:\n")
       +sheet.map(s=>"- "+s).join("\n")
-      +"\nWrite the slot names in plain words exactly as listed \u2014 \u201cimage 2\u201d, not \u201cImage2\u201d or \u201c@image2\u201d. Name the ones that matter inside the motion writing, where they belong: \u201cher face matches image 2\u201d, \u201cthe motion follows video 1\u201d, \u201cshe speaks the line in audio 1\u201d. Do not list them at the top, do not describe what a reference contains, and never invent a slot that is not on that list.";
+      +"\nWrite each token EXACTLY as listed \u2014 an @, the word, the number, no spaces and no capitals: @image2. Never \u201cimage 2\u201d, \u201cImage2\u201d or \u201c@ image 2\u201d; a token written any other way is read as ordinary text and the reference is thrown away. Drop it inline right where it belongs, as if it were the thing itself: \u201cher face is @image2 throughout\u201d, \u201cthe motion follows @video1\u201d, \u201cshe speaks the line in @audio1\u201d. Do not list the tokens at the top, do not describe what a reference contains, and never write a token that is not on that list.";
   }
   const explicit=!!(rule&&rule.explicit);
   const snd=(explicit&&rule&&rule.soundStyle&&rule.soundStyle.trim())||"";
@@ -20680,9 +20702,9 @@ function _i2vRefRow(kind){
   head.style.cssText="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 4px";
   const lbl=document.createElement('div'); lbl.className="desc"; lbl.style.flex="1";
   lbl.textContent=`${REF_LABEL[kind]} — ${list.length}/${REF_LIMITS[kind]-off}`
-    +(kind==="image"?` · called “image ${1+off}” onward`
-     :kind==="video"?" · ≤15s total · “video 1”…"
-                    :" · ≤15s total · “audio 1”…");
+    +(kind==="image"?` · @image${1+off} onward`
+     :kind==="video"?" · \u226415s total · @video1…"
+                    :" · \u226415s total · @audio1…");
   head.appendChild(lbl);
   // From the gallery (images and clips you already made) …
   if(kind!=="audio"){
@@ -20713,7 +20735,7 @@ function _i2vRefRow(kind){
         c.innerHTML=`<span style="color:#fff;opacity:.75">${icon(kind==="audio"?"volume":"film")}</span>`;
       }
       const tag=document.createElement('div');
-      tag.textContent=`${kind} ${i+1+off}`;
+      tag.textContent=`@${kind}${i+1+off}`;
       tag.style.cssText="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);color:#fff;font-size:9px;text-align:center;padding:2px 0";
       c.appendChild(tag);
       const x=document.createElement('button'); x.textContent="×"; x.title="Remove";
@@ -20755,8 +20777,8 @@ function _i2vRefSection(box){
   if(!vidSupportsRefs(model)) return;
   const _ro=vidIsRefOnly();
   box.appendChild(_pgLabelEl(_ro
-    ? "References — this model has no first-frame slot, so the scene image above is reference image 1 and everything here follows it (a finishing image takes image 2). Name them in the prompt or they are ignored. They stay attached until you remove them."
-    : "References — extra material this model can hold on to. Name them in the prompt (“her face matches image 1”) or the model ignores them. They stay attached until you remove them."));
+    ? "References — this model has no first-frame slot, so the scene image above is @image1 and everything here follows it (a finishing image takes @image2). The prompt has to name a reference by its @token or the model ignores it. They stay attached until you remove them."
+    : "References — extra material this model can hold on to. The prompt has to name one by its @token (“her face is @image1 throughout”) or the model ignores it. They stay attached until you remove them."));
   REF_KINDS.forEach(k=>box.appendChild(_i2vRefRow(k)));
 }
 // Copy a gallery record's stored bytes into the reference library (no network, no CORS).
@@ -20786,7 +20808,7 @@ function renderImg2Video(){
   box.appendChild(h);
   if(!rec||!rec.url){ box.appendChild(_pgLabelEl("Image not found.")); return; }
   box.appendChild(_pgLabelEl(vidIsRefOnly()
-    ? `One ${videoSeconds()}s clip at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. This model works from references, not a first frame — this image is sent as reference image 1 and a finishing image becomes image 2. Length and every other option are in Settings → Video.`
+    ? `One ${videoSeconds()}s clip at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. This model works from references, not a first frame — this image is sent as @image1 and a finishing image becomes @image2. Length and every other option are in Settings → Video.`
     : `One ${videoSeconds()}s clip from this image at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. Add a finishing frame to transition into a second image. Length and every other option are in Settings → Video.`));
 
   // ---- first frame (+ finishing frame in clip mode) ----

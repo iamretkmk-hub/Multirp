@@ -895,7 +895,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6895,10 +6895,16 @@ const VIDEO_MODEL_DEFAULT="atlascloud/wan-2.2/image-to-video-lora";
    correctly without being listed here. */
 const VIDEO_MODELS=[
   {id:"atlascloud/wan-2.2/image-to-video-lora", family:"wan", label:"Wan 2.2 image-to-video (LoRA)",
-   note:"LoRA-driven. Every position's LoRA channels, the advanced sampler controls and 1080p all apply. No reference inputs."},
+   note:"LoRA-driven. Every position's LoRA channels, the advanced sampler controls, the negative prompt and 1080p all apply. No reference inputs."},
   {id:"bytedance/seedance-2.0-mini/image-to-video", family:"seedance", label:"Seedance 2.0 mini image-to-video",
-   note:"ByteDance. 480p/720p, 4–15s, no LoRAs, no sampler controls, no negative prompt and no returned last frame — but it takes REFERENCE images, video and audio, and renders its own synced sound."}
+   note:"ByteDance. The scene image is the first frame, as on Wan. 4–15s, no LoRAs, no sampler controls, no negative prompt — but it renders its own synced sound."},
+  {id:"bytedance/seedance-2.0-mini/reference-to-video", family:"seedance", label:"Seedance 2.0 mini reference-to-video",
+   note:"ByteDance, REFERENCE-driven: there is no first-frame slot, so the scene image is sent as reference image 1 and your library follows it (up to 9 images, 3 videos, 3 sounds). Name them in the prompt or they are ignored. 4–15s, no LoRAs, no negative prompt."}
 ];
+/* Seedance's own resolution ladder — the -SR steps are super-resolved, and plain "1080p" is NOT
+   one of its options (sending it is a hard 400). */
+const SEEDANCE_RES=["480p","720p","720p-SR","1080p-SR","1440p-SR"];
+const SEEDANCE_RATIOS=["16:9","4:3","1:1","3:4","9:16","21:9","adaptive"];
 function vidModelId(){ return (state.vidModel&&String(state.vidModel).trim())||VIDEO_MODEL_DEFAULT; }
 /* Which body shape a model id wants. Matched on the id rather than an exact preset so the other
    Seedance endpoints (fast, 2.5, reference-to-video) are recognised too. */
@@ -6909,6 +6915,17 @@ function vidFamily(model){
   return "wan";
 }
 function vidSupportsRefs(model){ return vidFamily(model)==="seedance"; }
+/* reference-to-video has NO first-frame parameter at all: the whole input is the reference set.
+   The scene image the user started from is therefore sent as reference image 1, which is also why
+   the prompt sheet below shifts the library's own slots down by one. */
+function vidIsRefOnly(model){ return /reference-to-video/i.test(String(model||vidModelId())); }
+// Map whatever resolution is configured onto the ladder this model actually accepts.
+function vidResolutionFor(model){
+  const want=state.vidRes||"720p";
+  if(vidFamily(model)!=="seedance") return VIDEO_RES.includes(want)?want:(({"1024p":"1080p"})[want]||"720p");
+  if(SEEDANCE_RES.includes(want)) return want;
+  return ({"580p":"480p","1080p":"1080p-SR","1024p":"1080p-SR","1440p":"1440p-SR"})[want]||"720p";
+}
 function vidSupportsLoras(model){ return vidFamily(model)==="wan"; }
 function vidModelNote(model){
   const m=String(model||vidModelId()).toLowerCase();
@@ -6978,9 +6995,16 @@ async function ensureRefUrls(){
   return n;
 }
 // A one-line summary of what is attached, in the exact wording the prompt must use.
-function refPromptSheet(){
-  const r=vidRefs(); const out=[];
-  REF_KINDS.forEach(k=>r[k].forEach((x,i)=>out.push(`${k} ${i+1}${x.name?` — ${x.name}`:""}`)));
+/* The slot list exactly as the model will see it. `prelude` holds the image slots that are filled
+   before the library's own — on a reference-only model the still the clip comes from, and the
+   finishing frame when there is one — so the numbering the writer is given matches the order
+   generateVideo actually assembles reference_images in. */
+function refPromptSheet(prelude){
+  const pre=Array.isArray(prelude)?prelude:[];
+  const r=vidRefs(); const out=pre.slice(); const off=pre.length;
+  r.image.forEach((x,i)=>out.push(`image ${i+1+off}${x.name?` — ${x.name}`:""}`));
+  r.video.forEach((x,i)=>out.push(`video ${i+1}${x.name?` — ${x.name}`:""}`));
+  r.audio.forEach((x,i)=>out.push(`audio ${i+1}${x.name?` — ${x.name}`:""}`));
   return out;
 }
 
@@ -7029,46 +7053,46 @@ async function generateVideo(prompt,imageUrl,opts){
   opts=opts||{};
   const rule=opts.rule||null;
   const model=(rule&&rule.model_id&&String(rule.model_id).trim())||state.vidModel||VIDEO_MODEL_DEFAULT;
-  // The API wants a hosted URL in `image`. Upload base64 data URIs; fall back to inline on failure.
-  let img=imageUrl;
-  try{ img=await atlasUpload(imageUrl); }catch(e){ img=imageUrl; }
-  const body={ model, image:img, prompt:(typeof prompt==="string"?prompt:String(prompt||"")) };
+  const fam=vidFamily(model), refOnly=vidIsRefOnly(model);
+  // The API wants a hosted URL, not a data URI or one of our blob: URLs.
+  const host1=async u=>{ try{ return await atlasUpload(u); }catch(e){ return u; } };
+  const img=await host1(imageUrl);
+  const body={ model, prompt:(typeof prompt==="string"?prompt:String(prompt||"")) };
+  // reference-to-video has no first-frame parameter at all — the still goes in as reference image 1
+  // (prepended below) instead. Every other shape takes it as `image`.
+  if(!refOnly) body.image=img;
 
-  const fam=vidFamily(model);
   body.duration=videoSeconds();
-  body.resolution=VIDEO_RES.includes(state.vidRes)?state.vidRes:({"1024p":"1080p"})[state.vidRes]||"720p";
-  // v27.5 — Seedance takes 480p/720p and 4–15s only; sending 1080p or a 3s clip is a hard 400.
-  // Clamp rather than fail, so switching models never breaks a generation that was fine before.
-  if(fam==="seedance"){
-    if(body.resolution!=="480p") body.resolution="720p";
-    body.duration=Math.max(4,Math.min(15,body.duration));
+  body.resolution=vidResolutionFor(model);
+  if(fam==="seedance") body.duration=Math.max(4,Math.min(15,body.duration));   // its range is 4-15
+  {
+    const a=state.vidAspect;
+    // Seedance calls this `ratio` and defaults to "adaptive" (follow the primary media); Wan calls
+    // it `aspect_ratio`. Sending the wrong name is a 400, so it is chosen by family, not by both.
+    if(a&&a!=="auto"){
+      if(fam==="seedance"){ if(SEEDANCE_RATIOS.includes(a)) body.ratio=a; }
+      else if(VIDEO_ASPECTS.includes(a)) body.aspect_ratio=a;
+    }
   }
-  {const a=state.vidAspect; if(a&&a!=="auto"&&VIDEO_ASPECTS.includes(a)) body.aspect_ratio=a;}
   body.seed=_vidSeed(state.vidSeed);
 
   // Sound. `generate_audio` asks the model for a native soundtrack rendered from the prompt;
   // `audio` hands it an actual track to sync to (voice-guided clips) where the model supports it.
   if(state.vidSound!==false) body.generate_audio=true;
-  if(opts.audio) body.audio=opts.audio;
+  if(opts.audio&&fam==="wan") body.audio=opts.audio;   // Seedance syncs to reference_audios instead
 
-  // END IMAGE — the clip is generated as a transition from the first frame to this one.
-  if(opts.endImage){ let li=opts.endImage; try{ li=await atlasUpload(li); }catch(e){} body.last_image=li; }
-  // Hand the clip's final frame back as its own image so the next clip can start where this stopped.
-  // Wan-only, along with the negative prompt and the watermark flag: Seedance documents none of the
-  // three, and an unknown field there is a hard 400 rather than something it quietly ignores.
+  // Shared across both families.
+  if(state.vidLastFrame!==false) body.return_last_frame=true;
+  if(state.vidWatermark===true) body.watermark=true;
+  if(VIDEO_BITRATES.includes(state.vidBitrate)&&state.vidBitrate!=="standard") body.bitrate_mode=state.vidBitrate;
+
+  // Wan-only. Seedance documents none of these and rejects a body carrying a field it does not
+  // know, so they are gated on the family rather than merely on being set.
   if(fam==="wan"){
-    if(state.vidLastFrame!==false) body.return_last_frame=true;
     const neg=(opts.negative&&String(opts.negative).trim())
           || (rule&&rule.negative&&String(rule.negative).trim())
           || (state.vidNegative&&String(state.vidNegative).trim())||"";
     if(neg) body.negative_prompt=neg;
-    if(state.vidWatermark===true) body.watermark=true;
-  }
-
-  // Wan-only controls. Seedance exposes none of these and rejects the whole request when it
-  // receives a field it doesn't know, so they are gated on the family rather than on being set.
-  if(fam==="wan"){
-    if(VIDEO_BITRATES.includes(state.vidBitrate)&&state.vidBitrate!=="standard") body.bitrate_mode=state.vidBitrate;
     if(state.vidExpand===true) body.enable_prompt_expansion=true;
     // Advanced sampler controls — only sent when the user has actually set them.
     {const n=parseInt(state.vidSteps,10);    if(n>0) body.num_inference_steps=n;}
@@ -7082,30 +7106,43 @@ async function generateVideo(prompt,imageUrl,opts){
     {const gen=atlasLoras(rule); if(gen) body.loras=gen;}
   }
 
-  // REFERENCES — the library's images, video and sound, hosted and attached. The prompt refers to
-  // them as "image 1", "video 1", "audio 1" (see videoWriterSystem). Each is uploaded on its own so
-  // one unreachable reference can't sink the whole generation.
-  if(vidSupportsRefs(model)&&refCount()){
-    if(opts.setStat)opts.setStat("Uploading references…");
+  // END IMAGE — the clip is generated as a transition from the first frame into this one. On a
+  // reference-only model there is no `last_image` slot either, so it rides along as another
+  // reference image and the prompt is what asks the motion to land on it.
+  let endImg=null;
+  if(opts.endImage) endImg=await host1(opts.endImage);
+  if(endImg&&!refOnly) body.last_image=endImg;
+
+  // REFERENCES — the library's images, video and sound, hosted and attached. The model only uses a
+  // reference the PROMPT names ("image 2", "video 1", "audio 1" — see videoWriterSystem), and the
+  // slot numbers here must line up with the sheet the writer was given, so the order is fixed:
+  // the first frame (ref-only), then the end image, then the library in its own order.
+  if(vidSupportsRefs(model)){
     await ensureRefUrls();
     const host=async list=>{
       const out=[];
       for(const r of (list||[])){
         const s=r&&(r.url||r.remote); if(!s)continue;
+        // Each is uploaded on its own so one unreachable reference can't sink the generation.
         try{ const u=await atlasUpload(s); if(u&&/^https?:/i.test(u)) out.push(u); }catch(e){}
       }
       return out;
     };
+    if(refCount()&&opts.setStat) opts.setStat("Uploading references…");
     const R=vidRefs();
-    const ri=await host(R.image.slice(0,REF_LIMITS.image));
+    const imgs=[];
+    if(refOnly&&img&&/^https?:/i.test(img)) imgs.push(img);
+    if(refOnly&&endImg&&/^https?:/i.test(endImg)) imgs.push(endImg);
+    imgs.push(...await host(R.image));
     const rv=await host(R.video.slice(0,REF_LIMITS.video));
     const ra=await host(R.audio.slice(0,REF_LIMITS.audio));
-    if(ri.length) body.reference_images=ri;
-    if(rv.length) body.reference_video=rv;
-    if(ra.length) body.reference_audio=ra;
+    if(imgs.length) body.reference_images=imgs.slice(0,REF_LIMITS.image);
+    if(rv.length) body.reference_videos=rv;
+    // Audio needs at least one image or video alongside it, per the model's own contract.
+    if(ra.length&&(imgs.length||rv.length)) body.reference_audios=ra;
   }
 
-  const label="Video generation"+(rule&&rule.label?" · "+rule.label:"")+" · "+body.duration+"s";
+  const label="Video generation"+(rule&&rule.label?" \u00b7 "+rule.label:"")+" \u00b7 "+body.duration+"s";
   const r=await atlasGenerate("video",body,label,opts.setStat||null,{all:true});
   if(opts.out) opts.out.lastFrame=body.return_last_frame?_pickLastFrame(r.outputs,r.url):null;
   return r.url;
@@ -7902,12 +7939,19 @@ function videoWriterSystem(rule,opts){
   if(tpl) sys+="\n\n"+tpl;
   // v27.5 — reference inputs. The model only honours them if the PROMPT names them, so the writer
   // has to know they exist and exactly what to call each slot.
-  if(vidSupportsRefs()&&refCount()){
-    const sheet=refPromptSheet();
+  if(vidSupportsRefs()&&(refCount()||vidIsRefOnly())){
+    const refOnly=vidIsRefOnly();
+    const pre=refOnly
+      ? ["image 1 — the still this clip is generated from (the scene exactly as it already looks)"]
+          .concat(opts.endPrompt?["image 2 — the frame the motion has to LAND ON at the end"]:[])
+      : [];
+    const sheet=refPromptSheet(pre);
     sys+="\n\n## REFERENCE INPUTS ATTACHED TO THIS CLIP\n"
-      +"Extra material is being sent alongside the first frame. The model only uses a reference if your prompt POINTS AT IT by its slot name, written exactly like this:\n"
+      +(refOnly
+        ? "This model has NO first-frame slot: everything it gets is a reference, and the still the clip comes from is reference image 1. Say what image 1 shows doing the motion. The model only uses a reference if your prompt POINTS AT IT by its slot name, written exactly like this:\n"
+        : "Extra material is being sent alongside the first frame. The model only uses a reference if your prompt POINTS AT IT by its slot name, written exactly like this:\n")
       +sheet.map(s=>"- "+s).join("\n")
-      +"\nName the ones that matter, inside the motion writing, where they belong \u2014 \u201cher face matches image 1\u201d, \u201cthe motion follows video 1\u201d, \u201cshe speaks the line in audio 1\u201d. Do not list them at the top, do not describe what a reference contains, and do not invent a slot that is not on that list.";
+      +"\nWrite the slot names in plain words exactly as listed \u2014 \u201cimage 2\u201d, not \u201cImage2\u201d or \u201c@image2\u201d. Name the ones that matter inside the motion writing, where they belong: \u201cher face matches image 2\u201d, \u201cthe motion follows video 1\u201d, \u201cshe speaks the line in audio 1\u201d. Do not list them at the top, do not describe what a reference contains, and never invent a slot that is not on that list.";
   }
   const explicit=!!(rule&&rule.explicit);
   const snd=(explicit&&rule&&rule.soundStyle&&rule.soundStyle.trim())||"";
@@ -7917,7 +7961,9 @@ function videoWriterSystem(rule,opts){
     sys+="\n\n## SOUND\nDo NOT describe sound in this prompt.";
   }
   if(opts.endPrompt){
-    sys+="\n\n## FINISHING FRAME\nThis clip ends on a second, fixed image. Write the motion so it ARRIVES at that end state on the final beat — do not describe the end image itself, describe the movement that lands on it.\nThe end state shows: "+String(opts.endPrompt).slice(0,400);
+    sys+="\n\n## FINISHING FRAME\nThis clip ends on a second, fixed image"
+       +(vidIsRefOnly()?" (sent as image 2 — name it in the last beat)":"")
+       +". Write the motion so it ARRIVES at that end state on the final beat — do not describe the end image itself, describe the movement that lands on it.\nThe end state shows: "+String(opts.endPrompt).slice(0,400);
   }
   return sys;
 }
@@ -20627,11 +20673,14 @@ function _i2vHydratePicks(list){
 function _i2vRefRow(kind){
   const wrap=document.createElement('div'); wrap.style.cssText="margin-top:4px";
   const list=vidRefs()[kind];
+  // On a reference-only model the scene image is already image 1 (and a finishing image is image 2),
+  // so the library's own images are numbered after them — the label has to match what the model sees.
+  const off=(kind==="image"&&vidIsRefOnly())?(1+(_i2vLastRec()?1:0)):0;
   const head=document.createElement('div');
   head.style.cssText="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 4px";
   const lbl=document.createElement('div'); lbl.className="desc"; lbl.style.flex="1";
-  lbl.textContent=`${REF_LABEL[kind]} — ${list.length}/${REF_LIMITS[kind]}`
-    +(kind==="image"?" · call them “image 1”, “image 2”…"
+  lbl.textContent=`${REF_LABEL[kind]} — ${list.length}/${REF_LIMITS[kind]-off}`
+    +(kind==="image"?` · called “image ${1+off}” onward`
      :kind==="video"?" · ≤15s total · “video 1”…"
                     :" · ≤15s total · “audio 1”…");
   head.appendChild(lbl);
@@ -20664,7 +20713,7 @@ function _i2vRefRow(kind){
         c.innerHTML=`<span style="color:#fff;opacity:.75">${icon(kind==="audio"?"volume":"film")}</span>`;
       }
       const tag=document.createElement('div');
-      tag.textContent=`${kind} ${i+1}`;
+      tag.textContent=`${kind} ${i+1+off}`;
       tag.style.cssText="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);color:#fff;font-size:9px;text-align:center;padding:2px 0";
       c.appendChild(tag);
       const x=document.createElement('button'); x.textContent="×"; x.title="Remove";
@@ -20704,7 +20753,10 @@ function _i2vRefRow(kind){
 function _i2vRefSection(box){
   const model=vidModelId();
   if(!vidSupportsRefs(model)) return;
-  box.appendChild(_pgLabelEl("References — extra material this model can hold on to. Name them in the prompt (“her face matches image 1”) or the model ignores them. They stay attached until you remove them."));
+  const _ro=vidIsRefOnly();
+  box.appendChild(_pgLabelEl(_ro
+    ? "References — this model has no first-frame slot, so the scene image above is reference image 1 and everything here follows it (a finishing image takes image 2). Name them in the prompt or they are ignored. They stay attached until you remove them."
+    : "References — extra material this model can hold on to. Name them in the prompt (“her face matches image 1”) or the model ignores them. They stay attached until you remove them."));
   REF_KINDS.forEach(k=>box.appendChild(_i2vRefRow(k)));
 }
 // Copy a gallery record's stored bytes into the reference library (no network, no CORS).
@@ -20733,7 +20785,9 @@ function renderImg2Video(){
   h.innerHTML=`${icon("film")} <span>Generate video</span>`;
   box.appendChild(h);
   if(!rec||!rec.url){ box.appendChild(_pgLabelEl("Image not found.")); return; }
-  box.appendChild(_pgLabelEl(`One ${videoSeconds()}s clip from this image at ${state.vidRes||"720p"}${state.vidSound!==false?", with audio":""}. Add a finishing frame to transition into a second image. Length and every other option are in Settings → Video.`));
+  box.appendChild(_pgLabelEl(vidIsRefOnly()
+    ? `One ${videoSeconds()}s clip at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. This model works from references, not a first frame — this image is sent as reference image 1 and a finishing image becomes image 2. Length and every other option are in Settings → Video.`
+    : `One ${videoSeconds()}s clip from this image at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. Add a finishing frame to transition into a second image. Length and every other option are in Settings → Video.`));
 
   // ---- first frame (+ finishing frame in clip mode) ----
   const frames=document.createElement('div'); frames.style.cssText="display:flex;gap:8px;align-items:stretch";
@@ -27387,6 +27441,14 @@ function updateProvVis(){
 /* v27.5 — the model picker, the free-text id and the note are three views of state.vidModel.
    Typing an id that isn't a preset selects "Custom" and the note explains which family it was
    routed to; the reference summary appears only for a model that can use references. */
+/* v27.5 — the resolution ladder differs per family: Seedance has no plain 1080p, it has the -SR
+   super-resolved steps instead, so the select is repopulated whenever the model changes. */
+function syncVidResUI(){
+  const e=document.getElementById('setVidRes'); if(!e)return;
+  const list=(vidFamily()==="seedance")?SEEDANCE_RES:VIDEO_RES;
+  e.innerHTML=list.map(r=>`<option value="${r}">${r}</option>`).join("");
+  e.value=list.includes(state.vidRes)?state.vidRes:vidResolutionFor(vidModelId());
+}
 function syncVidModelUI(){
   const sel=document.getElementById('setVidModelPreset');
   const fld=document.getElementById('setVidModelId');
@@ -27401,11 +27463,11 @@ function syncVidModelUI(){
       if(sel.value==="__custom__"){ if(fld)fld.focus(); return; }
       state.vidModel=sel.value; store.setRaw(K.vidModel,state.vidModel);
       if(fld)fld.value=state.vidModel;
-      syncVidModelUI();
+      syncVidModelUI(); syncVidResUI();
     };
   }
   if(fld){ if(document.activeElement!==fld) fld.value=id;
-           fld.oninput=()=>{ state.vidModel=fld.value.trim()||VIDEO_MODEL_DEFAULT; store.setRaw(K.vidModel,state.vidModel); syncVidModelUI(); }; }
+           fld.oninput=()=>{ state.vidModel=fld.value.trim()||VIDEO_MODEL_DEFAULT; store.setRaw(K.vidModel,state.vidModel); syncVidModelUI(); syncVidResUI(); }; }
   if(note) note.textContent=vidModelNote(id);
   const line=document.getElementById('vidRefLine'), sum=document.getElementById('vidRefSummary');
   if(line){
@@ -27476,8 +27538,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setAutoSpeak'); if(e)e.checked=!!state.autoSpeak;}
   {const aim=document.getElementById('setAtlasImgModel'); if(aim&&state.imgProvider==="atlascloud")aim.value=state.imgModel||'';}
   {const e=document.getElementById('setVidModelId'); if(e)e.value=state.vidModel||VIDEO_MODEL_DEFAULT;}
-  {const e=document.getElementById('setVidRes'); if(e){e.innerHTML=VIDEO_RES.map(r=>`<option value="${r}">${r}</option>`).join("");
-    e.value=VIDEO_RES.includes(state.vidRes)?state.vidRes:"720p";}}
+  syncVidResUI();
   {const e=document.getElementById('setVidAspect'); if(e){e.innerHTML=VIDEO_ASPECTS.map(a=>`<option value="${a}">${a==="auto"?"Auto (match the image)":a}</option>`).join("");
     e.value=VIDEO_ASPECTS.includes(state.vidAspect)?state.vidAspect:"auto";}}
   {const e=document.getElementById('setVidBitrate'); if(e)e.value=(state.vidBitrate==="high"?"high":"standard");}
@@ -27669,7 +27730,8 @@ function saveSettings(notify){
   {const aim=document.getElementById('setAtlasImgModel'); if(aim&&state.imgProvider==="atlascloud"&&aim.value.trim())state.imgModel=aim.value.trim();}
   {const e=document.getElementById('setVidModelId'); if(e)state.vidModel=e.value.trim()||VIDEO_MODEL_DEFAULT;}
   {const e=document.getElementById('setVidDur'); if(e){const n=parseInt(e.value,10);state.vidDur=(n>=1&&n<=60)?n:5;}}
-  {const e=document.getElementById('setVidRes'); if(e)state.vidRes=VIDEO_RES.includes(e.value)?e.value:"720p";}
+  {const e=document.getElementById('setVidRes'); if(e){const list=(vidFamily()==="seedance")?SEEDANCE_RES:VIDEO_RES;
+    state.vidRes=list.includes(e.value)?e.value:"720p";}}
   {const e=document.getElementById('setVidAspect'); if(e)state.vidAspect=VIDEO_ASPECTS.includes(e.value)?e.value:"auto";}
   {const e=document.getElementById('setVidBitrate'); if(e)state.vidBitrate=(e.value==="high"?"high":"standard");}
   {const e=document.getElementById('setVidSeed'); if(e)state.vidSeed=_vidSeed(e.value);}

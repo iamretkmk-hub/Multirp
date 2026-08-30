@@ -892,7 +892,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1289,10 +1289,10 @@
             <label class="switchLbl"><input type="checkbox" id="setPresenceOn" checked><span class="sl"></span></label></div>
           <div class="desc">When a character clearly leaves or arrives, they exit/enter the scene automatically.</div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
-            <label style="margin:0"><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment <span class="desc" style="display:block;font-weight:400">After your turn, the scene continues on its own with ONE extended, dialogue-rich response worth about N normal replies — several new beats that advance the moment in one go (typing and voice alike). Speak or send anything before it lands to cancel it.</span></label>
+            <label style="margin:0"><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment <span class="desc" style="display:block;font-weight:400">After your turn, the scene continues on its own for N more replies — dialogue-rich, minimal narration, each one generated after the last has landed so every beat builds on the one before it (typing and voice alike). Speak or send anything mid-run, or switch this off, to stop it.</span></label>
             <label class="switchLbl"><input type="checkbox" id="setHeatOn"><span class="sl"></span></label>
           </div>
-          <div><label>Heat length (how many replies' worth in the single response, 2–10)</label><input type="number" id="setHeatN" min="2" max="10" step="1" placeholder="5"></div>
+          <div><label>Heat length (how many continuation replies, 2–10)</label><input type="number" id="setHeatN" min="2" max="10" step="1" placeholder="5"></div>
           <div class="kvline"><span>Relationship tracking</span>
             <label class="switchLbl"><input type="checkbox" id="setRelOn" checked><span class="sl"></span></label></div>
           <div class="desc">Characters build feelings (-100…+100) toward each other and you, fed back into the story.</div>
@@ -5361,6 +5361,24 @@ function loadState(){
   // written every block, and each block lands one impact-or-grip beat (a palm across her backside,
   // a fist in her hair, a hip grip); the face drops to a single clause with the eye contact kept.
   _refreshPipe("vidPrompt","You convert a still frame into a VIDEO MOTION prompt","The PENETRATION is the subject of every block",DEFAULT_VIDPROMPT);
+  // v27.4 — heat of the moment went from ONE giant generation to a run of separate replies, so the
+  // three heat fragments now describe a single beat and take a {{n}}-of-{{total}} beat number. A
+  // saved override still carrying the single-shot wording would tell the model to write the whole
+  // run in one message again, which is the wall-of-text this release fixes — so drop those (the
+  // resolver then falls back to the new default). Overrides that don't match are hand-edits: kept.
+  try{
+    const _heatStale={
+      heat_format:"Write MANY separate short lines rather than a few long ones",
+      heat_guidance:"Write ONE unbroken continuation carrying the substance of about",
+      rail_heat_len:"deliberately LONG and deliberately multi-beat"};
+    const _heatNew={heat_format:"ONE MESSAGE ONLY",heat_guidance:"This is beat {{n}} of {{total}}",rail_heat_len:"write beat {{n}} of {{total}}"};
+    Object.keys(_heatStale).forEach(k=>{
+      const cur=state.blockTpls&&state.blockTpls[k];
+      if(typeof cur==="string" && cur.indexOf(_heatStale[k])!==-1 && cur.indexOf(_heatNew[k])===-1)
+        delete state.blockTpls[k];
+    });
+    store.set(K.blockTpls,state.blockTpls||{});
+  }catch(e){}
   // Same rebalance for the per-position templates. A stored template still carrying the v27 default's
   // "HER FACE (every block):" inventory (or the non-explicit one's equivalent) and lacking the new
   // markers is one of ours, so refresh it; a hand-edited template won't match and is preserved.
@@ -14701,6 +14719,33 @@ function lastDialogueLine(chat,selfP){
   }catch(e){}
   return null;
 }
+/* v27.4 — HEAT: the line a heat continuation picks up from, or null.
+   While the player is quiet lastDialogueLine() keeps returning the SAME player line beat after
+   beat, so every continuation was told it was "responding to" a line that had already been
+   answered — the reason heat read as the same reply over and over, and the reason the responding-to
+   block and the highlighted dialogue line showed the same thing every time.
+   When the character about to speak IS the last real speaker, what comes next is a continuation of
+   their OWN last line, not a reply to anyone. Returns that line so the payload can say so.
+   Returns null when the player or another character spoke last — then there genuinely IS a line to
+   answer and lastDialogueLine() already returns the right one. */
+function heatSelfLine(chat,selfP){
+  try{
+    if(!selfP)return null;
+    const msgs=(chat&&chat.messages)||[];
+    for(let i=msgs.length-1;i>=0;i--){
+      const m=msgs[i];
+      if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
+      if(!m.content||!String(m.content).trim())continue;
+      if(m.role==='user')return null;                 // the player spoke last — answer them normally
+      const sp=m.speaker||"";
+      if(!sp||/^Narrator$/i.test(sp))continue;
+      if((m.speakerId&&m.speakerId===selfP.id)||sp===selfP.name)
+        return {name:sp,text:String(m.content).trim()};
+      return null;                                    // someone else spoke last — that's a real target
+    }
+  }catch(e){}
+  return null;
+}
 /* ============================ GENRE PACK (v20) ============================
    Per-universe genre flavor injected as labeled BLOCKS into every genre-sensitive prompt WITHOUT
    editing any DEFAULT_* prompt text (so: no _refreshPipe markers, composes with per-universe
@@ -14822,7 +14867,7 @@ const PAYLOAD_DEFS={
   },
   heat:{
     label:"Heat of the Moment",
-    desc:"The self-continuing turn when {{user}} goes quiet. Same blocks, but the FORMATTING RULES block carries the heat format instead of your standard one (minimal narration, extended dialogue), and RESPONSE GUIDANCE and FINAL GUARDRAILS carry the heat versions — the single-turn rules are not sent.",
+    desc:"One beat of the self-continuing run that starts when {{user}} goes quiet — heat sends this payload once per continuation reply, each after the previous one has landed. Same blocks, but FORMATTING RULES carries the heat format instead of your standard one (minimal narration, extended dialogue, one message per beat), RESPONSE GUIDANCE and FINAL GUARDRAILS carry the heat versions, and when the speaker is continuing their OWN last line the two 'responding to' blocks say so instead of naming a stale target.",
     order:REPLY_ORDER.slice(),
     blocks:REPLY_BLOCKS
   }
@@ -14889,10 +14934,10 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     your_bio:["bio_header","bio_intro","intent_aim_warm","intent_aim_cool"],
     relationships:["rel_header"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
-    response_target:["target_header","target_player","target_char","target_bg","target_look"],
+    response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self"],
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
-    last_line:["last_line_header","last_line_footer"],
+    last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
     speaking_style:["style_header"],
     scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_present_others","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
     private_intent:["intent_warm","intent_hostile"],
@@ -15071,13 +15116,22 @@ Recent replies were written for a voice session: [bracketed delivery tags] insid
      heat_format replaces them — and the single-turn rails are swapped for the heat ones. */
   heat_format:`# FORMAT — HEAT OF THE MOMENT (this reply only)
 This is NOT a normal turn and the standard reply format does not apply to it. Ignore any narration→speech→thoughts template, any one-narration limit and any reply-length limit you have been given: they are replaced by the rules here.
-- DIALOGUE CARRIES THIS ENTIRELY. Almost every line is spoken, in "double quotes". Write MANY separate short lines rather than a few long ones — {{lines}} or more — overlapping, interrupting, breaking off, repeating a word, answering half a beat late. This is how the scene moves.
+- DIALOGUE CARRIES THIS ENTIRELY. Almost every line is spoken, in "double quotes". Write MANY separate short lines rather than a few long ones — {{lines}} or more — breaking off, changing direction mid-sentence, repeating a word, landing a thought half a beat late. This is how the scene moves.
 - NARRATION IS MINIMAL AND RARE. Use *asterisks* only where a spoken line would be unreadable without it, and then only a short clause. Never two narration clauses in a row. Never a narration paragraph. Never the room, the light, the air, the furniture, or what anything looks like. If it can be carried by what someone SAYS, say it instead.
 - NO internal-thought block, no closing reflection, no summary line, no stage direction to end on.
-- DO NOT RE-OPEN THE SCENE. Your own previous line already happened and is on screen. Continue from it mid-breath. Never restate it, never re-narrate it, never set the moment up again.`,
+- ONE MESSAGE ONLY. This is beat {{n}} of {{total}} in a run that is still going. Write this beat and STOP. Do not write the beats that come after it, do not write anyone else's reply, do not cover the rest of the scene. The next beat is generated separately, after this one lands.
+- DO NOT RE-OPEN THE SCENE. What is already on screen has happened. Continue from it mid-breath. Never restate it, never re-narrate it, never set the moment up again.`,
   heat_guidance:`# RESPONSE GUIDANCE — HEAT OF THE MOMENT
-{{user}} has gone quiet and the scene keeps moving without them. Write ONE unbroken continuation carrying the substance of about {{total}} normal replies — several beats that each ADVANCE the moment: an escalation, a demand, a refusal, a break in composure, a consequence that did not exist a second ago. Speak it, don't describe it. Never stall, never pad, never repeat something already written. End mid-momentum on a spoken line, leaving {{user}} an opening to step straight back into — and do not hand them a question.`,
-  rail_heat_len:`This reply is deliberately LONG and deliberately multi-beat. Any one-reply, one-beat or reply-length limit you have been given does NOT apply to it.`,
+{{user}} has gone quiet and the scene keeps moving without them. This is beat {{n}} of {{total}}, and everything from the earlier beats is already on screen above.
+Write ONE message that MOVES THE MOMENT ON: an escalation, a demand, a refusal, a decision, a break in composure, a consequence that did not exist a second ago. Speak it, don't describe it. Whatever the last line on screen was, this beat has to leave the scene somewhere it wasn't — never restate it, never rephrase it, never circle the same ground with new words.
+End mid-momentum on a spoken line, leaving {{user}} an opening to step straight back into — and do not hand them a question.`,
+  rail_heat_len:`Dialogue-dense and many lines long, but still ONE message: write beat {{n}} of {{total}} and stop there. Do not write the beats that come after it, and do not write anyone else's reply.`,
+  // v27.4 — shown INSTEAD of the "who you are responding to" / "the line you are responding to"
+  // headers when a heat beat continues the character's OWN last line (see heatSelfLine).
+  heat_target_header:`# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️`,
+  heat_target_self:`{{user}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line. {{user}} is still right here in the scene with you, and this is who they are:`,
+  heat_self_header:`# ⚠️ THIS WAS YOUR LAST LINE — CONTINUE STRAIGHT ON FROM IT ⚠️`,
+  heat_self_footer:`That is exactly where the scene stands. Pick it up mid-breath and say what comes NEXT. Do not restate it, do not re-narrate it, do not answer it, and do not set the moment up again.`,
   rail_heat_narr:`Minimal narration. If two narration clauses would end up touching, cut one of them. When in doubt, put it in someone's mouth instead.`,
   rail_heat_end:`End on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.`,
   // v19.4 — appended to the format block ONLY while narration voice / narration mode is active.
@@ -15360,8 +15414,12 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
      // v27.1 — the heat payload does NOT send the standard formatting rules. Sending both is what
      // made the model repeat the narration→speech→thoughts template N times instead of writing one
      // long dialogue-driven continuation. The narration-mode shape is skipped for the same reason.
+     // v27.4 — heat is a run of separate messages now, so the count here describes THIS beat
+     // (~6 spoken lines), not the whole run, and the beat number rides along so the model knows
+     // it is writing one link in a chain rather than the entire continuation.
      const _t=Math.max(2,Math.min(10,parseInt(chat._heatBeat.total,10)||5));
-     B.format=fillTpl(blkTpl("heat_format"),{lines:String(_t*3),total:String(_t),user:state.user});
+     const _n=Math.max(1,parseInt(chat._heatBeat.n,10)||1);
+     B.format=fillTpl(blkTpl("heat_format"),{lines:"6",total:String(_t),n:String(_n),user:state.user});
    }else{
      const _fr=(up("formatRules")||"").trim();
      if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
@@ -15400,7 +15458,12 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
     if(isPlayer){ bio=(state.userBio||"").trim(); look=(state.userLook||"").trim(); }
     else { const t=resolveChar(targetId,chat)||(others||[]).find(o=>o.name===tName);
            if(t){ bio=subUser(String(t.backstory||"")).trim(); look=subUser(lookProse(t.look)||"").trim(); } }
-    let tb=`${blkTpl("target_header")}\n`+fillTpl(blkTpl(isPlayer?"target_player":"target_char"),{target:tName});
+    // v27.4 — during a heat run the character is usually continuing their own last line rather
+    // than answering anyone, so the header says that instead of naming a stale target.
+    const _hSelf=!!(chat&&chat._heatBeat&&heatSelfLine(chat,p));
+    let tb=_hSelf
+      ? `${blkTpl("heat_target_header")}\n`+fillTpl(blkTpl("heat_target_self"),{user:state.user,target:tName,self:p.name})
+      : `${blkTpl("target_header")}\n`+fillTpl(blkTpl(isPlayer?"target_player":"target_char"),{target:tName});
     if(bio) tb+=`\n${fillTpl(blkTpl("target_bg"),{bio:bio})}`;
     if(look)tb+=`\n${fillTpl(blkTpl("target_look"),{look:look})}`;
     B.response_target=tb;
@@ -15542,8 +15605,12 @@ function buildTailBlocks(opts){
   //     the last real DIALOGUE line back out and put it right here, alone, so the model answers a
   //     line instead of answering the furniture.
   {
-    const ll=lastDialogueLine(chat,selfP);
-    if(ll)B.last_line=`${blkTpl("last_line_header")}\n${ll.name}: ${ll.text}\n\n${blkTpl("last_line_footer")}`;
+    // v27.4 — heat: when this beat continues the character's own last line, THAT is the line to
+    // highlight. Otherwise (and always outside heat) it's the freshest line aimed at them.
+    const hs=(chat&&chat._heatBeat)?heatSelfLine(chat,selfP):null;
+    if(hs) B.last_line=`${blkTpl("heat_self_header")}\n${hs.name}: ${hs.text}\n\n${blkTpl("heat_self_footer")}`;
+    else { const ll=lastDialogueLine(chat,selfP);
+           if(ll)B.last_line=`${blkTpl("last_line_header")}\n${ll.name}: ${ll.text}\n\n${blkTpl("last_line_footer")}`; }
   }
 
   // (2) HOW YOU SPEAK — the character's voice, delivered at the point the line gets written rather
@@ -15676,8 +15743,9 @@ function buildTailBlocks(opts){
   //     room for {{user}} to react, which is the opposite of what a heat continuation is for.
   const _heat=!!(chat&&chat._heatBeat);
   const _heatTotal=_heat?Math.max(2,Math.min(10,parseInt(chat._heatBeat.total,10)||5)):0;
+  const _heatN=_heat?Math.max(1,parseInt(chat._heatBeat.n,10)||1):0;
   let g=_heat
-    ? fillTpl(blkTpl("heat_guidance"),{user:state.user,self:selfName,total:String(_heatTotal),who:targetName||state.user})
+    ? fillTpl(blkTpl("heat_guidance"),{user:state.user,self:selfName,total:String(_heatTotal),n:String(_heatN),who:targetName||state.user})
     : fillTpl(blkTpl("guidance_open"),{self:selfName});
   if(!_heat){
   if(targetName) g+=fillTpl(blkTpl("guidance_target"),{target:targetName});
@@ -15717,7 +15785,8 @@ function buildTailBlocks(opts){
   // v26.7 — ONE placeholder map for every rail. Several were read with a bare blkTpl(), so a rail
   // the user had customized to mention {{user}} reached the model as the literal characters
   // "{{user}}". Filling them all uniformly means any override can use any of these tokens.
-  const _rmap={self:selfName,user:state.user,who:targetName||state.user,target:targetName||state.user};
+  const _rmap={self:selfName,user:state.user,who:targetName||state.user,target:targetName||state.user,
+               n:String(_heatN),total:String(_heatTotal)};
   // v27.1 — during heat the three single-turn rails (one reply · one beat · don't end on a
   // question) are replaced by the heat ones. Leaving them in was half of the contradiction that
   // made the model repeat its reply template instead of writing one long continuation.
@@ -16432,6 +16501,11 @@ async function toggleMode(mode,ev){
     case 'noimg':  state.imgPauseOn=!state.imgPauseOn; store.set(K.imgPauseOn,state.imgPauseOn);
                    toast(state.imgPauseOn?"Auto images paused":"Auto images back on"); break;
     case 'heat':   state.heatOn=!state.heatOn; store.set(K.heatOn,state.heatOn);
+                   // v27.4 — a burst already generating has to die with the toggle. Bumping the
+                   // sequence is the same cancellation signal a player turn uses; runHeatBursts
+                   // checks it between beats and playCharacterTurn checks it after generation, so
+                   // a reply that was in flight when the switch went off is dropped, not pushed.
+                   _heatSeq++;
                    toast(state.heatOn?"Heat of the moment on":"Heat off"); break;
     case 'autorp': toggleAutoRp(); break;
     case 'dnd':    toggleDnd(); break;
@@ -18722,16 +18796,23 @@ async function runMultiCharTurn(chat,playerText){
     persistChats();appendNewBubbles();
   }finally{document.getElementById('sendBtn').disabled=false;}
 }
-/* v19.5 — HEAT OF THE MOMENT. v24.3 — SINGLE-SHOT: after the player's turn resolves, the scene
-   continues on its own in ONE extended generation (Settings: heatOn/heatN — heatN is now "how
-   many replies' worth of substance", not a beat count). Pick the present character who has
-   spoken LONGEST AGO (keeps a scene moving between people), stamp chat._heatBeat={total}
-   (transient `_` field — never persisted; read by buildTailBlocks → heat_advance guardrail:
-   one dialogue-rich continuation worth ~total replies), and run a normal playCharacterTurn with
-   a max_tokens headroom bump — so voicing, reveal, presence and refusal handling all behave
-   exactly like an ordinary reply, and the auto image fires for the (single, final) response.
-   CANCELLATION: sendMessage bumps _heatSeq on every player turn (typed or spoken) — checked
-   right before the generation starts. Hooked at all three chain-end sites. */
+/* v19.5 — HEAT OF THE MOMENT. v27.4 — SEQUENTIAL: after the player's turn resolves the scene
+   continues on its own as `heatN` SEPARATE messages, each generated only once the previous one has
+   landed, so every beat can actually see the beat before it in the transcript. (v24.3 had folded
+   them into one giant generation; that made every beat blind to the others and produced one wall
+   of text.) Each beat picks the present character who has spoken LONGEST AGO — with one character
+   present that is always them, with two or more the scene alternates — and runs an ordinary
+   playCharacterTurn, so voicing, reveal, presence and refusal handling all behave exactly like a
+   normal reply. chat._heatBeat={total,n} is transient (`_` field, never persisted) and is what
+   switches the payload to the `heat` layout.
+   SELF-CONTINUATION: while the player is silent lastDialogueLine() keeps handing back the SAME
+   stale player line, so every beat re-answered a line that had already been answered — see
+   heatSelfLine(), which swaps in the character's OWN last line under "continue straight on from it"
+   whenever they were the last one to speak.
+   IMAGES: only the final beat gets the auto image (_heatNoImg gates the rest) — no waiting on a
+   picture mid-run.
+   CANCELLATION: _heatSeq is bumped by any player turn (typed or spoken) AND by the heat toggle
+   going off. Checked before every beat here and again after generation in playCharacterTurn. */
 function maybeHeatBursts(chat){
   if(!state.heatOn||_heatBusy||!chat)return;
   // v19.97 — PER-TURN single-flight: the burst runs at most once per new tail line. Two hook sites
@@ -18753,20 +18834,29 @@ async function runHeatBursts(chat){
   const mySeq=_heatSeq;
   _heatBusy=true;
   try{
-    if(mySeq!==_heatSeq||!state.heatOn)return;   // the player cut in, or the toggle went off
-    const cast=presentCast(chat); if(!cast.length)return;
-    // Voice: the present character who has spoken longest ago carries the extended continuation.
-    const lastIdx={};
-    chat.messages.slice(-30).forEach((m,i)=>{ if(m.role==='assistant'&&m.speaker){ const p=cast.find(c=>c.name===m.speaker); if(p)lastIdx[p.id]=i; } });
-    const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
-    chat._heatBeat={total:String(total)};
-    try{ await playCharacterTurn(chat,next,state.user); }
-    finally{ delete chat._heatBeat; }
+    for(let i=0;i<total;i++){
+      // Re-checked before EVERY beat, not just once at the top: the player can type and the toggle
+      // can go off at any point during a run that takes several generations.
+      if(mySeq!==_heatSeq||!state.heatOn)break;
+      const cast=presentCast(chat); if(!cast.length)break;
+      // Voice for this beat: the present character who has spoken longest ago. Recomputed each beat,
+      // so a scene with two or more people alternates instead of one person monologuing.
+      const lastIdx={};
+      chat.messages.slice(-30).forEach((m,k)=>{ if(m.role==='assistant'&&m.speaker){ const c=cast.find(x=>x.name===m.speaker); if(c)lastIdx[c.id]=k; } });
+      const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
+      _heatNoImg=(i<total-1);      // only the last beat is illustrated
+      chat._heatBeat={total:String(total),n:String(i+1)};
+      let ok=false;
+      try{ ok=await playCharacterTurn(chat,next,state.user); }
+      finally{ delete chat._heatBeat; }
+      if(!ok)break;                // refused, empty, or cancelled — don't keep hammering
+    }
   }finally{ _heatBusy=false; _heatNoImg=false; if(chat)delete chat._heatBeat; }
 }
 // One character produces one message, shown with its own name/avatar.
 async function playCharacterTurn(chat,p,addressed){
   const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see _dirSeq)
+  const _hseq=_heatSeq, _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
   const present=presentCast(chat);
   const others=present.filter(c=>c.id!==p.id);   // only characters actually present
   const list=document.getElementById('chatList');
@@ -18816,12 +18906,12 @@ async function playCharacterTurn(chat,p,addressed){
     }
     const _rpModel=rpModel();
     const _rpOpts={rp:true,dbg:"Roleplay reply · "+p.name};
-    // v24.3 — heat single-shot: the extended continuation is worth ~N normal replies, so give it
-    // max_tokens headroom beyond a low user cap (never LESS than the user's setting).
+    // v27.4 — heat beats are separate messages now, so each one only needs room for ONE
+    // dialogue-dense reply, not for the whole run. Never LESS than the user's own setting.
     if(chat._heatBeat){
-      const n=Math.max(2,Math.min(10,+chat._heatBeat.total||5));
-      _rpOpts.max=Math.max(+state.tokens||4000,450*n);
-      _rpOpts.dbg=`Roleplay reply (heat ×${n}) · `+p.name;
+      const n=Math.max(2,Math.min(10,+chat._heatBeat.total||5)), bi=+chat._heatBeat.n||1;
+      _rpOpts.max=Math.max(+state.tokens||4000,900);
+      _rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
     }
     let reply=await chatCompletion(messages,_rpModel,_rpOpts);
     // REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
@@ -18853,6 +18943,10 @@ async function playCharacterTurn(chat,p,addressed){
     // the player's own reply). Their turn answers the same moment, so drop this one rather than
     // giving one character two replies to it.
     if(_seq!==_dirSeq)return false;
+    // v27.4 — the heat toggle went off (or the player cut in) while this continuation was
+    // generating. Nobody asked for it any more, so drop it instead of pushing a bubble the user
+    // just switched off. This is the "heat keeps talking after I turn it off" fix.
+    if(_wasHeat && (!state.heatOn || _hseq!==_heatSeq)) return false;
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
     if(chat._heatBeat)msg.heatBeat=true;   // v27.1 — so a burst can never chain off its own output
     stampStatus(chat,msg);chat.messages.push(msg);
@@ -27182,7 +27276,7 @@ function saveSettings(notify){
   if(!(state.autoSpeak||state.narrMode))_dubKill("settings-voicing-off");   // v19.41: silence NOW, including queued jobs
   {const e=document.getElementById('setNarrVoice'); if(e){state.narrVoice=e.value.trim(); store.setRaw(K.narrVoice,state.narrVoice);}}
   {const e=document.getElementById('setNmPatience'); if(e){let v=parseInt(e.value,10); if(!(v>=800&&v<=8000))v=3000; state.nmPatience=v; store.setRaw(K.nmPatience,String(v));}}
-  {const e=document.getElementById('setHeatOn'); if(e){state.heatOn=e.checked; store.set(K.heatOn,state.heatOn);}}
+  {const e=document.getElementById('setHeatOn'); if(e){const _was=!!state.heatOn; state.heatOn=e.checked; store.set(K.heatOn,state.heatOn); if(_was!==!!state.heatOn)_heatSeq++;}}
   {const e=document.getElementById('setHeatN'); if(e){let v=parseInt(e.value,10); if(!(v>=2&&v<=10))v=5; state.heatN=v; store.setRaw(K.heatN,String(v));}}
   {const e=document.getElementById('setAnimVoice'); if(e){state.animVoice=e.checked; store.set(K.animVoice,state.animVoice);}}
   {const e=document.getElementById('setPulseOn'); if(e){state.pulseOn=e.checked; store.set(K.pulseOn,state.pulseOn);}}

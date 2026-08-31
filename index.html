@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6098,41 +6098,19 @@ function typewriterReveal(mid,fullText,onDone){
   // If reveal is off, the bubble is offscreen, or we can't find it: just show it whole.
   if(!body || state.streamReveal===false || state.narrMode){ if(body)body.innerHTML=md(fullText); if(onDone)onDone(); return; }   // narrMode: instant text (v19.4)
   cancelReveal(mid);
-  const list=chatScrollEl();
-  let follow=isNearBottom(list)||_followAfterSend;   // follow if at bottom, or the user just sent this turn
-  // …and the moment the user scrolls UP during this reveal, latch follow OFF for good. We can't
-  // rely on isNearBottom() here: our own per-tick auto-scroll keeps the viewport pinned inside
-  // the stick band, so a slow finger-drag never crosses the threshold before the next tick yanks
-  // it back (the "scroll is locked for a couple seconds" bug, made worse when an image lands and
-  // grows scrollHeight mid-reveal). Instead we compare against the scrollTop WE last set: if the
-  // user's scroll position is meaningfully above that, it was a human upward drag → stop following.
-  let _lastAutoTop=list?list.scrollTop:0;   // the scrollTop our own auto-scroll last wrote
-  const onScroll=()=>{
-    if(!list) return;
-    // Ignore OUR OWN programmatic scroll writes. The front-trim in appendOneBubble resets scrollTop
-    // (content above the window is removed, so scrollTop legitimately drops) via setScrollTop, which
-    // fires this 'scroll' event. Without this guard the drop reads as a user upward drag and latches
-    // follow OFF — the root cause of the "after a while, every reply jumps to the top" bug, which
-    // only appears once the message count exceeds RENDER_WINDOW and front-trimming begins.
-    if(_isProgrammaticScroll()){ _lastAutoTop=list.scrollTop; return; }
-    // A drag upward of more than a few px past our last auto-position = user intent. 24px absorbs
-    // sub-pixel/elastic jitter without needing the wide stick band.
-    if(list.scrollTop < _lastAutoTop - 24){ follow=false; _followAfterSend=false; }
-    else if(!isNearBottom(list)){ follow=false; }
-  };
-  if(list) list.addEventListener('scroll',onScroll,{passive:true});
-  const stopFollow=()=>{ if(list) list.removeEventListener('scroll',onScroll); };
+  // v28.5 — no per-tick scroll bookkeeping. The bubble growing IS a resize, and ChatScroll's
+  // ResizeObserver re-pins on it before the frame paints. The old code scrolled on every character
+  // and tried to tell its own writes apart from the user's finger; that fight was the jitter.
   body.innerHTML="";                         // clear immediately so the full text never flashes
   let i=0;                                    // character index into fullText
   const baseTick=Math.round(1000/revealCps()); // ms per character
   const tick=()=>{
     const liveBody=document.querySelector('.bubble[data-mid="'+mid+'"] .body');
-    if(!liveBody){ cancelReveal(mid); stopFollow(); if(onDone)onDone(); return; }
+    if(!liveBody){ cancelReveal(mid); if(onDone)onDone(); return; }
     i++;                                       // reveal one more character
     const shown=fullText.slice(0,i);
     liveBody.innerHTML=md(shown);
-    if(follow){ setScrollTop(list,list.scrollHeight); _lastAutoTop=list.scrollTop; }  // record our own write so onScroll can tell it apart from a user drag
-    if(i>=fullText.length){ cancelReveal(mid); stopFollow(); liveBody.innerHTML=md(fullText); if(onDone)onDone(); return; }
+    if(i>=fullText.length){ cancelReveal(mid); liveBody.innerHTML=md(fullText); if(onDone)onDone(); return; }
     // a longer beat after sentence-ending punctuation, a small one after clause punctuation
     const lastCh=fullText.charAt(i-1);
     const delay=/[.!?…]/.test(lastCh)?baseTick*9:(/[,;:]/.test(lastCh)?baseTick*5:baseTick);
@@ -6161,39 +6139,111 @@ function enqueuePresent(mid){
     _drainPresentQueue();
   });
 }
-// When the USER sends a message, we want the view to follow the whole resulting turn to the
-// bottom (their line → typing indicator → reply reveal), regardless of momentary isNearBottom()
-// readings — removing the typing indicator shrinks scrollHeight, and front-trimming can clamp
-// scrollTop toward 0, which together produced the "send jumps to my first message / parks on my
-// own line" bug. This intent flag overrides the follow heuristic until the turn settles or the
-// user deliberately scrolls up.
-let _followAfterSend=false;
-// Distinguishing OUR scroll writes from the user's. Every assignment to scrollTop fires a
-// 'scroll' event, indistinguishable from a finger drag. Without this guard, the front-trim's
-// scrollTop clamp (and other programmatic scrolls during a turn) fire 'scroll', momentarily read
-// !isNearBottom, and wipe _followAfterSend BEFORE the character's reply bubble is appended — so
-// the reply append sees no follow intent, the trim clamps scrollTop to 0, and the view jumps to
-// the first message. We mark programmatic writes and have the scroll listener ignore them; only a
-// genuine user gesture clears the follow intent.
-let _progScrollUntil=0;
-function setScrollTop(list,v){ if(!list)return; _progScrollUntil=Date.now()+120; list.scrollTop=v; }
-function _isProgrammaticScroll(){ return Date.now() < _progScrollUntil; }
-// A single synchronous scroll-to-bottom lands "high above" the newest line whenever the just-
-// appended content lays out AFTER the write: an avatar/image loads, a narration wraps to more
-// lines, a font paints — so scrollHeight was momentarily too small and the pin fell short. A full
-// renderChat() already re-pins across several frames; the INCREMENTAL append + typing-indicator
-// paths only pinned once, which is the "a new message / an event jumps the chat high above" bug.
-// pinChatBottomSoon() keeps re-pinning to the true bottom for a short window as late content
-// settles. A deliberate user scroll-UP cancels it (see the chatList scroll listener).
-let _pinBottomUntil=0;
-function pinChatBottomSoon(){
-  const el=(typeof chatScrollEl==="function")?chatScrollEl():document.getElementById('chatList'); if(!el) return;
-  setScrollTop(el,el.scrollHeight); if(typeof hideNewMsgPill==="function")hideNewMsgPill();
-  _pinBottomUntil=Date.now()+450;
-  const run=()=>{ const l=(typeof chatScrollEl==="function")?chatScrollEl():document.getElementById('chatList');
-    if(l && _renderedChatId===state.curChat && Date.now()<_pinBottomUntil){ setScrollTop(l,l.scrollHeight); if(typeof hideNewMsgPill==="function")hideNewMsgPill(); } };
-  requestAnimationFrame(run); setTimeout(run,80); setTimeout(run,200); setTimeout(run,450);
-}
+/* ============ v28.5 — CHAT SCROLL. ONE CONTROLLER, ONE RULE ============
+   Every earlier attempt DECIDED whether to scroll at particular moments: on append, on each
+   typewriter tick, after a front-trim, after a rebuild. But content height changes AFTER those
+   moments — an image paints, a font swaps, the reveal grows the bubble, the trim removes nodes —
+   so each decision was already stale when it was made, and the corrections fought each other.
+   That fight is what the jumping was.
+
+   This does not decide anything. It holds ONE boolean, `following`, and while it is true the view
+   is pinned to the bottom CONTINUOUSLY — a ResizeObserver on the bubbles and a MutationObserver on
+   the list re-pin in the same frame the content changes, before paint. No anchors, no height math,
+   no timers, nothing that can go out of date.
+
+   `following` is cleared ONLY by real user input: a wheel up, an upward drag, PageUp/Home/ArrowUp,
+   or a scrollbar drag that lands away from the bottom. It is NEVER cleared by a `scroll` event —
+   that is what let our own programmatic writes turn following off, and the whole reason a
+   programmatic-scroll timestamp guard had to exist. It is set again the moment the user returns to
+   the bottom, and whenever the player sends. */
+const ChatScroll=(()=>{
+  let el=null, following=true, ro=null, mo=null, touchY=0, pointerDown=false;
+  const REJOIN=40;                       // this close to the bottom counts as being at the bottom
+  const gap=()=>el?Math.max(0,el.scrollHeight-el.scrollTop-el.clientHeight):0;
+  const hidePill=()=>{ if(typeof hideNewMsgPill==="function")hideNewMsgPill(); };
+  const showPill=()=>{ if(typeof showNewMsgPill==="function")showNewMsgPill(); };
+  function pin(){ if(el) el.scrollTop=el.scrollHeight; }
+  function sync(){ if(el&&following){ pin(); hidePill(); } }
+  /* A gesture fires BEFORE the browser applies the scroll it causes, so the gap is still 0 at this
+     moment and testing it here swallowed the intent entirely (wheel up did nothing). Drop follow on
+     the gesture, then re-check on the next frame: if the gesture genuinely moved us off the bottom
+     we stay off and raise the pill; if it did nothing (wheeling up when already at the bottom) we
+     silently resume. */
+  function unfollow(){
+    if(!following||!el)return;
+    following=false;
+    requestAnimationFrame(()=>{
+      if(following||!el)return;
+      if(gap()<=REJOIN) follow();
+      else showPill();
+    });
+  }
+  function follow(){ following=true; if(el){ pin(); hidePill(); } }
+  const onScroll=()=>{ if(!el)return;
+    if(!following&&gap()<=REJOIN)follow();                    // they came back on their own
+    else if(following&&pointerDown&&gap()>REJOIN)unfollow();  // scrollbar dragged off the bottom
+  };
+  const onWheel=e=>{ if(e.deltaY<0)unfollow(); };
+  const onTouchStart=e=>{ touchY=(e.touches&&e.touches[0])?e.touches[0].clientY:0; };
+  const onTouchMove=e=>{ const y=(e.touches&&e.touches[0])?e.touches[0].clientY:0;
+                         if(y>touchY+8)unfollow(); touchY=y; };
+  const onKey=e=>{ if(e.key==="PageUp"||e.key==="Home"||e.key==="ArrowUp")unfollow(); };
+  const onDown=()=>{ pointerDown=true; };
+  const onUp=()=>{ pointerDown=false; };
+  const watch=n=>{ if(ro&&n&&n.nodeType===1){ try{ ro.observe(n); }catch(e){} } };
+  function detach(){
+    if(ro){ try{ ro.disconnect(); }catch(e){} ro=null; }
+    if(mo){ try{ mo.disconnect(); }catch(e){} mo=null; }
+    if(el){
+      el.removeEventListener('load',sync,true);
+      el.removeEventListener('scroll',onScroll);
+      el.removeEventListener('wheel',onWheel);
+      el.removeEventListener('touchstart',onTouchStart);
+      el.removeEventListener('touchmove',onTouchMove);
+      el.removeEventListener('keydown',onKey);
+      el.removeEventListener('pointerdown',onDown);
+    }
+    window.removeEventListener('pointerup',onUp);
+    window.removeEventListener('pointercancel',onUp);
+    el=null;
+  }
+  function attach(){
+    const node=document.getElementById('chatList');
+    if(!node)return;
+    if(node===el){ rewatch(); sync(); return; }
+    detach();
+    el=node;
+    // THE ENGINE: anything that changes the content's height re-pins us, before the next paint.
+    if(window.ResizeObserver){ ro=new ResizeObserver(sync); Array.prototype.forEach.call(el.children,watch); }
+    if(window.MutationObserver){
+      mo=new MutationObserver(muts=>{
+        muts.forEach(m=>Array.prototype.forEach.call(m.addedNodes||[],watch));
+        sync();
+      });
+      mo.observe(el,{childList:true,subtree:true,characterData:true});
+    }
+    // An image or video finishing its load changes height with no mutation — catch it on capture.
+    el.addEventListener('load',sync,true);
+    el.addEventListener('scroll',onScroll,{passive:true});
+    el.addEventListener('wheel',onWheel,{passive:true});
+    el.addEventListener('touchstart',onTouchStart,{passive:true});
+    el.addEventListener('touchmove',onTouchMove,{passive:true});
+    el.addEventListener('keydown',onKey);
+    el.addEventListener('pointerdown',onDown,{passive:true});
+    window.addEventListener('pointerup',onUp,{passive:true});
+    window.addEventListener('pointercancel',onUp,{passive:true});
+    sync();
+  }
+  // After a full rebuild the observed children are gone; re-observe the new ones.
+  function rewatch(){ if(!ro||!el)return; try{ ro.disconnect(); }catch(e){}
+                      ro=new ResizeObserver(sync); Array.prototype.forEach.call(el.children,watch); }
+  return {attach,detach,follow,sync,pin,rewatch,isFollowing:()=>following};
+})();
+/* Compat shims. The old call sites all meant one of two things: "put the caret at the bottom" or
+   "restore a measured position while the user is NOT following". Both survive; the timestamp guard,
+   the retry timers and the post-send intent flag are gone — the controller needs none of them. */
+function setScrollTop(list,v){ if(list)list.scrollTop=v; }
+function pinChatBottomSoon(){ ChatScroll.sync(); }
 function _drainPresentQueue(){
   if(_presentPlaying) return;
   const job=_presentQueue.shift();
@@ -6214,9 +6264,6 @@ function _drainPresentQueue(){
     _presentingMid=null;
     _presentPlaying=false;
     job.resolve&&job.resolve();
-    // Turn settled (nothing else queued to present) — drop the post-send follow intent so it
-    // can't bleed into unrelated background appends later.
-    if(_presentQueue.length===0) _followAfterSend=false;
     _drainPresentQueue();
   });
 }
@@ -6231,11 +6278,7 @@ function appendOneBubble(m){
   if(!list||!m)return;
   if(_renderedChatId!==state.curChat){ renderChat(); if(typeof reflectModes==='function')reflectModes(); return; }
   if(list.querySelector('[data-mid="'+m.mid+'"]')) return;   // already on screen
-  const wasAtBottom=isNearBottom(list);
-  // v26.6 — decide FOLLOW before touching the DOM. The front-trim below must know whether we are
-  // about to pin to the bottom, because restoring the reader's anchor and then pinning are two
-  // different destinations and doing both makes the view bounce.
-  const _following = wasAtBottom || _followAfterSend;
+  const _following=ChatScroll.isFollowing();
   const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid);
   // Front-trim to the render window. The OLD approach summed getBoundingClientRect().height of the
   // removed nodes and subtracted it from scrollTop — but that height is wrong when a removed bubble
@@ -6258,13 +6301,9 @@ function appendOneBubble(m){
     if(!_following && ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
   }
   _renderedCount=Math.min(curChat().messages.length,RENDER_WINDOW);
-  // Follow to the bottom only if the user is actually following. Previously `_presentPlaying` alone
-  // forced a scroll-to-bottom for ANY message the presentation queue rolled — including background
-  // GM / event / presence beats the user didn't send — so a beat arriving while you'd scrolled up to
-  // read yanked the view down (the "GM/event message makes the chat jump" bug; character replies you
-  // sent were fine because _followAfterSend was set). Now a presented beat only pulls the view down
-  // if you were already at the bottom or you sent this turn; otherwise it surfaces the "↓ New" pill.
-  if(_following){ pinChatBottomSoon(); }
+  // Follow only if the reader is actually following. A background beat (GM, event, presence) that
+  // arrives while they have scrolled up surfaces the "↓ New" pill instead of yanking the view.
+  if(_following){ ChatScroll.sync(); }
   else { showNewMsgPill(); }
 }
 
@@ -17183,17 +17222,12 @@ let _forceBottomOnce=false;
    text. Fix: only auto-scroll when the user is already AT (or very near) the
    bottom. If they've scrolled up to read, we leave the viewport exactly where
    it is and surface a "↓ New" button instead. */
-const SCROLL_STICK_PX=140;   // within this many px of the bottom = "following the conversation"
 function chatScrollEl(){ return document.getElementById('chatList'); }
-function isNearBottom(list){
-  list=list||chatScrollEl(); if(!list)return true;
-  return (list.scrollHeight - list.scrollTop - list.clientHeight) <= SCROLL_STICK_PX;
-}
-function scrollChatToBottom(smooth){
-  const list=chatScrollEl(); if(!list)return;
-  setScrollTop(list,list.scrollHeight);
-  hideNewMsgPill();
-}
+// v28.5 — "are we following?" is the controller's boolean, not a measurement. Measuring it produced
+// a different answer at every moment of a turn (the typing indicator shrinks the content, the trim
+// clamps scrollTop, an image grows it) and every caller got a different one.
+function isNearBottom(){ return ChatScroll.isFollowing(); }
+function scrollChatToBottom(){ ChatScroll.follow(); }
 // "↓ New" pill shown when content arrives while the user is scrolled up.
 function showNewMsgPill(){
   let p=document.getElementById('newMsgPill');
@@ -17208,15 +17242,8 @@ function showNewMsgPill(){
   p.style.display="";
 }
 function hideNewMsgPill(){ const p=document.getElementById('newMsgPill'); if(p)p.style.display="none"; }
-// Hide the pill automatically once the user scrolls back down to the bottom themselves.
-document.addEventListener('DOMContentLoaded',()=>{
-  const list=chatScrollEl();
-  if(list)list.addEventListener('scroll',()=>{
-    if(_isProgrammaticScroll()) return;        // ignore our own scrollTop writes (trim, follow, snap)
-    if(_presentPlaying) return;                 // during an active turn roll, ignore layout-induced scrolls
-    if(isNearBottom(list)){hideNewMsgPill();} else {_followAfterSend=false;_pinBottomUntil=0;}   // a real scroll-up cancels the bottom catch-up
-  });
-});
+// v28.5 — the pill and the follow state are the controller's; it binds itself to the list.
+document.addEventListener('DOMContentLoaded',()=>{ ChatScroll.attach(); });
 
 // Full rebuild — used on chat-switch, restart, or any structural change. O(window), not O(all).
 function renderChat(){ return perf("renderChat",()=>{
@@ -17227,7 +17254,8 @@ function renderChat(){ return perf("renderChat",()=>{
   // the TOP of the render window: the "new event message jumps the chat to the beginning" bug.
   // Rendering a DIFFERENT chat than the one currently in the DOM counts as a fresh open → bottom.
   const _sameChat = _renderedChatId===state.curChat;
-  const _wasFollowing = !_sameChat || _followAfterSend || isNearBottom(list);
+  // A different chat is a fresh open → bottom. Otherwise honour where the reader actually is.
+  const _wasFollowing = !_sameChat || ChatScroll.isFollowing();
   // If a scrolled-up reader triggers a rebuild, remember what they were looking at (topmost
   // on-screen bubble + its offset from the viewport top) so we can put them back on it.
   let _anchorMid=null,_anchorOff=0;
@@ -17262,7 +17290,7 @@ function renderChat(){ return perf("renderChat",()=>{
   // bottom (_forceBottomOnce), otherwise only re-pin if the user is actually near the bottom.
   const _wantBottom = _forceBottomOnce || _wasFollowing;
   _forceBottomOnce=false;
-  if(_wantBottom){ setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
+  if(_wantBottom){ ChatScroll.follow(); }
   else {
     // Put the scrolled-up reader back on the exact line they were reading; surface the pill so
     // they know new content landed below instead of yanking them to it. If we couldn't resolve
@@ -17271,9 +17299,11 @@ function renderChat(){ return perf("renderChat",()=>{
     // whole view at the very top (the "chat jumps high above" failure on a mid-scene rebuild).
     const _an=_anchorMid?list.querySelector('[data-mid="'+_anchorMid+'"]'):null;
     if(_an){ setScrollTop(list, _an.offsetTop - _anchorOff); showNewMsgPill(); }
-    else { setScrollTop(list,list.scrollHeight); hideNewMsgPill(); }
+    else { ChatScroll.follow(); }
   }
-  const _pin=()=>{ const el=document.getElementById('chatList'); if(el && _renderedChatId===state.curChat && _wantBottom && isNearBottom(el)){ setScrollTop(el,el.scrollHeight); } };
+  // The rebuild replaced every child, so the size observer has to be re-pointed at the new ones.
+  ChatScroll.attach(); ChatScroll.rewatch();
+  const _pin=()=>{ if(_renderedChatId===state.curChat) ChatScroll.sync(); };
   requestAnimationFrame(_pin);
   setTimeout(_pin,60);
   setTimeout(_pin,200);
@@ -17288,8 +17318,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
   const chat=curChat();
   if(_renderedChatId!==state.curChat || !list.querySelector('.bubble,[data-mid]')){ renderChat(); return; }
   // Capture whether the user is following the conversation BEFORE we mutate the DOM.
-  const wasAtBottom=isNearBottom(list);
-  const _following = wasAtBottom || _followAfterSend;   // v26.6 — the front-trim below needs this too
+  const _following=ChatScroll.isFollowing();
   const msgs=chat.messages;
   // New messages are always appended to the END of chat.messages, so instead of building a
   // Set over the whole transcript and scanning all of it (O(total) per turn), walk backward
@@ -17323,12 +17352,14 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
       while(nodes.length>RENDER_WINDOW){ list.removeChild(nodes[0]); nodes=list.querySelectorAll('[data-mid]'); }
       // v26.6 — see appendOneBubble: restoring the anchor and then pinning to the bottom are two
       // different destinations, and doing both bounced the view on every appended message.
+      // Following → the controller re-pins on the mutation; nothing to compute. Not following →
+      // hold the reader's place across the removal, synchronously, in this same task.
       if(!_following && ref.isConnected){ setScrollTop(list, ref.offsetTop - beforeTop); }
     }
     _renderedCount=Math.min(msgs.length,RENDER_WINDOW);
     // Only follow to the bottom if the user was already there (or just sent a message this turn);
     // otherwise keep their position and let them know new content arrived.
-    if(_following){ pinChatBottomSoon(); }
+    if(_following){ ChatScroll.sync(); }
     else { showNewMsgPill(); }
   }
   renderImageRail();
@@ -17803,7 +17834,7 @@ function refreshBubble(mid){
   const prevTop=list?list.scrollTop:0, prevH=list?list.scrollHeight:0;
   const _restoreScroll=()=>{
     if(!list)return;
-    if(wasAtBottom){ setScrollTop(list,list.scrollHeight); }
+    if(wasAtBottom){ ChatScroll.sync(); }
     else { setScrollTop(list,prevTop + (list.scrollHeight-prevH)); } // keep the same content in view
   };
   const old=b.querySelector('.scene');
@@ -17967,13 +17998,12 @@ async function sendMessage(){
 
   chat.messages.push({mid:newMid(),role:"user",content:text,present:presentIds(chat).slice()});
   chat.lastActive=Date.now();
-  _followAfterSend=true;   // follow this whole turn to the bottom (see flag definition)
+  ChatScroll.follow();     // v28.5 — sending always takes you to your own line, and keeps you there
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
   appendNewBubbles();persistChats();
   // The user just sent — always bring THEIR message into view (snap to bottom), regardless of
   // prior scroll position. appendNewBubbles only auto-follows if you were already near the
   // bottom, which (with front-trimming) could otherwise leave the view parked up the transcript.
-  {const _list=document.getElementById('chatList'); if(_list){setScrollTop(_list,_list.scrollHeight);} if(typeof hideNewMsgPill==="function")hideNewMsgPill();}
 
   // v26.5 — before anything routes, make sure the player is not stranded in an area the scene has
   // walked out of (see syncPlayerSubArea). This also repairs saves already stuck in that state.
@@ -17992,7 +18022,7 @@ async function sendMessage(){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";{const _sp=present[0];typing.innerHTML=`<div class="meta">${avatarHTML(_sp)}${esc((_sp||{name:"…"}).name)}</div><div class="typing"><span></span><span></span><span></span></div>`;}
-  list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();
+  list.appendChild(typing);ChatScroll.sync();
   document.getElementById('sendBtn').disabled=true;
 
   try{
@@ -18606,10 +18636,9 @@ async function sendWhisper(chat,rest){
   _heatSeq++; _dirSeq++;
   if(chat)chat._exitedIds=null;   // fresh player turn — last turn's departures stop mattering
   chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
-  chat.lastActive=Date.now(); _followAfterSend=true;
+  chat.lastActive=Date.now(); ChatScroll.follow();
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
   appendNewBubbles(); persistChats();
-  {const _list=document.getElementById('chatList'); if(_list){setScrollTop(_list,_list.scrollHeight);} if(typeof hideNewMsgPill==="function")hideNewMsgPill();}
   const sb=document.getElementById('sendBtn'); if(sb)sb.disabled=true;
   try{
     await playCharacterTurn(chat,target,state.user);   // ONLY the whispered-to character responds
@@ -19288,7 +19317,7 @@ async function playCharacterTurn(chat,p,addressed){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
+  if(list){list.appendChild(typing);ChatScroll.sync();}
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
@@ -26023,7 +26052,7 @@ async function playSingleReaction(chat,p,eventText){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);if(isNearBottom(list)||_followAfterSend)pinChatBottomSoon();}
+  if(list){list.appendChild(typing);ChatScroll.sync();}
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
@@ -28832,7 +28861,7 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=
       renderImageRail();
       const l=document.getElementById('chatList'); if(!l) return;
       // Restore reading position after the reflow settles.
-      if(atBottom){ setScrollTop(l,l.scrollHeight); }
+      if(atBottom){ ChatScroll.sync(); }
       else if(anchorEl && anchorEl.isConnected){ setScrollTop(l,anchorEl.offsetTop); }
     },140);
   };

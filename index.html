@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -16179,8 +16179,22 @@ async function routeSceneForBeat(mid,replyText){
   const chat=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
   if(!chat||!chat.sceneDockId)return;
   if(!state.routeOn)return;                     // routing disabled → keep whatever is playing
-  const scenes=_galScope(state.scenes||[]).filter(s=>s&&(s.clips||[]).length);
-  if(scenes.length<2)return;                    // nothing to choose between
+  // v28.1 — route ONLY within the scenes belonging to whoever just spoke. Routing across the whole
+  // universe is what made playback jump to another character's scenes mid-conversation.
+  const _m=(chat.messages||[]).find(x=>x&&x.mid===mid);
+  const _spId=_m&&_m.speakerId, _spName=_m&&_m.speaker;
+  const scenes=scenesFor(_spId,_spName).filter(s=>s&&(s.clips||[]).length);
+  if(!scenes.length)return;                     // this speaker has none — leave what's playing alone
+  const _curId=chat.sceneDockId;
+  const curIsTheirs=scenes.some(s=>s.id===_curId);
+  // One candidate: no LLM call needed. Switch only if what's docked isn't already theirs.
+  if(scenes.length===1){
+    if(!curIsTheirs && scenes[0].id!==_curId){
+      chat.sceneDockId=scenes[0].id; markChatDirty(chat); persistChats(); syncSceneDock(true);
+      toast(`Scene: ${scenes[0].name}`);
+    }
+    return;
+  }
   if(_sceneRouteBusy)return;                    // one route in flight per turn is enough
   _sceneRouteBusy=true;
   try{
@@ -16191,7 +16205,9 @@ async function routeSceneForBeat(mid,replyText){
       .slice(-3)
       .map(m=>`${m.role==='user'?state.user:(m.speaker||"Narrator")}: ${m.content}`).join("\n")
       ||`Narrator: ${String(replyText||"").slice(0,400)}`;
-    const cur=sceneById(chat.sceneDockId);
+    // The sticky "keep what's playing" bias only makes sense when what's playing is one of the
+    // candidates; if a different character's scene is docked, this beat should move off it.
+    const cur=curIsTheirs?sceneById(_curId):null;
     const items=scenes.map(s=>({id:s.id,label:s.name,
       when:(s.when&&s.when.trim())||`CHOOSE WHEN the moment matches "${s.name}".`}));
     const prev=cur?`CURRENTLY PLAYING SCENE: ${cur.name}\n(If the latest exchange does NOT clearly call for a different scene, return that same scene's index again. Switch ONLY when the roleplay really moves to a moment another scene fits better.)\n\n`:"";
@@ -20160,6 +20176,31 @@ function _vidThumbHTML(url,cls){
   return `<video ${cls?`class="${cls}" `:""}src="${u}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
 }
 function _sceneOwner(s){ return (s&&s.characterName)||""; }
+/* v28.1 — SCENES ARE PER CHARACTER. A scene is created inside one character's video tab and carries
+   characterId/characterName, but two places ignored that and worked off every scene in the universe:
+   the scene picker (so choosing a scene listed everyone's) and the beat router (so playback drifted
+   into another character's scenes mid-conversation). These resolve the owner and scope by it.
+   A scene with NO owner is treated as shared — it stays available to everyone, so nothing that was
+   created before scenes had owners becomes unreachable. */
+function _sceneOwnerId(s){
+  if(!s)return null;
+  if(s.characterId)return s.characterId;
+  const n=String(s.characterName||"").trim().toLowerCase();
+  if(!n)return null;
+  const p=(state.personas||[]).find(x=>x&&x.name&&x.name.toLowerCase()===n);
+  return p?p.id:null;
+}
+function scenesFor(charId,charName){
+  const all=_galScope(state.scenes||[]);
+  if(!charId&&!charName)return all;
+  const nm=String(charName||"").trim().toLowerCase();
+  return all.filter(s=>{
+    const oid=_sceneOwnerId(s), on=String(s.characterName||"").trim().toLowerCase();
+    if(!oid&&!on)return true;                       // unowned → shared
+    if(charId&&oid)return oid===charId;
+    return !!nm&&on===nm;
+  });
+}
 // One video thumbnail cell. opts: {selectable, onOpen}
 function _galVidCellEl(v,opts){
   opts=opts||{};
@@ -20284,7 +20325,9 @@ function _renderGalVideos(el){
 }
 // Toggle select-all / clear for the video selection.
 function galVidSelectAll(){
-  const vids=state.videos.filter(v=>v&&v.url);
+  // v28.1 — "all" means all of what is on screen (this universe, this character's folder),
+  // not every clip in the library.
+  const vids=_visibleVideos();
   if(_galVidSel.size===vids.length) _galVidSel.clear();
   else vids.forEach(v=>_galVidSel.add(v.id));
   renderGallery();
@@ -20410,30 +20453,61 @@ function renderSceneEditor(){
 
 /* ---- scene picker: modern thumbnail list. mode:"assign" (move marked clips into a scene)
         or mode:"play" (pick a scene to play over the story) ---- */
+/* v28.1 — which character the scene picker is showing. Defaults to the open gallery folder, else
+   the character in the current scene; "" means everyone. Remembered across opens. */
+let _scenePickWho=null;
 function openScenePicker(opts){
   opts=opts||{};
   const assign=opts.mode==="assign";
   const box=document.getElementById('scenePickBody'); if(!box)return;
   box.innerHTML="";
+  // Pick the character to show. An explicit opts.character wins; then the open gallery folder;
+  // then whoever is in the scene with the player.
+  if(opts.character!=null) _scenePickWho=opts.character;
+  else if(_scenePickWho==null){
+    if(_galFolder&&_galFolder!=="__all__") _scenePickWho=_galFolder;
+    else { const pc=presentCast(curChat())[0]; _scenePickWho=pc?pc.name:""; }
+  }
+  const owners=[...new Set(_galScope(state.scenes||[]).map(s=>String(s&&s.characterName||"").trim()).filter(Boolean))].sort();
+  if(_scenePickWho && !owners.includes(_scenePickWho)) _scenePickWho="";
   const h=document.createElement('h3');
   h.innerHTML=`${icon("scenes")} <span>${assign?`Add ${_galVidSel.size} clip${_galVidSel.size===1?"":"s"} to…`:"Play a scene"}</span>`;
   box.appendChild(h);
-  const scenes=_galScope(state.scenes||[]).filter(s=>s&&(assign||(s.clips||[]).length));
+  // Character tabs — scenes belong to one character, so the picker shows one character at a time.
+  if(owners.length>1||(owners.length===1&&!_scenePickWho)){
+    const tabs=document.createElement('div');
+    tabs.style.cssText="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px";
+    const mkTab=(label,val)=>{
+      const b=document.createElement('button');
+      b.className=(_scenePickWho===val)?"btn small":"btn sec small";
+      b.style.cssText="width:auto;margin:0"; b.textContent=label;
+      b.onclick=()=>openScenePicker(Object.assign({},opts,{character:val}));
+      return b;
+    };
+    owners.forEach(n=>tabs.appendChild(mkTab(n,n)));
+    tabs.appendChild(mkTab("All","")); 
+    box.appendChild(tabs);
+  }
+  const scenes=(_scenePickWho?scenesFor(null,_scenePickWho):_galScope(state.scenes||[]))
+    .filter(s=>s&&(assign||(s.clips||[]).length));
   const grid=document.createElement('div'); grid.className="scPickGrid";
   if(assign){
     const nw=document.createElement('div'); nw.className="sceneCard scNew"; nw.innerHTML=`${icon("plus")}<span>New scene</span>`;
-    nw.onclick=()=>{ closeModal('scenePickModal'); createScene(_galFolder&&_galFolder!=="__all__"?_galFolder:""); };
+    nw.onclick=()=>{ closeModal('scenePickModal'); createScene(_scenePickWho||(_galFolder&&_galFolder!=="__all__"?_galFolder:"")); };
     grid.appendChild(nw);
   }
   scenes.slice().reverse().forEach(s=>{
-    grid.appendChild(_sceneCardEl(s,{showOwner:true,play:false,onOpen:()=>{
+    grid.appendChild(_sceneCardEl(s,{showOwner:!_scenePickWho,play:false,onOpen:()=>{
       if(assign){ addSelectedToScene(s.id); }
       else { closeModal('scenePickModal'); playSceneInChat(s.id); }
     }}));
   });
   box.appendChild(grid);
   if(!scenes.length&&!assign){
-    const d=document.createElement('div'); d.className="desc"; d.textContent="No scenes yet. Gallery → Videos → open a character → Create scene, then add clips to it.";
+    const d=document.createElement('div'); d.className="desc";
+    d.textContent=_scenePickWho
+      ? `${_scenePickWho} has no scenes with clips yet. Gallery → Videos → open ${_scenePickWho} → Create scene, then add clips to it.`
+      : "No scenes yet. Gallery → Videos → open a character → Create scene, then add clips to it.";
     box.appendChild(d);
   }
   openModal('scenePickModal');
@@ -21225,8 +21299,17 @@ function galImgEraseSelected(){
 let _galVidSel=new Set();   // ids of videos chosen for scenes / loop / pin (empty = all)
 // Resolve the working set of videos in DISPLAY order (newest→oldest). If some are selected, only
 // those; otherwise all. Returns the raw records so callers can map to url or httpsMedia.
+/* v28.1 — the clips currently ON SCREEN: this universe, and this character's folder when one is
+   open. _selectedVideos used to read every clip in every universe, so "Play" with nothing marked
+   played the whole library, other characters included. */
+function _visibleVideos(){
+  let list=_galScope(state.videos).filter(v=>v&&v.url);
+  const folder=(_galFolder&&_galFolder!=="__all__")?_galFolder:null;
+  if(folder) list=list.filter(v=>_imgChars(v).includes(folder));
+  return list.slice().reverse();
+}
 function _selectedVideos(){
-  const list=state.videos.filter(v=>v&&v.url).slice().reverse();
+  const list=_visibleVideos();
   if(_galVidSel.size) return list.filter(v=>_galVidSel.has(v.id));
   return list;
 }

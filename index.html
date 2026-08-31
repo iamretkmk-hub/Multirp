@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1325,6 +1325,10 @@
             <label class="switchLbl"><input type="checkbox" id="setGossipOn" checked><span class="sl"></span></label></div>
           <div><label>Only gossip if charge ≥ (0–1)</label><input type="number" id="setGossipThreshold" min="0" max="1" step="0.05" value="0.6"></div>
           <div><label>Max gossip items per day</label><input type="number" id="setGossipMaxPerDay" min="0" max="10" step="1" value="3"></div>
+          <div class="desc" style="margin-top:8px">A rumor now has a life. One person &mdash; the one whose life it changes &mdash; holds the stake and may put it to you <b>once</b>; everyone else has merely heard it and will not raise it at all. Your answer settles it or hardens it, and talk nobody acts on cools off and dies. See every live rumor, and end any of them by hand, in <b>Story State &rarr; Ongoing rumors</b>.</div>
+          <div><label>Rumor cools per day (0&ndash;1) <span class="desc" style="display:block;font-weight:400">Higher = talk dies out faster. At zero heat a rumor is forgotten.</span></label><input type="number" id="setGossipDecay" min="0" max="1" step="0.05" value="0.15"></div>
+          <div><label>Days before it can be raised again <span class="desc" style="display:block;font-weight:400">After someone asks you about a rumor, they live with your answer for this many days before they may bring it up again.</span></label><input type="number" id="setGossipCooldown" min="0" max="30" step="1" value="2"></div>
+          <div><label>Max live rumors per person <span class="desc" style="display:block;font-weight:400">How many unresolved suspicions any one character can be carrying about you at once.</span></label><input type="number" id="setGossipMaxLive" min="1" max="10" step="1" value="3"></div>
           <div class="kvline" style="margin-top:10px"><span>Confrontations (gossip → someone comes to settle it)</span>
             <label class="switchLbl"><input type="checkbox" id="setConfrontOn" checked><span class="sl"></span></label></div>
           <div class="desc">When a character holds a strong, unresolved suspicion about you, they may arrive to confront you. The Scene Writer runs it as a winnable social check: a hidden conviction the evidence sets a floor on, that your excuses, consistency, and honesty move — while their personality decides how movable they are.</div>
@@ -2101,6 +2105,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",memMaxBeforeCondense:"sm_memmaxcondense",memCondenseStart:"sm_memcondensestart",embedOn:"sm_embedon",embedKey:"sm_embedkey",embedUrl:"sm_embedurl",embedModel:"sm_embedmodel",memWSem:"sm_memwsem",memWPpl:"sm_memwppl",memWLoc:"sm_memwloc",memWAct:"sm_memwact",memWRec:"sm_memwrec",memWEmo:"sm_memwemo",memWImp:"sm_memwimp",memLongtermCount:"sm_memltcount",
   memRecentCount:"sm_memrecentcount",memDistantCount:"sm_memdistantcount",memIntimateFrac:"sm_memintimatefrac",memPerTypeCap:"sm_mempertypecap",
   gossipOn:"sm_gossipon",gossipThreshold:"sm_gossipthresh",gossipMaxPerDay:"sm_gossipmax",gossipModel:"sm_gossipmodel",gossipPrompt:"sm_gossipprompt",
+  gossipLedger:"sm_gossipledger",rumorJudge:"sm_rumorjudge",gossipDecay:"sm_gossipdecay",gossipCooldown:"sm_gossipcooldown",gossipMaxLive:"sm_gossipmaxlive",
   intentOn:"sm_intenton",intentForm:"sm_intentform",intentTick:"sm_intenttick",intentMax:"sm_intentmax",contemplate:"sm_contemplate",
   // Character bio generator + auto-character (Stages 5/6)
   bioModel:"sm_biomodel",bioPrompt:"sm_bioprompt",batchBioPrompt:"sm_batchbioprompt",univPrompt:"sm_univprompt",directorAuthor:"sm_directorauthor",genrePackAuthor:"sm_genrepackauthor",ruleCompiler:"sm_rulecompiler",questGen:"sm_questgen",questNext:"sm_questnext",originGen:"sm_origingen",chronicler:"sm_chronicler",styles:"sm_styles",authorModel:"sm_authormodel",promptTuner:"sm_prompttuner",autoCharOn:"sm_autocharon",autoCharDelay:"sm_autochardelay",
@@ -2220,15 +2225,15 @@ const mediaDB=(function(){
 // loadState reads the four growing collections from here instead of localStorage.
 let _idbColl=null;
 // Keys for the growing collections now living in IndexedDB's kv store.
-const IDB_COLL_KEYS={chats:"chats",memory:"memory",universes:"universes",personas:"personas"};
+const IDB_COLL_KEYS={chats:"chats",memory:"memory",universes:"universes",personas:"personas",gossip:"gossip"};
 // Load the four growing collections from IndexedDB into _idbColl BEFORE loadState runs.
 // First run after this upgrade: IDB is empty, so we seed it from whatever is still in
 // localStorage (non-destructive migration), then IndexedDB becomes the source of truth.
 async function preloadCollections(){
   _idbColl={};
   let migrated=false;
-  const defs={ chats:{}, memory:[], universes:null, personas:null };
-  const lsKey={chats:K.chats,memory:K.memory,universes:K.universes,personas:K.personas};
+  const defs={ chats:{}, memory:[], universes:null, personas:null, gossip:[] };
+  const lsKey={chats:K.chats,memory:K.memory,universes:K.universes,personas:K.personas,gossip:K.gossipLedger};
   for(const name in IDB_COLL_KEYS){
     let v=await mediaDB.kvGet(IDB_COLL_KEYS[name]);
     if(v===null||v===undefined){
@@ -2243,6 +2248,7 @@ async function preloadCollections(){
   if(migrated){
     await mediaDB.kvSet("chats",_idbColl.chats);
     await mediaDB.kvSet("memory",_idbColl.memory);
+    await mediaDB.kvSet("gossip",_idbColl.gossip||[]);
     if(_idbColl.universes!=null) await mediaDB.kvSet("universes",_idbColl.universes);
     if(_idbColl.personas!=null) await mediaDB.kvSet("personas",_idbColl.personas);
   }
@@ -2755,7 +2761,8 @@ WHERE: {{location}}
 - Would THIS witness actually spread this? Personality and ties decide. A loyal friend warns the person wronged; a rival or gossip spreads it eagerly, maybe twisted worse; a discreet or indifferent person says nothing. Many people just don't bother — silence is a valid, common answer.
 - If they DO talk, who do they tell? Pick from the candidates someone who would plausibly hear it AND care — often someone close to a person in the impression (a partner, family, a rival). The witness tells people in their OWN circle.
 - Gossip is VAGUE and travels imperfectly. It is a RUMOR and a QUESTION ("I heard X was getting close with Y — is something going on?"), NEVER a proven fact or verdict. It may be exaggerated or softened by the teller's bias. No invented specifics, no quotes of what was actually said (the witness didn't hear it).
-- Do NOT manufacture drama. If the realistic answer is "nobody spreads this", return an empty list.
+- Do NOT manufacture drama. If the realistic answer is "nobody spreads this", return an empty list. This is the usual answer. Most of what people glimpse is boring and dies where it was seen.
+- WHO ACTUALLY HAS A STAKE. A rumor only matters to the ONE person whose life changes if it is true \u2014 the partner who would be betrayed, the rival it would hand an advantage, the parent it would shame. Name that person as the "stakeholder". Everyone else who hears it is a bystander who will gossip about it and then get on with their day. If NOBODY has a real stake in this, nobody spreads it: return an empty list.
 
 ## Output ONLY strict JSON:
 {
@@ -2765,12 +2772,42 @@ WHERE: {{location}}
       "recipient": "recipient name (exact, from candidates)",
       "motive": "loyalty|malice|manipulation|fun|concern",
       "rumor": "the vague rumor as the recipient would now hold it, first person from the recipient's view, e.g. 'I heard {{user}} was getting cozy with Ceyda at the gym — I don't know if it's true.' One sentence. A question/suspicion, not a verdict.",
+      "stakeholder": "exact name of the ONE person whose life this actually changes if true \u2014 often the recipient, sometimes someone else. Never a bystander.",
+      "about": ["exact names of who the rumor is about"],
       "suspicion_strength": 0.0-1.0
     }
   ]
 }
 
 Return {"spread": []} if no one would realistically talk. At most 2 entries — gossip is selective.`;
+
+/* v28.9 — RUMOR JUDGE. Two jobs, one prompt, chosen by the `mode` line. RAISE: did the character
+   actually put the rumor to the player, or merely think around it? ANSWER: given how the player
+   responded, is the matter closed? This is what lets a rumor END — the thing the old design had no
+   way to do at all. */
+const DEFAULT_RUMOR_JUDGE=`You are an impartial referee reading one exchange. Answer only about what is literally on the page — never about what someone might have meant.
+
+## The rumor
+{{rumor}}
+
+## Mode
+{{mode}}
+
+## The text to judge
+{{text}}
+
+## If MODE is RAISE
+Did the speaker actually put this matter to {{user}} — asked about it, alluded to it plainly enough that {{user}} would know they were being asked, or accused them of it? Hinting so faintly that no one could tell is NOT raising it. Thinking about it in private narration is NOT raising it. Talking about an unrelated worry is NOT raising it.
+Return: {"raised": true|false}
+
+## If MODE is ANSWER
+{{user}} has just responded. Judge how it would land for an ordinary person who WANTED to believe them but is not a fool:
+- "settled" — they gave a straight answer, or an explanation that holds, or admitted something in a way that closes the matter. The suspicion is spent.
+- "believed" — they confirmed it, or evaded so badly that the suspicion is now conviction.
+- "open" — genuinely inconclusive; they deflected without either satisfying or damning themselves. Use this SPARINGLY: most real answers close a matter one way or the other, and a suspicion nobody can settle is exactly what makes a character tiresome.
+Return: {"verdict": "settled"|"believed"|"open", "why": "one short clause"}
+
+## Output ONLY strict JSON. No prose, no fences.`;
 
 // ===== LIVING UNIVERSE layer 4: OFFSTAGE INTENT & AGENCY =====
 // Characters form charged MOTIVES from what happened, act on them offstage (festering, recruiting
@@ -4781,6 +4818,10 @@ function loadState(){
     gossipMaxPerDay:+store.raw(K.gossipMaxPerDay,3),
     gossipModel:store.raw(K.gossipModel,""),
     gossipPrompt:store.raw(K.gossipPrompt,DEFAULT_GOSSIP),
+    rumorJudge:store.raw(K.rumorJudge,DEFAULT_RUMOR_JUDGE),
+    gossipDecay:+store.raw(K.gossipDecay,0.15),        // heat lost per in-game day
+    gossipCooldown:+store.raw(K.gossipCooldown,2),     // days before a stakeholder may raise it again
+    gossipMaxLive:+store.raw(K.gossipMaxLive,3),       // live rumors any one stakeholder may carry
     intentOn:store.get(K.intentOn,true),
     intentForm:store.raw(K.intentForm,DEFAULT_INTENT_FORM),
     intentTick:store.raw(K.intentTick,DEFAULT_INTENT_TICK),
@@ -4866,6 +4907,7 @@ function loadState(){
     universes:(_idbColl?_idbColl.universes:store.get(K.universes,null)),
     curUniverse:store.raw(K.curUniverse,null),
     memory:(_idbColl?_idbColl.memory:store.get(K.memory,[]))||[],
+    gossip:(_idbColl?_idbColl.gossip:store.get(K.gossipLedger,[]))||[],
     images:store.get(K.images,[]),
     videos:[],
     scenes:[]   // v27: user-curated video SCENES (ordered playlists of gallery clips, per character)
@@ -5741,6 +5783,7 @@ function flushPersistChats(){ if(_persistChatsTimer){ clearTimeout(_persistChats
 function persistPersonas(){mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
 function persistUniverses(){mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
 function persistMemory(){mediaDB.kvSet("memory",state.memory);}
+function persistGossip(){mediaDB.kvSet("gossip",state.gossip||[]);}
 /* ===== v25.11 — DURABLE GALLERY MEDIA =========================================
    Generated images and videos used to be stored as the PROVIDER'S REMOTE URL (fal / AtlasCloud /
    ModelsLab CDN links). Those links expire after a while, so the gallery quietly went blank — the
@@ -8673,6 +8716,8 @@ const PROMPT_REGISTRY=[
    hint:"When the player LEAVES a public location and its gossip-chance rolls a hit, the place produces a vague 'people are saying…' rumor about the visit, planted (as an OBSERVATION) in every character ticked at that location — including the person it's about, so they can hear they're being talked about. Feeds the gossip/intent pipeline. Use {{user}}, {{place}}, {{place_desc}}, {{others}}, {{visit}}."},
   {key:"gistBuild", label:"Bystander gist (perception)", def:()=>DEFAULT_GIST_BUILD, json:true,
    hint:"A bystander's fuzzy outside impression when present but not in the conversation. Use {{char}}, {{user}}."},
+  {key:"rumorJudge", label:"Rumor judge (raise / answer)", def:()=>DEFAULT_RUMOR_JUDGE, json:true,
+   hint:"Decides two things about a live rumor: whether the character actually put it to you this turn (which spends their one raise), and \u2014 after you answer \u2014 whether the matter is now settled, believed, or still open. This is what lets a rumor end."},
   {key:"gossipPrompt", label:"Gossip propagation (Living Universe)", def:()=>DEFAULT_GOSSIP, json:true,
    hint:"At End Day, decides who tells whom about charged things bystanders saw. Use {{user}}, {{witness}}, {{impression}}, {{charge}}, {{location}}, {{witness_ties}}, {{candidates}}."},
   {key:"intentForm", label:"Intent formation (offstage agency)", def:()=>DEFAULT_INTENT_FORM, json:true,
@@ -12192,17 +12237,72 @@ function openStoryState(){
       undercurrents=`<div class="desc">Nothing brewing offstage right now.</div>`;
     }
   }
+  /* v28.9 — ONGOING RUMORS. The gossip engine used to be a black box you could only turn off; a
+     suspicion planted on day 3 was still being asked about on day 30 with no way to reach it. Every
+     live rumor is now listed with who holds the stake, who is carrying it, how hot it still is, and
+     four buttons that end it. */
+  let rumors="";
+  {
+    const uid=(chat&&chat.universeId)||state.curUniverse||null;
+    const live=liveGossip(uid).slice().sort((a,b)=>(b.heat||0)-(a.heat||0));
+    const day=(chat&&chat.gameDay)||curGameDay();
+    if(live.length){
+      rumors=live.map(g=>{
+        const stake=gossipName(g.stakeholderId)||"someone";
+        const others=(g.carriers||[]).map(c=>gossipName(c.charId)).filter(n=>n&&n!==stake);
+        const last=(g.raisedBy||{})[g.stakeholderId];
+        const status = g.status==="raised"
+          ? (last!=null?`asked you on day ${last}`:"asked you")
+          : (gossipCanRaise(g,day)?"may bring it up":"holding it");
+        const heat=Math.round((g.heat||0)*100);
+        return `<div class="kvline" style="align-items:flex-start;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)">
+          <div style="font-size:12px;line-height:1.45">${esc(g.text)}</div>
+          <div class="desc" style="font-size:10px">
+            <b>${esc(stake)}</b> has the stake \u00b7 ${esc(status)} \u00b7 heat ${heat}%
+            ${others.length?` \u00b7 also heard by ${esc(others.slice(0,4).join(", "))}`:""}
+          </div>
+          <span style="display:flex;gap:4px;flex-wrap:wrap">
+            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','settled')">They believe you</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','believed')">They believe it</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','dead')">Never happened</button>
+            <button class="btn sec small" onclick="ssCoolGossip('${g.id}')">Cool off</button>
+          </span>
+        </div>`;
+      }).join("");
+    }else{
+      rumors=`<div class="desc">Nobody is talking about you right now.</div>`;
+    }
+  }
   const m=document.createElement('div'); m.id="storyStateModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_ssClose()">×</button>
    <div class="card editCard">
     <h3>${icon("chart")} Story State</h3>
     <div class="subhead">How they feel</div>${state.relOn?rel:`<div class="desc">Relationship tracking is off.</div>`}
     <div class="subhead" style="margin-top:12px">Trackers</div>${trk}
+    ${state.gossipOn!==false?`<div class="subhead" style="margin-top:12px">${icon("speech")} Ongoing rumors <span class="desc">(what is going around about you)</span></div>${rumors}`:``}
     ${state.intentOn!==false?`<div class="subhead" style="margin-top:12px">${icon("globe")} Undercurrents <span class="desc">(offstage motives)</span></div>${undercurrents}`:``}
     <button class="btn small" style="margin-top:12px" onclick="_ssClose()">Close</button>
    </div>`;
   m.addEventListener('click',e=>{if(e.target===m)_ssClose();});
   document.body.appendChild(m);
+}
+// Close a rumor by hand. Settling rewrites the linked memories from an open question into a
+// closed one, so the character stops carrying it as something still to be asked.
+function ssResolveGossip(id,how){
+  const g=gossipById(id); if(!g)return;
+  resolveGossip(id,how);
+  toast(how==="settled"?"Settled \u2014 they take your word for it"
+      :how==="believed"?"They believe the rumor"
+      :"Rumor killed");
+  openStoryState();
+}
+// Take the pressure out of a rumor without deciding it: it stays true-or-not, it just stops driving.
+function ssCoolGossip(id){
+  const g=gossipById(id); if(!g)return;
+  g.heat=Math.max(0,(g.heat||0)-0.35);
+  if(g.heat<=0.05){ resolveGossip(id,"dead"); toast("Rumor faded out"); }
+  else { persistGossip(); toast("Cooled off"); }
+  openStoryState();
 }
 function nudgeTracker(id,d,ownerKey){ const chat=curChat(); const t=curTrackers().find(x=>x.id===id); if(!t)return; const key=ownerKey||trackerOwner(t); setTrackerValOwner(chat,t,key,trackerVal(chat,t,key)+d); persistChats(); openStoryState(); updateChatHeader(); }
 function setTrackerVal(id,ownerKey){ const chat=curChat(); const t=curTrackers().find(x=>x.id===id); if(!t)return; const key=ownerKey||trackerOwner(t); const v=prompt(`Set ${t.name}${key!=="__story__"?" ("+ownerLabel(key)+")":""} to:`,String(trackerVal(chat,t,key))); if(v===null||v.trim()==="")return; setTrackerValOwner(chat,t,key,+v); persistChats(); openStoryState(); updateChatHeader(); }
@@ -14936,6 +15036,206 @@ function memInjectText(m){
 }
 // Current in-game day for the active chat (defaults to 1).
 function curGameDay(){const c=state.curChat&&state.chats[state.curChat];return (c&&c.gameDay)||1;}
+
+/* ===== v28.9 — THE GOSSIP LEDGER ==============================================================
+   Before this, a rumor was ONLY a memory with openSuspicion:true — a flag set in two places and
+   cleared in none. Nothing could ever end one. Worse, the gossip prompt is told to write the rumor
+   as a QUESTION ("I heard X — is something going on?"), so every turn handed the character an
+   unanswered question about the player and told them to let their memories shape the reply. Every
+   character who ever heard anything asked about it, forever.
+
+   A rumor is now a first-class object with a life:
+     subject        who it is about (character ids, or "__user__")
+     stakeholderId  the ONE person whose life changes if it is true (the wronged spouse, the rival
+                    who'd act on it). Distinct from a memory's ownerId, which is merely whoever
+                    happens to be holding the memory.
+     carriers       everyone who has heard it. They know it; it is not theirs to raise.
+     heat           0..1, decaying daily. At zero the rumor dies of boredom, like a real one.
+     status         open -> raised -> settled | believed | dead
+     raisedBy       charId -> game day it was last put to the player, enforcing a cooldown so
+                    asking SPENDS the move instead of repeating it.
+   GOSSIP memories link back by `gossipId`; the ledger is the authority on whether one still
+   speaks. ===============================================================================*/
+const GOSSIP_STATUS=["open","raised","settled","believed","dead"];
+function gossipAll(){ if(!Array.isArray(state.gossip))state.gossip=[]; return state.gossip; }
+function gossipById(id){ return gossipAll().find(g=>g&&g.id===id)||null; }
+// Rumors alive in a universe: not settled/believed/dead, and still carrying heat.
+function liveGossip(uid){
+  const u=uid||state.curUniverse||null;
+  return gossipAll().filter(g=>g && (!g.universeId||!u||g.universeId===u)
+    && g.status!=="dead" && g.status!=="settled" && g.status!=="believed" && (g.heat||0)>0.05);
+}
+// The live rumors THIS character is the stakeholder for — the ones that are actually theirs.
+function gossipStakeOf(charId,uid){ return liveGossip(uid).filter(g=>g.stakeholderId===charId); }
+// The live rumors this character has merely heard (and is therefore NOT entitled to raise).
+function gossipCarriedBy(charId,uid){
+  return liveGossip(uid).filter(g=>g.stakeholderId!==charId
+    && (g.carriers||[]).some(c=>c&&c.charId===charId));
+}
+// May this stakeholder put it to the player this turn? Asking spends the move for gossipCooldown days.
+function gossipCanRaise(g,day){
+  if(!g||g.status==="settled"||g.status==="believed"||g.status==="dead")return false;
+  const cd=Math.max(0,+state.gossipCooldown||0);
+  const last=(g.raisedBy||{})[g.stakeholderId];
+  if(last==null)return true;
+  return (day-last)>=cd;
+}
+function gossipName(id){
+  if(id==="__user__")return state.user||"You";
+  const p=(state.personas||[]).find(x=>x&&x.id===id);
+  return p?p.name:"";
+}
+/* Plant a rumor, or fold it into one that already exists. Returns the ledger entry, or null when
+   the world is already saturated. Two throttles live here, because the old code had neither:
+     - a rumor whose text substantially matches a live one about the same subject just adds a
+       carrier and a little heat, instead of becoming a second rumor saying the same thing
+       (the old de-dupe compared exact strings, so every paraphrase slipped through);
+     - a stakeholder already carrying gossipMaxLive live rumors takes no more. */
+function recordGossip(o){
+  o=o||{};
+  const day=+o.day||curGameDay();
+  const uid=o.universeId||state.curUniverse||null;
+  const text=String(o.text||"").trim(); if(!text)return null;
+  const subject=(o.subject||[]).filter(Boolean);
+  const stakeholderId=o.stakeholderId||null; if(!stakeholderId)return null;
+  const carrier=o.carrierId||stakeholderId;
+  const L=gossipAll();
+  // fold into an existing live rumor about the same subject
+  const sameSubject=liveGossip(uid).filter(g=>
+    g.stakeholderId===stakeholderId ||
+    (subject.length && (g.subject||[]).some(s=>subject.indexOf(s)>=0)));
+  for(const g of sameSubject){
+    if(replySimilarity(text,g.text)>=0.55){
+      if(!(g.carriers||[]).some(c=>c.charId===carrier))
+        (g.carriers=g.carriers||[]).push({charId:carrier,from:o.from||"",motive:o.motive||"",day});
+      g.heat=Math.min(1,(g.heat||0)+0.1);   // it is going around again
+      persistGossip();
+      return g;
+    }
+  }
+  if(gossipStakeOf(stakeholderId,uid).length>=Math.max(1,+state.gossipMaxLive||3))return null;
+  const g={
+    id:"g_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+    universeId:uid, text, subject, stakeholderId,
+    carriers:[{charId:carrier,from:o.from||"",motive:o.motive||"",day}],
+    heat:Math.max(0.1,Math.min(1,o.heat!=null?o.heat:0.6)),
+    status:"open", day, raisedBy:{}, playerStance:"", source:o.source||"gossip",
+    memIds:o.memId?[o.memId]:[]
+  };
+  L.push(g); persistGossip();
+  return g;
+}
+// Close a rumor by hand or by judgement. `how` is one of settled | believed | dead.
+// Settling REWRITES the linked memories from an open question into a closed one, because the
+// question-shaped text is what made characters keep asking.
+function resolveGossip(id,how,note){
+  const g=gossipById(id); if(!g)return false;
+  g.status=(GOSSIP_STATUS.indexOf(how)>=0?how:"dead");
+  g.resolvedDay=curGameDay();
+  if(note)g.playerStance=String(note).slice(0,200);
+  if(g.status!=="open"&&g.status!=="raised")g.heat=0;
+  const who=gossipName(g.stakeholderId)||"someone";
+  (state.memory||[]).forEach(m=>{
+    if(!m||m.gossipId!==g.id)return;
+    m.openSuspicion=false; m.suspicion=0; m._confrontUsed=true;
+    m.importance=Math.min(m.importance||0.5,0.35);   // a closed matter stops shouting in retrieval
+    m.emotion="neutral";                              // and stops matching suspicious-mood recall
+    const was=String(m.content||"").trim();
+    if(g.status==="settled") m.content=`I asked about this and I believe them: ${was}`;
+    else if(g.status==="believed") m.content=`I asked about this and I did not believe the answer: ${was}`;
+    else m.content=`This turned out to be nothing: ${was}`;
+    m.gossipClosed=g.status;
+  });
+  persistGossip(); persistMemory();
+  return true;
+}
+// Heat bleeds away each in-game day; a cold rumor is dead. Called at End Day.
+function decayGossip(day){
+  const d=Math.max(0,+state.gossipDecay||0);
+  let changed=false;
+  gossipAll().forEach(g=>{
+    if(!g||g.status==="settled"||g.status==="believed"||g.status==="dead")return;
+    g.heat=Math.max(0,(g.heat||0)-d); changed=true;
+    if(g.heat<=0.05){ resolveGossip(g.id,"dead"); }
+  });
+  if(changed)persistGossip();
+}
+/* One-time migration: every pre-ledger GOSSIP memory becomes a ledger entry so old saves get the
+   lifecycle too (and, more importantly, so the years of never-closing suspicions in an existing
+   universe finally become something that can be closed from Story State). */
+function migrateGossipLedger(){
+  const mems=(state.memory||[]).filter(m=>m&&m.type==="GOSSIP"&&!m.gossipId);
+  if(!mems.length)return 0;
+  let n=0;
+  mems.forEach(m=>{
+    const closed=!m.openSuspicion;
+    const g={
+      id:"g_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)+(n++),
+      universeId:m.universeId||null,
+      text:String(m.content||"").trim(),
+      subject:m.plantedAgainst?[m.plantedAgainst]:["__user__"],
+      stakeholderId:m.ownerId,
+      carriers:[{charId:m.ownerId,from:m.gossipFrom||"",motive:m.gossipMotive||"",day:m.gameDay||1}],
+      heat:closed?0:Math.max(0.1,Math.min(1,m.suspicion!=null?m.suspicion:0.5)),
+      status:closed?"dead":"open",
+      day:m.gameDay||1, raisedBy:{}, playerStance:"",
+      source:m.source||"gossip", memIds:[m.id], migrated:true
+    };
+    m.gossipId=g.id;
+    gossipAll().push(g);
+  });
+  persistGossip(); persistMemory();
+  return n;
+}
+/* Did this reply actually put the rumor to the player? Runs only for a stakeholder who HAD a
+   raisable rumor in their payload, and only when the reply shares enough with the rumor to be
+   worth a call — so the common case (they talked about something else) costs nothing. Raising it
+   SPENDS the move: the cooldown starts, heat drops, and the answer becomes due. */
+async function noteRumorRaise(chat,p,reply){
+  try{
+    if(!p||!reply||!state.key||state.gossipOn===false)return;
+    const day=(chat&&chat.gameDay)||curGameDay();
+    const uid=(chat&&chat.universeId)||state.curUniverse||null;
+    const g=gossipStakeOf(p.id,uid).filter(x=>gossipCanRaise(x,day))
+      .sort((a,b)=>(b.heat||0)-(a.heat||0))[0];
+    if(!g)return;
+    if(replySimilarity(reply,g.text)<0.12)return;   // cheap gate: nothing of the rumor is in here
+    const out=await chatCompletion([
+      {role:"system",content:fillTpl(up("rumorJudge"),{rumor:g.text,mode:"RAISE",user:state.user,
+        text:`${p.name} says:\n${String(reply).slice(0,900)}`})},
+      {role:"user",content:"Return the JSON."}
+    ],state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",60),dbg:"Rumor judge (raise) · "+p.name});
+    const j=parseJSON(out)||{};
+    if(!j.raised)return;
+    (g.raisedBy=g.raisedBy||{})[g.stakeholderId]=day;
+    g.status="raised";
+    g.heat=Math.max(0,(g.heat||0)-0.25);   // putting it into words takes the pressure out of it
+    g._awaitAnswer=true;
+    persistGossip();
+  }catch(e){/* best-effort */}
+}
+/* The player has just answered something that was put to them. One call decides whether the
+   matter closes — and closing it REWRITES the memory from a question into a settled fact, which is
+   what stops the character coming back to it. */
+async function settleRumors(chat,playerText){
+  try{
+    if(!playerText||!state.key||state.gossipOn===false)return;
+    const uid=(chat&&chat.universeId)||state.curUniverse||null;
+    const pending=liveGossip(uid).filter(g=>g._awaitAnswer);
+    for(const g of pending){
+      g._awaitAnswer=false;
+      const out=await chatCompletion([
+        {role:"system",content:fillTpl(up("rumorJudge"),{rumor:g.text,mode:"ANSWER",user:state.user,
+          text:`${state.user} answers:\n${String(playerText).slice(0,900)}`})},
+        {role:"user",content:"Return the JSON."}
+      ],state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",80),dbg:"Rumor judge (answer)"});
+      const j=parseJSON(out)||{};
+      const v=String(j.verdict||"open");
+      if(v==="settled"||v==="believed") resolveGossip(g.id,v,j.why||"");
+      else persistGossip();
+    }
+  }catch(e){/* best-effort */}
+}
 // Memories belonging to a specific owner (character id).
 function memoriesOf(ownerId){return state.memory.filter(m=>m.ownerId===ownerId);}
 // Memories visible to the current scene: ONLY those owned by characters in the cast AND formed
@@ -15397,7 +15697,7 @@ const REPLY_ORDER=["task","world","format",
   "distant_memories","recent_memories","situation",
   "speaking_style","latest_arcs",
   "__history__",
-  "last_line","already_said","scene_now","calendar","quests","private_intent",
+  "last_line","already_said","rumors","scene_now","calendar","quests","private_intent",
   "response_guidance","final_guardrails","spoken_delivery"];
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
@@ -15415,6 +15715,7 @@ const REPLY_BLOCKS={
   recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered. The transcript counts as memory too — this list covers what came before it."},
   situation:{label:"Situation (entering/leaving)",kind:"dyn",desc:"Only appears when this character is arriving to or leaving the scene this turn."},
   __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript (witness-scoped for this character). Blocks below this line are delivered AFTER the dialogue."},
+  rumors:{label:"🗣️ Rumors",kind:"dyn",desc:"Live rumors from the gossip ledger, split by standing: the one rumor this character actually has a stake in (which they may put to you ONCE, then must live with the answer), and separately the talk they have merely overheard and are not entitled to raise at all."},
   already_said:{label:"⚠️ What you already said",kind:"dyn",desc:"This character's own last one or two lines in the scene, quoted verbatim, with the rule that this turn may not repeat or rephrase them — plus a stronger directive when the exchange has visibly stalled on the same request."},
   last_line:{label:"⚠️ The line you are responding to",kind:"dyn",desc:"The last real DIALOGUE line in the transcript — not a day marker, presence note, travel beat or narration — pulled out and highlighted."},
   speaking_style:{label:"⚠️ How you speak",kind:"dyn",desc:"This character's voice, delivered where the line actually gets written."},
@@ -15551,6 +15852,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
     already_said:["already_said_header","already_said_instr","already_said_stalled"],
+    rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_carrier_header","rumor_carrier_instr"],
     speaking_style:["style_header","style_notes"],
     scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_present_others","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
     private_intent:["intent_warm","intent_hostile"],
@@ -15561,7 +15863,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
-  const SCOPE={already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
+  const SCOPE={rumors:"chat",already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
   // All three payloads share ONE block map now, so a single pass covers them.
   Object.keys(REPLY_BLOCKS).forEach(id=>{
     if(T[id])REPLY_BLOCKS[id].tpls=T[id];
@@ -15625,8 +15927,8 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"trackers",label:"Tracker Engine",desc:"Judges soft deltas and detects trigger phrases for story trackers; dice and per-day ticks are handled by code.",blocks:[
     {kind:"prompt",promptKey:"trackPrompt"},
     {kind:"dyn",label:"Tracker definitions + latest exchange",scope:"chat",desc:"The universe's trackers (owner/stages/behaviour) and the lines being judged."}]},
-  {key:"gossip",label:"Gossip",desc:"End-of-day rumor propagation along the relationship graph, plus the location leak planted when you leave a watched place.",blocks:[
-    {kind:"prompt",promptKey:"gossipPrompt"},{kind:"prompt",promptKey:"poiGossip"},
+  {key:"gossip",label:"Gossip",desc:"End-of-day rumor propagation along the relationship graph, plus the location leak planted when you leave a watched place \u2014 and the ledger that gives each rumor a stakeholder, one raise, and an ending.",blocks:[
+    {kind:"prompt",promptKey:"gossipPrompt"},{kind:"prompt",promptKey:"poiGossip"},{kind:"prompt",promptKey:"rumorJudge"},
     {kind:"dyn",label:"Witness observation, ties & candidates / place info",scope:"chat",desc:"Charged observations from today, who cares about whom, and the place's privacy profile."}]},
   {key:"intent",label:"Intent Engine",desc:"Characters privately form wants (warm or hostile), harden or fade them daily, and contemplate a concrete plan (method + gate) when ready.",blocks:[
     {kind:"prompt",promptKey:"intentForm"},{kind:"prompt",promptKey:"intentTick"},{kind:"prompt",promptKey:"contemplate"},
@@ -15826,6 +16128,16 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   mem_recent_instr:`Things you personally did, saw, or learned BEFORE the conversation below. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
 This list is not the whole of what you remember. THE CONVERSATION BELOW IS MEMORY TOO — you were present for every line of it, you heard it, and you remember it perfectly. Anything said or done in it happened, whether or not it also appears in this list. Treat the two together as what you know: this list for what came before, the conversation itself for what has happened since.
 What you do NOT have is anything in neither place — never invent a past event, a shared history, or a conversation to fill a gap.`,
+  // --- tail: rumors (v28.9). Two completely different framings, because the whole problem was
+  //     that a rumor read the same to the wronged spouse and to the barista who overheard it.
+  rumor_stake_header:`# ⚠️ THIS ONE IS YOURS ⚠️`,
+  rumor_stake_instr:`Something is going around about someone you have a real stake in. Nobody has confirmed it. You have not seen proof. It sits in you.
+You may put it to {{user}} — ONCE. Choose your moment; a person picks their moment for a thing like this, they do not blurt it the second the other one walks in. And when you have asked, you have asked: you take whatever answer you get and you live with it. You do not ask a second time in new words, you do not keep steering back to it, you do not test them with little hints. Whatever they say lands, and then the scene moves on.
+If this is not the moment, carry it. It is allowed to just sit there and cost you something.`,
+  rumor_stake_spent:`You already put this to {{user}} on day {{day}}, and they answered. That is done. You do not raise it again — not straight, not sideways, not as a joke, not as a hint. It stays in you and it colours how you are with them, and that is all it does now.`,
+  rumor_carrier_header:`# WHAT YOU HAVE HEARD (NOT YOURS)`,
+  rumor_carrier_instr:`You have heard the talk below. It is gossip — secondhand, unproven, and about someone else's life.
+It is NOT your business and you do NOT raise it. Do not ask {{user}} about it, do not hint at it, do not steer the conversation near it, do not tell them people are talking. If they bring it up themselves, you can be honest about what you heard. Otherwise this is nothing but a thing you happen to know, and knowing it does not entitle you to a single word about it.`,
   already_said_header:`# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️`,
   already_said_instr:`These are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
 Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
@@ -16261,6 +16573,32 @@ function buildTailBlocks(opts){
   //     the last real DIALOGUE line back out and put it right here, alone, so the model answers a
   //     line instead of answering the furniture.
   {
+  /* v28.9 — RUMORS. Split by standing, because a rumor is not one thing: to the person whose
+     marriage it is about it is an open wound they get to press ONCE, and to everyone else it is
+     background noise they are not entitled to mention. Previously both got the identical memory
+     with identical weight, which is why the whole cast interrogated the player. */
+  {
+    const day=(chat&&chat.gameDay)||curGameDay();
+    const uid=(chat&&chat.universeId)||state.curUniverse||null;
+    const mine=selfP?gossipStakeOf(selfP.id,uid):[];
+    const heard=selfP?gossipCarriedBy(selfP.id,uid):[];
+    const parts=[];
+    if(mine.length){
+      const g=mine.slice().sort((a,b)=>(b.heat||0)-(a.heat||0))[0];   // one at a time; a person has one main worry
+      const canRaise=gossipCanRaise(g,day);
+      const map={user:state.user||"You",day:String((g.raisedBy||{})[g.stakeholderId]||day)};
+      parts.push(fillTpl(blkTpl("rumor_stake_header"),map)+"\n"
+        +fillTpl(blkTpl(canRaise?"rumor_stake_instr":"rumor_stake_spent"),map)
+        +"\n\nWhat you have heard: "+g.text);
+    }
+    if(heard.length){
+      const map={user:state.user||"You"};
+      parts.push(fillTpl(blkTpl("rumor_carrier_header"),map)+"\n"
+        +fillTpl(blkTpl("rumor_carrier_instr"),map)+"\n\n"
+        +heard.slice(0,3).map(g=>"- "+g.text).join("\n"));
+    }
+    if(parts.length) B.rumors=parts.join("\n\n");
+  }
   // v28.8 — the character's own recent lines, quoted verbatim, immediately before generation.
   // Abstract "don't repeat yourself" loses to the context; the actual sentences do not.
   {
@@ -18227,6 +18565,9 @@ async function sendMessage(){
 
   chat.messages.push({mid:newMid(),role:"user",content:text,present:presentIds(chat).slice()});
   chat.lastActive=Date.now();
+  // v28.9 — if a character put a rumor to you last turn, this is the answer. Judging it in the
+  // background lets it close (or harden) without holding up the reply.
+  try{ settleRumors(chat,text); }catch(e){}
   ChatScroll.follow();     // v28.5 — sending always takes you to your own line, and keeps you there
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
   appendNewBubbles();persistChats();
@@ -18301,6 +18642,7 @@ async function sendMessage(){
        quoted back and an explicit instruction to move off it. One retry only: a second identical
        answer is the model's final word and is still better than an empty turn. */
     try{
+      try{ noteRumorRaise(chat,solo,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
       const _mine=ownRecentLines(chat,solo,3);
       const _hit=_mine.find(x=>repeatKind(reply,x));
       if(_hit){
@@ -19571,6 +19913,7 @@ async function playCharacterTurn(chat,p,addressed){
        quoted back and an explicit instruction to move off it. One retry only: a second identical
        answer is the model's final word and is still better than an empty turn. */
     try{
+      try{ noteRumorRaise(chat,p,reply); }catch(e){}      // v28.9 — raising a rumor spends the move
       const _mine=ownRecentLines(chat,p,3);
       const _hit=_mine.find(x=>repeatKind(reply,x));
       if(_hit){
@@ -22000,7 +22343,21 @@ async function runGossipPropagation(chat,day,uni){
           universeId:uid, chatId:(chat&&chat.id)||null
         };
         if(!memoriesOf(rid).some(m=>memText(m).toLowerCase()===mem.content.toLowerCase())){
-          state.memory.push(mem);
+          // v28.9 — the rumor goes in the LEDGER first. The ledger decides whether the world has
+          // room for it (a paraphrase of a live rumor just adds a carrier; a stakeholder already
+          // drowning in suspicions takes no more), and only then does a memory get planted.
+          const stakeId=(g.stakeholder?idByName(g.stakeholder):null)||rid;
+          const about=(Array.isArray(g.about)?g.about:[]).map(idByName).filter(Boolean);
+          const led=recordGossip({
+            text:mem.content, subject:about.length?about:["__user__"],
+            stakeholderId:stakeId, carrierId:rid, from:witness.name,
+            motive:g.motive||"", heat:mem.suspicion, day, universeId:uid, source:"gossip"
+          });
+          if(led){
+            mem.gossipId=led.id;
+            if(led.memIds&&led.memIds.indexOf(mem.id)<0)led.memIds.push(mem.id);
+            state.memory.push(mem);
+          }
         }
       }
     }catch(e){/* best-effort per observation */}
@@ -22015,11 +22372,19 @@ function maybeSpawnConfrontation(chat,uni){
   if(chat.activeEvent && !chat.activeEvent.resolved)return false;
   const uid=uni||(chat&&chat.universeId)||state.curUniverse||null;
   // candidate suspicions: gossip-planted, open, charged, not already used for a confrontation
-  const cands=state.memory.filter(m=>
-    m.type==="GOSSIP" && m.openSuspicion && !m._confrontUsed &&
-    (!m.universeId||!uid||m.universeId===uid) &&
-    (typeof m.suspicion==="number"?m.suspicion:0)>=0.6
-  ).sort((a,b)=>(b.suspicion||0)-(a.suspicion||0));
+  // v28.9 — a confrontation is a stakeholder's move. A bystander who merely heard the talk does
+  // not come to your door about it, and a rumor the ledger has closed (settled, disbelieved or
+  // simply gone cold) does not come back.
+  const _day=(chat&&chat.gameDay)||curGameDay();
+  const _live=new Set(liveGossip(uid).map(g=>g.id));
+  const cands=state.memory.filter(m=>{
+    if(!(m.type==="GOSSIP" && m.openSuspicion && !m._confrontUsed))return false;
+    if(m.universeId&&uid&&m.universeId!==uid)return false;
+    if((typeof m.suspicion==="number"?m.suspicion:0)<0.6)return false;
+    const g=m.gossipId?gossipById(m.gossipId):null;
+    if(g)return _live.has(g.id) && g.stakeholderId===m.ownerId && gossipCanRaise(g,_day);
+    return true;   // pre-ledger memory that migration missed — behave as before
+  }).sort((a,b)=>(b.suspicion||0)-(a.suspicion||0));
   if(!cands.length)return false;
   const roster=(state.personas||[]).filter(p=>!uid||p.universeId===uid);
   for(const sus of cands){
@@ -22030,6 +22395,11 @@ function maybeSpawnConfrontation(chat,uni){
     // The accuser should plausibly be able to reach the player. For v1 we allow it whenever the
     // accuser isn't currently mid-scene elsewhere; the confrontation arrives as a director event.
     sus._confrontUsed=true;   // consume so it won't re-fire next day
+    // v28.9 — coming to your door IS raising it. Spend the move and start the cooldown, so a
+    // confrontation is followed by living with the answer rather than by asking again tomorrow.
+    if(sus.gossipId){ const g=gossipById(sus.gossipId);
+      if(g){ (g.raisedBy=g.raisedBy||{})[g.stakeholderId]=_day; g.status="raised";
+             g.heat=Math.max(0,(g.heat||0)-0.25); g._awaitAnswer=true; persistGossip(); } }
     persistMemory();
     startConfrontation(chat,{
       accuser,
@@ -22225,6 +22595,16 @@ function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
   };
   // de-dupe by content within the recipient (mirrors organic gossip)
   if(memoriesOf(rid).some(m=>memText(m).toLowerCase()===mem.content.toLowerCase()))return null;
+  // v28.9 — a planted rumor is a rumor: it goes through the ledger and obeys the same caps. The
+  // stakeholder is whoever the schemer aimed it at, since they are the one it is meant to cost.
+  const led=recordGossip({
+    text:mem.content, subject:[targetId], stakeholderId:(targetId&&targetId!=="__user__")?targetId:rid,
+    carrierId:rid, from:holder.name, motive:it.kind||"", heat:strength,
+    day:(chat.gameDay||1), universeId:uid, source:"planted"
+  });
+  if(!led)return null;
+  mem.gossipId=led.id;
+  if(led.memIds.indexOf(mem.id)<0)led.memIds.push(mem.id);
   state.memory.push(mem); persistMemory();
   return mem.id;
 }
@@ -22349,7 +22729,7 @@ function _pulseSheet(p){
 function _pulseKnows(chat,p,otherName,day){
   const un=String(state.user||"").toLowerCase(), on=String(otherName||"").toLowerCase();
   const rec=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&(m.gameDay==null||day-(m.gameDay||0)<=2))
-    .filter(m=>{const t=String(m.content||"").toLowerCase(); return (on&&t.includes(on))||(un&&t.includes(un))||m.type==="GOSSIP"||(m.importance||0)>=0.7;})
+    .filter(m=>{const t=String(m.content||"").toLowerCase(); return (on&&t.includes(on))||(un&&t.includes(un))||(m.importance||0)>=0.7;})
     .slice(-4).map(m=>"- "+memPayloadText(m.content,500));
   return rec.length?rec.join("\n"):"- (nothing charged recently)";
 }
@@ -22426,7 +22806,7 @@ async function runOffstageInteraction(chat,uni){
       let score=0;
       const oa=relObj(chat,a.id,b.id),ob=relObj(chat,b.id,a.id);
       [oa,ob].forEach(o=>{ if(!o)return; if(Math.abs(o.affection||0)>=30)score++; if(Math.abs(o.trust||0)>=30)score++; });
-      const dn=(p,other)=>((state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=2&&(String(m.content||"").toLowerCase().includes(other.name.toLowerCase())||String(m.content||"").toLowerCase().includes(String(state.user||"").toLowerCase()))&&((m.importance||0)>=0.5||m.type==="GOSSIP"||m.type==="OBSERVATION")).length);
+      const dn=(p,other)=>((state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=2&&(String(m.content||"").toLowerCase().includes(other.name.toLowerCase())||String(m.content||"").toLowerCase().includes(String(state.user||"").toLowerCase()))&&((m.importance||0)>=0.5||m.type==="OBSERVATION")).length);
       score+=2*dn(a,b)+2*dn(b,a);
       // v28.4 — LIVE INTENTS STEER THE WORLD. The intent engine is the one system generating real
       // private motives ("a grievance toward X", "a wish to mend with Y") and its output was only
@@ -22566,7 +22946,7 @@ async function runGoalPursuit(chat,day,uni){
     // Prioritise those who haven't acted on a goal recently (space each character out), then those
     // with the most charged recent activity (something's in motion for them). Keep the evaluated set
     // bounded so day-end stays cheap even with a big cast.
-    const chargedCount=p=>(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3&&((m.importance||0)>=0.5||m.type==="GOSSIP"||m.type==="OBSERVATION")).length;
+    const chargedCount=p=>(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3&&((m.importance||0)>=0.5||m.type==="OBSERVATION")).length;
     pool=pool.map(p=>({p,last:chat.goalActed[p.id]||0,ch:chargedCount(p)}))
       .filter(x=>day-x.last>=1)                       // acted yesterday? let it breathe a day
       .sort((a,b)=>(a.last-b.last)||(b.ch-a.ch))
@@ -23119,6 +23499,8 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
   // ---- LIVING UNIVERSE: GOSSIP ---- charged things bystanders glimpsed today travel to people
   // who'd care, planted as open-suspicion rumors. Runs after memories/relationships are settled.
   try{ await runGossipPropagation(chat,day,uid); }catch(e){}
+  // v28.9 — and yesterday's talk cools off. A rumor nobody acts on dies of boredom, like a real one.
+  try{ decayGossip(day); }catch(e){}
 
   // ---- LIVING UNIVERSE: WORLD PULSE (v25.x) ---- at day end, only SETTLE what is still due
   // (user-less calendar plans are commitments). Spontaneous char↔char encounters now fire DURING
@@ -25065,7 +25447,7 @@ async function runCharQuestSpawn(chat,day,uni){
     let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!holders.has(p.id)&&p.goals&&String(p.goals).trim());
     if(!pool.length)return 0;
     const liveIntent=p=>((chat.intents||[]).some(i=>i&&i.holderId===p.id&&i.status!=="spent"));
-    const chargedCount=p=>(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3&&((m.importance||0)>=0.5||m.type==="GOSSIP"||m.type==="OBSERVATION")).length;
+    const chargedCount=p=>(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3&&((m.importance||0)>=0.5||m.type==="OBSERVATION")).length;
     const lastQ=p=>all.filter(q=>q&&q.holderId===p.id).reduce((a,q)=>Math.max(a,q.completedDay||q.createdDay||0),0);
     pool=pool.map(p=>({p,li:liveIntent(p)?1:0,ch:chargedCount(p),last:lastQ(p)}))
       .filter(x=>day-x.last>=2)
@@ -26309,7 +26691,8 @@ async function manualConfront(){
   const roster=(state.personas||[]).filter(p=>(!uid||p.universeId===uid) && isActiveChar(p));
   // Prefer a character already carrying an open suspicion about the player.
   const susMem=state.memory
-    .filter(m=>m.type==="GOSSIP"&&m.openSuspicion&&!m._confrontUsed&&(!m.universeId||!uid||m.universeId===uid))
+    .filter(m=>m.type==="GOSSIP"&&m.openSuspicion&&!m._confrontUsed&&(!m.universeId||!uid||m.universeId===uid)
+             &&(!m.gossipId||liveGossip(uid).some(g=>g.id===m.gossipId&&g.stakeholderId===m.ownerId)))
     .sort((a,b)=>(b.suspicion||0)-(a.suspicion||0))[0];
   let accuser=null, intent="", evidence=0.6, conv=0.65;
   if(susMem){
@@ -26910,7 +27293,12 @@ async function retrieveMemories(userText,chat,ownerId){
   // WORKING tier = the character's raw arc-tracker memories, searched semantically over the WHOLE bank
   // (the "previous system" — not restricted to today). LONG-TERM tier = their diaries + condensed
   // LONGTERM/CONSOLIDATED memories. Both tiers are ranked against the query below.
-  const recentPool = ownAll.filter(m=>m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED");
+  // v28.9 — a LIVE ledger rumor is injected by the "rumors" block instead, which knows whether
+  // this character owns the stake or merely overheard it. Injecting it here too would put the
+  // question back in the payload stripped of that framing, which is the whole bug.
+  const _liveRumor=new Set(liveGossip().map(g=>g.id));
+  const recentPool = ownAll.filter(m=>m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED"
+                                   && !(m.gossipId && _liveRumor.has(m.gossipId)));
   const diaryPool = ownAll.filter(m=>m.type==="DIARY");                                  // own tier
   const longtermPool = ownAll.filter(m=>m.type==="LONGTERM" || m.type==="CONSOLIDATED"); // own tier
   const today=(chat&&chat.gameDay)||curGameDay();
@@ -28272,6 +28660,9 @@ function syncSettingsUI(){
   {const e=document.getElementById('setGossipOn'); if(e)e.checked=state.gossipOn!==false;}
   {const e=document.getElementById('setGossipThreshold'); if(e)e.value=(state.gossipThreshold!=null?state.gossipThreshold:0.6);}
   {const e=document.getElementById('setGossipMaxPerDay'); if(e)e.value=(state.gossipMaxPerDay!=null?state.gossipMaxPerDay:3);}
+  {const e=document.getElementById('setGossipDecay'); if(e)e.value=(state.gossipDecay!=null?state.gossipDecay:0.15);}
+  {const e=document.getElementById('setGossipCooldown'); if(e)e.value=(state.gossipCooldown!=null?state.gossipCooldown:2);}
+  {const e=document.getElementById('setGossipMaxLive'); if(e)e.value=(state.gossipMaxLive!=null?state.gossipMaxLive:3);}
   {const e=document.getElementById('setGossipModel'); if(e)e.value=state.gossipModel||"";}
   {const e=document.getElementById('setConfrontOn'); if(e)e.checked=state.confrontOn!==false;}
   {const e=document.getElementById('setIntentOn'); if(e)e.checked=state.intentOn!==false;}
@@ -28449,6 +28840,9 @@ function saveSettings(notify){
   {const e=document.getElementById('setGossipOn'); if(e)state.gossipOn=e.checked;}
   {const e=document.getElementById('setGossipThreshold'); if(e)state.gossipThreshold=Math.max(0,Math.min(1,+e.value||0.6));}
   {const e=document.getElementById('setGossipMaxPerDay'); if(e)state.gossipMaxPerDay=Math.max(0,Math.min(10,+e.value||0));}
+  {const e=document.getElementById('setGossipDecay'); if(e)state.gossipDecay=Math.max(0,Math.min(1,+e.value||0));}
+  {const e=document.getElementById('setGossipCooldown'); if(e)state.gossipCooldown=Math.max(0,Math.min(30,+e.value||0));}
+  {const e=document.getElementById('setGossipMaxLive'); if(e)state.gossipMaxLive=Math.max(1,Math.min(10,+e.value||3));}
   {const e=document.getElementById('setGossipModel'); if(e)state.gossipModel=e.value.trim();}
   {const e=document.getElementById('setConfrontOn'); if(e)state.confrontOn=e.checked;}
   {const e=document.getElementById('setIntentOn'); if(e)state.intentOn=e.checked;}
@@ -28517,7 +28911,7 @@ function saveSettings(notify){
   store.set(K.autoImg,state.autoImg);store.setRaw(K.rewritePrompt,state.rewritePrompt);
   store.setRaw(K.offstageEvent,state.offstageEvent);store.setRaw(K.calExec,state.calExec);store.setRaw(K.goalPursuit,state.goalPursuit);store.set(K.goalPursuitOn,state.goalPursuitOn!==false);store.setRaw(K.charQuestGen,state.charQuestGen);store.setRaw(K.charQuestStep,state.charQuestStep);store.setRaw(K.charQuestText,state.charQuestText);store.set(K.charQuestsOn,state.charQuestsOn!==false);store.setRaw(K.latentNpc,state.latentNpc);store.setRaw(K.trackerGen,state.trackerGen);
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
-  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
+  store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.setRaw(K.gossipDecay,state.gossipDecay);store.setRaw(K.gossipCooldown,state.gossipCooldown);store.setRaw(K.gossipMaxLive,state.gossipMaxLive);store.setRaw(K.rumorJudge,state.rumorJudge);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
@@ -28570,7 +28964,7 @@ async function buildBackup(){
   return {
     app:"StoryMind", backupVersion:BACKUP_VERSION, date:Date.now(),
     localStorage:ls,
-    collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[] },
+    collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[], gossip:state.gossip||[] },
     media:{ images, videos, statics }
   };
 }
@@ -28624,6 +29018,7 @@ async function applyBackupBundle(b){
   const c=b.collections||{};
   await mediaDB.kvSet("chats",c.chats||{});
   await mediaDB.kvSet("memory",c.memory||[]);
+  await mediaDB.kvSet("gossip",c.gossip||[]);
   await mediaDB.kvSet("universes",c.universes||null);
   await mediaDB.kvSet("personas",c.personas||null);
   await mediaDB.kvSet("scenes",c.scenes||[]);
@@ -28989,6 +29384,9 @@ function finishOnboard(){
 async function init(){
   await preloadCollections();   // hydrate growing collections from IndexedDB (with one-time LS migration)
   loadState();applyTheme();applyUiScale();
+  // v28.9 — fold pre-ledger GOSSIP memories into the rumor ledger, so an existing universe's
+  // never-closing suspicions become things that can actually be closed.
+  try{ migrateGossipLedger(); }catch(e){}
   if(store.raw(K.onboarded,null)!=="1"){document.getElementById('onboard').classList.add('show');}
   else{init2();}
 }

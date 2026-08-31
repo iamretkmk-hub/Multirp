@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14786,6 +14786,25 @@ function visibleMemories(){
 /* (!) The RECENT/DISTANT header sentences are blkTpl fragments (mem_recent_header /
    mem_distant_header) — single render site feeding ALL THREE reply paths. Edit the fragment
    defaults, not inline strings here. */
+/* v28.3 — THE LAST FEW ARCS, always. Retrieval is semantic, so what a character gets is whatever
+   MATCHES this moment — which routinely omits the two or three things that most recently happened
+   to them. Between the transcript window and the semantic hits there was a hole, and the character
+   fell into it: "that never happened" about something from an hour ago in story time.
+   This is a small, unconditional recency tier — the newest closed memory arcs for this character,
+   newest first, minus anything retrieval already injected. */
+const RECENT_ARCS_N=3;
+function latestArcs(ownerId,excludeIds,n){
+  try{
+    if(!state.mem||!ownerId)return [];
+    const skip=new Set(excludeIds||[]);
+    const uni=state.curUniverse||null;
+    return (state.memory||[])
+      .filter(m=>m&&m.ownerId===ownerId&&!skip.has(m.id)
+                 &&(!uni||!m.universeId||m.universeId===uni))
+      .sort((a,b)=>((b.gameDay||0)-(a.gameDay||0))||((b.date||0)-(a.date||0)))
+      .slice(0,n||RECENT_ARCS_N);
+  }catch(e){ return []; }
+}
 function memoryBlocks(injectedMemories,which){
   if(!state.mem||!injectedMemories)return [];
   which=which||"all";
@@ -14805,6 +14824,15 @@ function memoryBlocks(injectedMemories,which){
   if((which==="longterm"||which==="distant"||which==="all") && longterm.length)
     out.push(blkTpl("mem_distant_header")+"\n"+blkTpl("mem_distant_instr")+"\n\n"+longterm.map(fmt).join("\n"));
   return out;
+}
+// The recency tier as its own block, rendered by the same numbered format.
+function latestArcsBlock(ownerId,injectedMemories){
+  const inj=injectedMemories||{};
+  const used=[].concat(inj.recent||[],inj.longterm||[],inj.diary||[]).map(m=>m&&m.id).filter(Boolean);
+  const arcs=latestArcs(ownerId,used,RECENT_ARCS_N);
+  if(!arcs.length)return "";
+  const fmt=(m,i)=>{const d=m.gameDay?`Day ${m.gameDay}`:"";return `Latest ${i+1}: ${memInjectText(m)}${d?` (${d})`:""}${m.location?` [${m.location}]`:""}`;};
+  return blkTpl("mem_latest_header")+"\n"+blkTpl("mem_latest_instr")+"\n\n"+arcs.map(fmt).join("\n");
 }
 // Build one character's identity block with XML-delimited fields. Stronger structure than flat
 // "Key: value" lines means the model loses far less of this dense, load-bearing info — especially
@@ -15106,7 +15134,7 @@ function _gpTail(section,chat,asPrefix){
    so a user can still tune each path independently. */
 const REPLY_ORDER=["task","world","format",
   "your_bio","relationships","scenario","others_present",
-  "response_target","player","feelings",
+  "response_target","player","feelings","latest_arcs",
   "distant_memories","recent_memories","situation",
   "__history__",
   "last_line","speaking_style","scene_now","calendar","quests","private_intent",
@@ -15123,7 +15151,8 @@ const REPLY_BLOCKS={
   player:{label:"Player character",kind:"dyn",desc:"Who the human player is. Rendered only when the response target is someone else, so the player never drops out of the payload."},
   feelings:{label:"How you feel toward them",kind:"dyn",desc:"Considered + momentary relationship prose toward the response target (or the stranger notice on a first encounter)."},
   distant_memories:{label:"Distant memories",kind:"dyn",desc:"Long-term, condensed recollections, numbered. (Diaries are never injected.)"},
-  recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered, with the rule that anything not listed did not happen."},
+  latest_arcs:{label:"The last things that happened",kind:"dyn",desc:"The newest few memory arcs for this character, injected on EVERY turn regardless of what semantic retrieval matched — closes the gap between the transcript window and the retrieved memories."},
+  recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered. The transcript counts as memory too — this list covers what came before it."},
   situation:{label:"Situation (entering/leaving)",kind:"dyn",desc:"Only appears when this character is arriving to or leaving the scene this turn."},
   __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript (witness-scoped for this character). Blocks below this line are delivered AFTER the dialogue."},
   last_line:{label:"⚠️ The line you are responding to",kind:"dyn",desc:"The last real DIALOGUE line in the transcript — not a day marker, presence note, travel beat or narration — pulled out and highlighted."},
@@ -15200,6 +15229,27 @@ function payloadRemovedSet(key){
    (!) Every call site must also pass the response target through BOTH halves — {chat,
    targetName,targetId} to the head builder and the same to buildTailBlocks — or the
    "who you are responding to" block and the guidance will name different people. */
+/* v28.3 — DEDUPE. Measured on a real payload: five whole sections arrived TWICE (the base
+   instruction pasted into the Universe Setting field) and four guardrails arrived twice (a
+   customized fragment that already contained the default's text, with the default appended under
+   it). That is not just ~1.8k wasted tokens: a rule stated twice carries roughly double the
+   weight, and the rules that happened to be doubled were the "you don't remember that" ones —
+   which is why characters denied things the player had actually said.
+   This strips any '# HEADING' section whose heading AND body have already appeared verbatim
+   earlier in the same payload. First occurrence wins, so ordering is untouched. */
+function _dedupePayloadSections(text){
+  const t=String(text||"");
+  if(!t.trim())return t;
+  const parts=t.split(/\n(?=#{1,2} )/);
+  if(parts.length<2)return t;
+  const seen=new Set(), out=[];
+  parts.forEach(sec=>{
+    const key=sec.replace(/\s+/g," ").trim();
+    if(key.length>40){ if(seen.has(key))return; seen.add(key); }
+    out.push(sec);
+  });
+  return out.join("\n");
+}
 function buildPayload(layoutKey, headBlocks, tailBlocks){
   const all=Object.assign({},headBlocks,tailBlocks);
   const head=[],tail=[]; let afterHist=false;
@@ -15208,7 +15258,12 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     const c=all[id]; if(!c)return;
     (afterHist?tail:head).push(c);
   });
-  return {head:head.join("\n\n"), tail:tail.join("\n\n")};
+  const h=_dedupePayloadSections(head.join("\n\n"));
+  // The tail is deduped against the head too — a block repeated across the split is still a repeat.
+  const t=_dedupePayloadSections(tail.join("\n\n"));
+  const hKeys=new Set(h.split(/\n(?=#{1,2} )/).map(s=>s.replace(/\s+/g," ").trim()).filter(s=>s.length>40));
+  const t2=t.split(/\n(?=#{1,2} )/).filter(s=>!hKeys.has(s.replace(/\s+/g," ").trim())).join("\n");
+  return {head:h, tail:t2};
 }
 
 /* v19.2 — attach editable template-fragment lists (`tpls`) + scope tags to the reply-payload
@@ -15228,16 +15283,17 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
-    speaking_style:["style_header"],
+    speaking_style:["style_header","style_notes"],
     scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_present_others","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
     private_intent:["intent_warm","intent_hostile"],
+    latest_arcs:["mem_latest_header","mem_latest_instr"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
-    final_guardrails:["rails_header","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
+    final_guardrails:["rails_header","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
-  const SCOPE={world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
+  const SCOPE={latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
   // All three payloads share ONE block map now, so a single pass covers them.
   Object.keys(REPLY_BLOCKS).forEach(id=>{
     if(T[id])REPLY_BLOCKS[id].tpls=T[id];
@@ -15499,19 +15555,24 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
   mem_recent_header:`# ⚠️ THESE ARE YOUR RECENT MEMORIES ⚠️`,
-  mem_recent_instr:`Things you personally did, saw, or learned. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
-Whenever you or anyone else reaches for the past, read this list first. It is the whole of what you remember. If something is not written here, it did not happen and you do not know it — never invent a past event, a shared history, or a conversation to fill the gap.`,
+  mem_recent_instr:`Things you personally did, saw, or learned BEFORE the conversation below. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
+This list is not the whole of what you remember. THE CONVERSATION BELOW IS MEMORY TOO — you were present for every line of it, you heard it, and you remember it perfectly. Anything said or done in it happened, whether or not it also appears in this list. Treat the two together as what you know: this list for what came before, the conversation itself for what has happened since.
+What you do NOT have is anything in neither place — never invent a past event, a shared history, or a conversation to fill a gap.`,
+  mem_latest_header:`# ⚠️ THE LAST THINGS THAT HAPPENED TO YOU ⚠️`,
+  mem_latest_instr:`The most recent things you lived through, newest first — regardless of whether they fit this moment. These are the freshest facts you hold: they are still warm, you have not had time to put them behind you, and they are the LAST thing you would forget. If any of them bears on what is being said now, you know it without having to be reminded.`,
   mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
-  mem_distant_instr:`Older, condensed recollections — the lasting things you carry from further back. They are background: they colour who you are and how you read people, but you do not recite them. The same rule holds as for your recent memories: if it is not written here, you do not remember it.`,
+  mem_distant_instr:`Older, condensed recollections — the lasting things you carry from further back. They are background: they colour who you are and how you read people, but you do not recite them. As above, this list is not exhaustive: the conversation below is also yours to remember in full.`,
   // --- tail: guidance ---
   guidance_open:`# RESPONSE GUIDANCE\nWrite one turn, as {{self}}, and stop`,
   guidance_target:`. It is aimed at {{target}}`,
   guidance_close:`. Move the moment forward — do something, change something, let something land — and leave {{who}} room to answer.`,
-  guidance_reply:`Answer the highlighted line above: that is what {{target}} just said or did, and it is what you are reacting to. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
+  guidance_reply:`React to the highlighted line above: that is what {{target}} just said or did. Answer it from your own side — never by repeating it back first. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
   // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
   last_line_header:`# ⚠️ THIS IS THE LINE YOU ARE RESPONDING TO ⚠️`,
-  last_line_footer:`Everything above this is context. THIS is the line your next turn answers.`,
-  style_header:`# ⚠️ HOW YOU SPEAK ⚠️\nThis is your voice. Write the line the way this describes — rhythm, vocabulary, what you do and don't say out loud:`,
+  last_line_footer:`Everything above this is context. THIS is the line you are reacting to.
+React to it — do not recap it. Never quote it back, never paraphrase it, never open by restating what they just said before adding your own ("you say X, but…", "so you're telling me X", "X, is it?"). They know what they said. Start from your side of it: the thing their words did to you, or what you do about it.`,
+  style_header:`# ⚠️ HOW YOU SPEAK — THIS GOVERNS THE LINE ⚠️\nEverything else told you what you know. This tells you how it comes out of your mouth, and it wins over all of it: rhythm, vocabulary, what you say out loud and what you refuse to. If a fact and this voice pull different ways, the voice decides — a thing you would not say plainly does not get said plainly:`,
+  style_notes:`How you play it: {{notes}}`,
   // --- tail: feelings ---
   feel_header:`# HOW YOU FEEL TOWARD {{target_up}}\nThese are your private feelings — let them shape how you speak and act, but never state them outright.`,
   feel_lasting:`LASTING / CONSIDERED VIEW (your settled, filtered opinion — this is the real foundation and should govern your behaviour): {{desc}}`,
@@ -15535,14 +15596,18 @@ It is momentary and impulsive, so it must NOT override the lasting view above or
   rail_voice:`You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth or the narrator's.`,
   rail_single_solo:`One reply. Not a scene, not a chain of exchanges — one turn.`,
   rail_beat:`One emotional beat lands harder than five. Don't resolve everything in a single reply; leave things unsaid.`,
+  rail_indirect:`Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.`,
+  rail_oblique:`Approach rather than ask. When you want something — the truth, a promise, reassurance — do not put it as a direct question. Circle it: say the thing next to it, leave a silence where the answer goes, offer them the wrong version so they correct it, or talk about someone else who is really you. A direct question is a last resort, used when you have decided to force it, and it costs you something.`,
+  rail_noecho:`Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said, and never mirror their sentence back with a twist on the end. One short callback to a specific WORD of theirs is allowed when you are turning it against them — never a restatement of their line.`,
   rail_norepeat:`Write only NEW material. Never reproduce, re-narrate or paraphrase a line you already wrote earlier in this scene — not to set the mood again, not as a run-up to what comes next. Your last turn already happened; start from where it left off.`,
   rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO, or on a beat left hanging.`,
   rail_consistent_known:`Hold your voice, your mood, and the relationship you already have. You do not reset between replies.`,
   rail_consistent_stranger:`Hold your voice and your mood — you do not reset between replies. And remember you do not know {{who}} yet: don't manufacture familiarity you haven't earned.`,
   rail_facts:`Hold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.`,
   rail_pushback:`If {{user}} states something that contradicts a fact you clearly know — your identity, your relationships, your history, who owns what — do not just accept it. Correct it, doubt it, or push back the way you actually would, then carry on. But an unfamiliar face, a new event, or a detail you simply have no memory of is the story moving: take it as real and respond to it rather than arguing with it.`,
-  rail_nofabricate:`Never invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene and it is not in the memories or background you were given, you do not have it.`,
-  rail_unknown_past:`If {{user}} brings up something from the past, check your memories. If it is there, it happened. If it is NOT there, don't accept it as fact and don't invent details to match — react as yourself to not recalling it: say it doesn't sound familiar, that you don't remember it that way, or ask them to remind you. Your memory can have holes, so word it as uncertainty ("I don't remember that…") rather than a flat denial — unless it contradicts something you clearly DO know, in which case push back as above.`,
+  rail_nofabricate:`Never invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it. (What IS in this scene, you have — the whole exchange above is yours.)`,
+  rail_unknown_past:`If {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new. Reread the exchange above before you doubt anything.
+Only when they reach back to something from BEFORE this conversation that is in neither your memories nor your background may you not recall it — and then word it as your own gap ("I don't remember that…"), never as a denial that it happened, unless it contradicts something you clearly DO know.`,
   // --- tail: spoken delivery (whole block; was SPOKEN_DELIVERY_BLOCK) ---
   // v24.3 — ACTIVE again: rendered into the spoken_delivery slot whenever voicing is on with the
   // xAI engine (buildTailBlocks), so the model writes expressive delivery tags xAI TTS renders
@@ -15778,6 +15843,7 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   // ===== WHAT YOU REMEMBER — distant first, then recent (freshest closest to the dialogue). =====
   {const dm=memoryBlocks(injectedMemories,"longterm"); if(dm.length)B.distant_memories=dm.join("\n\n");}
   {const rm=memoryBlocks(injectedMemories,"recent");   if(rm.length)B.recent_memories=rm.join("\n\n");}
+  {const la=latestArcsBlock(p&&p.id,injectedMemories); if(la)B.latest_arcs=la;}
 
   // situation — entrance/exit note only (the generic "voice only your turn" rules live in the
   // post-dialogue FINAL GUARDRAILS so they fire closest to generation).
@@ -15909,7 +15975,15 @@ function buildTailBlocks(opts){
 
   // (2) HOW YOU SPEAK — the character's voice, delivered at the point the line gets written rather
   //     than buried thousands of tokens up in the bio.
-  if(selfP&&selfP.style&&String(selfP.style).trim())B.speaking_style=`${blkTpl("style_header")}\n${subUser(selfP.style).trim()}`;
+  if(selfP&&selfP.style&&String(selfP.style).trim()){
+    B.speaking_style=`${blkTpl("style_header")}\n${subUser(selfP.style).trim()}`;
+    // v28.3 — the play notes describe HOW to act this character (the loaded pause, the question
+    // left hanging) and were buried mid-bio, thousands of tokens from generation, outweighed by the
+    // fact blocks. Repeat them here, beside the voice, where they can actually govern the line.
+    const _pn=selfP.instructions||"";   // the character sheet's <play_notes>
+    if(_pn&&String(_pn).trim())
+      B.speaking_style+=`\n${fillTpl(blkTpl("style_notes"),{notes:subUser(String(_pn).trim())})}`;
+  }
 
   // (3) SCENE RIGHT NOW — closest to generation so the model can't drift on where the character is,
   //     who is in the room, or the time. This is the single biggest cause of roleplay slips.
@@ -16085,14 +16159,28 @@ function buildTailBlocks(opts){
   // question) are replaced by the heat ones. Leaving them in was half of the contradiction that
   // made the model repeat its reply template instead of writing one long continuation.
   const rails=(_heat
-    ? ["rail_voice","rail_heat_len","rail_heat_narr","rail_norepeat","rail_heat_end",
+    ? ["rail_indirect","rail_noecho","rail_voice","rail_heat_len","rail_heat_narr","rail_norepeat","rail_heat_end",
        (knowsTarget?"rail_consistent_known":"rail_consistent_stranger"),
        "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"]
-    : ["rail_voice","rail_single_solo","rail_beat","rail_question",
+    // v28.3 — the CRAFT rules (how to play this turn) lead; the prohibitions follow. This block is
+    // the last thing before generation, and a wall of "never" in that slot produces careful,
+    // hedging, rule-reciting output — which was half of why replies read as recitation.
+    : ["rail_indirect","rail_oblique","rail_beat","rail_noecho","rail_norepeat","rail_question",
+       "rail_voice","rail_single_solo",
        (knowsTarget?"rail_consistent_known":"rail_consistent_stranger"),
-       "rail_norepeat","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"])
+       "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"])
     .map(k=>fillTpl(blkTpl(k),_rmap)).filter(Boolean);
-  B.final_guardrails=`${blkTpl("rails_header")}\n`+rails.map(r=>`- ${r}`).join("\n");
+  // v28.3 — drop a rail whose text is already carried by another rail. A customized fragment often
+  // grows to contain the whole of a neighbouring default, and both then ship: the same rule, twice,
+  // at double weight, in the highest-attention block of the payload.
+  const _seen=[];
+  const railsOut=rails.filter(r=>{
+    const n=String(r).replace(/\s+/g," ").trim().toLowerCase();
+    if(!n)return false;
+    if(_seen.some(s=>s===n||(n.length>60&&s.includes(n))||(s.length>60&&n.includes(s))))return false;
+    _seen.push(n); return true;
+  });
+  B.final_guardrails=`${blkTpl("rails_header")}\n`+railsOut.map(r=>`- ${r}`).join("\n");
 
   // v24.3 — delivery-tag coaching for the xAI engine: while replies are being voiced through xAI
   // TTS, ask the model to write expressive delivery tags inside the dialogue quotes. The tags never

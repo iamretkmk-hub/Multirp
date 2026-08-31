@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v27.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14941,7 +14941,7 @@ function lastDialogueLine(chat,selfP){
   }catch(e){}
   return null;
 }
-/* v27.4 — HEAT: the line a heat continuation picks up from, or null.
+/* v27.4 — the line a continuation picks up from, or null. (v27.9: no longer heat-only.)
    While the player is quiet lastDialogueLine() keeps returning the SAME player line beat after
    beat, so every continuation was told it was "responding to" a line that had already been
    answered — the reason heat read as the same reply over and over, and the reason the responding-to
@@ -14949,8 +14949,14 @@ function lastDialogueLine(chat,selfP){
    When the character about to speak IS the last real speaker, what comes next is a continuation of
    their OWN last line, not a reply to anyone. Returns that line so the payload can say so.
    Returns null when the player or another character spoke last — then there genuinely IS a line to
-   answer and lastDialogueLine() already returns the right one. */
-function heatSelfLine(chat,selfP){
+   answer and lastDialogueLine() already returns the right one.
+   v27.9 — this is not a heat problem, it is a SECOND-TURN problem, and heat was only the most
+   common way to get a second turn. Any path that gives a character another turn with no new line
+   aimed at them (a Scene Writer beat, a director reaction, an arrival) hits it: lastDialogueLine()
+   skips their own line, hands back the player's already-answered one, and they answer it twice.
+   So the check now runs on every turn. In the normal flow the player or someone else spoke last,
+   it returns null, and nothing changes. */
+function selfContinueLine(chat,selfP){
   try{
     if(!selfP)return null;
     const msgs=(chat&&chat.messages)||[];
@@ -15156,7 +15162,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     your_bio:["bio_header","bio_intro","intent_aim_warm","intent_aim_cool"],
     relationships:["rel_header"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
-    response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self"],
+    response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
@@ -15353,6 +15359,10 @@ End mid-momentum on a spoken line, leaving {{user}} an opening to step straight 
   heat_target_header:`# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️`,
   heat_target_self:`{{user}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line. {{user}} is still right here in the scene with you, and this is who they are:`,
   heat_self_header:`# ⚠️ THIS WAS YOUR LAST LINE — CONTINUE STRAIGHT ON FROM IT ⚠️`,
+  // v27.9 — the same swap outside a heat run: something moved the scene on and this character is
+  // speaking again, with no new line aimed at them. Answering the old one twice is the failure.
+  cont_target_header:`# ⚠️ YOU SPOKE LAST — THIS TURN CARRIES ON, IT DOES NOT ANSWER AGAIN ⚠️`,
+  cont_target_self:`You were the last one to speak and nothing new has been said to you since. {{user}}'s last line is already answered — your own reply to it is on screen. Do NOT answer it a second time and do NOT rephrase what you just said. Something in the scene has moved; carry on from your own last line. {{user}} is still here with you, and this is who they are:`,
   heat_self_footer:`That is exactly where the scene stands. Pick it up mid-breath and say what comes NEXT. Do not restate it, do not re-narrate it, do not answer it, and do not set the moment up again.`,
   rail_heat_narr:`Minimal narration. If two narration clauses would end up touching, cut one of them. When in doubt, put it in someone's mouth instead.`,
   rail_heat_end:`End on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.`,
@@ -15680,11 +15690,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
     if(isPlayer){ bio=(state.userBio||"").trim(); look=(state.userLook||"").trim(); }
     else { const t=resolveChar(targetId,chat)||(others||[]).find(o=>o.name===tName);
            if(t){ bio=subUser(String(t.backstory||"")).trim(); look=subUser(lookProse(t.look)||"").trim(); } }
-    // v27.4 — during a heat run the character is usually continuing their own last line rather
-    // than answering anyone, so the header says that instead of naming a stale target.
-    const _hSelf=!!(chat&&chat._heatBeat&&heatSelfLine(chat,p));
+    // v27.4/v27.9 — this character spoke last and nothing new is aimed at them, so the header says
+    // to carry on rather than naming a target whose line they have already answered. Heat gets its
+    // own wording ({{user}} has gone quiet); any other second turn gets the neutral one.
+    const _hSelf=!!selfContinueLine(chat,p);
+    const _heatRun=!!(chat&&chat._heatBeat);
     let tb=_hSelf
-      ? `${blkTpl("heat_target_header")}\n`+fillTpl(blkTpl("heat_target_self"),{user:state.user,target:tName,self:p.name})
+      ? `${blkTpl(_heatRun?"heat_target_header":"cont_target_header")}\n`
+        +fillTpl(blkTpl(_heatRun?"heat_target_self":"cont_target_self"),{user:state.user,target:tName,self:p.name})
       : `${blkTpl("target_header")}\n`+fillTpl(blkTpl(isPlayer?"target_player":"target_char"),{target:tName});
     if(bio) tb+=`\n${fillTpl(blkTpl("target_bg"),{bio:bio})}`;
     if(look)tb+=`\n${fillTpl(blkTpl("target_look"),{look:look})}`;
@@ -15827,9 +15840,9 @@ function buildTailBlocks(opts){
   //     the last real DIALOGUE line back out and put it right here, alone, so the model answers a
   //     line instead of answering the furniture.
   {
-    // v27.4 — heat: when this beat continues the character's own last line, THAT is the line to
-    // highlight. Otherwise (and always outside heat) it's the freshest line aimed at them.
-    const hs=(chat&&chat._heatBeat)?heatSelfLine(chat,selfP):null;
+    // v27.4/v27.9 — when this turn continues the character's OWN last line, that is the line to
+    // highlight. Otherwise it's the freshest line actually aimed at them.
+    const hs=selfContinueLine(chat,selfP);
     if(hs) B.last_line=`${blkTpl("heat_self_header")}\n${hs.name}: ${hs.text}\n\n${blkTpl("heat_self_footer")}`;
     else { const ll=lastDialogueLine(chat,selfP);
            if(ll)B.last_line=`${blkTpl("last_line_header")}\n${ll.name}: ${ll.text}\n\n${blkTpl("last_line_footer")}`; }
@@ -18401,6 +18414,7 @@ async function sendWhisper(chat,rest){
   if(!target){ toast("Whisper: no one here by that name. Usage: /whisper Name message"); return; }
   if(!body){ toast("Usage: /whisper "+target.name+" <message>"); return; }
   _heatSeq++; _dirSeq++;
+  if(chat)chat._exitedIds=null;   // fresh player turn — last turn's departures stop mattering
   chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
   chat.lastActive=Date.now(); _followAfterSend=true;
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
@@ -19029,7 +19043,7 @@ async function runMultiCharTurn(chat,playerText){
    switches the payload to the `heat` layout.
    SELF-CONTINUATION: while the player is silent lastDialogueLine() keeps handing back the SAME
    stale player line, so every beat re-answered a line that had already been answered — see
-   heatSelfLine(), which swaps in the character's OWN last line under "continue straight on from it"
+   selfContinueLine(), which swaps in the character's OWN last line under "continue straight on from it"
    whenever they were the last one to speak.
    IMAGES: only the final beat gets the auto image (_heatNoImg gates the rest) — no waiting on a
    picture mid-run.
@@ -19340,6 +19354,12 @@ async function runPresenceTracker(chat){
       notePresence(chat,[],[p.name],narr);
       if(chat.worldPositions)chat.worldPositions[p.id]=null;  // they went elsewhere
       persistChats();appendNewBubbles();updateChatHeader();
+      // v27.9 — remember that this was a DELIBERATE exit, for the rest of this turn only. The
+      // Scene Writer's recovery branch treats a missing event participant as presence that got
+      // cleared by accident and drags them back in; it must not undo someone who just walked out
+      // under their own steam. Transient `_` field — never persisted.
+      if(!Array.isArray(chat._exitedIds))chat._exitedIds=[];
+      if(p.id&&chat._exitedIds.indexOf(p.id)<0)chat._exitedIds.push(p.id);
       result.exited.push(p);result.lastBeat=p;
     }
     // ENTRIES: announce the arrival with a presence note. The character arrives SILENTLY — they do
@@ -25449,9 +25469,20 @@ async function runSceneWriter(chat){
     // RECOVERY: the participant is supposed to be IN THE ROOM (not approaching) but for
     // some reason isn't actually present — e.g. an event set up before this fix existed,
     // or presence got cleared. Only fires if the writer did NOT introduce someone new above.
+    // v27.9 — two things it must NOT do, both of which produced the same visible bug: a
+    // character answering the player, then immediately answering the very same line again.
+    //   (a) A character who LEFT this turn is not missing by accident. The presence tracker
+    //       exited them because their own line said they were walking out; teleporting them
+    //       back and giving them another turn is how "she leaves → she is dragged back → she
+    //       repeats herself → she leaves again" happened.
+    //   (b) A character who already spoke since the player's last message has had their turn.
+    //       The `already` branch above learned this; this one never did.
+    // Either way the event does not get a speaker out of it — it just stays open (or resolves
+    // on its own terms), and they react to the player's NEXT message like anyone else.
     if(!broughtIn && ev.participant && !ev.participant.approaching){
       const id=ev.participant.charId;
-      if(id && !presentIds(chat).includes(id)){
+      const leftThisTurn=!!(id && Array.isArray(chat._exitedIds) && chat._exitedIds.indexOf(id)>=0);
+      if(id && !presentIds(chat).includes(id) && !leftThisTurn && !spokeSincePlayer(chat,id)){
         if(!chat.presentIds)chat.presentIds=[];
         chat.presentIds.push(id);
         notePresence(chat,[ev.participant.name],[]);

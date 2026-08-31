@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4267,6 +4267,48 @@ const _CAP_LABELS={play_notes:"play notes",how_you_behave:"how you behave",goals
   what_you_quietly_want:"WHAT YOU QUIETLY WANT",your_quests:"your quests",speaking_style:"speaking style",
   where_you_live:"where you live"};
 function _capLabel(tag){ return _CAP_LABELS[tag]||tag; }
+/* v28.7 — READABILITY ONLY. Nothing below changes a single byte of what is sent to the model; it
+   only changes how the inspector shows it. A wall of 13 unlabelled "- " bullets is unreadable, so
+   each rule becomes its own titled section, named after the fragment it actually came from — which
+   also makes it obvious at a glance WHICH fragment to edit, and when two of them are saying the
+   same thing. */
+let _RAIL_INDEX=null;
+function _railName(text){
+  if(!_RAIL_INDEX){
+    _RAIL_INDEX=[];
+    try{
+      Object.keys(BLOCK_TPL_DEFAULTS).forEach(k=>{
+        if(!/^rail_/.test(k))return;
+        // Match on the LONGEST literal run of the fragment — the stretch between {{tokens}}. Using
+        // only the opening run mis-identified every rail that starts with {{user}} or {{self}},
+        // which is four of them.
+        const runs=String(BLOCK_TPL_DEFAULTS[k]).split(/\{\{[^}]*\}\}/)
+          .map(x=>x.replace(/\s+/g," ").trim().toLowerCase()).filter(x=>x.length>=15);
+        runs.sort((x,y)=>y.length-x.length);
+        if(runs.length) _RAIL_INDEX.push({key:k,head:runs[0].slice(0,60)});
+      });
+    }catch(e){}
+  }
+  const t=String(text||"").replace(/\s+/g," ").trim().toLowerCase();
+  // A user-customized fragment won't match a default, so fall back to the rule's own opening words.
+  const hit=_RAIL_INDEX.find(r=>t.indexOf(r.head)!==-1);
+  if(hit) return hit.key.replace(/^rail_/,"").replace(/_/g," ");
+  const first=String(text||"").trim().split(/(?<=[.!?])\s/)[0]||"";
+  return first.replace(/\s+/g," ").slice(0,42).replace(/[.,:;]$/,"")||"rule";
+}
+// A long "- " bullet list reads far better as one section per bullet.
+function _bulletKids(body,namer){
+  const b=String(body||"");
+  const parts=b.split(/\n(?=-\s)/);
+  if(parts.length<3)return null;
+  const kids=[];
+  parts.forEach(x=>{
+    const txt=x.replace(/^-\s*/,"").trim();
+    if(!txt)return;
+    kids.push({label:namer?namer(txt):(txt.split(/(?<=[.!?])\s/)[0]||"rule").replace(/\s+/g," ").slice(0,42),text:txt});
+  });
+  return kids.length>1?kids:null;
+}
 function _subCapsules(title,body){
   const t=String(title||""), b=String(body||"");
   // --- RELATIONSHIPS: split per person (#1). Handles both the new "• [Name — tie]\n  desc"
@@ -4328,6 +4370,20 @@ function _subCapsules(title,body){
     flush();
     if(kids.length>1) return kids;
   }
+  // --- FINAL GUARDRAILS: one titled section per rule, named after its fragment. ---
+  if(/FINAL GUARDRAILS/i.test(t)){
+    // Anything after the rules (e.g. an appended FORMAT RESET block) stays whole as its own child.
+    const cut=b.search(/\n##\s/);
+    const rules=cut>=0?b.slice(0,cut):b, tailBlock=cut>=0?b.slice(cut).trim():"";
+    const kids=_bulletKids(rules,_railName)||[];
+    if(tailBlock) kids.push({label:(tailBlock.match(/^##\s*(.+)$/m)||[])[1]||"note",text:tailBlock});
+    if(kids.length>1) return kids;
+  }
+  // --- Any other section that is really a list of rules reads better split up. ---
+  if(!/RELATIONSHIP|SCENE RIGHT NOW|MEMORIES/i.test(t)){
+    const long=_bulletKids(b);
+    if(long&&long.length>2&&b.length>400) return long;
+  }
   // --- IMAGE-PROMPT user message: continuity / latest exchange (#11). v25: no character sheet. ---
   if(/LATEST EXCHANGE/i.test(b) && /(CONTINUITY REFERENCE|No previous image)/i.test(b)){
     const kids=[];
@@ -4382,6 +4438,14 @@ function fmtCapsules(p){
   const c=payloadCapsules(p);
   return c?JSON.stringify(c,null,2):null;
 }
+/* v28.7 — the untruncated result for the expanded card and the clipboard. shortResult stays for
+   any one-line summary; this is what you actually read. Only real image DATA is elided — a 2MB
+   base64 blob is not something anyone wants pasted. */
+function fullResult(r){
+  if(r==null)return "";
+  let s=typeof r==="string"?r:fmtPayload(r);
+  return s.replace(/data:image\/[a-z+]*;base64,[A-Za-z0-9+/=]{100,}/g,"[image data omitted]");
+}
 function shortResult(r){
   if(r==null)return "";
   let s=typeof r==="string"?r:fmtPayload(r);
@@ -4389,8 +4453,16 @@ function shortResult(r){
   if(/^https?:\/\//.test(s)&&s.length>80)return s.slice(0,80)+"…";
   return s.length>200?s.slice(0,200)+"…":s;
 }
+/* v28.7 — which entries the user has expanded. renderDebug() rebuilds the whole list from scratch
+   every time a call starts or finishes, which threw away the open/closed state — so reading a
+   payload got interrupted the moment anything else fired. The set survives the rebuild, and the
+   scroll position is restored with it. */
+const _dbgOpen=new Set();
 function renderDebug(){
-  const el=document.getElementById('debugList');if(!el)return;el.innerHTML="";
+  const el=document.getElementById('debugList');if(!el)return;
+  const _scroller=el.closest('.screenBody')||el.parentElement||el;
+  const _prevScroll=_scroller?_scroller.scrollTop:0;
+  el.innerHTML="";
   if(!dbgLog.length){el.innerHTML=`<div class="empty"><div class="big">${icon("bug")}</div><div>No AI calls yet.<br>Send a message or generate an image, then come back.</div></div>`;return;}
   dbgLog.slice().reverse().forEach(e=>{
     const dot=e.status==="ok"?"var(--good)":e.status==="error"?"var(--danger)":"var(--muted)";
@@ -4424,24 +4496,41 @@ function renderDebug(){
         <label style="margin:0">${payloadLabel}</label>
         <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-x:auto">${esc(payloadView)}</pre>
         ${e.result!=null?`<label style="margin:0">Result (${esc(e.status)})</label>
-          <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word">${esc(shortResult(e.result))}</pre>`:""}
-        <button class="btn sec small" data-copy>Copy ${capStr?"JSON":"payload"}</button>
+          <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word">${esc(fullResult(e.result))}</pre>`:""}
+        <button class="btn sec small" data-copy>Copy ${capStr?"JSON":"payload"} + response</button>
       </div>`;
     const body=card.querySelector('[data-body]');
     const arrow=card.querySelector('[data-arrow]');
+    // Restore this entry's expanded state across the rebuild.
+    if(_dbgOpen.has(e.id)){ body.classList.remove('hide'); arrow.textContent="▾"; }
     card.addEventListener('click',ev=>{
       if(ev.target.closest('[data-copy]'))return;
+      if(ev.target.closest('pre'))return;          // selecting text inside a payload must not collapse it
       const open=body.classList.toggle('hide')===false;
       arrow.textContent=open?"▾":"▸";
+      if(open)_dbgOpen.add(e.id); else _dbgOpen.delete(e.id);
     });
     card.querySelector('[data-copy]').addEventListener('click',ev=>{
       ev.stopPropagation();
-      navigator.clipboard?.writeText(payloadView);toast((capStr?"JSON":"Payload")+" copied");
+      // v28.7 — the reply is half the reason to copy a payload; it goes on the clipboard with it.
+      // For the capsule view it lands INSIDE the JSON as a `response` field, so what you paste is
+      // still one valid document.
+      let out=payloadView;
+      if(e.result!=null){
+        if(capStr){
+          try{ const o=JSON.parse(payloadView); o.response=fullResult(e.result); o.status=e.status;
+               if(e.ms!=null)o.ms=e.ms; out=JSON.stringify(o,null,2); }
+          catch(_){ out=payloadView+"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result); }
+        }else out=payloadView+"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result);
+      }
+      navigator.clipboard?.writeText(out);
+      toast((capStr?"JSON":"Payload")+" + response copied");
     });
     el.appendChild(card);
   });
+  if(_scroller&&_prevScroll)_scroller.scrollTop=_prevScroll;
 }
-function clearDebug(){dbgLog=[];renderDebug();toast("Debug log cleared");}
+function clearDebug(){dbgLog=[];_dbgOpen.clear();renderDebug();toast("Debug log cleared");}
 // Scrub any stray secrets that might have slipped into a logged value.
 function scrubSecrets(obj){
   const seen=new WeakSet();
@@ -15217,12 +15306,18 @@ function _gpTail(section,chat,asPrefix){
    themselves (the turn router made the whole-cast "Name:" script obsolete), so solo, multi and
    gamemaster share the same producers and the same block map; only the ORDER arrays are separate,
    so a user can still tune each path independently. */
+/* v28.7 — the shipped order now matches the one that plays best: who you are and what you
+   remember, then HOW YOU SPEAK and the out-of-window summaries immediately before the transcript
+   (so the voice is the last thing read going in), then the line being answered, the scene, the
+   guidance and the guardrails after it. Blocks that were empty in that reference payload keep their
+   slot beside their logical neighbours rather than being dropped — an empty block renders nothing. */
 const REPLY_ORDER=["task","world","format",
   "your_bio","relationships","scenario","others_present",
-  "response_target","player","feelings","latest_arcs",
+  "response_target","player","feelings",
   "distant_memories","recent_memories","situation",
+  "speaking_style","latest_arcs",
   "__history__",
-  "last_line","speaking_style","scene_now","calendar","quests","private_intent",
+  "last_line","scene_now","calendar","quests","private_intent",
   "response_guidance","final_guardrails","spoken_delivery"];
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
@@ -15649,8 +15744,8 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   mem_recent_instr:`Things you personally did, saw, or learned BEFORE the conversation below. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
 This list is not the whole of what you remember. THE CONVERSATION BELOW IS MEMORY TOO — you were present for every line of it, you heard it, and you remember it perfectly. Anything said or done in it happened, whether or not it also appears in this list. Treat the two together as what you know: this list for what came before, the conversation itself for what has happened since.
 What you do NOT have is anything in neither place — never invent a past event, a shared history, or a conversation to fill a gap.`,
-  mem_latest_header:`# ⚠️ THE LAST THINGS THAT HAPPENED TO YOU ⚠️`,
-  mem_latest_instr:`The most recent things you lived through, newest first — regardless of whether they fit this moment. These are the freshest facts you hold: they are still warm, you have not had time to put them behind you, and they are the LAST thing you would forget. If any of them bears on what is being said now, you know it without having to be reminded.`,
+  mem_latest_header:`# ⚠️ LATEST DIALOGUE OUT OF CONTEXT WINDOW ⚠️`,
+  mem_latest_instr:`These are your latest dialogue summaries that are now out of the context window. Use them for consistency during the conversation. You don't mention them unless it's required — they are here to give you grounding, not lines to recite. Newest first. If any of them bears on what is being said now, you know it without having to be reminded.`,
   mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
   mem_distant_instr:`Older, condensed recollections — the lasting things you carry from further back. They are background: they colour who you are and how you read people, but you do not recite them. As above, this list is not exhaustive: the conversation below is also yours to remember in full.`,
   // --- tail: guidance ---

@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v28.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -15183,6 +15183,86 @@ function intentParts(chat,selfId){
    travel beat, GM narration, or one of their own lines. Returns {name,text} or null.
    Other characters' lines are reduced to what was actually SPOKEN (narration privacy), matching
    what castHistory already delivers, so the highlight never reveals more than the transcript did. */
+/* ============ v28.8 — REPEATING YOURSELF ============
+   A rule saying "write only NEW material" is abstract, sits as one bullet in a wall of thirteen,
+   and is read thousands of tokens before generation. It loses to the thing that actually drives the
+   output: the same want, the same instructions and the same refusal produce the same continuation.
+   In one exported scene two of this character's turns came out BYTE-IDENTICAL, and the player had
+   to say "why are you repeating yourself like a parrot".
+   So this stops being a rule and becomes machinery: quote back the lines they ALREADY said, name the
+   stall when it is happening, and check the finished reply before it is shown. */
+function _repWords(s){
+  return String(s||"").toLowerCase()
+    .replace(/\*[^*]*\*/g," ")                 // narration is not the point of comparison
+    .replace(/[^\p{L}\p{N}\s]/gu," ")
+    .split(/\s+/).filter(w=>w.length>2);
+}
+// 0..1 overlap of content words, stemmed, measured against the SHORTER text — so a reply that
+// simply re-says an earlier one with a few words added still scores high.
+function replySimilarity(a,b){ return _overlap(_repWords(a),_repWords(b)); }
+/* The export from 2026-08-31T17:11 showed the OTHER half of the problem: two turns whose spoken
+   lines genuinely differed but whose opening stage direction was all but identical —
+   "*Bar\u0131 b\u0131rak\u0131p do\u011Fruluyorum, ellerim iki yan\u0131ma d\u00FC\u015F\u00FCyor. Sesim al\u00E7ak...*" twice in a row.
+   Because _repWords strips narration on purpose, dialogue similarity scored those at zero. So
+   narration gets its own comparison, and the guard fires on either half. */
+function _narrWords(s){
+  const spans=String(s||"").match(/\*[^*]*\*/g)||[];
+  return spans.join(" ").toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu," ")
+    .split(/\s+/).filter(w=>w.length>2);
+}
+function _overlap(wa,wb){
+  if(wa.length<4||wb.length<4)return 0;
+  const stem=w=>w.slice(0,5);
+  const sa=new Set(wa.map(stem)), sb=new Set(wb.map(stem));
+  let inter=0; sa.forEach(w=>{ if(sb.has(w))inter++; });
+  const smaller=Math.min(sa.size,sb.size);
+  return smaller?inter/smaller:0;
+}
+function narrationSimilarity(a,b){ return _overlap(_narrWords(a),_narrWords(b)); }
+/* "" when the reply is new, otherwise which half of it is a repeat. Narration sits a little
+   lower because stage directions are short and a shared verb or two is normal. */
+function repeatKind(a,b){
+  if(replySimilarity(a,b)>=0.72) return "line";
+  if(narrationSimilarity(a,b)>=0.70) return "narration";
+  return "";
+}
+/* The nudge sent back to the model when a reply came out as a repeat. Naming WHICH half repeated
+   matters: told "you repeated yourself" after a fresh line with a recycled stage direction, the
+   model rewrites the dialogue it just got right and recycles the narration again. */
+function repeatRetryNote(kind,hit){
+  const q="\n\n\u201C"+String(hit||"").slice(0,400)+"\u201D\n\n";
+  if(kind==="narration")
+    return "Your stage directions in that reply are the same ones you already used earlier in this scene:"+q
+      +"Same body, same gesture, same description of your own voice. Bodies do not loop. Whatever you were doing, you are already done doing it \u2014 be somewhere else in the room, or doing something else with your hands, or simply still. Write the turn again with COMPLETELY different action and completely different description of yourself. Do not open the same way twice.";
+  return "That reply repeats something you already said earlier in this scene:"+q
+    +"You have already said it. Saying it again, in any wording, is not available to you. Write a DIFFERENT turn that moves off that line entirely: drop what you were pressing for, or say the thing you were circling outright, or react to being stonewalled, or turn to something else and carry it with you. Do not restate, do not rephrase, do not ask again.";
+}
+// This character's own most recent spoken lines in this scene, newest first.
+function ownRecentLines(chat,selfP,n){
+  const out=[];
+  try{
+    const msgs=(chat&&chat.messages)||[];
+    for(let i=msgs.length-1;i>=0&&out.length<(n||3);i--){
+      const m=msgs[i];
+      if(!m||m.role!=="assistant"||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
+      if(!m.content||!String(m.content).trim())continue;
+      if(!selfP||!((m.speakerId&&m.speakerId===selfP.id)||m.speaker===selfP.name))continue;
+      out.push(String(m.content).trim());
+    }
+  }catch(e){}
+  return out;
+}
+/* Is this exchange stuck? True when the character has been pressing the same line and the player
+   keeps refusing — the exact shape that produces a parroted reply. */
+function exchangeIsStalled(chat,selfP){
+  try{
+    const mine=ownRecentLines(chat,selfP,3);
+    if(mine.length<2)return false;
+    return replySimilarity(mine[0],mine[1])>=0.5
+        || (mine.length>2&&replySimilarity(mine[0],mine[2])>=0.5);
+  }catch(e){ return false; }
+}
 function lastDialogueLine(chat,selfP){
   try{
     const msgs=(chat&&chat.messages)||[];
@@ -15317,7 +15397,7 @@ const REPLY_ORDER=["task","world","format",
   "distant_memories","recent_memories","situation",
   "speaking_style","latest_arcs",
   "__history__",
-  "last_line","scene_now","calendar","quests","private_intent",
+  "last_line","already_said","scene_now","calendar","quests","private_intent",
   "response_guidance","final_guardrails","spoken_delivery"];
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
@@ -15335,6 +15415,7 @@ const REPLY_BLOCKS={
   recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered. The transcript counts as memory too — this list covers what came before it."},
   situation:{label:"Situation (entering/leaving)",kind:"dyn",desc:"Only appears when this character is arriving to or leaving the scene this turn."},
   __history__:{label:"DIALOGUE (chat history)",kind:"history",desc:"The transcript (witness-scoped for this character). Blocks below this line are delivered AFTER the dialogue."},
+  already_said:{label:"⚠️ What you already said",kind:"dyn",desc:"This character's own last one or two lines in the scene, quoted verbatim, with the rule that this turn may not repeat or rephrase them — plus a stronger directive when the exchange has visibly stalled on the same request."},
   last_line:{label:"⚠️ The line you are responding to",kind:"dyn",desc:"The last real DIALOGUE line in the transcript — not a day marker, presence note, travel beat or narration — pulled out and highlighted."},
   speaking_style:{label:"⚠️ How you speak",kind:"dyn",desc:"This character's voice, delivered where the line actually gets written."},
   scene_now:{label:"Scene right now",kind:"dyn",desc:"How to read the situation, then CURRENT DAY · your current location · sub-areas · privacy (who can hear you, who is one door away) · your trackers."},
@@ -15469,6 +15550,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
+    already_said:["already_said_header","already_said_instr","already_said_stalled"],
     speaking_style:["style_header","style_notes"],
     scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_present_others","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
     private_intent:["intent_warm","intent_hostile"],
@@ -15479,7 +15561,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
-  const SCOPE={latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
+  const SCOPE={already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
   // All three payloads share ONE block map now, so a single pass covers them.
   Object.keys(REPLY_BLOCKS).forEach(id=>{
     if(T[id])REPLY_BLOCKS[id].tpls=T[id];
@@ -15744,6 +15826,11 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   mem_recent_instr:`Things you personally did, saw, or learned BEFORE the conversation below. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
 This list is not the whole of what you remember. THE CONVERSATION BELOW IS MEMORY TOO — you were present for every line of it, you heard it, and you remember it perfectly. Anything said or done in it happened, whether or not it also appears in this list. Treat the two together as what you know: this list for what came before, the conversation itself for what has happened since.
 What you do NOT have is anything in neither place — never invent a past event, a shared history, or a conversation to fill a gap.`,
+  already_said_header:`# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️`,
+  already_said_instr:`These are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
+Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
+This applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.`,
+  already_said_stalled:`⚠️ YOU HAVE ASKED AND THEY HAVE NOT GIVEN IT. Asking again in any form is over — you have spent that move. A real person does one of these instead, and you pick the one that fits you: drop it and let the silence sit; say the thing you were circling, plainly, and take the risk; get short and turn away; let it show that being stonewalled by THIS person stings; or change the subject entirely and carry the sting with you. The one thing you may NOT do is put the same question a fourth time.`,
   mem_latest_header:`# ⚠️ LATEST DIALOGUE OUT OF CONTEXT WINDOW ⚠️`,
   mem_latest_instr:`These are your latest dialogue summaries that are now out of the context window. Use them for consistency during the conversation. You don't mention them unless it's required — they are here to give you grounding, not lines to recite. Newest first. If any of them bears on what is being said now, you know it without having to be reminded.`,
   mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
@@ -15799,7 +15886,8 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
   rail_single_solo:`One reply. Not a scene, not a chain of exchanges — one turn.`,
   rail_beat:`One emotional beat lands harder than five. Don't resolve everything in a single reply; leave things unsaid.`,
   rail_indirect:`Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.`,
-  rail_oblique:`Approach rather than ask. When you want something — the truth, a promise, reassurance — do not put it as a direct question. Circle it: say the thing next to it, leave a silence where the answer goes, offer them the wrong version so they correct it, or talk about someone else who is really you. A direct question is a last resort, used when you have decided to force it, and it costs you something.`,
+  rail_oblique:`Approach rather than ask. When you want something — the truth, a promise, reassurance — do not put it as a direct question. Circle it: say the thing next to it, leave a silence where the answer goes, offer them the wrong version so they correct it, or talk about someone else who is really you.
+CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.`,
   rail_noecho:`Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said, and never mirror their sentence back with a twist on the end. One short callback to a specific WORD of theirs is allowed when you are turning it against them — never a restatement of their line.`,
   rail_norepeat:`Write only NEW material. Never reproduce, re-narrate or paraphrase a line you already wrote earlier in this scene — not to set the mood again, not as a run-up to what comes next. Your last turn already happened; start from where it left off.`,
   rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO, or on a beat left hanging.`,
@@ -16173,6 +16261,17 @@ function buildTailBlocks(opts){
   //     the last real DIALOGUE line back out and put it right here, alone, so the model answers a
   //     line instead of answering the furniture.
   {
+  // v28.8 — the character's own recent lines, quoted verbatim, immediately before generation.
+  // Abstract "don't repeat yourself" loses to the context; the actual sentences do not.
+  {
+    const mine=ownRecentLines(chat,selfP,2);
+    if(mine.length){
+      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`
+           +mine.map((x,i)=>`(${i===0?"your last line":"the line before that"}) ${x}`).join("\n\n");
+      if(exchangeIsStalled(chat,selfP)) t+=`\n\n${blkTpl("already_said_stalled")}`;
+      B.already_said=t;
+    }
+  }
     // v27.4/v27.9 — when this turn continues the character's OWN last line, that is the line to
     // highlight. Otherwise it's the freshest line actually aimed at them.
     const hs=selfContinueLine(chat,selfP);
@@ -18197,6 +18296,22 @@ async function sendMessage(){
     }
     const _rpModel=rpModel();
     let reply=await chatCompletion(messages,_rpModel,{rp:true,dbg:"Roleplay reply"});
+    /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
+       character already said in this scene, the prompt lost — so ask once more with the repeat
+       quoted back and an explicit instruction to move off it. One retry only: a second identical
+       answer is the model's final word and is still better than an empty turn. */
+    try{
+      const _mine=ownRecentLines(chat,solo,3);
+      const _hit=_mine.find(x=>repeatKind(reply,x));
+      if(_hit){
+        const _again=await chatCompletion(
+          messages.concat([{role:"assistant",content:reply},
+            {role:"system",content:repeatRetryNote(repeatKind(reply,_hit),_hit)}]),
+          _rpModel,{rp:true,dbg:"Roleplay reply (repeat retry)"});
+        if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
+           !_mine.some(x=>repeatKind(_again,x))) reply=_again;
+      }
+    }catch(e){}
     // REFUSAL HANDLING (mirrors the multi-character path): a non-empty reply can be a content
     // refusal (e.g. v4-pro's canned "无法" line), which is NOT a token problem. Retry once on the
     // fallback model, then surface an honest message rather than blaming Max tokens.
@@ -19451,6 +19566,22 @@ async function playCharacterTurn(chat,p,addressed){
       _rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
     }
     let reply=await chatCompletion(messages,_rpModel,_rpOpts);
+    /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
+       character already said in this scene, the prompt lost — so ask once more with the repeat
+       quoted back and an explicit instruction to move off it. One retry only: a second identical
+       answer is the model's final word and is still better than an empty turn. */
+    try{
+      const _mine=ownRecentLines(chat,p,3);
+      const _hit=_mine.find(x=>repeatKind(reply,x));
+      if(_hit){
+        const _again=await chatCompletion(
+          messages.concat([{role:"assistant",content:reply},
+            {role:"system",content:repeatRetryNote(repeatKind(reply,_hit),_hit)}]),
+          _rpModel,Object.assign({},_rpOpts,{dbg:_rpOpts.dbg+" (repeat retry)"}));
+        if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
+           !_mine.some(x=>repeatKind(_again,x))) reply=_again;
+      }
+    }catch(e){}
     // REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
     // canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it.
     // If the primary model refused, retry ONCE on the fallback model (flash tends to be more

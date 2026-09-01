@@ -8,12 +8,13 @@ before any non-trivial change.**
 
 | If you change… | …it affects | Warning |
 |---|---|---|
-| A reply-payload block (add/remove) | all three reply payloads | **Four places**: producer, `order` of solo+multi+**gm**, `blocks{}`, fragment 3-leg. `gm` shares solo's blocks map but has its **own order** — trackers/calendar were missing from gm in v19.2. |
+| A reply-payload block (add/remove) | **all five** reply payloads (solo · multi · gm · text · heat) | **Three places**: producer, `REPLY_ORDER`, `REPLY_BLOCKS{}` (+ fragment 3-leg if it wraps fixed text). Since v26 there is ONE shared block map and one default order, so the old per-payload asymmetry (which hid trackers/calendar from `gm` in v19.2) can no longer happen — don't reintroduce separate block maps. |
 | A block id (rename) | users' saved layouts | Layouts reference ids by string — a rename silently loses the user's placement (block re-inserts at default). **Never rename.** |
+| Adding a `buildPayload` call site | that payload's correctness | Must skip empty `head`/`tail`, gate on the right layout key, **and pass the response target through BOTH halves** (`{chat,targetName,targetId}` to the head builder *and* `buildTailBlocks`) or `response_target`/`player`/`feelings` disagree with the guidance. |
 | Fixed prose inside a producer | Settings → Payloads editor | Route it through `blkTpl()` or the editor silently diverges from what's actually sent (3-leg, leg 2 is unguarded). |
 | A producer's `fillTpl` variable map | users' customized fragments | Unknown `{{tokens}}` render **literally** into the model input; customized fragments are never auto-upgraded. |
 | The payload settings UI | prompt saving / reordering | v19.1's rewrite dropped four handlers (`plqInput`/`plqReset`/`movePayloadBlock`/`resetPayloadOrder`) — call sites live in HTML strings, so `node --check` passes. After any UI rewrite, sweep every generated `onclick` name. |
-| One reply path's block content | the other reply path | Solo and multi must stay **symmetric in content** — fix producers in both. |
+| Reintroducing a per-path content producer | every reply path | Guard #2: every reply is one character speaking for themselves. `buildSystemPromptBlocks` is only a thin wrapper that delegates to `buildCharPromptBlocks`; the whole-cast `Name:` branch was deleted as unreachable. |
 | `ENGINE_PAYLOAD_DEFS` entries | boot | The array property must be `blocks` — a different name crashed boot in v19.81. `promptKey` strings must match `PROMPT_REGISTRY` exactly. |
 | Engine part order | JSON parsing | Engine payload assembly is code-defined *because* outputs feed parsers — reordering needs a per-engine refactor, don't expose it. |
 

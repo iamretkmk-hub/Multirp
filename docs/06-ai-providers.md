@@ -67,7 +67,7 @@ Per-rule dispatch (see doc 10 for the pipeline): `effImgProvider(rule)` /
 | Provider | Functions | Notes |
 |---|---|---|
 | ModelsLab (`ML` base) | `modelslabCall/mlResolve/modelslabImage/modelslabVideo` | v6 API; async polling via `fetch_result`; CORS may block browser calls (friendly `mlCorsMsg`). Smart routing rules carry model_id + LoRA. |
-| AtlasCloud (`ATLAS` base) | `atlasGenerate` (submit→poll→url), `atlasImage`, `atlasVideo`, `atlasUpload`, `wanAnimateVideo` (wan-2.2 turbo-spicy i2v LoRA), `wanExtendVideo` (wan-2.5 video-extend), `atlasTTS` (xAI voices), `atlasLipsync` (Kling) | The workhorse. `civitaiLoraUrl` appends the CivitAI token to gated LoRA links; `atlasLoras` maps rule LoRAs into high/low-noise channels. |
+| AtlasCloud (`ATLAS` base) | `atlasGenerate` (submit→poll→url), `atlasImage`, `atlasUpload`, `generateVideo` (the one video request builder, v27 — doc 10), `atlasTTS` (xAI voices), `atlasLipsync` (Kling) | The workhorse. `civitaiLoraUrl` appends the CivitAI token to gated LoRA links; `atlasLoras` maps image-rule LoRAs into high/low-noise channels (video LoRA plumbing was removed in v27.8). |
 | fal.ai | `falImage` | z-image turbo LoRA; NSFW checker toggle (`falSafety`). |
 | OpenRouter image | `imageCompletion` | Multimodal chat models (`modalities:["image"]`). |
 

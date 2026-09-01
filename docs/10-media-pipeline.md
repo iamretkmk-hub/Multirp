@@ -39,16 +39,35 @@ The **image rail** (landscape) mirrors scene images beside the text (`renderImag
 pinning via `togglePin`); `sceneHTML`/`refreshBubble` render the in-bubble media block with
 the per-image menu (frame picker `pickFrame`, retry, view prompt, Animate/Movie/Scene).
 
-## Video
+## Video (rewritten v27 — one path, one request builder)
 
-- **Animate** (`animateScene` → `wanAnimateVideo`): first clip from a scene image on
-  wan-2.2 turbo-spicy i2v LoRA (the routed video rule's LoRAs + trigger keyword apply; output
-  follows the image's aspect). The motion prompt is written by `vidPrompt`. With
-  **voice-guided animate** (`animVoice`, wan-2.5 ids only) the line's TTS audio rides along.
-- **Extend / Movie** (`movieScene` → `wanExtendVideo`): wan-2.5 video-extend appends
-  `extendDur` seconds onto the chat's latest clip; the `extendPrompt` writer produces a
-  "scene continues…" prompt from the picked still. Each press grows the same video.
-- Async submit→poll: `submitVideo`/`pollVideo` (ModelsLab) and `atlasGenerate` (Atlas).
+> Replaces the older three-path design (wan-2.2 Animate + wan-2.5 Extend/Movie). The
+> `seedance*`, `movie*` and `extend*` settings keys, `wanAnimateVideo`/`wanExtendVideo`,
+> `movieScene` and the `extendPrompt` registry entry are all **gone**; v27.8 removed the Wan
+> option and all LoRA plumbing with it.
+
+- **One video path.** `generateVideo(prompt, imageUrl, opts)` is the single request builder
+  (`===== VIDEO OPTIONS + THE ONE REQUEST BUILDER (v27) =====`). Default model
+  `VIDEO_MODEL_DEFAULT = "bytedance/seedance-2.0-mini/image-to-video"`.
+- **Options are opt-in per field**: every option the model family exposes lives in Settings
+  (`vidAspect`, `vidFps`, `vidBitrate`, `vidSteps`, `vidShift`, `vidSeed`, `vidGuidance`,
+  `vidNegative`, `vidExpand`, `vidLastFrame`, `vidRefs`, `vidWatermark`, `vidRes`…), and a
+  field is put in the body **only when actually set** — so pointing the model id at a
+  different model never sends it a field it doesn't know.
+- **Two shipped models** (`VIDEO_MODELS`), matched by *family* on the id so siblings
+  (seedance-2.0-fast, -2.5) route correctly without being listed:
+  - `…/image-to-video` — the scene image is the first frame; 4–15 s; renders its own synced
+    sound; accepts reference images/video/sound alongside the frame.
+  - `…/reference-to-video` — **no first-frame slot**: the scene image is sent as `@image1` and
+    the library follows (up to 9 images, 3 videos, 3 sounds). Items must be *named in the
+    prompt* or they're ignored (`vidIsRefOnly` also shifts the prompt sheet's slots down one).
+- **Resolution ladder is model-specific**: `SEEDANCE_RES = 480p · 720p · 720p-SR · 1080p-SR ·
+  1440p-SR` — plain `1080p` is **not** an option and is a hard 400. `vidResolutionFor(model)`
+  maps whatever is configured onto the accepted ladder.
+- **Animate** (`animateScene(mid)`) is still the per-scene entry point; the motion prompt is
+  written by the `vidPrompt` writer (`===== VIDEO PROMPT WRITER (v27) =====`). Voice-guided
+  animate (`animVoice`) sends the line's TTS as the clip's audio where the model supports it.
+- Async submit→poll via `atlasGenerate`.
 
 ## Gallery, scenes, playground
 
@@ -92,5 +111,7 @@ and inlined into exports (`inlineStaticImages`).
 - Per-character continuity keys (`imgPromptBy`, `lastImgRuleBy`) are the fix for two shipped
   bugs (newcomers inheriting poses/frames). If you add a new generation path, key it per
   character the same way.
-- Video rules are **LoRA selectors** — the base model is fixed (`state.vidModel`); a rule's
-  `model_id` is ignored for video (`videoRuleToAtlas`).
+- Video LoRA plumbing was **removed in v27.8** — don't reintroduce per-rule LoRA channels for
+  video; the option set in Settings is the whole surface.
+- Sending an option a model doesn't accept is a hard 400 (the `1080p` case). Add new options
+  behind the same "only when set" rule that `generateVideo` uses.

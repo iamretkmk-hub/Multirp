@@ -1,8 +1,8 @@
 # StoryMind (Multirp) — Architecture Documentation
 
-This folder is the complete developer map of the app. The entire application lives in **one
-file** — `index.html` (~27,600 lines: CSS → HTML → one `<script>`), plus a tiny optional
-service worker (`sw.js`). These documents explain how every subsystem works, how it shows up
+This folder is the complete developer map of the app, current as of **v29.0**. The entire
+application lives in **one file** — `index.html` (~30,100 lines: CSS → HTML → one
+`<script>`), plus a tiny optional service worker (`sw.js`). These documents explain how every subsystem works, how it shows up
 in the UI, what data each AI payload carries, how the pieces couple to each other, and what
 breaks when you change something in the wrong place.
 
@@ -66,5 +66,5 @@ breaks when you change something in the wrong place.
 4. **Every new network call gets `dbg()`/`dbgDone()`.** The Debug screen is the app's only
    diagnostic surface on a phone.
 5. **Bump both version stamps on release:** the `#buildStamp` text in Settings' header
-   (`v25.8` at time of writing) *and* `CACHE_VERSION` in `sw.js` (`storymind-v102`) — without
+   (`v29.0` at time of writing) *and* `CACHE_VERSION` in `sw.js` (`storymind-v140`) — without
    the sw bump, installed clients keep serving the old cached build.

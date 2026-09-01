@@ -82,10 +82,12 @@ transcript* (not the router's stale `addressed`), witness-scoped history, refusa
 
 When `heatOn`: after the player's turn resolves, ONE extended continuation is generated —
 worth ~`heatN` normal replies — voiced by the present character who has spoken longest ago.
-Implementation: `chat._heatBeat={total}` (transient) makes `buildTailBlocks` append the
-`heat_advance` guardrail fragment; max-tokens gets a `450×N` headroom bump. Guards: single
-flight (`_heatBusy`), once per tail message (`_heatRanMid`), cancelled by any new player input
-(`_heatSeq`).
+Implementation: `chat._heatBeat` (transient) switches `playCharacterTurn` to the dedicated
+**`heat` payload layout** — same blocks, but the heat format rules, heat response guidance and
+heat guardrails fragments are swapped in, and when the speaker continues their *own* last line
+the "responding to" blocks say so instead of naming a stale target (doc 05). Max-tokens gets a
+headroom bump. Guards: single flight (`_heatBusy`), once per tail message (`_heatRanMid`),
+cancelled by any new player input (`_heatSeq`).
 
 ## Presence & witness scoping (why characters don't "hear" everything)
 
@@ -127,4 +129,9 @@ image and voice all fired before the reveal starts.
 - The solo path and multi path must stay **symmetric in block content** (payload coupling
   guard #2) — fix producers in both, or a solo-only fix will desync the multi payload.
 - Phone texts (`textMsg`) deliberately carry `present:[]` so they never leak into scene
-  history or scene memory; they have their own memory path (`rememberTextExchange`).
+  history or scene memory; they have their own memory path (`rememberTextExchange`). Since
+  v28.6 they are generated from the **same reply payload** as spoken turns (`text` layout
+  key) — only the format rules differ.
+- The solo and gm call sites go through `buildSystemPromptBlocks`, which is now just a wrapper
+  that picks the single present character and delegates to `buildCharPromptBlocks` — every
+  reply path shares one producer (doc 05).

@@ -70,14 +70,18 @@ hook site (a module failure must never kill the turn).
       `if(await …){return;}` pattern so the Gamemaster doesn't double-fire.
 
 ### 5. Payload surface (only if replies must know about it)
-Follow the **four-place rule** (doc 05) exactly:
-- [ ] produce the block in `buildTailBlocks` (or the head builders — both solo+multi paths),
-- [ ] add the id to `order` of `solo`, `multi`, **and** `gm`,
-- [ ] add the `blocks{}` metadata entry,
+Follow the **three-place rule** (doc 05) exactly:
+- [ ] produce the block in `buildCharPromptBlocks` (head) or `buildTailBlocks` (tail) — there
+      is **one** producer per half; don't add a per-path variant,
+- [ ] add the id to **`REPLY_ORDER`** (one array; all five payloads — solo · multi · gm ·
+      text · heat — derive from it),
+- [ ] add the `REPLY_BLOCKS{}` metadata entry (label/kind/desc, optional `scope`),
 - [ ] route all fixed prose through a new `BLOCK_TPL_DEFAULTS` fragment + list it in
-      `_attachBlockTpls` (the 3-leg).
+      `_attachBlockTpls`'s `T` map (the 3-leg).
 Self-healing means no migration is needed; users' saved layouts pick the block up at its
-default position.
+default position. If the block should read differently in the text or heat payload, swap the
+**fragment** for that path (as `format`/`response_guidance`/`final_guardrails` do) rather than
+forking the block.
 
 ### 6. UI (a modern module surface)
 - [ ] **Settings card** in the fitting `details.sgroup` (usually 7 · Game Preferences):

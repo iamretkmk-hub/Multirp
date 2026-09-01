@@ -88,8 +88,32 @@ ambition/scheme/courtship/...), targetId, aim, trigger, strength, allies[], stat
   every **resident/regular** of that place — including the person it's about.
 - **End-Day propagation** (`runGossipPropagation`, `gossipPrompt`): charged observations
   (≥ `gossipThreshold`) travel through the relationship graph to people who'd care (capped
-  `gossipMaxPerDay`), planted as **vague open-suspicion GOSSIP memories** (a question, not a
-  verdict — deliberately winnable later). These fuel confrontations and color scenes.
+  `gossipMaxPerDay`), planted as **vague open-suspicion rumors** (a question, not a verdict —
+  deliberately winnable later). These fuel confrontations and color scenes.
+
+### The gossip ledger (v28.9 — "give gossip an owner and an ending")
+
+Rumors are no longer just loose GOSSIP memories: they are entries in a **ledger**
+(`state.gossip`, its own IndexedDB collection, key `sm_gossipledger`). GOSSIP memories link
+back by `gossipId`, and **the ledger is the authority on whether a rumor still speaks**.
+
+| Field | Meaning |
+|---|---|
+| `stakeholderId` | Whose rumor it actually is — the one person who would act on it (distinct from a memory's `ownerId`, which is merely whoever holds a copy). |
+| `carriers[]` | Everyone who has heard it. They know it; **it is not theirs to raise.** |
+| `heat` | 0–1, decaying daily (`gossipDecay`). At zero the rumor dies of boredom, like a real one. |
+| `status` | `open → raised → settled | believed | dead` (`GOSSIP_STATUS`). |
+| `raisedBy` | charId → game day it was last put to the player, enforcing `gossipCooldown` — **asking spends the move** instead of repeating it. |
+
+Helpers: `liveGossip(uid)` (not settled/believed/dead, heat > 0.05), `gossipStakeOf(charId)`
+vs `gossipCarriedBy(charId)`, `gossipCanRaise(g, day)`. `recordGossip()` plants **or folds
+into** an existing rumor with two throttles the old code lacked: a paraphrase of a live rumor
+about the same subject just adds a carrier and a little heat rather than becoming a duplicate,
+and a stakeholder already carrying `gossipMaxLive` live rumors takes no more. A one-time
+migration turns every pre-ledger GOSSIP memory into a ledger entry.
+
+New prompt: **`rumorJudge`**. In the payload this surfaces as the `rumors` block, split by
+standing — the stakeholder's one raisable rumor vs. talk merely overheard (doc 05).
 
 ## World pulse & goal pursuit
 
@@ -139,9 +163,10 @@ menu), manual add/edit (`addCalManual`), world-map section.
 Full-payload character replies adapted to texting (`buildTextReplySystem` + `textReplyPrompt`;
 dialogue only), real time+game-day stamps so silence is *felt*; proactive texts
 (`maybeProactiveText`/`textProactivePrompt`, ≤1 per period, forced pass at End Day);
-left-on-read consequences (`reconcileTextsDay`, mood nudge + memory; `_judgeTextVisit` may
-send the character to find you in person). Text exchanges get their own memories
-(`rememberTextExchange`). UI: per-character text windows, inbox with unread badges.
+left-on-read consequences (`reconcileTextsDay`, mood nudge + memory). Text exchanges get their
+own memories (`rememberTextExchange`). UI: per-character text windows, inbox with unread
+badges. Since v28.6 a text reply uses the **shared reply payload** (`text` layout key) — same
+blocks as a spoken turn, only the format rules differ (doc 05).
 
 ## End Day pipeline (`endDayBackground` — full order, after the day visibly advances)
 

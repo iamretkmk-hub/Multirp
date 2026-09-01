@@ -26,7 +26,7 @@ AI providers with the user's own API keys.
 ## File layout
 
 ```
-index.html   — the entire app: ~650 lines CSS, ~1400 lines HTML, ~25,500 lines JS
+index.html   — the entire app: ~650 lines CSS, ~1400 lines HTML, ~28,000 lines JS
 sw.js        — optional service worker: caches the app shell, network-first; never caches API calls
 docs/        — this documentation
 ```
@@ -37,12 +37,15 @@ global** and discipline comes from banner comments + naming conventions, not mod
 
 ## index.html anatomy
 
-| Region | Lines (v25.8) | Content |
+| Region | Lines (v29.0) | Content |
 |---|---|---|
-| `<style>` | ~25–649 | All CSS. Theming via CSS variables on `body[data-theme]`. Landscape two-column layout, video gallery, playground styles at the end. |
-| SVG symbol defs | ~652–734 | The line-icon system: `<symbol id="i-*">` sprites referenced by `<use href="#i-…">`. |
-| Screens & modals | ~736–2047 | 7 screens (`#screen-chat`, `-personas`, `-gallery`, `-memory`, `-diary`, `-settings`, `-debug`), onboarding, ~25 modals, bottom `<nav>`. |
-| `<script>` | 2049–27571 | Everything else. Starts with the SCRIPT MAP table of contents, then 18 numbered sections (config/state → media store → prompts → living universe → directors → … → settings UI). |
+| `<style>` | ~25–657 | All CSS. Theming via CSS variables on `body[data-theme]`. Landscape two-column layout, video gallery, playground styles at the end. |
+| SVG symbol defs | ~660–742 | The line-icon system: `<symbol id="i-*">` sprites referenced by `<use href="#i-…">`. |
+| Screens & modals | ~744–2047 | 7 screens (`#screen-chat`, `-personas`, `-gallery`, `-memory`, `-diary`, `-settings`, `-debug`), onboarding, ~25 modals, bottom `<nav>`. |
+| `<script>` | 2049–30130 | Everything else. Starts with the SCRIPT MAP table of contents, then 18 numbered sections (config/state → media store → prompts → living universe → directors → … → settings UI). |
+
+*(Line numbers drift with every release — navigate by the `===== NAME =====` banner comments,
+not by number.)*
 
 ### The 18 script sections (from the in-source SCRIPT MAP)
 
@@ -97,10 +100,10 @@ only), `navigator.storage.persist()`, and a custom "Install app" button.
 
 ## Versioning & release checklist
 
-- `#buildStamp` in the Settings header shows the app version (e.g. `v25.8`). The codebase's
+- `#buildStamp` in the Settings header shows the app version (`v29.0`). The codebase's
   banner comments reference feature versions constantly (`v19.4 — NARRATION MODE`), which is
   how history is tracked in a single file.
-- `sw.js` `CACHE_VERSION` (`storymind-v102`) **must be bumped with every upload**, otherwise
+- `sw.js` `CACHE_VERSION` (`storymind-v140`) **must be bumped with every upload**, otherwise
   installed clients keep the previous cached `index.html` (network-first mitigates this online,
   but offline clients pin to cache).
 - There is no test suite. The de-facto regression harness is: (a) the dev-time drift guards

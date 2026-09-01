@@ -1,162 +1,174 @@
 # 05 · The Payload System
 
 **This is the most coupling-dense part of the codebase.** The in-source "(!) COUPLING GUARDS"
-comment above `PAYLOAD_DEFS` is mandatory reading before any change; this doc expands it.
+comment above `REPLY_ORDER` is mandatory reading before any change; this doc expands it.
+
+> **Restructured in v26, re-ordered in v28.7.** Before v26 each reply path had its own block
+> map and its own order array. Now **all reply payloads share ONE block map (`REPLY_BLOCKS`)
+> and one default order (`REPLY_ORDER`)** — only the per-payload `order` arrays are separate
+> so users can still tune each path. If you find older notes describing `solo`/`multi`/`gm`
+> asymmetry or a `buildSystemPromptBlocks` producer distinct from the per-character one,
+> they are obsolete.
 
 ## Concepts
 
-A **payload** is the complete instruction package one AI call receives. The app has two kinds:
+A **payload** is the complete instruction package one AI call receives. Two kinds:
 
-1. **Reply payloads** — what a roleplay model gets when a character speaks. Three of them:
-   - `solo` — one model voices the scene (single character present; also whole-scene solo mode),
-   - `multi` — built **once per character** in a multi-character chain,
-   - `gm` — a character reacting to a hidden Gamemaster beat.
-   These are **ordered block lists** the user can reorder/remove/re-add in
-   Settings → Payloads. The special `__history__` block marks where the chat transcript sits:
-   blocks before it join into the pre-dialogue system message (**head**), blocks after it into
-   the post-dialogue system message (**tail** — closest to generation, strongest influence).
-2. **Engine payloads** (`ENGINE_PAYLOAD_DEFS`) — every background job (routers, memory
-   builder/retrieval, tracker engine, gossip, intents, judges, scene writer, gamemaster,
-   diaries, calendar, travel, texts, voice check, image/video writers, character/world
-   generators, universe memory). Their prompts are editable in place, but their **part order
-   is fixed in code** — outputs feed JSON parsers.
+1. **Reply payloads** — what a roleplay model gets when a character speaks. **Five** of them,
+   all sharing the same blocks and differing only in order + a few swapped fragments:
 
-## Reply payload block inventory
+   | Key | Built at | What differs |
+   |---|---|---|
+   | `solo` | `sendMessage` (exactly one character present) | — |
+   | `multi` | `playCharacterTurn` (once **per responding character**) | — |
+   | `gm` | `playSingleReaction` (reacting to a hidden Gamemaster beat) | — |
+   | `text` | `sendTextMessage` (v28.6) | FORMATTING RULES carries the **text format** (typed words only, no narration/asterisks/inner thoughts); the spoken-delivery block is never sent. Otherwise **block for block identical** to the spoken reply — same bio, ties, memories, scene, feelings, plans, guardrails and transcript window, because texting and being in the room are one continuous relationship. |
+   | `heat` | `playCharacterTurn` when `chat._heatBeat` is set | FORMATTING RULES carries the **heat format** (minimal narration, extended dialogue, one message per beat); RESPONSE GUIDANCE and FINAL GUARDRAILS carry heat versions; when the speaker continues their **own** last line the two "responding to" blocks say so instead of naming a stale target. |
 
-Block **content** is produced by three producers; block **order** comes from
-`state.payloadLayouts[key]` via `payloadOrder(key)`:
+2. **Engine payloads** (`ENGINE_PAYLOAD_DEFS`) — every background job. Prompts editable in
+   place; **part order fixed in code** (outputs feed JSON parsers).
 
-- `buildSystemPromptBlocks(injected)` — head blocks for `solo`/`gm`
-- `buildCharPromptBlocks(p, others, injected, addressed)` — head blocks for `multi`
-- `buildTailBlocks({chat, selfId, selfName, targetName, targetId, multi, injected})` — tail
-  blocks shared by all three paths
+The special `__history__` block marks where the transcript sits: blocks before it join into
+the pre-dialogue system message (**head**), blocks after it into the post-dialogue message
+(**tail** — closest to generation, strongest influence).
 
-Default `solo`/`gm` order:
-`task → world → format → genre_voice → characters → player → ooc → distant_memories →
-multi_format → __history__ → scene_now → trackers → calendar → quests → private_intent →
-recent_memories → response_guidance → feelings → final_guardrails → spoken_delivery`
+## The v26 shape (default order)
 
-`multi` replaces `characters`/`multi_format` with per-character blocks:
-`your_bio → relationships → scenario → others_present` (+ `situation` when arriving/leaving).
+```
+universal        task · world setting · formatting + story language
+who you are      your_bio · relationships · scenario · others_present
+who you answer   response_target · player (only when the target isn't them) · feelings
+what you recall  distant_memories · recent_memories · situation
+voice + gap      speaking_style · latest_arcs        ← last thing read going in (v28.7)
+                 ───────── [ THE DIALOGUE ] ─────────
+after            last_line · already_said · rumors · scene_now · calendar · quests ·
+                 private_intent · response_guidance · final_guardrails · spoken_delivery
+```
 
-What each block carries (the "what data is in the payload" answer for replies):
+`REPLY_ORDER` verbatim:
+`task, world, format, your_bio, relationships, scenario, others_present, response_target,
+player, feelings, distant_memories, recent_memories, situation, speaking_style, latest_arcs,
+__history__, last_line, already_said, rumors, scene_now, calendar, quests, private_intent,
+response_guidance, final_guardrails, spoken_delivery`
+
+v28.7's rationale (from the source): the order that plays best is *who you are and what you
+remember*, then **how you speak** and the out-of-window summaries immediately before the
+transcript, then the line being answered, the scene, guidance and guardrails after it. Blocks
+that render empty keep their slot beside their logical neighbours rather than being dropped —
+an empty block renders nothing.
+
+## Block inventory (what data is actually in a reply payload)
 
 | Block | Content |
 |---|---|
-| `task` | Core directive + the editable **Global Base Instruction** (universal roleplay principles) |
-| `world` | The universe's `setting` text |
-| `format` | **Response Format Rules** (`*narration*`, `_thoughts_`, `"dialogue"` contract); narration-mode shape appended when the mic session is live |
-| `genre_voice` | Genre-pack `voice` section (per-universe tone) |
-| `characters` / `your_bio` | Character card(s): instructions, personality, backstory, five-axis traits, goals, style, appearance (via `charBioBlock`) |
-| `relationships` | Factual tie sheet (`relGen` + hand-written `socialGraph`; `[here now]` marks presence) |
-| `scenario` | The character's scenario when set |
-| `others_present` | Who else is within earshot + the "only these people exist right now" footer |
-| `player` | Player identity: name, background, appearance (per-universe overrides) |
-| `ooc` | The OOC command contract |
-| `distant_memories` | Diary-tier + long-term/consolidated memories (headers `mem_distant_header` / `mem_longterm_header`) |
-| `multi_format` | Name-prefix format for solo-mode multi-presence scenes |
-| `__history__` | The witness-scoped, compacted transcript (doc 04) |
-| `scene_now` | Day/time, **authoritative location**, home/host dynamics, sub-areas & privacy, who is present/alone/apart, plus the "⚠️ WHAT JUST CHANGED" transition call-outs (moved, day jump, arrivals, departures) |
-| `trackers` | Visible/shared tracker lines `[ … ]` incl. breaking-point stage texts |
-| `calendar` | Plans due now/soon for this character |
-| `quests` | Active quests this character is named in |
-| `private_intent` | One-turn coloring from a live intent (warm/hostile; aim-aware when the target is absent) |
-| `recent_memories` | Fresh experiential memories (header `mem_recent_header`) |
-| `response_guidance` | "You are X, replying to Y's last line" |
-| `feelings` | Considered (slow axes) + right-now (fast axes) relationship prose, impulse-vs-settled tension lines, or the `stranger` block on a first encounter |
-| `final_guardrails` | Voice-only-yourself, single turn, dialogue-first, no reflexive questions, consistency; `heat_advance` is prepended during a heat continuation |
-| `spoken_delivery` | While voicing with the xAI engine: TTS delivery-tag coaching; otherwise, just after a voice session: the `voice_format_reset` |
+| `task` | Core directive + the editable **Global Base Instruction**. Universal. |
+| `world` | The universe's `setting` text. Universal. |
+| `format` | Formatting contract (`*narration*`, `_thoughts_`, `"dialogue"`) **+ the player's story language**. Swapped for the text/heat format in those payloads. |
+| `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, quests, goals & ambitions, **what they quietly want** (a standing aim toward someone absent rides here), appearance, wardrobe, where they live. |
+| `relationships` | Full relationship sheet; `[here now]` marks who is present. |
+| `scenario` | The character's scenario, when set. |
+| `others_present` | Who else is within earshot + the "only these people exist" footer. |
+| `response_target` ⚠️ | **The person this turn is aimed at** — player *or* another character — with their backstory and appearance. |
+| `player` | Who the human player is — rendered **only when the response target is someone else**, so the player never drops out of the payload. |
+| `feelings` | Considered + momentary relationship prose toward the target, or the `stranger` notice on a first encounter. |
+| `distant_memories` | Long-term condensed recollections, numbered. **Diaries are never injected** (changed from earlier builds). |
+| `recent_memories` | Fresh experiential memories, numbered — what came before the transcript. |
+| `latest_arcs` | The newest few memory arcs for this character, injected **every turn regardless of what semantic retrieval matched** — closes the gap between the transcript window and retrieved memories. |
+| `situation` | Only when this character is arriving/leaving this turn. |
+| `speaking_style` ⚠️ | The character's voice, delivered where the line actually gets written (just before the transcript). |
+| `__history__` | The witness-scoped, compacted transcript (doc 04). |
+| `last_line` ⚠️ | The last real **dialogue** line — not a day marker, presence note, travel beat or narration — pulled out and highlighted. |
+| `already_said` ⚠️ | This character's own last one or two lines quoted verbatim, with the rule that this turn may not repeat or rephrase them, plus a stronger directive when the exchange has visibly stalled on the same request. |
+| `rumors` 🗣️ | Live rumors from the **gossip ledger**, split by standing: the one rumor this character has a **stake** in (may be put to the player **once**, then they must live with the answer), and separately talk they merely overheard and may **not** raise at all. |
+| `scene_now` | How to read the situation, then current day · location · sub-areas · privacy (who can hear you, who is one door away) · **the character's trackers** (folded in — no separate `trackers` block since v26). |
+| `calendar` | Plans due now/soon for this character. |
+| `quests` | Active quests this character is named in. |
+| `private_intent` | One-turn coloring from a live scheme/warmth toward someone **present**. |
+| `response_guidance` | Who you are, who you're replying to, what the turn has to do. |
+| `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. |
+| `spoken_delivery` | xAI TTS delivery-tag coaching while voicing; otherwise the `voice_format_reset` while stale markup lingers. |
 
-`buildPayload(layoutKey, headBlocks, tailBlocks)` walks the order, splits at `__history__`,
-joins with blank lines, skips empty blocks, returns `{head, tail}` — either may be `""` and
-call sites must skip empty system messages.
+## Producers & assembly
+
+One content producer per half — **do not reintroduce a per-path producer** (guard #2):
+
+- `buildCharPromptBlocks(p, others, injectedMemories, addressed, opts)` — head blocks.
+- `buildSystemPromptBlocks(injected, opts)` — a thin **wrapper** used by the solo and gm call
+  sites: it picks the single present character and delegates to `buildCharPromptBlocks`. The
+  old "one model voices the whole cast with `Name:` prefixes" branch is **gone** (the turn
+  router made it unreachable).
+- `buildTailBlocks({chat, selfId, selfName, targetName, targetId, …})` — tail blocks.
+
+`buildPayload(layoutKey, headBlocks, tailBlocks)` walks `payloadOrder(key)`, splits at
+`__history__`, joins with blank lines, skips empty blocks, returns `{head, tail}` — either may
+be `""`, and **every call site must skip an empty system message**. The four call sites:
+`solo` (sendMessage), `text` (sendTextMessage), `chat._heatBeat?"heat":"multi"`
+(playCharacterTurn), `gm` (playSingleReaction).
+
+**(!) Every call site must pass the response target through BOTH halves** — `{chat,
+targetName, targetId}` to the head builder and the same to `buildTailBlocks` — or the
+`response_target`/`player`/`feelings` blocks disagree with the guidance.
 
 ## Editable fixed text: block template fragments
 
-Every fixed sentence in the three reply payloads lives in `BLOCK_TPL_DEFAULTS` as a
-**fragment** (e.g. `scene_present`, `feel_header`, `rail_question`, `spoken_delivery`).
-Producers consume them via `fillTpl(blkTpl("key"), {vars})`; user overrides live in
-`state.blockTpls` (blank override ⇒ default). The Settings editor lists each fragment under
-its block ("Fixed text").
+Every fixed sentence lives in `BLOCK_TPL_DEFAULTS` as a **fragment**, consumed by producers
+via `fillTpl(blkTpl("key"), {vars})`, overridable in `state.blockTpls` (blank ⇒ default), and
+listed per block in `_attachBlockTpls`'s `T` map so the Settings editor exposes it.
 
-**(!) The fragment 3-leg rule** — a fragment is healthy only when all three exist:
-1. a default in `BLOCK_TPL_DEFAULTS`,
-2. a producer consuming it via `blkTpl()`,
-3. a listing in `_attachBlockTpls`'s `T` map (making it editable).
-The boot-time drift guard checks (1)↔(3) only; it **cannot** detect a producer that stopped
-calling `blkTpl` — if you inline fixed text in a producer, the Settings editor silently
-diverges from reality.
+**(!) The fragment 3-leg rule** — healthy only when all three exist: (1) a default, (2) a
+producer calling `blkTpl()`, (3) a listing in `T`. The boot drift guard checks (1)↔(3) only —
+it **cannot** detect a producer that stopped calling `blkTpl`. Inline fixed text in a producer
+makes the Settings editor silently diverge from what is actually sent.
 
-**(!) Placeholders render literally when unfilled.** `fillTpl` only substitutes keys the
-producer provides. Changing a producer's variable map means updating the fragment default and
-accepting that users' customized fragments are kept as-is across upgrades (there is no
-migration pipe for fragments).
+**(!) Unfilled `{{placeholders}}` render literally** into the model input. Changing a
+producer's variable map means updating the fragment default; users' customized fragments are
+never auto-upgraded.
 
-## The four-place rule for adding/removing a reply block
+## The 3-place rule for adding/removing a reply block
 
-Adding or removing a block touches **four places** (guard #1):
-1. Produce the content in `buildSystemPromptBlocks` **and/or** `buildCharPromptBlocks` and/or
-   `buildTailBlocks` under the block id.
-2. Add the id to the `order` array of **every** payload that should carry it — `solo`, `multi`,
-   **and `gm`**. ⚠️ `gm` *shares* solo's `blocks` map but has its **own** `order` array — this
-   exact asymmetry shipped a bug in v19.2 (trackers/calendar missing from gm.order).
-3. Add the `blocks{}` metadata entry (label/kind/desc).
-4. If it wraps fixed text, wire the fragment 3-leg above.
+(Guard #1 — simpler than pre-v26, which needed four.)
+1. Produce it in `buildCharPromptBlocks` or `buildTailBlocks` under the block id.
+2. Add the id to **`REPLY_ORDER`** (one array — all five payloads derive from it).
+3. Add the `REPLY_BLOCKS{}` entry (label/kind/desc, optional `scope`).
+4. If it wraps fixed text, wire the fragment 3-leg.
 
-Self-healing: `payloadOrder()` re-inserts blocks a saved user layout doesn't know at their
-default position — **adding a block needs no migration**. But **never rename a block id**:
-saved layouts reference ids by string; a rename loses the user's placement.
-`state.payloadRemoved[key]` lists blocks the user ✕-removed (kept explicit so self-heal
-doesn't resurrect them; "＋ Placeholder" un-removes).
+Self-healing: `payloadOrder()` drops ids it no longer knows and re-inserts unknown-to-the-save
+blocks at their default position — **no migration needed**. But **never rename a block id**:
+saved layouts reference ids by string. `state.payloadRemoved[key]` holds blocks the user
+✕-removed (kept explicit so self-heal doesn't resurrect them; "＋ Placeholder" un-removes).
 
 ## Engine payloads & the prompt registry
 
-`PROMPT_REGISTRY` is the **single source of truth** for every editable engine prompt: key,
-label, default (`DEFAULT_*` constant), `json` flag, and a hint documenting its placeholders
-and output contract. ~60 prompts: memory (memEval/memBuild/gistBuild/queryGen/ranker/
-condensePrompt), living universe (gossipPrompt/poiGossip/intentForm/intentTick/contemplate/
-offstageEvent/calExec/goalPursuit/charQuest*), directors (gmJudge/gmAuthor/sceneSetup/
-sceneWriter/confrontJudge/overtureJudge/presencePrompt/routerPlayer/routerChar), world
-authoring (univPrompt/bioPrompt/batchBioPrompt/directorAuthor/genrePackAuthor/ruleCompiler/
-questGen/questNext/originGen/chronicler/promptTuner), relationships (relPrompt/relShortPrompt/
-relGenPrompt), calendar (calPrompt/attendanceEstimate/attendancePersuade/calReconcile), texts
-(textReplyPrompt/textProactivePrompt/textVisitPrompt), media (rewritePrompt/vidPrompt/
-extendPrompt/routerPrompt), misc (travelPrompt/charMovePrompt/trackPrompt/voiceCheckPrompt/
-daySummaryPrompt/playerNarratePrompt/trackerGen/latentNpc).
+`PROMPT_REGISTRY` is the single source of truth for every editable engine prompt
+(`{key, label, def, json, hint}` — the hint documents placeholders and the return shape).
+`up(key, uid?)` is the **only** read path: per-universe override → global `state[key]` →
+hard-coded `DEFAULT_*`.
 
-**Prompt resolution — `up(key, uid?)`** (the ONLY read path):
-per-universe override (`universe.prompts[key]`, set in the Universe editor or by the
-per-universe prompt tuner) → global `state[key]` (Settings) → hard-coded `DEFAULT_*`.
+Engine payload cards (`ENGINE_PAYLOAD_DEFS`), current set:
+`familiarity`, `turn_router`, `player_narrator`, `presence`, `memory_builder`,
+`memory_retrieval`, `tracker_gen`, `latent_npcs`, `world_pulse`, `memory_condenser`,
+`relationships`, `trackers`, `gossip`, `intent`, `judges`, `scene_events`,
+`gamemaster_engine`, `diaries`, `calendar`, `calendar_reconcile`, `travel`, `char_move`,
+`text_reply`, `text_proactive`, `voice_check`, `image_writer`, `video_writer`,
+`char_generator`, `world_authoring`, `universe_memory`.
 
-`ENGINE_PAYLOAD_DEFS` maps registry prompts into labeled payload cards for the Settings UI,
-each also listing its **dynamic blocks** (descriptions of the live data the job assembles —
-these dyn descriptions are the documentation of each engine's user-message content).
-Safety net: `_enginePayloadCoverage()` surfaces any unmapped registry prompt in an auto
-"Other prompts" card so nothing is ever uneditable. ⚠️ Each def's array property **must** be
-named `blocks` — a wrong name crashes boot (shipped v19.81).
+Each card lists its prompt blocks plus `{kind:"dyn"}` descriptions of the live data the job
+assembles — those dyn descriptions are the documentation of each engine's user message.
+`_enginePayloadCoverage()` surfaces any unmapped registry prompt under "Other prompts" with a
+console warning. ⚠️ The array property **must** be named `blocks` (a wrong name crashed boot
+in v19.81), and `promptKey` strings must match registry keys exactly.
 
-## Placeholders (`{{token}}`)
+## Placeholders
 
-- Placeholders are **not universal**: each token is filled only by the engine that sends that
-  prompt. A token pasted into a prompt whose engine doesn't fill it goes to the model as
-  literal `{{text}}`. The per-prompt picker (`promptPlaceholders`, `phMenuForPrompt`) offers
-  only that prompt's supported tokens; an empty picker means no substitutions at all.
-- `{{user}}` is the most widely supported; story text the player authors (universe setting,
-  character cards, plan titles) is always name-substituted via `subUser`.
-- The placeholder dictionary UI (`renderPlaceholderGuide`) is generated from `_phDoc`.
+Placeholders are **not universal** — each token is filled only by the engine that sends that
+prompt; a token pasted into a prompt whose engine doesn't fill it reaches the model as literal
+`{{text}}`. Each box's picker (`promptPlaceholders`/`phMenuForPrompt`) offers only that
+prompt's supported tokens; an empty picker means no substitutions at all. `{{user}}` is the
+most widely supported, and player-authored story text is always name-substituted (`subUser`).
 
 ## Genre packs & language
 
-- `_gpTail(section, chat)` appends the universe's genre-pack section (voice/drama/stakes/
-  relInterpretation/diaryVoice/pacing) to the relevant engine calls, so every system plays the
-  same genre.
-- `langDirective()` (story language en/de/tr) is appended to **every content-producing**
-  payload (replies, narration, memories, diaries, events, texts) — never to pure-JSON parsers
-  whose enums must stay stable.
-
-## Byte-equivalence discipline
-
-The default layout + default fragments reproduce the pre-v19 hardcoded payload
-**byte-for-byte** (Node-harness verified). Preserve that for untouched installs: change fixed
-text via fragment defaults, not inline literals; after restructuring, diff an old-vs-new
-payload dump (the Debug screen's export is the tool for this).
+`_gpTail(section, chat)` appends the universe's genre-pack section (voice/drama/stakes/
+relInterpretation/diaryVoice/pacing) to genre-sensitive engines. `langDirective()` (story
+language) rides in the `format` block for replies and is appended to every other
+content-producing payload — never to pure-JSON parsers whose enums must stay stable.

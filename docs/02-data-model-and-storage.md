@@ -5,7 +5,7 @@
 | Tier | What lives there | Why |
 |---|---|---|
 | **localStorage** (~5 MB quota) | Every setting, prompt override, API key, toggle — all the scalar keys in the `K` map (all prefixed `sm_`). | Synchronous, tiny values. |
-| **IndexedDB** `storymind_media` (hundreds of MB–GB) | Object stores `images` and `videos` (full-res base64 / URL records, keyPath `id`), plus a `kv` store holding the *growing collections*: `chats`, `memory`, `universes`, `personas`, `scenes`, static image bytes (`simg:*`, `mimg:<mid>`), and rolling `autobackup_*` bundles. | Collections grow without bound; localStorage would overflow. |
+| **IndexedDB** `storymind_media` (hundreds of MB–GB) | Object stores `images` and `videos` (full-res base64 / URL records, keyPath `id`), plus a `kv` store holding the *growing collections*: `chats`, `memory`, `universes`, `personas`, `scenes`, **`gossip`** (the rumor ledger, doc 08), static image bytes (`simg:*`, `mimg:<mid>`), and rolling `autobackup_*` bundles. | Collections grow without bound; localStorage would overflow. |
 
 Access goes through two wrappers — never call `localStorage`/`indexedDB` directly:
 
@@ -40,8 +40,8 @@ IDB collections in `_idbColl`; `loadState()` prefers those over any legacy local
   (blocks the user ✕-removed), `blockTpls` (fragment overrides), `styles` (image style list).
 - **UI**: `theme`, `font`, `streamReveal`, `revealCps`, `uiScale`, `storyLang` (en/de/tr).
 - **Collections**: `chats` (object keyed by chat id), `personas` (array), `universes` (array),
-  `memory` (flat array of all memories), `images`, `videos`, `scenes` (hydrated async),
-  `curChat`, `curPersona`, `curUniverse`.
+  `memory` (flat array of all memories), `gossip` (the rumor ledger), `images`, `videos`,
+  `scenes` (hydrated async), `curChat`, `curPersona`, `curUniverse`.
 
 Adding any new persistent value means touching **four places**: `K` (key), `loadState()`
 (default), `saveSettings()` (persist), `syncSettingsUI()` (reflect into the UI) — see doc 12.

@@ -22,13 +22,26 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   `safety_settings` categories are sent as `BLOCK_NONE`.
 - **Retries**: network errors and 429/5xx retried up to `opts.retries ?? 2` with backoff;
   4xx fail fast with a friendly message (`httpMsg`).
-- **Empty-response rescue**: if content comes back empty (reasoning burn), one automatic
-  retry with `max_tokens = max(1600, 3×)`. Logged into the same debug entry.
+- **Empty-response rescue**: if content comes back empty, one automatic retry with
+  `max_tokens = max(1600, 3×)`. When the first response was **thinking-only** (empty content
+  but a reasoning trace present), the retry *also* forces `reasoning:{enabled:false,
+  exclude:true}` — more headroom alone can just buy the model a longer think. Logged into the
+  same debug entry.
 - **Debug**: every call opens a `dbg()` entry (label, provider, url, body) and closes with
   `dbgDone(entry, ok|error, result)`.
 
-`extractCompletionText` normalizes provider quirks; `stripInlineReasoning` removes leaked
-`<think>`-style blocks; `looksLikeRefusal` is described in doc 04.
+`extractCompletionText` normalizes provider quirks (string content · content-part arrays ·
+`choices[0].text`); `stripInlineReasoning` removes leaked `<think>`/`<reasoning>`/`◁think▷`
+blocks and "Final answer:" channel markers from the content field; `looksLikeRefusal` is
+described in doc 04.
+
+⚠️ **`message.reasoning` / `reasoning_content` is a thinking trace, not an answer.** A
+reasoning model that spends its whole budget thinking returns empty content plus a full
+trace. `extractCompletionText` returns `""` for that, so the rescue above fires — it salvages
+from the reasoning field **only** when `finalAnswerFrom()` finds an explicitly delimited final
+answer (some providers dump the whole channel there). Returning the bare trace instead — which
+is what the code did before v29.1 — rendered the model's monologue as the character's line
+*and* made the caller believe the call had succeeded, so the recovery retry never ran.
 
 ## Which model runs what (fallback chains)
 

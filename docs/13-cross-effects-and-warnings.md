@@ -27,7 +27,8 @@ before any non-trivial change.**
 | Setting a background engine to `rp:true` or enabling reasoning | Sampling penalties / leaked thinking derail its JSON. Engines run provider defaults **by design**. |
 | Raising `memMinImp` above ~0.5 | The **intent engine starves** (it reads day memories at ≥0.55 importance to form grudges) — the living universe goes passive. UI warns; keep well below 0.55. |
 | `provDeny` slugs not matching OpenRouter's provider names | Deny-list is silently ignored — check a Debug response's `provider` field for exact slugs. |
-| Turning reasoning on globally with low `tokens` | Empty replies (budget burned on hidden thinking). The empty-rescue retries once at ≥1600, but engines with tight `fnTok` caps still suffer. |
+| Turning reasoning on globally with low `tokens` | Empty replies (budget burned on hidden thinking). The rescue retries once at ≥1600 with thinking forced off, but engines with tight `fnTok` caps still suffer. |
+| Treating `message.reasoning` as answer text | Renders the model's thinking as a character's line **and** hides the failure: a non-empty return makes `chatCompletion` think the call succeeded, so the recovery retry never runs. Only `finalAnswerFrom()`-delimited answers may be salvaged from that field (fixed v29.1). |
 
 ## Persistence
 

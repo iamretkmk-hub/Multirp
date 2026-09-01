@@ -37,7 +37,7 @@ global** and discipline comes from banner comments + naming conventions, not mod
 
 ## index.html anatomy
 
-| Region | Lines (v29.0) | Content |
+| Region | Lines (v29.1) | Content |
 |---|---|---|
 | `<style>` | ~25–657 | All CSS. Theming via CSS variables on `body[data-theme]`. Landscape two-column layout, video gallery, playground styles at the end. |
 | SVG symbol defs | ~660–742 | The line-icon system: `<symbol id="i-*">` sprites referenced by `<use href="#i-…">`. |
@@ -100,10 +100,10 @@ only), `navigator.storage.persist()`, and a custom "Install app" button.
 
 ## Versioning & release checklist
 
-- `#buildStamp` in the Settings header shows the app version (`v29.0`). The codebase's
+- `#buildStamp` in the Settings header shows the app version (`v29.1`). The codebase's
   banner comments reference feature versions constantly (`v19.4 — NARRATION MODE`), which is
   how history is tracked in a single file.
-- `sw.js` `CACHE_VERSION` (`storymind-v140`) **must be bumped with every upload**, otherwise
+- `sw.js` `CACHE_VERSION` (`storymind-v141`) **must be bumped with every upload**, otherwise
   installed clients keep the previous cached `index.html` (network-first mitigates this online,
   but offline clients pin to cache).
 - There is no test suite. The de-facto regression harness is: (a) the dev-time drift guards

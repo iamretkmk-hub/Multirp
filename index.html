@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6481,6 +6481,17 @@ function clearRevealQueue(){
 // their scratch-work in <think>…</think>, <reasoning>…</reasoning>, ◁think▷…◁/think▷, or a
 // "final answer" channel marker. We remove the reasoning and keep the answer. Conservative: only
 // acts on these explicit markers, so ordinary prose is never touched.
+// "Final answer: …" / "Final response — …" channel marker, shared by the inline stripper below
+// and finalAnswerFrom() (which reads the dedicated reasoning field).
+const FINAL_ANSWER_RE=/(?:^|\n)\s*(?:#{0,3}\s*)?\**\s*(?:final answer|final response|answer)\s*\**\s*[:\-–]\s*([\s\S]+)$/i;
+// The answer a reasoning TRACE explicitly delimits, or "" when the text is only scratch-work.
+// Deliberately strict: no marker means we have thinking, not a reply, and the caller must retry
+// rather than show the monologue.
+function finalAnswerFrom(s){
+  if(typeof s!=="string"||!s) return "";
+  const m=s.match(FINAL_ANSWER_RE);
+  return (m&&m[1]&&m[1].trim())?m[1].trim():"";
+}
 function stripInlineReasoning(s){
   if(typeof s!=="string"||!s) return s;
   let t=s;
@@ -6494,8 +6505,7 @@ function stripInlineReasoning(s){
   // 3) Channel-style markers: some models emit "...reasoning... \n\nFinal answer: <answer>". Only
   //    collapse to the final channel when the text BEFORE it clearly reads as reasoning scratch-work
   //    (so ordinary prose that merely contains the word "answer" is never truncated).
-  const finRe=/(?:^|\n)\s*(?:#{0,3}\s*)?\**\s*(?:final answer|final response|answer)\s*\**\s*[:\-–]\s*([\s\S]+)$/i;
-  const fin=t.match(finRe);
+  const fin=t.match(FINAL_ANSWER_RE);
   if(fin && fin[1] && fin[1].trim().length>0 && fin.index>0){
     const preamble=t.slice(0,fin.index);
     const looksLikeReasoning=/\b(let me|i need to|i should|the user|first,|step \d|okay,|reasoning|let'?s think|i'?ll)\b/i.test(preamble);
@@ -6514,10 +6524,20 @@ function extractCompletionText(d){
     if(cleaned && cleaned.trim()) return cleaned;
     // content was ONLY reasoning (stripped to empty) → fall through to the reasoning fields below
   }
-  // reasoning-model fallbacks (dedicated field). This is genuinely the model's thinking, so only
-  // used when there's no real answer content — better than showing nothing.
+  // REASONING FIELD — NOT AN ANSWER. `reasoning`/`reasoning_content` is the model's THINKING
+  // trace. A reasoning model that spends its whole token budget thinking returns empty content
+  // plus a full trace (finish_reason "length"), and returning that trace was doing two bad
+  // things at once: it rendered the model's internal monologue as the character's line, and —
+  // because the caller then saw a non-empty string — it made the empty-response rescue below
+  // believe the call had SUCCEEDED, so the retry that would have produced a real reply never
+  // ran. Salvage from this field ONLY when it demonstrably carries a delimited final answer
+  // (some providers dump the whole channel here, which is the case the original fallback was
+  // written for); a bare trace yields "" so the caller retries with real headroom.
   const r=msg.reasoning_content||msg.reasoning;
-  if(typeof r==="string" && r.trim()) return stripInlineReasoning(r)||r.trim();
+  if(typeof r==="string" && r.trim()){
+    const answer=finalAnswerFrom(r);
+    if(answer) return answer;
+  }
   // some providers stream the final answer into choices[0].text
   if(typeof d.choices[0].text==="string" && d.choices[0].text.trim()) return stripInlineReasoning(d.choices[0].text);
   return "";
@@ -6614,18 +6634,28 @@ async function chatCompletion(messages,model,opts={}){
   // the model can burn the whole budget on reasoning and return EMPTY content (finish_reason
   // "length"). One automatic retry with a generous ceiling almost always recovers a real reply.
   // Gated so it only fires once and only when we actually got nothing.
+  // THINKING-ONLY: the model produced a reasoning trace but never got to an answer. Distinguished
+  // from a plain empty response because the remedy is stronger — see the retry body below.
+  const _reasonOnly=!out.trim() && !!(()=>{const m=d&&d.choices&&d.choices[0]&&d.choices[0].message;
+    return m&&String(m.reasoning_content||m.reasoning||"").trim();})();
   if(!out.trim() && !opts._emptyRetry){
     const fin=d&&d.choices&&d.choices[0]&&d.choices[0].finish_reason;
     const bumped=Math.max(1600, (body.max_tokens||0)*3);
+    // When the model spent the whole budget thinking, more headroom alone can just buy it a
+    // longer think. Turn thinking OFF for the retry as well: this pipeline never wants
+    // chain-of-thought (see the REASONING CONTROL note above), and an answer the player can
+    // read beats a trace they can't use. Plain empty responses keep the original body.
+    const retryBody=Object.assign({},body,{max_tokens:bumped},
+      _reasonOnly?{reasoning:{enabled:false,exclude:true}}:{});
     try{
       const res2=await fetch(OR+"/chat/completions",{method:"POST",
         headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-        body:JSON.stringify(Object.assign({},body,{max_tokens:bumped}))});
+        body:JSON.stringify(retryBody)});
       if(res2.ok){
         const d2=await res2.json();
         const out2=extractCompletionText(d2);
         if(out2.trim()){
-          dbgDone(entry,"ok",out2+"\n\n[recovered after empty response — retried with max_tokens="+bumped+(fin?", first finish_reason="+fin:"")+"]");
+          dbgDone(entry,"ok",out2+"\n\n[recovered after "+(_reasonOnly?"a thinking-only response — retried with thinking disabled and":"an empty response — retried with")+" max_tokens="+bumped+(fin?", first finish_reason="+fin:"")+"]");
           return out2;
         }
       }
@@ -6633,7 +6663,10 @@ async function chatCompletion(messages,model,opts={}){
   }
   // Surface an empty-but-OK response as a soft error in the log so it's diagnosable instead of
   // looking like a success that did nothing (the old behaviour). The caller still gets "".
-  dbgDone(entry, out.trim()?"ok":"error", out.trim()?out:"(empty response — model returned no content; if using a reasoning model, raise the token limit in Settings)");
+  dbgDone(entry, out.trim()?"ok":"error", out.trim()?out
+    :(_reasonOnly
+      ?"(thinking-only response — the model returned its reasoning but never produced an answer, and the retry with thinking disabled didn't recover one either. Turn OFF Settings → LLM Selection → Model reasoning / thinking, raise Max tokens, or pick a non-reasoning model for this job.)"
+      :"(empty response — model returned no content; if using a reasoning model, raise the token limit in Settings)"));
   return out;
 }
 // REFUSAL DETECTOR. A model can return a NON-EMPTY reply that is actually a content refusal —

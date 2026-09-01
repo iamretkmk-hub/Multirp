@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1938,10 +1938,11 @@
     <div><label>Profile picture</label>
       <div id="peAvatarPreview" class="avatarPreview"><svg class="ic"><use href="#i-masks"/></svg></div>
       <div class="row" style="margin-top:8px">
+        <button class="btn sec small" id="pePickPic" onclick="pickProfilePicFromGallery()"><svg class="ic"><use href="#i-image"/></svg> Choose from gallery</button>
         <button class="btn sec small" id="peGenPic" onclick="generateProfilePic()"><svg class="ic"><use href="#i-sparkle"/></svg> Generate from appearance</button>
         <button class="btn sec small" id="peClearPic" onclick="clearProfilePic()">Clear</button>
       </div>
-      <div class="desc">Uses the Appearance field below + your ModelsLab image settings. Fill in Appearance first for best results.</div>
+      <div class="desc"><b>Choose from gallery</b> picks one of this character's existing pictures — usually the best likeness you already have. <b>Generate</b> makes a new one from the Appearance fields below.</div>
     </div>
     <div><label>Avatar (emoji fallback)</label><input type="text" id="peAvatar" placeholder="🧝‍♀️" maxlength="4"></div>
     <div><label>Roleplay instructions</label><textarea class="fld" id="peInstructions" placeholder="How this character should be played: rules, tone, content boundaries, formatting preferences, things to always/never do…" style="min-height:64px"></textarea></div>
@@ -1971,9 +1972,12 @@
         <div><label>Body</label><input type="text" class="fld" id="peLookBody" placeholder="e.g. tall, athletic build"></div>
         <input type="hidden" id="peLook">
         <div><label><svg class="ic"><use href="#i-image"/></svg> Reference images <span class="desc" style="font-weight:400">— for image-edit models</span></label>
-          <div class="desc" style="margin:2px 0 6px">Your own pictures of this character. Image-<b>edit</b> models (alibaba/wan-2.6/image-edit) build every scene out of these instead of a text description, so the face and build stay the same from scene to scene. Up to 8 here; the newest 4 are sent with each request. Text-to-image models ignore them. Max 10MB each.</div>
+          <div class="desc" style="margin:2px 0 6px">Your own pictures of this character. Image-<b>edit</b> models (alibaba/wan-2.6/image-edit) build every scene out of these instead of a text description, so the face and build stay the same from scene to scene. Keep up to 8 here; the <b>numbered</b> ones are what gets sent (4 at most, in that order) &mdash; tap a number to leave one out. Text-to-image models ignore all of this. Max 10MB each.</div>
           <div id="peRefGrid" style="display:flex;flex-wrap:wrap;gap:8px"></div>
-          <button class="btn sec small" type="button" style="width:auto;margin-top:8px" onclick="peAddRefImages()">＋ Upload reference images</button>
+          <div class="row" style="margin-top:8px">
+            <button class="btn sec small" type="button" onclick="peAddRefImages()">＋ Upload reference images</button>
+            <button class="btn sec small" type="button" onclick="peAddRefFromGallery()"><svg class="ic"><use href="#i-image"/></svg> Add from gallery</button>
+          </div>
         </div>
         <div><label><svg class="ic"><use href="#i-palette"/></svg> Wardrobe — preferred clothing (with colors)</label>
           <textarea class="fld" id="peWardrobe" placeholder="e.g. daytime: cream silk blouses, high-waist navy trousers; evenings: deep burgundy wrap dresses, gold jewelry; at home: oversized grey knits" style="min-height:64px"></textarea>
@@ -13673,7 +13677,9 @@ function editPersona(id){
   });
   fillLookEditor(p.look);
   // v29.4 — reference images: edit a copy, so cancelling the editor doesn't mutate the persona.
-  _peRefDraft={refImages:(Array.isArray(p.refImages)?p.refImages.slice():[])};
+  // Deep-copy the metadata: a shallow slice shares the record objects, so toggling a badge or
+  // reordering would reach the saved persona even when the editor is cancelled.
+  _peRefDraft={refImages:(Array.isArray(p.refImages)?p.refImages.map(r=>Object.assign({},r)):[])};
   renderPeRefs();
   ensureCharRefUrls(_peRefDraft).then(n=>{ if(n)renderPeRefs(); });
   {const e=document.getElementById('peWardrobe'); if(e)e.value=p.wardrobe||"";}
@@ -13699,6 +13705,26 @@ function editPersona(id){
   openModal('personaModal');
 }
 function clearProfilePic(){peImageData=null;renderAvatarPreview();}
+/* v29.5 — the profile picture straight from the gallery. Generating one from the Appearance text
+   re-rolls the face; a picture you already liked in play is usually the better likeness. Stored as
+   a data URI on the persona (same shape generateProfilePic produces), so nothing downstream changes. */
+function pickProfilePicFromGallery(){
+  const nameEl=document.getElementById('peName');
+  openGalleryPicker({
+    title:"Profile picture",
+    charId:editingPersona?editingPersona.id:null,
+    charName:(nameEl&&nameEl.value.trim())||"",
+    multiple:false,
+    onPick:async recs=>{
+      const rec=recs&&recs[0]; if(!rec)return;
+      const blob=await galleryRecordBlob(rec);
+      if(!blob){ toast("Couldn't read that picture"); return; }
+      const d=await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result)); fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
+      if(!d){ toast("Couldn't read that picture"); return; }
+      peImageData=d; renderAvatarPreview(); toast("Profile picture set");
+    }
+  });
+}
 // Render the "places they usually visit" checklist. Homes the character lives in are shown
 // pre-ticked and disabled (they're always part of the day); POIs are tickable and stored on
 // p.locations (the per-character "allowed visit set" that the daily placement roll uses).
@@ -15100,13 +15126,31 @@ function renderPeRefs(){
   const p=_peRefDraft; el.innerHTML="";
   const list=charRefs(p);
   if(!list.length){ el.innerHTML=`<div class="desc">No reference images yet.</div>`; return; }
-  list.forEach(r=>{
+  const active=charRefsActive(p).map(r=>r.id);
+  list.forEach((r,i)=>{
+    const slot=active.indexOf(r.id);              // -1 = not sent
     const cell=document.createElement('div');
-    cell.style.cssText="position:relative;width:78px;height:78px;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:var(--surface)";
+    cell.style.cssText="position:relative;width:82px;height:82px;border-radius:10px;overflow:hidden;background:var(--surface);border:2px solid "
+      +(slot>=0?"var(--accent)":"var(--border)")+(slot<0?";opacity:.45":"");
     const u=charRefUrl(r.id);
     cell.innerHTML=u
       ? `<img src="${u}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
       : `<div class="desc" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px">…</div>`;
+    // the badge IS the answer to "which image gets sent": 1..4, or a dash when it doesn't
+    const badge=document.createElement('button');
+    badge.type="button"; badge.title=slot>=0?"Sent as image "+(slot+1)+" — tap to leave it out":"Not sent — tap to include it";
+    badge.textContent=slot>=0?String(slot+1):"–";
+    badge.style.cssText="position:absolute;left:2px;top:2px;min-width:20px;height:20px;border-radius:10px;border:none;padding:0 5px;font-size:11px;cursor:pointer;"
+      +(slot>=0?"background:var(--accent);color:#fff":"background:rgba(0,0,0,.55);color:#fff");
+    badge.onclick=()=>{ r.off=!r.off; renderPeRefs(); };
+    cell.appendChild(badge);
+    if(i>0){
+      const up=document.createElement('button');
+      up.type="button"; up.innerHTML="‹"; up.title="Send this one earlier";
+      up.style.cssText="position:absolute;left:2px;bottom:2px;width:20px;height:20px;line-height:18px;border-radius:50%;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:13px;cursor:pointer;padding:0";
+      up.onclick=()=>{ const a=p.refImages; a.splice(i-1,0,a.splice(i,1)[0]); renderPeRefs(); };
+      cell.appendChild(up);
+    }
     const x=document.createElement('button');
     x.type="button"; x.innerHTML="×"; x.title="Remove";
     x.style.cssText="position:absolute;top:2px;right:2px;width:20px;height:20px;line-height:18px;border-radius:50%;border:none;background:rgba(0,0,0,.62);color:#fff;font-size:15px;cursor:pointer;padding:0";
@@ -15114,8 +15158,38 @@ function renderPeRefs(){
     cell.appendChild(x);
     el.appendChild(cell);
   });
+  const note=document.createElement('div'); note.className="desc"; note.style.cssText="width:100%;margin-top:4px;font-size:11px";
+  note.textContent=active.length
+    ? `Numbered 1–${active.length} are sent with every image request, in that order. Tap a number to leave one out; use ‹ to move it earlier.`
+    : "Nothing is selected, so an image-edit model has nothing to work from. Tap a dash to include a picture.";
+  el.appendChild(note);
 }
 let _peRefDraft={refImages:[]};
+/* Promote pictures the story already produced into references — the usual way you get a good one.
+   The bytes are COPIED into the reference store, so deleting the gallery image later leaves the
+   reference intact. */
+function peAddRefFromGallery(){
+  const nameEl=document.getElementById('peName');
+  openGalleryPicker({
+    title:"Add reference images",
+    hint:"Tap the pictures that show this character best, then Add.",
+    charId:editingPersona?editingPersona.id:null,
+    charName:(nameEl&&nameEl.value.trim())||"",
+    multiple:true,
+    onPick:async recs=>{
+      let n=0;
+      for(const rec of recs){
+        const blob=await galleryRecordBlob(rec);
+        if(!blob)continue;
+        const f=new File([blob],(rec.character||"reference")+".png",{type:blob.type||"image/png"});
+        if(await addCharRef(_peRefDraft,f)) n++;
+      }
+      await ensureCharRefUrls(_peRefDraft);
+      renderPeRefs();
+      toast(n?`Added ${n} reference image${n===1?"":"s"}`:"Nothing was added");
+    }
+  });
+}
 async function peAddRefImages(){
   const files=await pickFiles("image/*",true);
   if(!files.length)return;
@@ -20998,6 +21072,79 @@ async function addUploadedMedia(kind,file,who){
   updateStorage();
   return rec;
 }
+/* ===== v29.5 — GALLERY PICKER =================================================================
+   One modal for "choose an existing picture", used by the profile picture and by reference
+   images. Scoped to the current universe, with the named character's own images first, because
+   the picture you want is almost always one of theirs. Hydrates records whose bytes are in
+   IndexedDB but have no live object URL yet (anything outside the boot window). */
+function _pickerImages(charId,charName){
+  const all=_galScope(state.images||[])
+    .filter(r=>r&&(r.url||r.stored||r.remote))
+    .slice().reverse();                       // newest first
+  if(!charId&&!charName) return all.slice(0,120);
+  const mine=r=>charId?(r.characterId===charId):((r.character||"")===charName);
+  return all.filter(mine).concat(all.filter(r=>!mine(r))).slice(0,120);
+}
+function closeGalleryPicker(){ const m=document.getElementById('galPickModal'); if(m)m.remove(); }
+function openGalleryPicker(opts){
+  opts=opts||{};
+  closeGalleryPicker();
+  const recs=_pickerImages(opts.charId||null,opts.charName||"");
+  const m=document.createElement('div'); m.id="galPickModal"; m.className="modal show";
+  const picked=new Set();
+  m.innerHTML=`<button class="x" onclick="closeGalleryPicker()">×</button>
+    <div class="card editCard">
+      <h3>${icon("image")} ${esc(opts.title||"Choose an image")}</h3>
+      <div class="desc" id="galPickHint">${esc(opts.hint||(opts.multiple?"Tap the pictures you want, then Add.":"Tap a picture to use it."))}</div>
+      <div id="galPickGrid" class="grid" style="margin-top:10px;max-height:56vh;overflow:auto"></div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button class="btn sec" type="button" onclick="closeGalleryPicker()">Cancel</button>
+        ${opts.multiple?`<button class="btn" type="button" id="galPickGo">Add</button>`:``}
+      </div>
+    </div>`;
+  m.addEventListener('click',e=>{ if(e.target===m)closeGalleryPicker(); });
+  document.body.appendChild(m);
+  const grid=document.getElementById('galPickGrid');
+  if(!recs.length){
+    grid.innerHTML=`<div class="desc">No pictures in this universe's gallery yet. Roleplay to illustrate a scene, upload one in the Gallery, or make one in the Playground.</div>`;
+    return;
+  }
+  const draw=()=>{
+    grid.innerHTML="";
+    recs.forEach(r=>{
+      const cell=document.createElement('div');
+      const on=picked.has(r.id);
+      cell.style.cssText="position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid "+(on?"var(--accent)":"transparent");
+      cell.innerHTML=r.url
+        ? `<img src="${r.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
+        : `<div class="desc" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px">…</div>`;
+      if(on){ const t=document.createElement('div');
+        t.style.cssText="position:absolute;top:4px;right:4px;background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px";
+        t.textContent="✓"; cell.appendChild(t); }
+      cell.onclick=()=>{
+        if(opts.multiple){ if(picked.has(r.id))picked.delete(r.id); else picked.add(r.id); draw(); }
+        else { closeGalleryPicker(); if(opts.onPick)opts.onPick([r]); }
+      };
+      grid.appendChild(cell);
+    });
+  };
+  draw();
+  // Pull in the ones whose bytes are stored but not yet materialized, then redraw.
+  const pend=recs.filter(r=>r&&!r.url&&r.stored);
+  if(pend.length) ensureGalleryUrls(pend).then(n=>{ if(n&&document.getElementById('galPickGrid'))draw(); });
+  const go=document.getElementById('galPickGo');
+  if(go) go.onclick=()=>{
+    const chosen=recs.filter(r=>picked.has(r.id));
+    closeGalleryPicker();
+    if(chosen.length&&opts.onPick)opts.onPick(chosen);
+  };
+}
+// The bytes behind a gallery record, for copying one into another store (refs, profile picture).
+async function galleryRecordBlob(rec){
+  if(!rec)return null;
+  if(rec.stored){ try{ const b=await mediaDB.kvGet(_gmKey(rec.id)); if(b&&b.size)return b; }catch(e){} }
+  return await fetchMediaBlob(rec.url||rec.remote||"");
+}
 /* ===== v29.4 — PER-CHARACTER REFERENCE IMAGES ==================================================
    A character's own photos/renders, kept as bytes in IndexedDB under "cref:<id>" with only tiny
    metadata on the persona. They feed the image-EDIT models (alibaba/wan-2.6/image-edit), which
@@ -21008,7 +21155,13 @@ async function addUploadedMedia(kind,file,who){
    unusable in the video work. */
 const _crefKey=id=>"cref:"+id;
 const CREF_MAX=8;                 // per character; the models take at most 4 per request
+const CREF_SEND=4;                // how many go with a request (the API's own ceiling)
 function charRefs(p){ return (p&&Array.isArray(p.refImages))?p.refImages:[]; }
+/* v29.5 — THE ONES THAT ACTUALLY GET SENT. Before this the code just took the newest four with no
+   way to see or change that, which made the whole feature guesswork. A reference is ON unless the
+   player turns it off, and the first CREF_SEND that are on — in the order shown in the editor —
+   are what the model receives, numbered 1..4 there so it is never a mystery. */
+function charRefsActive(p){ return charRefs(p).filter(r=>r&&!r.off).slice(0,CREF_SEND); }
 async function addCharRef(p,file){
   if(!p||!file||!file.size)return null;
   if(charRefs(p).length>=CREF_MAX){ toast(`${CREF_MAX} reference images is the limit`); return null; }
@@ -21043,7 +21196,7 @@ function charRefUrl(id){ return _gmObjUrls.get(id)||""; }
    uploading each one first). Newest last so the most recent reference carries the most weight. */
 async function charRefDataUrls(charId,max){
   const p=(state.personas||[]).find(x=>x&&x.id===charId);
-  const list=charRefs(p).slice(-(max||4));
+  const list=charRefsActive(p).slice(0,max||CREF_SEND);
   const out=[];
   for(const r of list){
     if(!r||!r.id)continue;

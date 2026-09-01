@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6922,7 +6922,12 @@ async function atlasGenerate(kind,body,label,setStat,opts){
   const hdr={"Authorization":"Bearer "+state.atlasKey,"Content-Type":"application/json"};
   const entry=dbg(label,"AtlasCloud",ATLAS+endpoint,
     Object.assign({},body,body.image_url?{image_url:"[image data omitted]"}:{},body.image?{image:"[image data omitted]"}:{},
-                          body.last_image?{last_image:"[image data omitted]"}:{}));
+                          body.last_image?{last_image:"[image data omitted]"}:{},
+                          // v29.7 — reference images are base64 and would bury the log; show that
+                          // they were attached, and how many, which is the part worth checking.
+                          Array.isArray(body.images)?{images:body.images.map((s,i)=>
+                            `[reference ${i+1} — ${String(s||"").startsWith("data:")?"inline image, "+Math.round(String(s).length/1365)+"KB":String(s).slice(0,80)}]`)}:{},
+                          Array.isArray(body.reference_images)?{reference_images:"["+body.reference_images.length+" reference image(s)]"}:{}));
   let res;
   try{res=await fetch(ATLAS+endpoint,{method:"POST",headers:hdr,body:JSON.stringify(body)});}
   catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:"Couldn't reach AtlasCloud (network/CORS). Check your connection."};}
@@ -7086,6 +7091,14 @@ function atlasIsEditModel(m){ return ATLAS_EDIT_MODELS.indexOf(String(m||"").tri
    every one of the dozen atlasImage call sites, and threading a parameter through all of them
    would only make each of them wrong in a different way. */
 let _refCharOverride=null;
+// Two characters answering in one turn means two generations in flight, so the ambient overrides
+// are saved and restored rather than blanked — a plain `=null` in the second one's finally block
+// would strip the first of its reference mid-request.
+function _withRefOverrides(charId,images,fn){
+  const pc=_refCharOverride, pi=_refImagesOverride;
+  _refCharOverride=charId; _refImagesOverride=images;
+  return Promise.resolve().then(fn).finally(()=>{ _refCharOverride=pc; _refImagesOverride=pi; });
+}
 /* v29.6 — explicit reference images for ONE generation (the Playground's "Reference images"
    picker). Wins over _refCharOverride, so the Playground can build from any pictures you choose
    rather than only the actor's profile picture. */
@@ -8241,6 +8254,13 @@ async function pickRule(rules,prompt){
    preserving old behaviour for existing rules. */
 function effImgProvider(rule){
   const p=rule&&rule.provider; return (p&&p!=="default")?p:(state.imgProvider||"modelslab");
+}
+// The model id a rule will actually run on (its own, else the global default).
+function effImgModel(rule){ return (rule&&rule.model_id)||state.imgModel||""; }
+/* v29.7 — is this generation driven by a REFERENCE IMAGE rather than by a description of the
+   character? That changes what the prompt may say about who they are: see _imgSpeakerAppearance. */
+function usesRefImage(rule){
+  return effImgProvider(rule)==="atlascloud" && atlasIsEditModel(effImgModel(rule));
 }
 function effVidProvider(rule){
   const p=rule&&rule.provider; return (p&&p!=="default")?p:(state.vidProvider||"modelslab");
@@ -20470,8 +20490,21 @@ function _imgLocationClause(chat){
 // v25 — the FOCAL speaker's appearance, auto-injected on every image tail (no longer POV-only). The
 // writer never receives a character sheet, so this is the single authoritative source of the drawn
 // character's look — kept to ONE person (the speaker) so no other character's appearance can leak in.
-function _imgSpeakerAppearance(speaker){
-  try{ if(!speaker)return ""; const l=lookProse(speaker.look)||""; return l?String(l).replace(/\s+/g," ").trim():""; }catch(e){ return ""; }
+/* The speaker's look, stamped on the prompt tail in code so the writer can't paraphrase it.
+   v29.7 — WITH AN IMAGE-EDIT MODEL THIS MUST NOT DESCRIBE THEIR IDENTITY. The reference image
+   already IS the face, the hair and the build; appending a description on top puts the text and
+   the picture in competition, and the model follows the text. That is what made a scene come back
+   as a different person entirely while the same prompt and image in AtlasCloud's own playground
+   were fine: the tail carried the face-map name, so the model drew THAT person instead of the
+   reference. With a reference attached the identity clause is dropped completely — nothing about
+   the face, hair or build — and the picture speaks for itself. */
+function _imgSpeakerAppearance(speaker,opts){
+  try{
+    if(!speaker)return "";
+    if(opts&&opts.refDriven)return "";
+    const l=lookProse(speaker.look)||"";
+    return l?String(l).replace(/\s+/g," ").trim():"";
+  }catch(e){ return ""; }
 }
 
 /* ===== v26.1 — WARDROBE + DRESSING CONTEXT for the image writer =========================
@@ -20682,7 +20715,9 @@ async function illustrate(mid,replyText,force){
     // and the character whose line this is gets their exact look stamped on the tail. Because only the
     // speaker's look is injected, a character is never rendered with someone else's appearance.
     {
-      const _appC=_imgSpeakerAppearance(speaker);
+      // v29.7 — with a reference image the identity is the picture, not a sentence about it.
+      const _refDriven=usesRefImage(rule);
+      const _appC=_imgSpeakerAppearance(speaker,{refDriven:_refDriven});
       const _locC=_imgLocationClause(chat);
       const _litC=_imgLightingClause(chat);
       const _det=[_appC,_locC,_litC].filter(Boolean).join(", ");
@@ -20705,19 +20740,21 @@ async function illustrate(mid,replyText,force){
     msg.ratio=_frame;
     let url;
     _frameOverride=_frame;
-    // v29.4 — an edit model builds this frame from THIS speaker's reference images.
-    _refCharOverride=msg.characterId||(_spkKey!=="__narr__"?_spkKey:null);
+    // v29.4 — an edit model builds this frame from THIS speaker's reference image.
+    const _refChar=msg.characterId||(_spkKey!=="__narr__"?_spkKey:null);
     try{
-      if(rule){
-        url=await genImageForRule(rule,finalPrompt,baseNeg);
-        msg.imgRule=rule.label||"";
-      }else{
+      url=await _withRefOverrides(_refChar,null,async()=>{
+        if(rule){
+          const u=await genImageForRule(rule,finalPrompt,baseNeg);
+          msg.imgRule=rule.label||"";
+          return u;
+        }
         // No rules configured at all → use the global provider directly.
-        if(state.imgProvider==="atlascloud")      url=await atlasImage(finalPrompt,baseNeg,null);
-        else if(state.imgProvider==="modelslab")  url=await modelslabImage(finalPrompt,baseNeg,null);
-        else                                      url=await imageCompletion(finalPrompt,state.imgModel,RATIOS[curImgRatioKey()]);
-      }
-    }finally{ _frameOverride=null; _refCharOverride=null; }
+        if(state.imgProvider==="atlascloud")      return await atlasImage(finalPrompt,baseNeg,null);
+        if(state.imgProvider==="modelslab")       return await modelslabImage(finalPrompt,baseNeg,null);
+        return await imageCompletion(finalPrompt,state.imgModel,RATIOS[curImgRatioKey()]);
+      });
+    }finally{ _frameOverride=null; }
     msg.img=url;msg.imgSrc=url;msg.imgState="done";msg.imgPrompt=finalPrompt;
     // v29 — flag it only when the bytes are really in the store. This used to be set the instant
     // the fetch was FIRED, so a refused capture still reported itself as saved.
@@ -21948,7 +21985,9 @@ async function pgGenerate(){
     // Deterministic tail — IDENTICAL to the roleplay pipeline: actor appearance, then the picked
     // location, then the picked time-of-day lighting, then the render/quality style last.
     let finalPrompt=_pg.prompt.trim().replace(/^["']|["']$/g,"");
-    const _det=[_imgSpeakerAppearance(actor),_pgLocationClause(),LIGHTING_BY_PERIOD[_pg.period]||""].filter(Boolean).join(", ");
+    // v29.7 — same rule here: describing the face fights the reference picture.
+    const _refDriven=usesRefImage(rule)||((_pg.refIds||[]).length>0&&atlasIsEditModel(effImgModel(rule)));
+    const _det=[_imgSpeakerAppearance(actor,{refDriven:_refDriven}),_pgLocationClause(),LIGHTING_BY_PERIOD[_pg.period]||""].filter(Boolean).join(", ");
     if(_det) finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_det;
     const _styleTail=styleTail();
     if(_styleTail && !finalPrompt.toLowerCase().includes(_styleTail.slice(0,18).toLowerCase()))
@@ -21968,14 +22007,14 @@ async function pgGenerate(){
       const d=await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result)); fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
       if(d)_pgRefs.push(d);
     }
-    _refImagesOverride=_pgRefs.length?_pgRefs:null;
-    _refCharOverride=actor.id;
     try{
-      if(rule) url=await genImageForRule(rule,finalPrompt,baseNeg);
-      else if(state.imgProvider==="atlascloud")      url=await atlasImage(finalPrompt,baseNeg,null);
-      else if(state.imgProvider==="modelslab")       url=await modelslabImage(finalPrompt,baseNeg,null);
-      else                                           url=await imageCompletion(finalPrompt,state.imgModel,RATIOS[curImgRatioKey()]);
-    }finally{ _frameOverride=null; _refImagesOverride=null; _refCharOverride=null; }
+      url=await _withRefOverrides(actor.id,_pgRefs.length?_pgRefs:null,async()=>{
+        if(rule) return await genImageForRule(rule,finalPrompt,baseNeg);
+        if(state.imgProvider==="atlascloud")      return await atlasImage(finalPrompt,baseNeg,null);
+        if(state.imgProvider==="modelslab")       return await modelslabImage(finalPrompt,baseNeg,null);
+        return await imageCompletion(finalPrompt,state.imgModel,RATIOS[curImgRatioKey()]);
+      });
+    }finally{ _frameOverride=null; }
     const uni=curUniverseObj();
     const rec={id:"img_"+Date.now(),url,prompt:finalPrompt,character:actor.name,characterId:actor.id,
                universeId:uni?uni.id:null,date:Date.now(),frame:_frame,playground:true};

@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1417,8 +1417,8 @@
           <h3>Storage &amp; Cleanup</h3>
           <div class="kvline"><span>Storage used</span><span id="storageUsed" class="pill">—</span></div>
           <div class="kvline"><span>Media saved offline</span><span id="storageMedia" class="pill">—</span></div>
-          <div class="desc">Generated images and clips are copied into this device's database, so they survive a reload and keep working after the provider's link expires. Anything still showing as <b>link only</b> could not be copied \u2014 tap <b>Re-save media</b> to try again while those links are alive.</div>
-          <button class="btn sec small" id="reSaveMediaBtn" onclick="reSaveAllMedia()">Re-save media to this device</button>
+          <div class="desc">Generated images and clips are copied into this device's database, so they survive a reload and keep working after the provider's link expires. This does <b>not</b> download files to your phone &mdash; use the save button on a picture or clip for that. Anything counted as missing below either still has a live link (the button will fetch it) or was lost before v29.2, in which case nothing can bring it back.</div>
+          <button class="btn sec small" id="reSaveMediaBtn" onclick="reSaveAllMedia()">Copy missing media to this device</button>
           <button id="installBtn" class="btn small" style="display:none" onclick="installApp()"><svg class="ic"><use href="#i-share"/></svg> Install app</button>
 
           <div class="desc" style="margin-top:10px;font-weight:600;color:var(--accent)">Full backup</div>
@@ -5958,14 +5958,29 @@ function _iosLike(){
 }
 // The bytes behind a piece of gallery media. recId (a gallery record id) is tried first: those
 // bytes are already local, so it works offline and for links the provider has since expired.
-async function mediaBlob(url,recId){
+async function mediaBlob(url,recId,mid){
   if(recId){ try{ const b=await mediaDB.kvGet(_gmKey(recId)); if(b&&b.size)return b; }catch(e){} }
-  const u=httpsMedia(url||"");
-  if(!u)return null;
+  // v29.3 — a chat clip also has its own per-message copy. Checking it here means every save
+  // button gets it for free; v29.2 wrongly special-cased this inside downloadVideo instead, which
+  // added an await before saveMedia and cost the click its user-activation on iOS.
+  if(mid){ try{ const b=await mediaDB.kvGet("mvid:"+mid); if(b&&b.size)return b; }catch(e){} }
+  if(!url)return null;
   try{
-    if(u.startsWith("data:")) return _dataURLtoBlob(u);
-    const r=await fetch(u,{mode:"cors"});
-    if(r&&r.ok){ const b=await r.blob(); if(b&&b.size) return b; }
+    if(String(url).startsWith("data:")) return _dataURLtoBlob(url);
+    // blob: is same-origin — fetching it with mode:"cors" fails. Only remote URLs want that.
+    if(String(url).startsWith("blob:")){
+      const r=await fetch(url);
+      if(r&&r.ok){ const b=await r.blob(); if(b&&b.size) return b; }
+      return null;
+    }
+    // Try the URL as given, then the https-upgraded form. Upgrading first (which this used to do
+    // unconditionally) silently kills an http-only host.
+    const opt={mode:"cors",referrerPolicy:"no-referrer"};
+    for(const u of [url,httpsMedia(url)]){
+      if(!u)continue;
+      try{ const r=await fetch(u,opt); if(r&&r.ok){ const b=await r.blob(); if(b&&b.size) return b; } }catch(e){}
+      if(httpsMedia(url)===url)break;
+    }
   }catch(e){}
   return null;
 }
@@ -6005,10 +6020,10 @@ function pickFiles(accept,multiple){
     inp.click();
   });
 }
-async function saveMedia(url,filename,recId){
+async function saveMedia(url,filename,recId,mid){
   const name=filename||"storymind";
   let blob=null;
-  try{ blob=await mediaBlob(url,recId); }catch(e){}
+  try{ blob=await mediaBlob(url,recId,mid); }catch(e){}
   if(blob){
     if(_iosLike()&&navigator.canShare){
       try{
@@ -20771,16 +20786,13 @@ async function pollVideo(job,setStat){
   }
   throw{friendly:"Video timed out. Try a shorter duration."};
 }
-async function downloadVideo(mid){
+function downloadVideo(mid){
   const m=findMsg(mid); if(!m||(!m.video&&!m.videoSrc))return;
   // The clip is also a gallery record; its stored bytes save without touching the network.
+  // saveMedia -> mediaBlob already prefers stored bytes (gallery record, then this message's own
+  // copy), so this stays a plain call made straight from the click — no await in front of it.
   const rec=(state.videos||[]).find(v=>v&&(v.mid===mid||v.url===m.video||v.url===m.videoSrc));
-  const name=mediaFilename("mp4",(rec&&rec.character)||m.speaker);
-  // v29 — our own copy first. A provider link that has expired cannot be downloaded either, and
-  // that was how a saved clip turned into a failed save weeks later.
-  const stored=await msgVideoBlobUrl(mid);
-  if(stored) return saveMedia(stored,name,rec&&rec.id);
-  saveMedia(m.video||m.videoSrc, name, rec&&rec.id);
+  saveMedia(m.video||m.videoSrc, mediaFilename("mp4",(rec&&rec.character)||m.speaker), rec&&rec.id, mid);
 }
 
 /* ---- scene image viewer ---- */
@@ -29069,25 +29081,42 @@ function mediaStoredCounts(){
   (state.videos||[]).forEach(r=>{ if(!r||!r.id)return; c.vidAll++; if(r.stored)c.vid++; });
   return c;
 }
-// Re-run capture over everything not yet stored. Safe to press repeatedly; a link that has already
-// expired cannot be recovered, and that is reported honestly rather than retried forever.
+/* Copy anything not yet held on this device into IndexedDB. Safe to press repeatedly. Three
+   outcomes are reported separately, because they mean different things to the person pressing it:
+   copied, a link that is still there but refused us, and a record with no link left at all (the
+   ones lost before v29.2 — those are gone and no button can bring them back). */
 async function reSaveAllMedia(){
   const btn=document.getElementById('reSaveMediaBtn');
-  const before=mediaStoredCounts();
-  const pending=[...(state.images||[]),...(state.videos||[])].filter(r=>r&&r.id&&!r.stored);
-  if(!pending.length){ toast("Everything is already saved on this device"); return; }
-  if(btn){ btn.disabled=true; btn.textContent="Saving \u2026"; }
-  let ok=0;
+  const label="Copy missing media to this device";
+  const all=[...(state.images||[]),...(state.videos||[])].filter(r=>r&&r.id);
+  // A `stored` flag can outlive its bytes (a cleared database, a half-finished write). Verify
+  // against the store rather than trust the flag, so the count reflects what is really there.
+  if(btn){ btn.disabled=true; btn.textContent="Checking …"; }
+  const have=new Set();
+  try{ (await mediaDB.kvKeys()).forEach(k=>{ if(typeof k==="string"&&k.startsWith("gmedia:")) have.add(k.slice(7)); }); }catch(e){}
+  all.forEach(r=>{ r.stored=have.has(r.id); });
+
+  const pending=all.filter(r=>!r.stored);
+  if(!pending.length){
+    if(btn){ btn.disabled=false; btn.textContent=label; }
+    updateStorage(); toast("Everything is already on this device"); return;
+  }
+  let ok=0, noLink=0, refused=0, done=0;
   for(const r of pending){
-    _gmCaptured.delete(r.id); r._capTries=0;      // allow a genuine retry
-    if(await captureGalleryMedia(r)) ok++;
+    if(!((typeof r.url==="string"&&r.url)||r.remote)){ noLink++; done++; continue; }
+    _gmCaptured.delete(r.id); r._capTries=99;     // one honest attempt, no background retry storm
+    if(await captureGalleryMedia(r)) ok++; else refused++;
+    done++;
+    if(btn) btn.textContent=`Copying … ${done}/${pending.length}`;
   }
   try{ persistImages(); persistVideos(); }catch(e){}
-  if(btn){ btn.disabled=false; btn.textContent="Re-save media to this device"; }
+  if(btn){ btn.disabled=false; btn.textContent=label; }
   updateStorage();
-  const failed=pending.length-ok;
-  toast(ok?`Saved ${ok} item${ok===1?"":"s"}${failed?` \u00b7 ${failed} link${failed===1?"":"s"} already expired`:""}`
-          :"None could be saved \u2014 those links have expired");
+  const bits=[];
+  if(ok)      bits.push(`${ok} copied`);
+  if(refused) bits.push(`${refused} link${refused===1?"":"s"} expired`);
+  if(noLink)  bits.push(`${noLink} lost before v29.2`);
+  toast(bits.length?bits.join(" · "):"Nothing to copy");
 }
 function updateStorage(){let b=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);b+=(localStorage.getItem(k)||"").length+k.length;}
   const el=document.getElementById('storageUsed');if(el)el.textContent=(b/1024).toFixed(0)+" KB";

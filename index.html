@@ -898,7 +898,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v29.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1416,6 +1416,9 @@
         <div class="card">
           <h3>Storage &amp; Cleanup</h3>
           <div class="kvline"><span>Storage used</span><span id="storageUsed" class="pill">—</span></div>
+          <div class="kvline"><span>Media saved offline</span><span id="storageMedia" class="pill">—</span></div>
+          <div class="desc">Generated images and clips are copied into this device's database, so they survive a reload and keep working after the provider's link expires. Anything still showing as <b>link only</b> could not be copied \u2014 tap <b>Re-save media</b> to try again while those links are alive.</div>
+          <button class="btn sec small" id="reSaveMediaBtn" onclick="reSaveAllMedia()">Re-save media to this device</button>
           <button id="installBtn" class="btn small" style="display:none" onclick="installApp()"><svg class="ic"><use href="#i-share"/></svg> Install app</button>
 
           <div class="desc" style="margin-top:10px;font-weight:600;color:var(--accent)">Full backup</div>
@@ -5814,6 +5817,37 @@ function _dataURLtoBlob(d){
     return new Blob([bytes],{type:mime});
   }catch(e){ return null; }
 }
+/* v29 — THE ONE MEDIA FETCH. AtlasCloud serves generated media from a referer-gated OSS bucket:
+   a request carrying our Referer is rejected. Every RENDERING path already knew this and set
+   referrerPolicy="no-referrer" (the <img>/<video> tags, toPlayableVideo, downloadable saves) — but
+   all three STORAGE paths used a bare fetch(url), so every capture was refused and nothing was ever
+   written to IndexedDB. The links then expired and the media was gone. All byte-fetching goes
+   through here so a storage fetch can never again differ from the fetch that works. */
+async function fetchMediaBlob(url){
+  if(!url||typeof url!=="string")return null;
+  if(url.startsWith("data:")) return _dataURLtoBlob(url);
+  // A blob: URL is same-origin and always readable — this is how a freshly generated clip arrives.
+  if(url.startsWith("blob:")){
+    try{ const r=await fetch(url); if(r&&r.ok){ const b=await r.blob(); return (b&&b.size)?b:null; } }catch(e){}
+    return null;
+  }
+  if(!/^https?:/.test(url)) return null;
+  const attempt=async(u,opt)=>{
+    try{
+      const r=await fetch(u,opt);
+      if(!r||!r.ok)return null;
+      const b=await r.blob();
+      if(!b||!b.size)return null;
+      // An error page returned with 200 is not media. Real frames are never this small.
+      if(b.type&&/^text\/|json/i.test(b.type)&&b.size<4096)return null;
+      return b;
+    }catch(e){ return null; }
+  };
+  const opt={mode:"cors",referrerPolicy:"no-referrer",credentials:"omit"};
+  // As given first; only then the https-upgraded form, so an http-only host still works.
+  return (await attempt(url,opt))
+      || (httpsMedia(url)!==url ? await attempt(httpsMedia(url),opt) : null);
+}
 function _gmSetUrl(rec,blob){
   const old=_gmObjUrls.get(rec.id);
   if(old){ try{ URL.revokeObjectURL(old); }catch(e){} }
@@ -5828,13 +5862,28 @@ async function captureGalleryMedia(rec){
   if(!rec||!rec.id)return false;
   if(_gmCaptured.has(rec.id))return false;
   const url=(typeof rec.url==="string"&&rec.url)||rec.remote||"";
-  if(!url||url.startsWith("blob:"))return false;   // nothing to fetch / already our own object URL
+  if(!url)return false;
+  /* v29 — THE BUG THAT LOST EVERY GENERATED CLIP. This used to bail on any blob: URL as "already
+     our own object URL". It is not: _gmObjUrls only holds URLs WE built from stored bytes, whereas
+     pollVideo returns URL.createObjectURL() over the freshly downloaded clip — live bytes with no
+     durable home. Skipping it meant the bytes were never written, _slimMediaRec then blanked the
+     dead blob: URL on persist, and after a reload the record had no url at all while the message
+     still pointed at a provider link that later expired. Only a URL we ourselves minted from
+     IndexedDB can be skipped. */
+  if(url.startsWith("blob:") && _gmObjUrls.get(rec.id)===url) return false;
   _gmCaptured.add(rec.id);
   try{
-    let blob=null;
-    if(url.startsWith("data:")) blob=_dataURLtoBlob(url);
-    else if(/^https?:/.test(url)){ const r=await fetch(url); if(r&&r.ok) blob=await r.blob(); }
-    if(!blob||!blob.size){ _gmCaptured.delete(rec.id); return false; }
+    const blob=await fetchMediaBlob(url);
+    if(!blob||!blob.size){
+      _gmCaptured.delete(rec.id);
+      // A fresh record whose first fetch failed gets a couple more tries — the provider often
+      // needs a moment to publish, and the link is only useful while it is still alive.
+      const tries=(rec._capTries=(rec._capTries||0)+1);
+      if(tries<=3 && /^https?:/.test(url))
+        setTimeout(()=>{ captureGalleryMedia(rec); }, tries*4000);
+      // A blob: URL that would not read is revoked or gone; retrying cannot bring it back.
+      return false;
+    }
     if(!(await mediaDB.kvSet(_gmKey(rec.id),blob))){ _gmCaptured.delete(rec.id); return false; }
     if(/^https?:/.test(url)) rec.remote=url;   // keep the link as a fallback for other devices
     _gmSetUrl(rec,blob);                       // also frees a heavy base64 string from the record
@@ -5870,8 +5919,13 @@ function _gmCaptureAll(list){
 async function ensureGalleryUrls(list){
   let n=0;
   for(const r of (list||[])){
-    if(!r||!r.id||r.url)continue;
-    if(!r.stored)continue;
+    if(!r||!r.id||!r.stored)continue;
+    /* v29 — our own bytes beat any URL the record is currently carrying. This used to skip every
+       record that had a url at all, so a stored record still pointing at its provider link (which
+       is what _slimMediaRec writes to disk) kept rendering from that link and broke the day it
+       expired — with the bytes sitting in IndexedDB the whole time. Only an object URL we already
+       minted for THIS record means there is nothing to do. */
+    if(r.url && _gmObjUrls.get(r.id)===r.url) continue;
     let blob=null; try{ blob=await mediaDB.kvGet(_gmKey(r.id)); }catch(e){}
     if(blob&&blob.size){ _gmSetUrl(r,blob); n++; }
     else if(r.remote){ r.url=r.remote; n++; }   // bytes missing → fall back to the link
@@ -18141,6 +18195,7 @@ function deleteMessage(mid){
   if(!owner){toast("Message not found");return;}
   markChatDirty(owner);
   try{ mediaDB.kvDelete("mimg:"+mid); }catch(e){}   // drop this message's cached scene-image bytes
+  try{ mediaDB.kvDelete("mvid:"+mid); }catch(e){}   // ...and its cached clip (v29)
   const node=document.querySelector('[data-mid="'+mid+'"]');
   if(node) node.remove(); else renderChat();
   persistChats();
@@ -18178,16 +18233,47 @@ function showPromptPopup(title,text){
 // IndexedDB keyed by message id (mimg:<mid>): base64 is stored directly; a hosted URL is fetched to a
 // data URL best-effort (harmless if CORS blocks it — the URL still persists via imgSrc). On reload we
 // rehydrate lazily as each bubble renders, and fall back to the cached bytes if a remote URL 404s.
-function saveMsgImage(mid,url){
-  if(!mid||!url||typeof url!=="string")return;
+function saveMsgImage(mid,url,done){
+  const fin=ok=>{ try{ if(done)done(ok); }catch(e){} };
+  if(!mid||!url||typeof url!=="string")return fin(false);
   try{
-    if(url.startsWith("data:")){ mediaDB.kvSet("mimg:"+mid,url); return; }
+    if(url.startsWith("data:")){ mediaDB.kvSet("mimg:"+mid,url).then(fin,()=>fin(false)); return; }
     if(/^https?:/.test(url)){
-      fetch(url).then(r=>r&&r.ok?r.blob():null).then(b=>{ if(!b)return;
-        const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet("mimg:"+mid,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
-      }).catch(()=>{});
+      fetchMediaBlob(url).then(b=>{ if(!b)return fin(false);
+        const fr=new FileReader();
+        fr.onload=()=>{ mediaDB.kvSet("mimg:"+mid,String(fr.result)).then(fin,()=>fin(false)); };
+        fr.onerror=()=>fin(false);
+        fr.readAsDataURL(b);
+      }).catch(()=>fin(false));
+      return;
     }
   }catch(e){}
+  fin(false);
+}
+/* v29 — the same byte cache for VIDEO. Images have had one since v25 ("mimg:"), which is why the
+   expired-link problem showed up on video first: a chat clip lived only at the provider URL, so
+   when the referer-gated link died there was nothing to fall back to and the bubble offered a
+   "Tap to open" pointing at a dead address. Stored as a Blob rather than a base64 string — clips
+   are large and base64 costs a third again in size. */
+function saveMsgVideo(mid,url){
+  if(!mid||!url||typeof url!=="string")return;
+  // A blob: URL is exactly the case that needs saving — those bytes have no home until we give
+  // them one. Only an object URL already built FROM the store would be pointless to re-store.
+  fetchMediaBlob(url).then(b=>{ if(b&&b.size) mediaDB.kvSet("mvid:"+mid,b); }).catch(()=>{});
+}
+/* The clip's bytes for a message, wherever they ended up: its own cache first, then the gallery
+   record captured from the same generation. Returns an object URL, or "" if we never got them. */
+async function msgVideoBlobUrl(mid){
+  try{
+    let b=null;
+    try{ b=await mediaDB.kvGet("mvid:"+mid); }catch(e){}
+    if(!b||!b.size){
+      const rec=(state.videos||[]).find(v=>v&&v.mid===mid);
+      if(rec){ try{ b=await mediaDB.kvGet(_gmKey(rec.id)); }catch(e){} }
+    }
+    if(b&&b.size) return URL.createObjectURL(b);
+  }catch(e){}
+  return "";
 }
 // Lazily restore a message's image from the byte cache when it isn't in memory (after reload). Tries
 // once per message; on miss it falls through to the normal "no image" UI. Re-renders when done.
@@ -18240,7 +18326,7 @@ function saveStaticImage(key,url){
   try{
     if(url.startsWith("data:")){ mediaDB.kvSet(key,url); return; }
     if(/^https?:/.test(url)){
-      fetch(url).then(r=>r&&r.ok?r.blob():null).then(b=>{ if(!b)return;
+      fetchMediaBlob(url).then(b=>{ if(!b)return;
         const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet(key,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
       }).catch(()=>{});
     }
@@ -18486,9 +18572,12 @@ function refreshBubble(mid){
     vid.onloadedmetadata=_restoreScroll;
     let _triedBlob=false;
     vid.onerror=async()=>{
-      // First failure on a remote URL: try a same-origin blob (works only if the CDN sends CORS).
+      // First failure on a remote URL. v29 — try OUR OWN STORED BYTES first: an expired provider
+      // link is the common case, and re-fetching it (as this used to do) can only fail again.
       if(!_triedBlob && !String(vid.src).startsWith("blob:")){
         _triedBlob=true;
+        const stored=await msgVideoBlobUrl(mid);
+        if(stored){ m.video=stored; vid.src=stored; vid.load(); return; }
         try{
           const playable=await toPlayableVideo(remote);
           if(playable && playable.startsWith("blob:")){ m.video=playable; vid.src=playable; vid.load(); return; }
@@ -20478,8 +20567,9 @@ async function illustrate(mid,replyText,force){
       }
     }finally{ _frameOverride=null; }
     msg.img=url;msg.imgSrc=url;msg.imgState="done";msg.imgPrompt=finalPrompt;
-    saveMsgImage(mid,url);   // cache the bytes so this scene image survives reload
-    msg.imgStored=true;
+    // v29 — flag it only when the bytes are really in the store. This used to be set the instant
+    // the fetch was FIRED, so a refused capture still reported itself as saved.
+    saveMsgImage(mid,url,ok=>{ msg.imgStored=!!ok; try{ persistChats(); }catch(e){} });
     // Tag the image with the persona whose speech produced it (same resolution as the continuity
     // key above). Player/narrator lines have no character id (null).
     const _charId=msg.characterId||(_spkKey!=="__narr__"?_spkKey:null);
@@ -20619,7 +20709,8 @@ async function animateScene(mid){
     msg.videoSrc=httpsMedia(videoUrl);
     msg.video=msg.videoSrc;
     msg.vidState="done";msg.vidPrompt=vidPrompt;
-    {const _rec={id:"vid_"+Date.now(),url:videoUrl,prompt:vidPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now()};
+    saveMsgVideo(mid,videoUrl);   // v29: this message's own copy of the clip
+    {const _rec={id:"vid_"+Date.now(),mid,url:videoUrl,prompt:vidPrompt,character:cast.map(c=>c.name).join(", "),characterId:msg.characterId||null,universeId:chat?chat.universeId:null,date:Date.now()};
      state.videos.push(_rec); captureGalleryMedia(_rec);}   // v25.11: bytes → IndexedDB
     // return_last_frame: the clip's final frame comes back as its own image. Save it to
     // the gallery so the next clip can start exactly where this one stopped.
@@ -20680,11 +20771,16 @@ async function pollVideo(job,setStat){
   }
   throw{friendly:"Video timed out. Try a shorter duration."};
 }
-function downloadVideo(mid){
+async function downloadVideo(mid){
   const m=findMsg(mid); if(!m||(!m.video&&!m.videoSrc))return;
   // The clip is also a gallery record; its stored bytes save without touching the network.
   const rec=(state.videos||[]).find(v=>v&&(v.mid===mid||v.url===m.video||v.url===m.videoSrc));
-  saveMedia(m.video||m.videoSrc, mediaFilename("mp4",(rec&&rec.character)||m.speaker), rec&&rec.id);
+  const name=mediaFilename("mp4",(rec&&rec.character)||m.speaker);
+  // v29 — our own copy first. A provider link that has expired cannot be downloaded either, and
+  // that was how a saved clip turned into a failed save weeks later.
+  const stored=await msgVideoBlobUrl(mid);
+  if(stored) return saveMedia(stored,name,rec&&rec.id);
+  saveMedia(m.video||m.videoSrc, name, rec&&rec.id);
 }
 
 /* ---- scene image viewer ---- */
@@ -28964,8 +29060,43 @@ function saveSettings(notify){
   applyTheme();updateChatHeader();
   if(notify)toast("Settings saved");
 }
+/* v29 — say plainly how much media is actually on the device. The referer-gated capture failure
+   was invisible: the gallery looked fine until a link expired weeks later, by which point the bytes
+   were unrecoverable. A number you can read while the links are still alive makes it fixable. */
+function mediaStoredCounts(){
+  const c={img:0,imgAll:0,vid:0,vidAll:0};
+  (state.images||[]).forEach(r=>{ if(!r||!r.id)return; c.imgAll++; if(r.stored)c.img++; });
+  (state.videos||[]).forEach(r=>{ if(!r||!r.id)return; c.vidAll++; if(r.stored)c.vid++; });
+  return c;
+}
+// Re-run capture over everything not yet stored. Safe to press repeatedly; a link that has already
+// expired cannot be recovered, and that is reported honestly rather than retried forever.
+async function reSaveAllMedia(){
+  const btn=document.getElementById('reSaveMediaBtn');
+  const before=mediaStoredCounts();
+  const pending=[...(state.images||[]),...(state.videos||[])].filter(r=>r&&r.id&&!r.stored);
+  if(!pending.length){ toast("Everything is already saved on this device"); return; }
+  if(btn){ btn.disabled=true; btn.textContent="Saving \u2026"; }
+  let ok=0;
+  for(const r of pending){
+    _gmCaptured.delete(r.id); r._capTries=0;      // allow a genuine retry
+    if(await captureGalleryMedia(r)) ok++;
+  }
+  try{ persistImages(); persistVideos(); }catch(e){}
+  if(btn){ btn.disabled=false; btn.textContent="Re-save media to this device"; }
+  updateStorage();
+  const failed=pending.length-ok;
+  toast(ok?`Saved ${ok} item${ok===1?"":"s"}${failed?` \u00b7 ${failed} link${failed===1?"":"s"} already expired`:""}`
+          :"None could be saved \u2014 those links have expired");
+}
 function updateStorage(){let b=0;for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);b+=(localStorage.getItem(k)||"").length+k.length;}
   const el=document.getElementById('storageUsed');if(el)el.textContent=(b/1024).toFixed(0)+" KB";
+  {const me=document.getElementById('storageMedia');
+   if(me){ const c=mediaStoredCounts(); const miss=(c.imgAll-c.img)+(c.vidAll-c.vid);
+     me.textContent=`${c.img}/${c.imgAll} images \u00b7 ${c.vid}/${c.vidAll} clips`;
+     me.title=miss?`${miss} still link-only \u2014 they will break when the provider's link expires`
+                  :"Everything is saved on this device";
+     me.style.color=miss?"var(--warn, #d08a3a)":""; }}
   // Also surface IndexedDB media size (images/videos), where the heavy base64 now lives.
   if(navigator.storage&&navigator.storage.estimate){
     navigator.storage.estimate().then(est=>{

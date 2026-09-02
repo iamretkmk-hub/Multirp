@@ -102,14 +102,36 @@ cancelled by any new player input (`_heatSeq`).
   - Day window: only the last **2 game-days** of dialogue (older facts are memory's job).
   - Witness filter: a line with `present[]` not containing p is dropped (legacy name matching
     tolerated); untagged dialogue defaults to **excluded** (leak-safe).
-  - **Private narration** (`narrPrivacy`, default on): other characters' `*narration*` is
-    stripped via `spokenOnly()` — a character only witnesses their own and the player's
-    narration, but hears all spoken dialogue.
+  - **Private narration** (`narrPrivacy`, default on) — **rewritten in v30.5.** It used to strip
+    other characters' `*narration*` via `spokenOnly()`, which removes actions AND thoughts, leaving
+    only quoted dialogue. That is the wrong cut: the format contract defines `*asterisks*` as
+    "Action / physical beats — a glance, a step, a touch", which is exactly what someone standing in
+    the same room sees. Two characters in one kitchen each got a transcript in which the other one
+    never moved, and a purely-narrated turn (she puts the glass down and walks out) vanished
+    entirely. `perceivedOnly()` now strips only `_inner thoughts_`, which nobody can perceive.
+    **You see what they did; you never hear what they thought.** `lastDialogueLine` uses the same
+    rule, so a wordless exit is something the character can actually react to.
 - `mapMsgToApi` converts messages to API form (assistant lines carry `name:`; narrator
   events/presence notes/day markers become Narrator lines).
-- `compactHistory` then applies the cost controls: hard cap `histTurns` (default 20), and
-  optional narration-stripping of all but the last `stripKeepFull` messages (Narrator lines
-  exempt — they carry scene state).
+- `compactHistory` then applies the cost controls: hard cap `histTurns` (default 20 **messages** —
+  in a two-character scene that is six or seven exchanges), and optional narration-stripping of all
+  but the last `stripKeepFull` messages. Narrator lines are exempt (they carry scene state) and,
+  **since v30.5, so are the speaking character's own lines.**
+  **(!) Why:** this pass runs AFTER `narrPrivacy`, which has already removed every other character's
+  narration. The only narration still standing when it runs is (a) the character's own and (b) the
+  player's — so the cost control was spending its entire budget on the two things nothing else in the
+  payload can reconstruct. Losing your own physical beats is the worst case of the two: the model
+  cannot see that it already gripped the counter or already looked away, so it does it again. That
+  repetition is what the `already_said` block exists to paper over.
+
+### The ratio worth watching
+
+On a reference 35-message scene with two characters present, default settings: **instructions
+~6,200 tokens, transcript ~1,260 tokens — the story is 17% of what the model reads.** A reply that
+comes out mechanical is very often this number being low; the character is being briefed rather than
+played. The Debug view prints the split under each payload (`_dbgMixLine`) and flags anything under
+20%. The knobs are `histTurns` / `stripKeepFull` (more scene) and Settings → Payloads (less
+instruction).
 
 ## Rendering pipeline
 

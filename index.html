@@ -1355,14 +1355,14 @@
           </div>
           <div style="height:1px;background:var(--border);margin:10px 0"></div>
           <div><label>Messages of history sent per reply</label><input type="number" id="setHistTurns" min="2" max="200" step="1" value="20"></div>
-          <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20.</div>
+          <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20 — note that this counts MESSAGES, so in a scene with two characters twenty of them is only six or seven exchanges. Debug shows what share of each payload was the scene rather than instructions; if that number is low, this is the knob.</div>
           <div class="kvline"><span>Strip narration from old messages</span>
             <label class="switchLbl"><input type="checkbox" id="setStripNarr"><span class="sl"></span></label></div>
           <div><label>Keep this many recent messages full</label><input type="number" id="setStripKeepFull" min="2" step="1" value="6"></div>
-          <div class="desc">Trims <i>*narration*</i> from OLDER messages within the window to save tokens. Recent messages are always sent in full. Applies only to roleplay replies.</div>
+          <div class="desc">Trims <i>*narration*</i> from OLDER messages within the window to save tokens. Recent messages are always sent in full, and a character's OWN narration is never trimmed — they know what their hands were doing, and taking it away is what makes them repeat a gesture they already made. Applies only to roleplay replies.</div>
           <div class="kvline"><span>Private narration (subjective scene)</span>
             <label class="switchLbl"><input type="checkbox" id="setNarrPrivacy" checked><span class="sl"></span></label></div>
-          <div class="desc">Each present character only witnesses their OWN <i>*narration*</i> and <b>{{user}}</b>'s — never another character's narrated actions/thoughts (they still hear everyone's spoken dialogue). Stops characters reacting to things they couldn't have seen. Off = everyone sees all narration (old behaviour).</div>
+          <div class="desc">Each present character sees what the others visibly <i>*do*</i> — they are in the same room — but never their <i>_inner thoughts_</i>. Their own narration and <b>{{user}}</b>'s always stay whole. Stops characters reacting to what they couldn't have known while still letting them react to what happened in front of them. Off = everyone sees everything, thoughts included.</div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-globe"/></svg> Living Universe</h3>
@@ -4424,6 +4424,26 @@ function dbg(label,service,endpoint,payload){
 }
 // Rough token estimate (~4 chars/token) of a request payload's text content. Approximate,
 // but consistent — good enough to watch payload size grow and to see compaction savings.
+/* v30.5 — INSTRUCTION vs SCENE. The single most useful number when tuning a reply payload, and the
+   one you otherwise have to work out by hand: how much of what the model just read was the app
+   telling it how to behave, and how much was the story actually happening. A reply that reads
+   mechanical is very often a payload where the first number dwarfs the second — the character is
+   being briefed rather than played. System messages are the instructions (payload head + tail);
+   every other message is the transcript. Chat payloads only; anything else renders nothing. */
+function _dbgMixLine(payload){
+  try{
+    if(!payload||!Array.isArray(payload.messages))return "";
+    let sys=0,scene=0;
+    for(const m of payload.messages){
+      const n=(typeof m.content==="string"?m.content.length:0)+(m.name?m.name.length:0);
+      if(m.role==="system")sys+=n; else scene+=n;
+    }
+    if(!sys||!scene)return "";
+    const t=x=>Math.round(x/4), pct=Math.round(100*scene/(sys+scene));
+    const warn=pct<20;
+    return `<div class="desc">📐 Instructions <b>~${t(sys)} tok</b> · scene <b style="color:${warn?"#E8A33D":"var(--good)"}">~${t(scene)} tok</b> — the story is <b style="color:${warn?"#E8A33D":"var(--good)"}">${pct}%</b> of what the model read${warn?" (low: it is being briefed more than it is being played — raise \u201cMessages of history\u201d, or trim a block in Settings \u2192 Payloads)":""}</div>`;
+  }catch(e){ return ""; }
+}
 function estTokens(payload){
   try{
     let chars=0;
@@ -4756,6 +4776,7 @@ function renderDebug(){
       <div data-body class="hide" style="display:flex;flex-direction:column;gap:8px">
         <div class="desc" style="word-break:break-all">${esc(e.endpoint)}</div>
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
+        ${_dbgMixLine(e.payload)}
         <label style="margin:0">${payloadLabel}</label>
         <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-x:auto">${esc(payloadView)}</pre>
         ${e.result!=null?`<label style="margin:0">Result (${esc(e.status)})</label>
@@ -16625,7 +16646,12 @@ function lastDialogueLine(chat,selfP){
       if(selfP && ((m.speakerId&&m.speakerId===selfP.id)||sp===selfP.name))continue;   // your own line
       if(selfP && Array.isArray(m.present) && !witnessedBy(m,selfP))continue;          // you weren't there
       let text=String(m.content);
-      if(selfP && state.narrPrivacy!==false){ text=spokenOnly(text)||""; if(!text.trim())continue; }
+      // v30.5 — perceivedOnly, matching castHistory: you react to what they visibly DID as well as
+      // to what they said. With spokenOnly() a wordless turn (she puts the glass down and walks out)
+      // was skipped entirely and this block reached back to an older line the character had already
+      // answered — so the one thing actually happening in front of them was the one thing they were
+      // not shown. Their thoughts stay hidden either way.
+      if(selfP && state.narrPrivacy!==false){ text=perceivedOnly(text)||""; if(!text.trim())continue; }
       return {name:sp,text:text.trim()};
     }
   }catch(e){}
@@ -20695,6 +20721,24 @@ function spokenOnly(text){
     .replace(/_[^_]*_/g," ")       // _underscore stage directions_
     .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
 }
+/* v30.5 — WHAT SOMEONE IN THE ROOM ACTUALLY PERCEIVES.
+   `narrPrivacy` exists to stop a character reacting to something they could not have seen, and it
+   was implemented with spokenOnly() — which strips *narration* AND _thoughts_, leaving only quoted
+   dialogue. That is too blunt in one direction: the format contract defines *asterisks* as "Action /
+   physical beats — a glance, a step, a touch, the distance closing", which is precisely what a person
+   standing in the same room DOES see. Stripping it meant two characters in one kitchen each received
+   a transcript in which the other one never moved: no one set down a glass, turned away, or reached
+   for the door. That is why co-present characters read as though they were in separate rooms, and it
+   is the opposite of what the setting is for.
+   _Underscores_ are the other half and they are genuinely private — that is where the format puts
+   "what's hidden underneath, what the character does NOT say aloud". Those stay hidden.
+   So: you see what they did, you never hear what they thought. */
+function perceivedOnly(text){
+  if(!text) return "";
+  return String(text)
+    .replace(/_[^_]*_/g," ")       // _inner thought_ — nobody else can perceive this, ever
+    .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
+}
 // Map a chat message to an API message (role + name + content). Shared by all roleplay
 // builders so behaviour stays identical everywhere.
 function mapMsgToApi(m,soloName){
@@ -20722,9 +20766,22 @@ function compactHistory(mapped){
   const keep=Math.max(2,state.stripKeepFull||6);
   const cut=mapped.length-keep;
   if(cut<=0) return mapped;
+  /* (!) v30.5 — THIS RAN AFTER narrPrivacy, SO IT ONLY EVER CUT THE RIGHT MATERIAL.
+     By the time a mapped history reaches here, every OTHER character's narration has already been
+     removed upstream. The only narration still standing is (a) this character's own and (b) the
+     player's — and this pass then deleted exactly those from everything older than the last few
+     entries. The cost control was spending its whole budget on the two things nothing else in the
+     payload can reconstruct.
+     A character's own physical beats are the worst possible thing to lose: with them gone the model
+     cannot see that it already gripped the counter, already looked away, already dropped its voice —
+     so it does it again, which is the repetition the `already_said` block exists to paper over.
+     Their own lines are exempt now. The player's older narration is still thinned (their actions are
+     what the memory system records, and the newest `stripKeepFull` keep theirs in full). */
+  const isSelfLine=m=>m.role==="assistant" && m.name!=="Narrator";
   return mapped.map((m,i)=>{
     if(i>=cut) return m;                          // recent → full
     if(m.name==="Narrator") return m;             // keep narrator beats (scene state)
+    if(isSelfLine(m)) return m;                   // your own body — you know what you did
     const stripped=stripNarration(m.content);
     return stripped===m.content?m:{...m,content:stripped};
   });
@@ -20914,7 +20971,9 @@ function castHistory(chat,forP){
       // only HEARS their spoken words. Their own narration and {{user}}'s narration stay full. A line
       // that was pure narration is dropped entirely (they heard nothing). Toggle: state.narrPrivacy.
       let heard=m.content;
-      if(forP && state.narrPrivacy!==false){ heard=spokenOnly(m.content); if(!heard) return null; }
+      // v30.5 — was spokenOnly(), which also deleted their visible actions. A purely narrated turn
+      // (someone crosses the room and says nothing) now survives as the action instead of vanishing.
+      if(forP && state.narrPrivacy!==false){ heard=perceivedOnly(m.content); if(!heard) return null; }
       return {role:"user",name:sanitizeName(sp),content:`${sp}: ${heard}`};
     }
     return mapMsgToApi(m);

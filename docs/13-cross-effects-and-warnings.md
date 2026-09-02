@@ -74,6 +74,9 @@ before any non-trivial change.**
 | Turning World Pulse off | Due char↔char calendar plans still must run — `postTurn` explicitly falls back to `runCalendarExecutor` when `pulseOn` is false. Any new pulse-hosted job needs the same fallback or it dies with the toggle. |
 | DND (`chat.dnd`) | Silences the Gamemaster AND quietly resolves the active event — but deliberately leaves memory/trackers/relationships running. A manual force overrides DND on purpose. |
 
+| Adding a pass that trims the transcript (v30.5) | the character's physical continuity | Order matters: `narrPrivacy` runs FIRST and has already removed every other character's narration, so anything trimming "narration" afterwards is only ever cutting the speaking character's own and the player's. `compactHistory` exempts the character's own lines for exactly this reason — a model that cannot see it already gripped the counter grips it again. |
+| Using `spokenOnly()` for "what a character perceived" | co-present characters | It strips actions AND thoughts, so the other person appears never to move and a wordless turn disappears. `perceivedOnly()` is the one you want: thoughts hidden, visible action kept. `spokenOnly` remains for anywhere a genuinely dialogue-only view is wanted. |
+
 ## Media
 
 | Change | Effect |

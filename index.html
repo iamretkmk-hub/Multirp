@@ -2585,11 +2585,6 @@ const DEFAULT_VID_RULES=[
 /* ===== RESPONSE FORMAT RULES ===== editable; controls how replies are written ===== */
 const DEFAULT_FORMAT_RULES=`# FORMATTING RULES — follow exactly in every reply:
 
-# LANGUAGE (applies to every reply)
-- Write in perfect, natural, everyday Turkish, in this character's own speech style — how a real person actually talks.
-- Don't translate from English. Take the intention and tone, then write what a Turkish speaker would actually say. Avoid formal, artificial, translated-sounding phrasing.
-- In intense moments sentences shorten and break — few words, much feeling.
-
 # STRUCTURE
 - DIALOGUE IS THE REPLY. What the character SAYS carries the turn. Narration is a thin frame around the words, never the main event. If a turn can be just spoken words, make it just spoken words.
 - Spoken dialogue: plain text in "double quotes".
@@ -4364,10 +4359,19 @@ function storyLangName(){ return STORY_LANGS[storyLang()].name; }
    every player-facing sentence is model-written and covered by langDirective(); this covers the few
    that are hardcoded. Falls back to English for any language without an entry. */
 function sLine(map){ const m=map||{}; return m[storyLang()]||m.en||""; }
+/* Remove a "# LANGUAGE" section (heading + body, up to the next heading or the end) from a block of
+   fixed prose. langDirective() is the single authority on what language story text is written in;
+   anything else claiming to set it is a contradiction at best and a duplicate at worst. */
+function _stripLangSection(text){
+  return String(text||"")
+    .replace(/^#{1,3}[ \t]*LANGUAGE\b[^\n]*\n(?:(?!^#{1,3}[ \t])[^\n]*\n?)*/gmi,"")
+    .replace(/\n{3,}/g,"\n\n").trim();
+}
 function langDirective(){
   const n=storyLangName(), L=n.toUpperCase();
   let s=`# STORY LANGUAGE — ${L} (selected by the player; this OVERRIDES every other language instruction anywhere in this prompt, including any instruction to write in Turkish)
-- Write ALL story text the player reads — dialogue, narration, actions, inner thoughts — in perfect, natural, everyday ${n}, in the speaker's own voice.`;
+- Write ALL story text the player reads — dialogue, narration, actions, inner thoughts — in perfect, natural, everyday ${n}, in the speaker's own voice.
+- In intense moments sentences shorten and break — few words, much feeling.`;
   if(storyLang()!=="en")s+=`
 - Do NOT translate from English: take the intention and tone, then write what a native ${n} speaker would actually say. Avoid formal, artificial, translated-sounding phrasing.`;
   s+=`
@@ -16884,7 +16888,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
-    already_said:["already_said_header","already_said_instr","already_said_stalled"],
+    already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled"],
     rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_carrier_header","rumor_carrier_instr"],
     speaking_style:["style_header","style_notes"],
     scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
@@ -16895,7 +16899,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     private_intent:["intent_warm","intent_hostile"],
     latest_arcs:["mem_latest_header","mem_latest_instr"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
-    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","heat_guidance"],
+    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","stranger"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
@@ -17115,7 +17119,10 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   pursuit_status_intro:`Where your live pursuit actually stands right now — this part is fact, not mood. Above all: if you have already asked, you have asked. Asking again in new words is the thing that makes a person unbearable.`,
   rel_header:`# {{char}}'s RELATIONSHIPS (who the people in your life are to you)\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.`,
   others_header:`# OTHERS PRESENT (within earshot)`,
-  others_footer:`These people, together with {{user}}, are the ONLY people present right now. Address {{user}} or any of them by name, but don't bring in, reply to, or refer to anyone who isn't here as though they were.`,
+  // v30.4 — this used to restate the earshot rule ("the ONLY people present… don't refer to anyone
+  // who isn't here"), which the PRIVACY block then said again, in more detail and closer to
+  // generation. This block's job is naming who is standing here; privacy owns who can hear it.
+  others_footer:`Address {{user}} or any of them by name. Who can actually hear you — and who is merely one door away — is set out under PRIVACY, after the conversation.`,
   // --- head: THE PERSON YOU ARE RESPONDING TO ---
   target_header:`# ⚠️ THIS IS WHO YOU ARE RESPONDING TO ⚠️`,
   target_player:`{{target}} is the human player in this roleplay. Your reply this turn is aimed at {{target}}.`,
@@ -17186,9 +17193,14 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
   mem_recent_header:`# ⚠️ THESE ARE YOUR RECENT MEMORIES ⚠️`,
+  /* v30.4 — the last two paragraphs of this were a third statement of the no-fabricated-past
+     contract, which `rail_nofabricate` and `rail_unknown_past` already carry — and carry closer to
+     generation, which is where a prohibition belongs. Stating a rule three times in one payload
+     does not make it three times as binding; it makes the payload longer and the model more
+     careful-sounding. This block says what these memories ARE and what to do with them; the rails
+     say what you may not invent. */
   mem_recent_instr:`Things you personally did, saw, or learned BEFORE the conversation below. Let them shape this reply: when the moment resembles one of them, let it show in what you say and how you say it — never recite them.
-This list is not the whole of what you remember. THE CONVERSATION BELOW IS MEMORY TOO — you were present for every line of it, you heard it, and you remember it perfectly. Anything said or done in it happened, whether or not it also appears in this list. Treat the two together as what you know: this list for what came before, the conversation itself for what has happened since.
-What you do NOT have is anything in neither place — never invent a past event, a shared history, or a conversation to fill a gap.`,
+This list is not the whole of what you remember — the conversation below is memory too, and you were there for every line of it. This list is simply the part that came before it.`,
   // --- tail: rumors (v28.9). Two completely different framings, because the whole problem was
   //     that a rumor read the same to the wronged spouse and to the barista who overheard it.
   rumor_stake_header:`# ⚠️ THIS ONE IS YOURS ⚠️`,
@@ -17203,6 +17215,7 @@ It is NOT your business and you do NOT raise it. Do not ask {{user}} about it, d
   already_said_instr:`These are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
 Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
 This applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.`,
+  already_said_continues:`Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.`,
   already_said_stalled:`⚠️ YOU HAVE ASKED AND THEY HAVE NOT GIVEN IT. Asking again in any form is over — you have spent that move. A real person does one of these instead, and you pick the one that fits you: drop it and let the silence sit; say the thing you were circling, plainly, and take the risk; get short and turn away; let it show that being stonewalled by THIS person stings; or change the subject entirely and carry the sting with you. The one thing you may NOT do is put the same question a fourth time.`,
   mem_latest_header:`# ⚠️ LATEST DIALOGUE OUT OF CONTEXT WINDOW ⚠️`,
   mem_latest_instr:`These are your latest dialogue summaries that are now out of the context window. Use them for consistency during the conversation. You don't mention them unless it's required — they are here to give you grounding, not lines to recite. Newest first. If any of them bears on what is being said now, you know it without having to be reminded.`,
@@ -17212,6 +17225,8 @@ This applies to your ACTIONS exactly as much as to your words. If you already gr
   guidance_open:`# RESPONSE GUIDANCE\nWrite one turn, as {{self}}, and stop`,
   guidance_target:`. It is aimed at {{target}}`,
   guidance_close:`. Move the moment forward — do something, change something, let something land — and leave {{who}} room to answer.`,
+  // v30.4 — the sibling of guidance_reply for the turn that CONTINUES instead of answering.
+  guidance_continue:`Nothing new has been said to you: the highlighted line above is your OWN, and it is already answered. Do not reply to {{target}} again and do not restate what you just said — carry straight on from your own last line. Something has to MOVE this turn: do the thing you stopped short of, notice something, change the distance between you, or let the silence cost somebody something.`,
   guidance_reply:`React to the highlighted line above: that is what {{target}} just said or did. Answer it from your own side — never by repeating it back first. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
   // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
   last_line_header:`# ⚠️ THIS IS THE LINE YOU ARE RESPONDING TO ⚠️`,
@@ -17466,8 +17481,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
      if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
      if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
    }
-   // Player-selected story language — appended last so it overrides any language rule above.
-   B.format=(B.format?B.format+"\n\n":"")+langDirective();}
+   /* Player-selected story language — appended last so it overrides any language rule above.
+      v30.4 — and any language rule above is now REMOVED rather than overridden. The shipped format
+      rules opened with a "# LANGUAGE" section hardcoding Turkish, and langDirective() then said the
+      same three things again in the same order: ~700 characters of the payload spent saying one
+      thing twice, and a flat contradiction whenever the story language was not Turkish. Stripping
+      it here (rather than only from the default) covers users whose formatRules are customized —
+      they keep every other rule they wrote, and the one that was already being overridden goes. */
+   B.format=(B.format?_stripLangSection(B.format)+"\n\n":"")+langDirective();}
 
   // ===== WHO YOU ARE =====
   // your_bio — the identity sheet. The private aim ("what you quietly want") rides with the goals;
@@ -17684,13 +17705,22 @@ function buildTailBlocks(opts){
      there so the model can see the shape it is about to repeat. So the last line goes in verbatim,
      word for word, because that is the one that must not be said again; the one before it is trimmed
      on a word boundary. Same signal, roughly half the tokens. */
+  /* v30.4 — DON'T QUOTE THE SAME LINE TWICE. When this character spoke last, `last_line` above
+     already carries their newest line verbatim under "CONTINUE STRAIGHT ON FROM IT". This block was
+     then printing the identical text ten lines later under "YOU ALREADY SAID THIS — DO NOT SAY IT
+     AGAIN": the same words, twice, framed as a contradiction. So in that case the window SLIDES —
+     the newest is quoted once (above), and this block shows what came before it, which is the part
+     the model cannot otherwise see. The anti-repeat window stays the same size either way. */
   {
-    const mine=ownRecentLines(chat,selfP,2);
+    const _cont=!!selfContinueLine(chat,selfP);
+    const all=ownRecentLines(chat,selfP,_cont?3:2);
+    const mine=_cont?all.slice(1):all;
     if(mine.length){
-      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`
-           +mine.map((x,i)=>i===0
+      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
+      if(_cont)t+=`${blkTpl("already_said_continues")}\n\n`;
+      t+=mine.map((x,i)=>(i===0&&!_cont)
               ? `(your last line, word for word) ${x}`
-              : `(the line before that, shortened — you are being shown its shape, not asked to re-read it) ${briefDesc(x,320)}`
+              : `(${_cont?(i===0?"the line before the one quoted above":"and the one before that"):"the line before that"}, shortened — you are being shown its shape, not asked to re-read it) ${briefDesc(x,320)}`
              ).join("\n\n");
       if(exchangeIsStalled(chat,selfP)) t+=`\n\n${blkTpl("already_said_stalled")}`;
       B.already_said=t;
@@ -17881,7 +17911,16 @@ function buildTailBlocks(opts){
   if(!_heat){
   if(targetName) g+=fillTpl(blkTpl("guidance_target"),{target:targetName});
   g+=fillTpl(blkTpl("guidance_close"),{who:targetName||state.user});
-  if(targetName) g+=`\n${fillTpl(blkTpl("guidance_reply"),{target:targetName})}`;
+  /* v30.4 — THE GUIDANCE MUST AGREE WITH THE REST OF THE PAYLOAD. When this character spoke last
+     and nothing new has been aimed at them, three blocks already say so: `response_target` ("YOU
+     SPOKE LAST — THIS TURN CARRIES ON"), `last_line` (their own line, under CONTINUE STRAIGHT ON
+     FROM IT) and `already_said`. The guidance went on saying "React to the highlighted line above:
+     that is what {{target}} just said or did" — which is false (they already answered it) and which
+     WINS, because it is the last instruction before generation. That is the payload arguing with
+     itself, and the half that loses is the correct half. */
+  if(targetName) g+=`\n${selfContinueLine(chat,selfP)
+    ? fillTpl(blkTpl("guidance_continue"),{target:targetName,self:selfName})
+    : fillTpl(blkTpl("guidance_reply"),{target:targetName})}`;
   }
   // ABSENT-ADDRESSEE GUARD. If {{user}}'s latest line names a character who is NOT in the room, the
   // responder must NOT answer as that person (the classic "you address Y, present X replies as Y" bug).

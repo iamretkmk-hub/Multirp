@@ -139,6 +139,43 @@ tokens out, 300 → 560 chars stored).
 repeated) and the one before it trimmed on a word boundary — the older line is there to show a
 shape, not to be re-read.
 
+## v30.4 — the payload arguing with itself
+
+`_dedupePayloadSections` only strips a `# HEADING` section whose heading **and body** already
+appeared **verbatim**. Everything below said the same thing in different words, so nothing caught it.
+
+**The guidance contradicted three other blocks.** When a character spoke last and nothing new was
+aimed at them, `response_target`, `last_line` and `already_said` all say "carry on" — and
+RESPONSE GUIDANCE went on saying *"React to the highlighted line above: that is what {{target}} just
+said or did"*. It is the last instruction before generation, so it was the one that won. There is a
+`guidance_continue` fragment now, picked by the same `selfContinueLine()` the other blocks use. **If
+you add a fourth block that reads the continue state, it must agree with these three.**
+
+**The same line was quoted twice under opposite headings.** In that same continue case `last_line`
+carried the character's newest line verbatim under "CONTINUE STRAIGHT ON FROM IT", and `already_said`
+printed the identical text ten lines later under "YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN". The
+window now **slides**: continuing ⇒ `last_line` owns the newest line and `already_said` shows the
+ones before it (`already_said_continues` says so). Same window size, no duplicate.
+
+**The language rule was printed twice, back to back.** `DEFAULT_FORMAT_RULES` opened with a
+`# LANGUAGE` section hardcoding Turkish, then `langDirective()` appended `# STORY LANGUAGE` saying
+the same three things in the same order — and flatly contradicting it whenever the story language was
+not Turkish. `_stripLangSection()` removes any `# LANGUAGE` section from the format rules **at build
+time**, so users with a customized `formatRules` are covered too, and the "intense moments" style
+line moved into `langDirective` so it isn't lost. `langDirective()` is the single authority on story
+language; nothing else may claim to set it.
+
+**Two other statements were made twice or three times**, each time by a block further from
+generation than the one that owns it:
+- "these are the ONLY people present / don't refer to anyone who isn't here" — `others_footer` **and**
+  `scene_present`. `privacy` owns earshot now; `others_present` just names who is standing there.
+- the no-fabricated-past contract — `mem_recent_instr`, `rail_nofabricate` **and**
+  `rail_unknown_past`. The rails own it (a prohibition belongs closest to generation); the memory
+  block says what the memories are and stops.
+
+Measured on a populated reference payload: 27,475 → 25,903 characters of instruction, and two
+outright contradictions removed.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

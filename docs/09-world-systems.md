@@ -55,6 +55,16 @@ bound to them (media, diaries, memories, relationships, quests).
   sub-area) vs `presentCast` (same location) vs `offEarshotCast`. `chat.subPos` maps each
   character to a sub-area; "Move to area" (`openSubMove`/`moveToSub`) and `callToArea` move
   people; arriving anywhere puts you at the Entrance.
+  **(!) The entrance is identified by the `entrance:true` FLAG, but one can also arrive by
+  NAME** — the author types "Entrance" in the location editor, or `_ensureSublocationByName`
+  creates one from a quest or travel line, and neither sets the flag. `ensureSublocations`
+  therefore promotes a name-matching area rather than unshifting a rival, or the payload
+  reads `SUB-AREAS: Entrance; Entrance; Bedroom` and two people who both "walked into the
+  Entrance" land in different earshot zones and stop hearing each other.
+  `migrateDupeSublocations` (runs right after `migrateSublocations`) repairs stored
+  duplicates: same-named areas merge into the first, and every id that pointed at an
+  absorbed one is remapped — `chat.subId`, `chat.subPos`, `chat.calendar[].subId`,
+  `gameData.quests[].subId`. Add a new store of sub-area ids and it belongs in that remap.
 - **Travel** (`travelTo` → `openTravel` UI): costs periods (`travelTime`), optional
   companions (`chooseCompanions` → `companionLock`), narrated (`travelPrompt`), pushes a
   `travelBeat` (the scene boundary for history & memory), triggers arrival hooks: latent-NPC

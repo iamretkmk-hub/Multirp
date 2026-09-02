@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -5232,6 +5232,7 @@ function loadState(){
   persistUniverses(); if(_uMig)persistPersonas();
   // Sub-areas: guarantee every location has an entrance sub-area (idempotent; old data → entrance added).
   migrateSublocations();
+  migrateDupeSublocations();   // (!) must follow migrateSublocations — it repairs what that could create
   migratePresenceNoteIds();   // back-fill enteredIds/exitedIds on old text-only presence notes
   // ---- Quests-standalone migration (v20.3, runs once) ----------------------------------------
   // Stage 2 decouples quests from the (now-removed) game-systems UI. Quests still live on
@@ -9692,13 +9693,59 @@ function locById(id){ return curLocations().find(l=>l.id===id); }
 // areas never get their own leak slider, so the existing leak pipeline is untouched.
 function newSubId(){ return "sub_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
 // Ensure a location has a sublocations array with an entrance first. Idempotent; safe on old data.
+/* (!) The entrance is identified by the FLAG, but an entrance can also arrive by NAME — the author
+   types "Entrance" into the location editor, or _ensureSublocationByName() creates one from a quest
+   or a travel line, and neither sets the flag. Unshifting a flagged one on top of it produced two
+   sub-areas called Entrance: the payload read "SUB-AREAS: Entrance; Entrance; Bedroom; Kitchen",
+   and two people who both walked into "the Entrance" could land in different earshot zones and
+   stop hearing each other. Promote the one that is already there instead of adding a rival. */
 function ensureSublocations(l){
   if(!l)return l;
   if(!Array.isArray(l.sublocations))l.sublocations=[];
   if(!l.sublocations.some(s=>s&&s.entrance)){
-    l.sublocations.unshift({id:(l.id?l.id+"_entrance":newSubId()),name:"Entrance",entrance:true});
+    const named=l.sublocations.find(s=>s&&String(s.name||"").toLocaleLowerCase("tr").trim()==="entrance");
+    if(named){ named.entrance=true; }
+    else l.sublocations.unshift({id:(l.id?l.id+"_entrance":newSubId()),name:"Entrance",entrance:true});
   }
   return l;
+}
+/* ONE-TIME REPAIR for locations that already carry the duplicate the bug above created (or any other
+   same-named pair). Merge duplicates into the FIRST one and remap every id that pointed at an
+   absorbed area — chat.subId, chat.subPos, calendar events, quests — so nothing is orphaned into a
+   sub-area that no longer exists. Non-destructive: areas are merged, never dropped. */
+function migrateDupeSublocations(){
+  const remap={};
+  (state.universes||[]).forEach(u=>{
+    ((u&&u.locations)||[]).forEach(l=>{
+      if(!l||!Array.isArray(l.sublocations))return;
+      const byName=new Map(), keep=[];
+      l.sublocations.forEach(sub=>{
+        const nm=sub&&String(sub.name||"").toLocaleLowerCase("tr").trim();
+        if(!sub||!nm){ keep.push(sub); return; }
+        const first=byName.get(nm);
+        if(!first){ byName.set(nm,sub); keep.push(sub); return; }
+        remap[sub.id]=first.id;
+        if(sub.entrance)first.entrance=true;   // never lose the flag when the flagged copy came second
+      });
+      if(keep.length!==l.sublocations.length)l.sublocations=keep;
+    });
+  });
+  if(!Object.keys(remap).length)return;
+  const fix=v=>(v&&remap[v])||v;
+  (state.universes||[]).forEach(u=>{
+    const qs=(u&&u.gameData&&Array.isArray(u.gameData.quests))?u.gameData.quests:[];
+    qs.forEach(q=>{ if(q&&q.subId)q.subId=fix(q.subId); });
+  });
+  for(const cid in (state.chats||{})){
+    const c=state.chats[cid]; if(!c)continue;
+    if(c.subId)c.subId=fix(c.subId);
+    if(c.subPos&&typeof c.subPos==="object")for(const pid in c.subPos)c.subPos[pid]=fix(c.subPos[pid]);
+    if(Array.isArray(c.calendar))c.calendar.forEach(e=>{ if(e&&e.subId)e.subId=fix(e.subId); });
+    markChatDirty(c);
+  }
+  try{ console.warn("[StoryMind] merged "+Object.keys(remap).length+" duplicate sub-area(s)"); }catch(e){}
+  try{persistUniverses&&persistUniverses();}catch(e){}
+  try{persistChats&&persistChats();}catch(e){}
 }
 // The entrance sub-area id for a location (where you land on arrival).
 function entranceSubId(l){
@@ -16617,7 +16664,7 @@ function charBioBlock(c,opts){
      .quietWant — a standing aim (target absent, or the player). Goes in the bio, under the goals.
      .coloring  — a this-turn coloring toward someone who is IN the room. Goes in the tail.
    Exactly one is ever set, so a scheme is never stated twice in one payload. */
-function intentParts(chat,selfId){
+function intentParts(chat,selfId,addresseeId,addresseeName){
   const out={quietWant:"",coloring:""};
   try{
     if(state.intentOn===false||!chat||!Array.isArray(chat.intents)||!selfId)return out;
@@ -16627,8 +16674,14 @@ function intentParts(chat,selfId){
     if(live.length){
       // strongest one wins the beat (don't pile multiple colorings on one turn)
       const it=live.sort((a,b)=>(b.strength||0)-(a.strength||0))[0];
+      // (!) This block colours how the character treats the INTENT's target. When the turn is being
+      // spoken to somebody else, say so — otherwise the payload asks for extra warmth toward one
+      // person inside a reply addressed to another, with nothing ranking the two.
+      const _who=addresseeName||(addresseeId==="__user__"?state.user:"");
+      const _aside=(addresseeId&&addresseeId!==it.targetId&&_who)
+        ? fillTpl(blkTpl("intent_side"),{addressee:_who,target:it.targetName||"them"}) : "";
       out.coloring=fillTpl(blkTpl(it.valence==="warm"?"intent_warm":"intent_hostile"),
-        {target:it.targetName||"them",kind:it.kind,aim:it.aim});
+        {target:it.targetName||"them",kind:it.kind,aim:it.aim,aside:_aside});
       return out;
     }
     // No present-target coloring, but they may still be nursing a plan (target absent, or the
@@ -17032,7 +17085,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     trackers:["trackers_header"],
     promises:["promise_header","promise_yours","promise_owed","promise_ended"],
     calendar:["calendar_header"],
-    private_intent:["intent_warm","intent_hostile"],
+    private_intent:["intent_warm","intent_hostile","intent_side"],
     latest_arcs:["mem_latest_header","mem_latest_instr","query_lang"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","heat_guidance"],
@@ -17364,10 +17417,14 @@ What a text has that a room does not: it is WRITTEN DOWN. It stays on two phones
   scene_changed_arrived:`Just ARRIVED, now here with you: {{names}}. They were NOT here a moment ago — notice them and react; do not treat them as if they'd been present all along.`,
   scene_changed_left:`Just LEFT the scene: {{names}}. They are gone now — do not speak to them, answer them, or act as if they can still hear you.`,
   // --- tail: private intent ---
-  intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now (a {{kind}} — {{aim}}). You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.`,
-  intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now ({{aim}}). You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.`,
+  intent_warm:`# A PRIVATE FEELING (this turn)\nYou privately hold a growing warmth toward {{target}}, who is here now — a {{kind}}, and what you actually want out of it is this: {{aim}}. You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.{{aside}}`,
+  intent_hostile:`# A PRIVATE TENSION (this turn)\nYou privately hold a {{kind}} toward {{target}}, who is here now — what you want out of it: {{aim}}. You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.{{aside}}`,
   // v22 — SELF-AWARENESS of a plan whose target isn't in the room (or is the player). Keeps the holder
   // goal-driven and consistent with their own intent across scenes and texts, without exposing a scheme.
+  // (!) Rendered into {{aside}} when the intent's target is NOT the person this turn is aimed at.
+  // Without it the payload asked for a warmer Burcu inside a turn addressed to Duygu, with nothing
+  // saying which one owns the reply — so the side-current could quietly take over the whole turn.
+  intent_side:`\nThis turn is aimed at {{addressee}}, not at {{target}} — so this stays a side-current: it gets a glance, a half-sentence, one small tell in passing. It does not become what the turn is about.`,
   intent_aim_warm:`Privately, you are working toward something with {{target}}: {{aim}} (a {{kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
   intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
@@ -18136,7 +18193,7 @@ function buildTailBlocks(opts){
   //     private intent toward someone ALSO present, one concrete this-turn instruction makes the
   //     hidden current show in how they treat that person right now. (A standing aim whose target
   //     ISN'T here rides in the bio instead, under the goals — see intentParts.)
-  {const _c=intentParts(chat,selfId).coloring; if(_c)B.private_intent=_c;}
+  {const _c=intentParts(chat,selfId,targetId,targetName).coloring; if(_c)B.private_intent=_c;}
 
   // (5) RESPONSE GUIDANCE. Heat gets its own — the normal one asks for a single turn that leaves
   //     room for {{user}} to react, which is the opposite of what a heat continuation is for.

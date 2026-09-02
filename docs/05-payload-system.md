@@ -92,7 +92,7 @@ an empty block renders nothing.
 | `promises` 🆕 | Open-ended commitments with no date: what this character swore and is bound by, what was sworn to them, and anything broken/kept/released in the last couple of days. From the promises ledger (doc 08). |
 | `calendar` | Plans due now/soon for this character, under their own `# MEETINGS` heading (`calendar_header`). `calendarContextLine(..., {bare:true})` returns the entries without the inline lead-in the directors still use. |
 | `quests` | Active quests this character is named in. |
-| `private_intent` | One-turn coloring from a live scheme/warmth toward someone **present**. |
+| `private_intent` | One-turn coloring from a live scheme/warmth toward someone **present**. `{{kind}}` is the taxonomy label and `{{aim}}` the actual want, joined so one frames the other ("a courtship, and what you actually want out of it is this: …") rather than reading as two rival labels. When the intent's target is **not** the person the turn is aimed at, `intent_side` ranks it as a side-current so it can't take the turn over. |
 | `feelings_now` ⚠️🆕 | The **live** emotional charge carried into THIS reply, written as a state the character is in (`relMomentaryNarrative`) rather than a list of axis labels, plus the fast read's playable note. True for one turn, so it sits last — immediately above the guidance. |
 | `response_guidance` | Who you are, who you're replying to, what the turn has to do. |
 | `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. |

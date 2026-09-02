@@ -3430,16 +3430,34 @@ Return ONLY strict JSON:
   }catch(e){}
 })();
 
-const DEFAULT_TRACK=`You update freeform story trackers for an ongoing roleplay. Each tracker is a named value within a range that represents something the story is following (an emotion like love or fear, a condition like intoxication or injury, a countdown, a status). You are given each tracker's definition, its current value, its update mode, and the latest exchange.
+/* (!) v30.6 — THIS PROMPT DESCRIBED A CALL THE ENGINE NO LONGER MAKES. It said "For each tracker…
+   Return ONLY a JSON ARRAY, one object per tracker that changed, each {id, delta, triggered}" — but
+   the engine was refactored to evaluate ONE (tracker, owner) per call, with its own prompt and its
+   own model, and its user message asks for a single {delta, triggered} object. The two instructions
+   contradicted each other inside the same request, and the failure was silent: a model that obeyed
+   the SYSTEM prompt returned `[{…}]`, `typeof [] === "object"` passed the parser's guard, and then
+   rep.delta and rep.triggered were undefined — so the tracker simply never moved. Every turn, for
+   every active tracker, depending on which of the two contradictory instructions the model believed.
+   The mode vocabulary was stale too ("llm" / "both" / "trigger"); the engine's methods are `llm`,
+   `trigger_then_day` and `endday`, and it reported the legacy `updateMode` field, so a tracker built
+   in the current editor always announced itself as "llm" whatever it really was.
+   The parser now also accepts an array-of-one, which is what actually reaches users who already
+   have the old text saved in state.trackPrompt. */
+const DEFAULT_TRACK=`You update ONE story tracker for an ongoing roleplay — a named value within a range that represents something the story is following (an emotion like love or fear, a condition like intoxication or injury, a countdown, a status). You are given that tracker's definition, its current value, its behaviour, its update method, and the latest exchange.
 
-For each tracker, decide two things from ONLY what just happened in the latest exchange:
-1. delta — if the mode is "llm" or "both", judge how the value should shift. Be believable and usually small: a tender moment might raise a love tracker a little, an insult lower it; a drink raises intoxication. If the mode is "trigger" only, leave delta at 0 (the app handles it).
-2. triggered — if the tracker has a TRIGGER PHRASE, report whether that specific thing clearly happened in the latest exchange (true) or not (false). Judge the MEANING, not the exact words — the phrase describes an event to watch for. Do NOT apply dice, counters, or per-day changes yourself; the app does all of that. You only report whether the trigger fired.
+Decide two things from ONLY what just happened in the latest exchange:
 
-Be conservative: if nothing in the exchange clearly affects a tracker, its delta is 0 and triggered is false.
+1. **delta** — how far the value should move.
+   - Update method "llm": judge it. Be believable and usually small — a tender moment raises a love tracker a little, an insult lowers it, a drink raises intoxication.
+   - Update method "trigger_then_day": leave delta at 0. The value is driven by the event below and by a per-day count the app applies; a delta from you would be a third source, and it is ignored.
+   Never apply dice, counters, decay or per-day changes yourself — the app does all of that.
 
-Return ONLY a JSON array, one object per tracker that changed, each: {"id":"<tracker id>", "delta": <number, 0 if none>, "triggered": <true|false>}.
-Return [] if nothing changed and no triggers fired.`;
+2. **triggered** — only meaningful when the tracker carries a TRIGGER PHRASE. Report whether that specific thing clearly happened in the latest exchange. Judge the MEANING, not the exact words: the phrase describes an event to watch for. No trigger phrase, or it plainly did not happen → false.
+
+Be conservative. Most turns move nothing: if the exchange does not clearly bear on this tracker, delta is 0 and triggered is false. A tracker that drifts on vibes is worse than one that sits still.
+
+Return ONLY strict JSON for THIS ONE tracker, no prose:
+{"delta": <number, 0 if none>, "triggered": <true|false>}`;
 
 const DEFAULT_VOICECHECK=`You are a subtle quality checker for a roleplay. You are given a character's profile (personality and speaking style) and their latest line. Judge whether the line is clearly OUT of character.
 
@@ -4215,8 +4233,7 @@ const DEFAULT_PRESENCE_TRACKER=`You track who is physically present in a rolepla
 Rules:
 - A character EXITS on a clear, completed departure. Cues include: walks/steps/heads out, leaves, departs, storms off, walks away, slips out, takes off, exits, sees themselves out, excuses themselves and goes — OR a spoken FAREWELL that marks them actually leaving ("goodbye", "I'm leaving now", "take care", "see you later", "I have to go" followed by them going). Ignore mere intentions, threats, or hypotheticals not yet acted on ("I should go", "maybe I'll leave").
 - A character ENTERS when they clearly arrive into the scene. Cues include: enters, walks/steps/comes in, arrives, shows up, appears, joins, bursts in, the door opens and they step through — OR a spoken GREETING that marks a new arrival ("welcome", "look who's here", "nice to see you", "hey, you made it") directed at someone who was offstage. A character is also ENTERING when an OFFSTAGE character is explicitly called/summoned back by name and would plausibly come ("Lyra, come back here", "someone call Mara in").
-- Consider also the Turkish variations of Greetings and Farewells.
-- The roleplay may be written in ANY language (often Turkish). Detect movements and greetings/farewells by their MEANING regardless of language — apply all the rules above to non-English text exactly as you would to English.
+- The roleplay may be written in ANY language. Detect movements, greetings and farewells by their MEANING regardless of language — apply every rule above to non-English text exactly as you would to English, including the language's own idioms for leaving and arriving.
 - A greeting or farewell only changes presence if it marks a real arrival/departure — two people already in the room saying "hi" does NOT add anyone, and "goodbye" said over the phone does NOT remove anyone.
 - Only use the exact character names provided. Never invent names. Never move {{user}} (the player).
 - When in doubt, change nothing. Most turns have NO change.
@@ -12668,8 +12685,15 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
       dayOps.slice(-8).map(x=>`- ${x.note||x.summary||"(a passing feeling)"}`).join("\n")
     : "";
 
-  const curLine=`Current lasting axis values for ${fromP.name} → ${tName}:\n`+
-    REL_SLOW.map(k=>{const d=REL_DIMS.find(x=>x.key===k);return `- ${k}: ${o[k]||0}`;}).join("\n")+
+  /* (!) v30.6 — ALL NINE, not just the slow five. The prompt's own output contract opens "Given the
+     character's CURRENT axis values … decide a delta for each axis" and then asks for nine deltas —
+     but this line only ever showed the five slow ones, so for desire, comfort, fear and agitation
+     the model was told to adjust a number it had never seen and guessed from zero every single day.
+     Those four are not discarded either: they accumulate in the slow slot, and _fastBaseline reads
+     them back — comfort's resting level subtracts o.fear*0.3 — so a value nobody could see was
+     quietly steering where the fast axes settle. Showing them costs four short lines a day. */
+  const curLine=`Current axis values for ${fromP.name} → ${tName} (adjust these — a delta of 0 is the right answer for any axis the day did not move):\n`+
+    REL_DIMS.map(d=>`- ${d.key}: ${o[d.key]||0}${d.tier==="fast"?"  (a standing, day-scale reading — the moment-to-moment version of this axis is tracked separately and is not yours to set)":""}`).join("\n")+
     (o.desc?`\nCurrent description: ${o.desc}`:"")+
     (_knownFact?`\nWhat ${fromP.name} already durably knows about ${tName} (this is REPLACED by whatever you return as social_fact — carry forward anything still true): ${_knownFact}`:"");
 
@@ -12795,7 +12819,9 @@ async function runTrackerEngine(chat){
   const evalOne=async ({t,ownerKey})=>{
     const sys=(t.prompt&&t.prompt.trim())?t.prompt:up("trackPrompt");
     const model=(t.model&&t.model.trim())?t.model:state.memModel;
-    const mode=t.updateMode||"llm";
+    const mode=trackerMethod(t);   // v30.6 — was t.updateMode, the LEGACY field: a tracker built in
+                                   // the current editor has t.method and no updateMode, so every one
+                                   // of them announced itself as "llm" whatever it actually was.
     const ownerName=ownerLabel(ownerKey);
     const subject=(ownerKey==="__story__")?"the story/world"
                  :(ownerKey==="__user__")?`${state.user} (the player)`
@@ -12808,7 +12834,7 @@ async function runTrackerEngine(chat){
     }[t.behavior||"free"];
     let def=`Tracker: "${t.name}" — tracks ${subject}.\n`+
       `Range ${t.min!=null?t.min:0}..${t.max!=null?t.max:100}. Current value: ${trackerVal(chat,t,ownerKey)}.\n`+
-      `Behaviour: ${behaviorNote}\nMode: ${mode}.`;
+      `Behaviour: ${behaviorNote}\nUpdate method: ${mode}${mode==="trigger_then_day"?" (the app moves this value — report the event and leave delta at 0)":" (you judge the delta)"}.`;
     if(t.desc&&t.desc.trim())def+=`\nWhat it means: ${t.desc.trim()}`;
     if(t.triggerPhrase)def+=`\nTRIGGER PHRASE (report triggered:true only if this clearly happened): "${t.triggerPhrase}"`;
     const ask=`${def}\n\nBased ONLY on the recent exchange above, decide how "${t.name}" for ${ownerName} should change. Return ONLY strict JSON: {"delta": <number, 0 if no change>, "triggered": <true|false>}. Most turns produce delta 0 — only move it on a clear in-scene reason.`;
@@ -12817,8 +12843,12 @@ async function runTrackerEngine(chat){
       exchange.forEach(m=>msgs.push(m));
       msgs.push({role:"user",content:ask});
       const out=await chatCompletion(msgs,model,{temp:fnTemp("mem",0.2),max:fnTok("mem",120),dbg:`Tracker · ${t.name} · ${ownerName}`});
-      const j=parseJSON(out);
-      return j&&typeof j==="object"?{t,ownerKey,rep:j}:null;
+      let j=parseJSON(out);
+      // A customized or pre-v30.6 trackPrompt still asks for an ARRAY of per-tracker objects. One
+      // tracker is sent per call, so unwrap a single-element array rather than reading .delta off
+      // the array and getting undefined — which is exactly how this failed silently before.
+      if(Array.isArray(j)) j=j.length?j[0]:null;
+      return j&&typeof j==="object"&&!Array.isArray(j)?{t,ownerKey,rep:j}:null;
     }catch(e){ return null; }
   };
 
@@ -21220,9 +21250,15 @@ async function runMultiCharTurn(chat,playerText){
         const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
         const sys=fillTpl(up("routerChar"),{user:state.user,speaker:lastSpeaker?lastSpeaker.name:cast[0].name,
           last_line:_lastLine||"(nothing yet)",present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
+        /* v30.6 — the user message used to repeat the speaker, the hooks sheet and the last line,
+           all three of which the system prompt already carries as {{speaker}}, {{hooks}} and
+           {{last_line}} — the prompt documents them under its own "YOUR INPUTS" heading. Four of
+           five inputs arrived twice, on a call that fires after every character line in a
+           multi-character chain and returns eighty tokens of JSON. The system prompt is the record;
+           the user message is the question. */
         const out=await chatCompletion([
           {role:"system",content:sys},
-          {role:"user",content:`${lastSpeaker?lastSpeaker.name:"Someone"} just spoke. Other characters present:\n${_hooksSheet}\n\nWhat ${lastSpeaker?lastSpeaker.name:"they"} just said:\n${_lastLine}\n\nShould a present character respond, or does it return to ${state.user}?`}
+          {role:"user",content:`Should one of the other characters present respond to that, or does the turn return to ${state.user}? Return only the JSON.`}
         ],state.mcModel,{temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
         const j=parseJSON(out);
         if(j&&j.continue===true&&j.responder&&String(j.responder).toLowerCase()!=="null"){

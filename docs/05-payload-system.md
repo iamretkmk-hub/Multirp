@@ -420,6 +420,53 @@ Also: the three character-quest prompts had no card, so they landed in the auto-
 prompts" bucket and warned on every boot. They have a `char_quests` card now, and the coverage check
 is clean: **60 registry prompts, none dead, none unmapped.**
 
+## v30.6 — engine prompt CONTENT
+
+Structure was audited in v30.5; this pass read what the prompts actually say. Four findings, all of
+the same family as the reply payload's: an instruction that contradicts another instruction, or asks
+for a judgment the model has not been given what it needs to make.
+
+**The tracker engine's prompt described a call it no longer makes — and failed silently when
+obeyed.** `DEFAULT_TRACK` said *"For each tracker … Return ONLY a JSON **array**, one object per
+tracker that changed, each `{id, delta, triggered}`"*. But the engine evaluates **one** (tracker,
+owner) per call, with its own prompt and model, and its user message asks for a single
+`{delta, triggered}`. Two contradictory contracts in one request — and the failure mode is invisible:
+a model that believed the system prompt returned `[{…}]`, `typeof [] === "object"` passed the
+parser's guard, and `rep.delta` / `rep.triggered` came back `undefined`, so the tracker never moved.
+The prompt is rewritten for the single-tracker reality, **and the parser now unwraps an
+array-of-one** — which is the half that reaches anyone with the old text already saved in
+`state.trackPrompt`.
+The engine also reported the tracker's **legacy `updateMode`** field rather than `trackerMethod(t)`,
+so every tracker built in the current editor announced itself as `"llm"` whatever it really was. The
+method vocabulary in the prompt was legacy too (`llm`/`both`/`trigger` vs the real
+`llm`/`trigger_then_day`/`endday`).
+
+**The daily relationship evaluator adjusted four axes it was never shown.** `DEFAULT_REL`'s output
+contract opens *"Given the character's CURRENT axis values … decide a delta for each axis"* and asks
+for nine deltas — but the user message listed only the five **slow** ones, so for desire, comfort,
+fear and agitation the model guessed from zero every day. Those four are not discarded: they
+accumulate in the slow slot and `_fastBaseline` reads them back (comfort's resting level subtracts
+`o.fear*0.3`), so a number nobody could see was steering where the fast axes settle. All nine are
+shown now, with the fast four labelled as the day-scale reading so they are not confused with the
+moment-to-moment ones the short-term pass owns.
+
+**The chain router sent four of its five inputs twice.** `routerChar` is the second-largest engine
+prompt (8,699 chars) and fires after every character line in a multi-character chain, for an
+80-token answer — and its user message repeated the speaker, the hooks sheet and the last line, all
+of which the system prompt already carries as `{{speaker}}`, `{{hooks}}` and `{{last_line}}` under
+its own "YOUR INPUTS" heading. The system prompt is the record; the user message is now just the
+question.
+
+**The presence tracker singled out Turkish and then said "any language".** Two adjacent bullets, the
+first redundant with the second. One bullet now, language-neutral.
+
+### Engine prompt sizes, for reference
+
+`relPrompt` 11,971 · `routerChar` 8,699 · `sceneWriter` 7,308 · `gmAuthor` 5,344 · `gmJudge` 5,110 ·
+`memBuild` 4,872 · `intentForm` 4,472 · `calPrompt` 4,236 (60 prompts, ~167k chars total). `relPrompt`
+runs **per ordered pair per day** — with a cast of five that is up to twenty calls of ~3,000 tokens
+each at End Day, which is the largest single cost in the app after the replies themselves.
+
 ## Placeholders
 
 Placeholders are **not universal** — each token is filled only by the engine that sends that

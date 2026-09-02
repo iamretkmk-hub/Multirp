@@ -1076,7 +1076,7 @@
             </div>
             <div class="desc">Used by any rule set to “Default”. Each rule below can override this and use its own provider — so e.g. standard scenes can run on AtlasCloud while intimate scenes run on ModelsLab.</div></div>
           <div id="atlasImgWrap" style="display:none"><label>AtlasCloud image model (default)</label><input type="text" id="setAtlasImgModel" placeholder="seedream-3.0">
-            <div class="desc">One model for the whole story — every scene type uses it. An image-<b>edit</b> model builds each scene from real reference pictures instead of a description, so people keep the same face throughout: <code>alibaba/qwen-image/edit-plus-20251215</code> (up to 3 people per frame) or <code>alibaba/wan-2.6/image-edit</code> (up to 4). Whose pictures go with a scene is set per rule under <b>Who is in this frame</b>; the pictures themselves are the characters' profile pictures, and yours in Settings › You.</div></div>
+            <div class="desc">One model for the whole story — every scene type uses it. An image-<b>edit</b> model builds each scene from real reference pictures instead of a description, so people keep the same face throughout: <code>alibaba/qwen-image/edit-plus-20251215</code> (up to 3 people per frame), <code>alibaba/wan-2.6/image-edit</code> (up to 4) or <code>alibaba/wan-2.7/image-edit</code> (up to 9, and it takes its frame from the first reference rather than the aspect set here). Whose pictures go with a scene is set per rule under <b>Who is in this frame</b>; the pictures themselves are the characters' profile pictures, and yours in Settings › You.</div></div>
           <div>
             <label>Illustrate every <span id="imgEveryVal">1</span> repl<span id="imgEveryPl">y</span></label>
             <input type="range" id="setImgEveryTurns" min="1" max="12" step="1" value="1" style="width:100%"
@@ -1951,7 +1951,7 @@
         <button class="btn sec small" id="peGenPic" onclick="generateProfilePic()"><svg class="ic"><use href="#i-sparkle"/></svg> Generate from appearance</button>
         <button class="btn sec small" id="peClearPic" onclick="clearProfilePic()">Clear</button>
       </div>
-      <div class="desc"><b>This picture is also the character's reference.</b> With an image-edit model (<code>alibaba/wan-2.6/image-edit</code>) every scene they appear in is built from it, so their face and build stay the same throughout — pick the clearest likeness you have. <b>Upload</b> your own, <b>Choose from gallery</b> takes one the story already made, <b>Generate</b> draws a new one from the Appearance fields below.</div>
+      <div class="desc"><b>This picture is also the character's reference.</b> With an image-edit model (<code>alibaba/wan-2.6/image-edit</code>, <code>alibaba/wan-2.7/image-edit</code>) every scene they appear in is built from it, so their face and build stay the same throughout — pick the clearest likeness you have. <b>Upload</b> your own, <b>Choose from gallery</b> takes one the story already made, <b>Generate</b> draws a new one from the Appearance fields below.</div>
     </div>
     <div><label>Avatar (emoji fallback)</label><input type="text" id="peAvatar" placeholder="🧝‍♀️" maxlength="4"></div>
     <div><label>Roleplay instructions</label><textarea class="fld" id="peInstructions" placeholder="How this character should be played: rules, tone, content boundaries, formatting preferences, things to always/never do…" style="min-height:64px"></textarea></div>
@@ -7097,9 +7097,21 @@ const ATLAS_EDIT_MODELS={
   "alibaba/wan-2.6/image-edit":{maxRefs:4,promptMax:1200,negMax:500,sizes:[
     "576*1344","720*1280","720*1680","768*1024","800*1200","816*1904","936*1664","960*1280",
     "960*1440","1024*768","1024*1024","1040*1560","1104*1472","1200*800","1280*720","1280*960",
-    "1280*1280","1344*576","1440*960","1472*1104","1560*1040","1664*936","1680*720","1904*816"]}
+    "1280*1280","1344*576","1440*960","1472*1104","1560*1040","1664*936","1680*720","1904*816"]},
+  // v30.1 — wan 2.7. Missing from this table, it was not recognised as an edit model at all, so
+  // every call fell through to the text-to-image branch and the references were never attached:
+  // the prompt went out alone, from the story, the playground and the character editor alike.
+  // It speaks a different dialect of the same endpoint, hence the extra fields: the image count
+  // is `n` (not num_images), there is no negative_prompt and no prompt_extend, `size` is a
+  // resolution TIER ("1K"/"2K") rather than a pixel pair — the frame follows the first reference
+  // — and it takes up to 9 references with a 5000-character prompt.
+  "alibaba/wan-2.7/image-edit":{maxRefs:9,promptMax:5000,negMax:0,countKey:"n",
+    sizeTier:"2K",noPromptExtend:true,thinking:true}
 };
-function atlasEditSpec(m){ return ATLAS_EDIT_MODELS[String(m||"").trim()]||null; }
+Object.keys(ATLAS_EDIT_MODELS).forEach(function(k){ ATLAS_EDIT_MODELS[k].id=k; });
+// Match on the trimmed, lower-cased id so a stray capital or a pasted trailing space doesn't
+// silently drop a model off the edit path (which is exactly how the references go missing).
+function atlasEditSpec(m){ return ATLAS_EDIT_MODELS[String(m||"").trim().toLowerCase()]||null; }
 function atlasIsEditModel(m){ return !!atlasEditSpec(m); }
 function editModelMaxRefs(m){ const s=atlasEditSpec(m); return s?s.maxRefs:0; }
 function _wh(size){
@@ -7112,6 +7124,10 @@ function _wh(size){
 function editModelSize(model,size){
   const spec=atlasEditSpec(model); const wh=_wh(size);
   if(!spec)return String(size||"").replace(/x/gi,"*");
+  // A tier model (wan 2.7) takes a resolution band, not a pixel pair — the aspect comes from the
+  // first reference image, so the app's frame can't be asked for here. Send the band and let the
+  // references decide the shape.
+  if(spec.sizeTier)return spec.sizeTier;
   if(spec.sizes){
     if(!wh)return "1280*1280";
     const w=wh[0], h=wh[1], ar=w/h, area=w*h;
@@ -7163,10 +7179,14 @@ async function atlasImage(prompt,negative,rule,opts){
                :{urls:[],names:[]};
     const urls=(built.urls||[]).filter(Boolean).slice(0,spec.maxRefs);
     if(!urls.length) throw{friendly:model+" builds from reference images and none were available. Give the people in this scene a profile picture — the character editor for a character, Settings › You for yourself."};
-    const body={model,images:urls,
-      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length)),
-      num_images:1, prompt_extend:false};
-    if(negative)body.negative_prompt=String(negative).slice(0,spec.negMax||500);
+    // The payload is built from the spec, not hard-coded, because the edit models disagree on the
+    // names: qwen/wan-2.6 want num_images + prompt_extend, wan 2.7 wants n and takes neither.
+    const body={model:spec.id||model,images:urls,
+      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length))};
+    body[spec.countKey||"num_images"]=1;
+    if(!spec.noPromptExtend)body.prompt_extend=false;
+    if(spec.thinking)body.thinking_mode=true;
+    if(negative&&spec.negMax>0)body.negative_prompt=String(negative).slice(0,spec.negMax);
     const size=editModelSize(model,wanted);
     if(size)body.size=size;
     if(state.imgSeed!=null&&state.imgSeed!=="")body.seed=+state.imgSeed;

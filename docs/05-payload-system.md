@@ -176,6 +176,40 @@ generation than the one that owns it:
 Measured on a populated reference payload: 27,475 → 25,903 characters of instruction, and two
 outright contradictions removed.
 
+### Density pass (same release)
+
+**`# TASK` was a quarter of the payload, in its weakest position.** 6,287 characters at the very
+top, six of whose rules FINAL GUARDRAILS said again at the very bottom in its strongest position.
+`DEFAULT_BASE_INSTRUCTION` is rewritten: 6,287 → 3,685 rendered. Nothing was thrown away except the
+six duplicates (now only in the rails, where they fire hardest) and the `EMBODY YOUR CHARACTER`
+section, which said "use your character profile" directly above two thousand tokens of character
+profile. Both halves of the pressure rule — don't fold, don't shatter — survive; they are the most
+load-bearing paragraphs in the block and nothing else states them.
+**(!) Customized copies (`state.baseInstruction`) keep the old text.** This is the shipped default;
+a user gets the new one by resetting the prompt in Settings.
+
+**Situational rails now fire when they apply.** Every rail used to ship on every turn, including
+ones describing a situation that was not happening — and a wall of "never" in the last slot before
+generation is what produces careful, rule-reciting output.
+
+| Rail | Fires when |
+|---|---|
+| `rail_oblique_once` (split out of `rail_oblique`) | the exchange has stalled on the same ask, or this character carries a pursuit they have already put to someone. Without one of those there is no loop to break out of. |
+| `rail_noecho` | somebody else actually spoke last. On a turn that continues the character's own line there is nothing of the player's to echo. |
+| `rail_single_solo` | never, by default — RESPONSE GUIDANCE opens with the same sentence one block earlier. Still available in the payload editor. |
+
+**`feelings_now`** kept the charge and the note and lost the lecture around them: 1,875 → 1,251.
+
+**Memory lines** ended `(felt: tense) (Day 4) [Emre's House]`. The day stays (the scene brief tells
+the character to reason in "yesterday"/"the other day"). The bare `emotion` enum goes — it is one of
+ten fixed tokens, so a run of memories from one charged week ends every line identically
+(`memInjectText(m,{noEnum:true})`, reply payload only; a *written* `feelings` phrase still shows, and
+every other consumer gets the full string). The location is kept **only when it differs from the
+current scene**, which is when it carries information.
+
+Reference payload across the whole pass: **27,475 → 23,585 characters (−14%)**, with both
+contradictions gone.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

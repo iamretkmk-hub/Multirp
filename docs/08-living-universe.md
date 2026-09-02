@@ -12,6 +12,7 @@ maybeProactiveTextTick     a character may text first (≤1 per in-game period) 
 maybeCharQuestTextTick     a quest-holder may text their ask (heavily rate-limited) (bg)
 runTrackerEngine           freeform tracker deltas + trigger phrases (bg, if trackOn)
 runShortTermRel            fast feeling axes (adaptive cadence) (bg, if relOn)
+runPromiseEngine           open-ended commitments: find new ones AND settle open ones (bg, every 2nd turn)
 runCalendarEngine          extract new concrete meetings from conversation (bg, if calOn)
 adjustAttendance           persuasion re-scoring of an uncertain meeting (bg)
 runCalendarExecutor        due char↔char plans (only here when pulse is OFF)
@@ -147,6 +148,67 @@ standing — the stakeholder's one raisable rumor vs. talk merely overheard (doc
   (`openQuestDebugModal`), travel shortcut (`questTravel`). Reconciled daily
   (`reconcileQuestsForDay`).
 
+## Goals & ambitions: the curator (v30.3)
+
+`persona.goalsLive = {lines[], day, at, changed}` — the ONE want-list that reaches a character's
+payload as `<goals_and_ambitions>` (doc 05). It replaced three payload sections that only ever grew:
+the authored goals field frozen at creation, a `<your_quests>` dump re-stating every pursuit and its
+whole progress log, and a `<what_you_quietly_want>` line from the live intent.
+
+`runGoalsCurator(chat, day, uni)` runs at **End Day, after the quest passes and the intent engine**
+(the two things most likely to have changed what somebody wants) and **before the chronicler**.
+It is a REWRITE, not an append — the `goalsCurator` prompt's whole job is deciding what to DROP:
+keep / reword / merge / drop each existing line, add at most one or two the day genuinely earned,
+cap at `state.goalsMax` (default 5).
+
+Inputs per character: the authored goals (the **foundation**, never written to and never
+contradicted), the section as it currently stands, their active and just-resolved character quests,
+their live private intents, the commitments they are bound by, the memories they formed today, and
+which of their bonds moved today.
+
+Bounded on purpose: `_goalsMoveScore` skips characters the day did not move (a quiet character's list
+is already correct), and at most six characters are curated per day. Off via `state.goalsCuratorOn`,
+and "Reset to the foundation" in the character editor clears `goalsLive` — which also happens
+automatically when the author edits the goals field, since the list was grown from the old one.
+
+`engineGoals(p, cap)` is the read path for every engine that used to read `persona.goals` directly.
+
+## Promises & standing commitments (v30.3)
+
+The calendar tracks things with a DATE. The other half of what people hold each other to has none —
+"I'll never touch him again", "promise me you'll always be on my side", a rule accepted under
+pressure. The meetings detector was right to drop those, and there was nowhere else for them to go.
+
+`chat.promises[]` is a ledger with the same discipline as the gossip ledger:
+
+| Field | Meaning |
+|---|---|
+| `holderId`/`holderName` | who is bound by it |
+| `toId`/`toName` | who it was given to (may be empty) |
+| `ask` | what was asked, or what prompted it — the reason, which is what makes it make sense a week later |
+| `promise` | the word actually given, as a standing rule |
+| `kind` | `promise` · `prohibition` · `arrangement` · `change` · `secret` |
+| `weight` | `binding` or `soft` (given lightly / under pressure) |
+| `status` | `open → kept | broken | released`, with `statusDay` and a `note` |
+
+`runPromiseEngine(chat)` fires from `postTurn` on every second turn and does BOTH jobs in one call:
+finds new commitments and settles the open ones (`kept`/`broken`/`released`/`reaffirmed`), which is
+what keeps the ledger from becoming another append-only dump. `recordPromise` swallows paraphrases of
+a word already given (`_prSame`, 60% content-word overlap); `_prPrune` drops resolved entries after
+7 days and caps the list at 60. A **broken** word plants a real memory for whoever it was given to,
+so feelings, gossip and intents pick it up through the normal path.
+
+**(!) Four read paths, and they must stay in step** — a commitment nobody but its holder knows about
+is worse than none at all:
+1. the speaking character's payload — `promiseContextFor` → the `promises` block,
+2. the Gamemaster and Scene Writer — `promiseDirectorBlock` inside `directorContext`,
+3. the offstage engines — `promiseContextForNames` on the world pulse, calendar executor, goal
+   pursuit and character-quest step,
+4. the goals curator, as context for what a character can want.
+
+UI: a read-only section in the Meetings modal (`_calPromiseSection`) with release and delete.
+Off via `state.promiseOn`.
+
 ## Calendar & meetings
 
 `runCalendarEngine` (`calPrompt`) extracts only **concrete dated meetings** (day, executor,
@@ -178,7 +240,8 @@ blocks as a spoken turn, only the format rules differ (doc 05).
 8. `runGoalPursuit` → 9. char quests: reconcile → pursue → spawn → text
 10. `reconcileTextsDay` → `maybeProactiveText({force:true})`
 11. `maybeSpawnConfrontation` → 12. `bindPendingTasks`/`runBackgroundTasks` →
-13. `runIntentEngine` → 14. `runUniverseChronicler` (**must be last** — the day's record)
+13. `runIntentEngine` → 14. `runGoalsCurator` (rewrites each moved character's want-list) →
+15. `runUniverseChronicler` (**must be last** — the day's record)
 
 The foreground `endDay()` (before all this): confirm dialog → snapshot the day's messages
 (**before** pushing the new `dayMarker` — the marker would blank the "today" window) →

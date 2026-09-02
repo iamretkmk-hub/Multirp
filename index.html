@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3404,7 +3404,7 @@ These are STATES, not judgments. Do not factor in or re-score long-term trust, l
 
 You are given the character's current short-term values, their standing sentiment (context), and the recent moment.
 
-The "note" is the most important part — it is read by the actor voicing this character and is meant to STEER their very next reply, so do NOT write a terse label. Write it in the SECOND PERSON, addressing the character directly as "you" / "your" (NEVER "he", "she", "they", or their name). 1-2 vivid, present-tense sentences that (a) name what YOU are feeling right now and what in the moment caused it, and (b) spell out how that feeling should visibly COLOR your next line: your tone, pace, word choice, and body language — what you lean into, what you hold back, what leaks out despite you. Make the behavioural impact concrete and playable. Do NOT use technical feeling labels (no "fear", "agitation", "high desire") — describe it naturally.
+The "note" is the most important part — it is read by the actor voicing this character and is meant to STEER their very next reply, so do NOT write a terse label. Write it in the SECOND PERSON, addressing the character directly as "you" / "your" (NEVER "he", "she", "they", or their name). 2-3 vivid, present-tense sentences that (a) name what YOU are feeling right now and what in the moment caused it, (b) spell out how that feeling should visibly COLOR your next line — your tone, your pace, your word choice, your body: what you lean into, what you hold back, what leaks out despite you — and (c) name ONE concrete thing it does to your delivery that someone in the room would actually notice (a sentence that stops short, a hand that will not stay still, an answer given a beat too fast). Finish every sentence; a note that stops mid-clause is worse than a short one. Do NOT use technical feeling labels (no "fear", "agitation", "high desire") — describe it naturally.
 - Weak (do NOT do this): "flustered by his closeness".
 - Strong (do this): "His nearness has you flustered and off-balance; you keep your answers clipped and half-turned away, a beat too quick, fighting down a smile you don't want him to see."
 - Strong: "The jab landed and you're simmering — your voice drops flat and precise, courtesy stretched thin over the anger, each word placed like you're deciding whether to let it show."
@@ -4524,6 +4524,7 @@ function splitSystemSections(text){
 // field; the image-prompt user message → character sheet / continuity / exchange.
 // Human-readable labels for the character-sheet XML field names (the tag can't carry spaces).
 const _CAP_LABELS={play_notes:"play notes",how_you_behave:"how you behave",goals_ambitions:"goals & ambitions",
+  goals_and_ambitions:"goals & ambitions (maintained)",pursuit_status:"pursuit — where it stands",
   what_you_quietly_want:"WHAT YOU QUIETLY WANT",your_quests:"your quests",speaking_style:"speaking style",
   where_you_live:"where you live"};
 function _capLabel(tag){ return _CAP_LABELS[tag]||tag; }
@@ -4597,7 +4598,7 @@ function _subCapsules(title,body){
       if(/^⚠️ WHAT JUST CHANGED/i.test(ln)){ flush(); lbl="what just changed"; buf.push(ln); }
       else if(/^CURRENT DAY:/i.test(ln)){ flush(); lbl="CURRENT DAY"; buf.push(ln); }
       else if(/^⚠️\s*YOUR CURRENT LOCATION/i.test(ln)){ flush(); lbl="current location"; buf.push(ln); }
-      else if(/^SUB-AREAS:/i.test(ln)){ flush(); lbl="sub-areas"; buf.push(ln); }
+      else if(/^SUB-AREAS\b/i.test(ln)){ flush(); lbl="sub-areas"; buf.push(ln); }
       else if(/^PRIVACY:/i.test(ln)){ flush(); lbl="privacy"; buf.push(ln); }
       else if(/^(STORY TRACKERS|YOUR PERSONAL TRACKERS|PUBLICLY VISIBLE)/i.test(ln)){ flush(); lbl="trackers"; buf.push(ln); }
       else if(/^\[\s+\S/.test(ln) && lbl==="trackers"){ /* one tracker per child */ flush(); lbl="tracker"; buf.push(ln); flush(); lbl="trackers"; }
@@ -5282,6 +5283,27 @@ function loadState(){
       });
       if(stripped)persistUniverses();
       store.setRaw("sm_promptscope_v2","done");
+    }
+  }catch(e){}
+  /* ---- Social-graph discoveries migration (v30.3, runs once) ---------------------------------
+     socialGraphAuto was an APPEND-ONLY list of durable facts a character had learned, one line per
+     day, hard-sliced at 140 characters and never revisited. In a long story it became the thing this
+     release exists to remove: a growing block, in whatever language each day's engine happened to
+     use, with the last line cut mid-word — and it was injected into every payload that character
+     spoke from. It is replaced by persona.socialFacts, one CURRENT fact per person, rewritten in
+     place by the daily relationship pass.
+     The old lines cannot be attributed back to a person, so they are dropped rather than converted.
+     Nothing is lost that the engine will not re-derive within a day or two of play, and the
+     author's own socialGraph text is never touched. */
+  try{
+    if(!store.raw("sm_socialfacts_v1","")){
+      let cleared=0;
+      (state.personas||[]).forEach(p=>{
+        if(p&&typeof p.socialGraphAuto==="string"&&p.socialGraphAuto.trim()){ p.socialGraphAuto=""; cleared++; }
+        if(p&&!p.socialFacts)p.socialFacts={};
+      });
+      if(cleared){ persistPersonas(); try{ console.log("[migrate] cleared "+cleared+" legacy social-graph blob(s) — facts are now per-person and rewritten in place"); }catch(_){} }
+      store.setRaw("sm_socialfacts_v1","done");
     }
   }catch(e){}
   // ---- Structured-appearance migration ------------------------------------------------------
@@ -10970,7 +10992,7 @@ function _calOverdue(chat,e){
   const today=(chat&&chat.gameDay)||1;
   return !e.done && (e.kind||"meeting")==="meeting" && e.day!=null && e.day<today;
 }
-function calendarContextLine(chat,selfName,selfId){
+function calendarContextLine(chat,selfName,selfId,opts){
   const c=chat||curChat(); if(!c)return "";
   const today=c.gameDay||1;
   // Overdue (unkept) meetings are surfaced too, so a character KNOWS the player didn't show. Keep a
@@ -11030,6 +11052,10 @@ function calendarContextLine(chat,selfName,selfId){
   if(todayPlans.length)parts.push("TODAY: "+todayPlans.map(fmt).join("; "));
   if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e)} (Day ${e.day})`).join("; "));
   if(!parts.length)return "";
+  // v30.3 — opts.bare returns just the entries: the reply payload wraps them in its own MEETINGS
+  // heading (blkTpl("calendar_header")) so the block is a section of its own rather than a sentence
+  // swallowed by whatever came before it. The directors keep the inline, self-describing form.
+  if(opts&&opts.bare)return parts.join("\n");
   return "MEETINGS (you are aware of and remember these; reference them naturally and speak per whether each is firmly agreed or only loosely floated; hold whoever missed an unkept meeting accountable): "+parts.join(" · ");
 }
 
@@ -11295,11 +11321,55 @@ function openCalendar(){
    <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Meetings — Day ${today}, ${esc(chatPeriod(chat))}</h3>
    ${rows}
    ${_calWorldSection(chat)}
+   ${_calPromiseSection(chat)}
    ${_calQuestsSection(chat)}
    <button class="btn small" style="margin-top:10px" onclick="addCalManual()">＋ Add plan <span class="desc" style="display:inline;font-weight:400">(with me · between characters · solo task)</span></button>
    <button class="btn sec small" style="margin-top:6px" onclick="_calClose()">Close</button></div>`;
   m.addEventListener('click',e=>{if(e.target===m)_calClose();});
   document.body.appendChild(m);
+}
+/* v30.3 — COMMITMENTS section of the meetings modal. The two belong on the same screen: one is what
+   people agreed to DO at a time, the other is what they agreed to be true from now on. Read-only
+   apart from letting the player release or delete one — the engine writes them, but a commitment the
+   player has decided is over should not be able to outlive that decision. */
+function _calPromiseSection(chat){
+  if(state.promiseOn===false)return "";
+  const list=chatPromises(chat); if(!list.length)return "";
+  const today=chat.gameDay||1;
+  const open=list.filter(pr=>pr.status==="open");
+  const ended=list.filter(pr=>pr.status!=="open"&&(today-(pr.statusDay||pr.day||0))<=7).slice(-4);
+  if(!open.length&&!ended.length)return "";
+  const KIND={promise:"promised",prohibition:"swore not to",arrangement:"standing rule",change:"declared",secret:"keeping quiet"};
+  const row=pr=>{
+    const meta=[`Day ${pr.day}`,KIND[pr.kind]||pr.kind,pr.weight==="soft"?"given lightly":"",
+                pr.status!=="open"?`<span style="color:${pr.status==="broken"?"#E8A33D":"var(--good)"}">${esc(pr.status)}</span>`:""]
+               .filter(Boolean).join(" · ");
+    return `<div class="card" style="padding:8px">
+      <div class="qrow"><div class="qtxt">
+        <b style="${pr.status!=="open"?'text-decoration:line-through;opacity:.55':''}">${esc(pr.holderName)}${pr.toName?` → ${esc(pr.toName)}`:""}</b>
+        <div class="desc">${esc(pr.promise)}</div>
+        ${pr.ask?`<div class="desc" style="opacity:.7">asked: ${esc(pr.ask)}</div>`:""}
+        ${pr.note?`<div class="desc" style="opacity:.7">${esc(pr.note)}</div>`:""}
+        <div class="desc">${meta}</div></div>
+      <div class="qbtns">
+        ${pr.status==="open"?`<button class="btn sec small" title="Release them from this" onclick="releasePromise('${pr.id}')">${icon("check")}</button>`:""}
+        <button class="btn danger sec small" title="Delete" onclick="delPromise('${pr.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+      </div></div></div>`;
+  };
+  return `<div style="margin-top:14px"><div class="desc" style="font-weight:600;margin-bottom:4px">Promises &amp; standing commitments</div>
+    <div class="desc" style="margin-bottom:6px">Words with no date on them. They take effect the moment they are given and stay in force until something ends them — and everyone who might contradict one is told about it.</div>
+    ${open.map(row).join("")}${ended.map(row).join("")}</div>`;
+}
+function releasePromise(id){
+  const chat=curChat(); if(!chat)return;
+  const pr=chatPromises(chat).find(x=>x&&x.id===id); if(!pr)return;
+  pr.status="released"; pr.statusDay=chat.gameDay||1; pr.note="let go of";
+  markChatDirty(chat); persistChats(); openCalendar(); toast("Released");
+}
+function delPromise(id){
+  const chat=curChat(); if(!chat)return;
+  chat.promises=chatPromises(chat).filter(x=>x&&x.id!==id);
+  markChatDirty(chat); persistChats(); openCalendar();
 }
 /* v25.x — WORLD PLANS section of the calendar: entries that do NOT include the player — a
    char↔char meeting, or a single character's own errand/task (goal-pursuit moves land here). They
@@ -12026,6 +12096,67 @@ function relMomentaryProse(o){
     const d=REL_DIMS.find(x=>x.key===k); return `${_intensity(v)} ${v>0?d.pos:d.neg}`.trim(); }).filter(Boolean);
   return parts.length?parts.join("; "):"";
 }
+/* v30.3 — THE LIVE CHARGE, WRITTEN AS A FEELING.
+   relMomentaryProse renders the fast axes as "strongly intense attraction; overwhelmingly fear/
+   tension; overwhelmingly terror (intimidated / endangered); overwhelmingly provoked & angry" — four
+   axis labels welded together with semicolons. It reads as a stat sheet because it IS one, it names
+   the same state twice whenever comfort and fear both move (they are two ends of one thing), and an
+   actor cannot play "overwhelmingly comfort/negative".
+   This says the same thing as a state a person is in: one dominant charge, in the second person,
+   with what else is running underneath it. The axis table stays the single source of truth — these
+   are just its poles written the way a director would say them out loud. */
+const REL_FAST_FEEL={
+  desire:{
+    pos:["a flicker of pull toward them that you would rather not have noticed",
+         "a real pull toward them — your eye keeps going back before you catch it",
+         "a want for them that is hard to sit still under",
+         "a want for them so loud it is most of what you are right now"],
+    neg:["a small recoil you keep off your face",
+         "a distaste for them you are working to cover",
+         "a physical recoil — you do not want them close",
+         "a revulsion so complete that being in the same air as them is its own problem"]},
+  comfort:{
+    pos:["a little more at ease with them than you were",
+         "genuinely easy here — nothing in you is braced",
+         "so at ease with them that the silences do not need filling",
+         "completely unguarded with them, in the way you almost never are with anyone"],
+    neg:["a thread of unease you cannot quite put down",
+         "on edge with them — you are choosing your words before you say them",
+         "wound tight, watching yourself, nothing about this relaxed",
+         "so tense you can feel it in your jaw and your hands"]},
+  fear:{
+    pos:["a small cold note of caution about them",
+         "wary of them in a way you would not admit to",
+         "genuinely afraid of what they might do",
+         "frightened of them — they read as dangerous and your body has already decided it"],
+    neg:["", "steady around them; nothing here can touch you",
+         "safe here — and aware that you are the one holding the ground",
+         "entirely unafraid, to the point where you know you have the upper hand"]},
+  agitation:{
+    pos:["a small burr of irritation you are sitting on",
+         "provoked — something has got under your skin and stayed there",
+         "angry, and only just holding the shape of it",
+         "furious, close enough to the surface that one wrong word takes the lid off"],
+    neg:["", "calm, and it is not effort",
+         "composed in a way that is its own kind of answer",
+         "completely unruffled — nothing they do is reaching you"]}
+};
+function relMomentaryNarrative(o){
+  if(!o||!o.st)return "";
+  const band=v=>{const a=Math.abs(v); return a<25?0:a<45?1:a<70?2:3;};
+  const rank=REL_FAST.map(k=>({k,v:o.st[k]||0})).filter(x=>Math.abs(x.v)>=10)
+    .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  const say=x=>{ const t=REL_FAST_FEEL[x.k]; if(!t)return ""; return ((x.v>0?t.pos:t.neg)[band(x.v)]||"").trim(); };
+  const lead=rank.length?say(rank[0]):"";
+  if(!lead)return "";
+  // comfort and fear are two readings of the same nerve — naming both is how you get a line that
+  // says "overwhelmingly fear/tension; overwhelmingly terror" and means it twice.
+  const skip=(rank[0].k==="comfort"&&rank[0].v<0)?"fear":(rank[0].k==="fear"&&rank[0].v>0)?"comfort":"";
+  const rest=rank.slice(1).filter(x=>x.k!==skip).slice(0,2).map(say).filter(Boolean);
+  let out=`What is actually running in you as you open your mouth: ${lead}.`;
+  if(rest.length)out+=` Underneath that, and pulling its own way: ${rest.join("; ")}.`;
+  return out;
+}
 // CONSIDERED (slow/trait) facet — reads the stable axes. The filtered, lasting opinion. Prose only.
 function relConsideredProse(o){
   if(!o)return "";
@@ -12379,7 +12510,10 @@ async function runShortTermRel(chat){
       const msgs=[{role:"system",content:sys}];
       exchange.forEach(m=>msgs.push(m));
       msgs.push({role:"user",content:`${curLine}\n\nRead the four fast feelings HOLISTICALLY together (not in isolation): the same beat reads differently depending on the others and on the standing sentiment above — e.g. closeness with someone they distrust raises agitation/fear, not desire. Based ONLY on the recent moment above, return the JSON of immediate per-axis deltas (${REL_FAST.join(", ")}) for how ${fromP.name} feels RIGHT NOW toward ${state.user}.`});
-      const out=await chatCompletion(msgs,state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",120),dbg:"Short-term · "+fromP.name});
+      // v30.3 — 120 tokens could not hold the four deltas AND the note, so the note that reaches
+      // the actor arrived truncated mid-clause ("…like you're" and then nothing). It is the single
+      // most directly playable line in the whole payload; it gets the room to finish.
+      const out=await chatCompletion(msgs,state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",320),dbg:"Short-term · "+fromP.name});
       const j=parseJSON(out); if(!j||typeof j!=="object")continue;
       // Apply deltas with saturation; decay any axis that wasn't pushed toward its baseline.
       let touched=false;
@@ -12395,7 +12529,9 @@ async function runShortTermRel(chat){
       // playable behaviour, not just as intensity words. Sibling of o.st (never an axis key, so no
       // clamp/decay touches it); goes stale-but-harmless once the fast axes decay (gated at injection).
       // v26.8 — was slice(0,300), which cut mid-word and shipped the fragment to the model as-is.
-      if(touched && j.note && String(j.note).trim()){ o.stNote=briefDesc(String(j.note).trim(),300); o.stNoteDay=chat.gameDay||1; }
+      // v30.3 — and 300 was itself the cut: the prompt asks for 2-3 vivid sentences and they do not
+      // fit. briefDesc still trims on a word boundary; it just rarely needs to now.
+      if(touched && j.note && String(j.note).trim()){ o.stNote=briefDesc(String(j.note).trim(),560); o.stNoteDay=chat.gameDay||1; }
       // Log a compact episode for end-of-day consolidation (cap the log).
       if(touched){
         o.episodes.push({day:chat.gameDay||1, d:REL_FAST.map(k=>Math.round(o.st[k])), note:(j.note||"").slice(0,180)});
@@ -12471,6 +12607,9 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
   // FOUNDATION — the established relationship sheet entry toward the target. The long view evolves
   // FROM this baseline (a daughter, a rival, a stranger) rather than judging in a vacuum.
   const found=relSheetEntry(fromP,toId);
+  // v30.3 — the ONE durable fact this character holds about the target, so the model rewrites it
+  // rather than adding a second line beside it (see the socialFacts store below).
+  const _knownFact=socialFactOf(fromP,toId);
   const foundBlock=found
     ? `FOUNDATION — who ${tName} already is to ${fromP.name} (their established relationship; your judgment should EVOLVE this baseline, not ignore it): ${found.tie?found.tie+" — ":""}${found.relationship||""}\n\n`
     : "";
@@ -12489,10 +12628,11 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
 
   const curLine=`Current lasting axis values for ${fromP.name} → ${tName}:\n`+
     REL_SLOW.map(k=>{const d=REL_DIMS.find(x=>x.key===k);return `- ${k}: ${o[k]||0}`;}).join("\n")+
-    (o.desc?`\nCurrent description: ${o.desc}`:"");
+    (o.desc?`\nCurrent description: ${o.desc}`:"")+
+    (_knownFact?`\nWhat ${fromP.name} already durably knows about ${tName} (this is REPLACED by whatever you return as social_fact — carry forward anything still true): ${_knownFact}`:"");
 
   const userMsg=`${bioBlock}${foundBlock}${memBlock}${fastBlock}\n\n${curLine}\n\n`+
-    `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence description of how ${fromP.name} feels about ${tName} now. ALSO: if today established a DURABLE relational FACT about ${tName} that ${fromP.name} would treat as known (a kinship/role/history tie — e.g. "${tName} is X's brother", "${tName} is my new boss", "${tName} betrayed Y"), include it as "social_fact" (one short sentence from ${fromP.name}'s point of view). Omit social_fact if nothing durable was revealed — do NOT restate feelings there.`;
+    `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence description of how ${fromP.name} feels about ${tName} now. ALSO: "social_fact" — what ${fromP.name} durably KNOWS about ${tName} as a matter of fact, not feeling (a kinship or role, a history, a thing they did — e.g. "${tName} is X's brother", "${tName} is my new boss", "${tName} betrayed Y"). You are shown what ${fromP.name} already knows${_knownFact?"":" (nothing on record yet)"}: if today added to it or changed it, return the COMPLETE CURRENT version as ONE short sentence, rewritten to include the old and the new together — it REPLACES what is on record, so anything you leave out is forgotten. If today added nothing, omit the field entirely and the existing record is kept as it is. Never put a feeling here; feelings belong in "description".`;
 
   const out=await chatCompletion([
     {role:"system",content:sys+"\n\n"+engineLangDirective()},
@@ -12535,23 +12675,47 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
   // The day's fast opinions have now been folded into the lasting view — clear them for the
   // next day (they are stored in the per-day history below for the diary/visualisation).
   o.dayOpinions=[];
-  // Append a durable discovery to fromP's social graph — APPEND ONLY, never overwriting the
-  // author's own text, deduped, capped so it can't grow without bound.
+  /* v30.3 — ONE FACT PER PERSON, REWRITTEN. This used to append a line to a flat
+     persona.socialGraphAuto blob: never overwritten, deduped only by substring, capped at 12 lines
+     and hard-sliced at 140 characters, which is exactly how the ties block ended up as an English
+     paragraph followed by five Turkish fragments, the last one cut mid-word.
+     A durable fact belongs to the PERSON it is about, so it is stored per target and the new value
+     REPLACES the old one — the model is handed what is on record and asked to return the complete
+     current version. The list is now bounded by the size of the cast instead of by time. */
   if(typeof j.social_fact==="string" && j.social_fact.trim()){
-    const fact=j.social_fact.trim().replace(/\s+/g," ").slice(0,140);
+    const fact=briefDesc(j.social_fact.trim().replace(/\s+/g," "),180);
     const persona=state.personas.find(p=>p.id===fromP.id);
-    if(persona){
-      const existing=(persona.socialGraphAuto||"");
-      const authored=(persona.socialGraph||"");
-      const norm=s=>s.toLowerCase().replace(/[^a-z0-9 ]/g,"").trim();
-      const known=(existing+"\n"+authored).split("\n").map(norm).filter(Boolean);
-      if(!known.some(k=>k.includes(norm(fact))||norm(fact).includes(k))){
-        const lines=(existing?existing.split("\n"):[]); lines.push(fact);
-        persona.socialGraphAuto=lines.slice(-12).join("\n");   // cap discoveries
+    if(persona && fact){
+      const authored=String(persona.socialGraph||"").toLowerCase();
+      const norm=t=>String(t||"").toLowerCase().replace(/[^\p{L}\p{N} ]/gu,"").trim();
+      // Don't echo something the author already wrote on the card by hand.
+      if(!norm(authored).includes(norm(fact))){
+        if(!persona.socialFacts||typeof persona.socialFacts!=="object")persona.socialFacts={};
+        persona.socialFacts[toId]={text:fact, day:(day||chat.gameDay||1)};
         persistPersonas();
       }
     }
   }
+}
+/* What `persona` durably knows about `targetId`, as a fact rather than a feeling. One line, always
+   the current one — the daily evaluation rewrites it in place. */
+function socialFactOf(persona,targetId){
+  try{
+    const m=persona&&persona.socialFacts;
+    const e=m&&typeof m==="object"&&m[targetId];
+    return (e&&String(e.text||"").trim())||"";
+  }catch(e){ return ""; }
+}
+// Rendered for the payload, newest first, one line per person, each attributed so the character can
+// tell whose fact it is.
+function socialFactLines(persona){
+  try{
+    const m=persona&&persona.socialFacts; if(!m||typeof m!=="object")return [];
+    return Object.keys(m).map(id=>{
+      const e=m[id]; const t=e&&String(e.text||"").trim(); if(!t)return null;
+      return {id, day:(e.day||0), text:t};
+    }).filter(Boolean).sort((a,b)=>(b.day||0)-(a.day||0)).slice(0,10).map(x=>x.text);
+  }catch(e){ return []; }
 }
 
 // After-turn engine: each tracker is evaluated INDEPENDENTLY, with ITS OWN prompt and ITS OWN
@@ -12751,7 +12915,7 @@ function openStoryState(){
     }
     // Characters who have a generated/authored sheet but no numeric content yet still deserve a row.
     for(const p of cast){
-      const hasSheet=((p.relationshipsGen||"").trim()||(p.socialGraph||"").trim()||(p.socialGraphAuto||"").trim());
+      const hasSheet=((p.relationshipsGen||"").trim()||(p.socialGraph||"").trim()||(p.socialGraphAuto||"").trim()||socialFactLines(p).length);
       if(hasSheet && !owners.has(p.id))owners.set(p.id,[]);
     }
 
@@ -12785,7 +12949,7 @@ function openStoryState(){
         let body=`<div style="padding:4px 2px 8px 6px;border-left:2px solid var(--border);margin:2px 0 2px 12px">`;
         const sgGen=(persona&&persona.relationshipsGen||"").trim();
         const sgA=(persona&&persona.socialGraph||"").trim();
-        const sgB=(persona&&persona.socialGraphAuto||"").trim();
+        const sgB=(persona?(socialFactLines(persona).join("\n")||String(persona.socialGraphAuto||"")):"").trim();
         if(sgGen||sgA||sgB){
           body+=`<div class="relFacet" style="margin:4px 0"><span class="relFacetLbl">Who they are to ${esc(p.name)}</span><span>`+
             [sgA?esc(sgA).replace(/\n/g,"<br>"):"",
@@ -14197,7 +14361,8 @@ function editPersona(id){
   _peTtsVoiceLoad(p.ttsVoice||"");
   {const sg=document.getElementById('peSocialGraph'); if(sg)sg.value=p.socialGraph||"";
    const auto=document.getElementById('peSocialAuto');
-   if(auto){ const a=(p.socialGraphAuto||"").trim();
+   if(auto){ const facts=(typeof socialFactLines==="function")?socialFactLines(p):[];
+     const a=facts.length?facts.join("\n"):(p.socialGraphAuto||"").trim();
      auto.style.display=a?"block":"none"; auto.textContent=a?("Discovered in play: "+a):""; }}
   {const rg=document.getElementById('peRelGen'); if(rg)rg.value=p.relationshipsGen||"";
    const wrap=document.getElementById('peRelGenWrap'); if(wrap)wrap.style.display="block";
@@ -14770,8 +14935,13 @@ function relSheetBlockFull(persona){
   const parts=[];
   const sg=subUser(String(persona.socialGraph||"")).trim();
   if(sg)parts.push(sg);
-  const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim();
-  if(sgAuto)parts.push(sgAuto);
+  // v30.3 — what play has DISCOVERED about the people in this character's life: one line per
+  // person, always the current version (socialFactOf/socialFactLines). The old flat
+  // socialGraphAuto blob appended a line per day and never removed one; it is migrated away at load
+  // and only read here so an import made on an older build still shows something.
+  {const facts=socialFactLines(persona);
+   if(facts.length)parts.push(facts.map(t=>"- "+t).join("\n"));
+   else{ const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim(); if(sgAuto)parts.push(sgAuto); }}
   const hereSet=new Set(presentCast().map(c=>c.id));
   const mark=id=>hereSet.has(id)?" [here now]":"";
   const rels=persona.relationships;
@@ -15784,6 +15954,7 @@ function savePersona(){
     // overwritten by the save — preserved from the existing persona).
     socialGraph:(document.getElementById('peSocialGraph')?document.getElementById('peSocialGraph').value.trim():((editingPersona&&editingPersona.socialGraph)||"")),
     socialGraphAuto:(editingPersona&&editingPersona.socialGraphAuto)||"",
+    socialFacts:(editingPersona&&editingPersona.socialFacts)||undefined,
     // Generated relationship sheet (editable in the character page). Preserve/read-back.
     relationshipsGen:(document.getElementById('peRelGen')?document.getElementById('peRelGen').value.trim():((editingPersona&&editingPersona.relationshipsGen)||"")),
     relationshipsGenAt:(editingPersona&&editingPersona.relationshipsGenAt)||null,
@@ -16555,8 +16726,8 @@ const REPLY_ORDER=["task","world","format",
   "distant_memories","recent_memories","situation",
   "speaking_style","latest_arcs",
   "__history__",
-  "last_line","already_said","rumors","scene_now","calendar","quests","private_intent",
-  "response_guidance","final_guardrails","spoken_delivery"];
+  "last_line","already_said","rumors","scene_now","privacy","trackers","promises","calendar","quests","private_intent",
+  "feelings_now","response_guidance","final_guardrails","spoken_delivery"];
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
   world:{label:"Universe setting",kind:"dyn",desc:"The current universe's setting text. Universal — true for every character."},
@@ -16567,7 +16738,7 @@ const REPLY_BLOCKS={
   others_present:{label:"Others present",kind:"dyn",desc:"Short list of who else is within earshot."},
   response_target:{label:"⚠️ Who you are responding to",kind:"dyn",desc:"The person this turn is aimed at — the player OR another character — with their backstory and appearance."},
   player:{label:"Player character",kind:"dyn",desc:"Who the human player is. Rendered only when the response target is someone else, so the player never drops out of the payload."},
-  feelings:{label:"How you feel toward them",kind:"dyn",desc:"Considered + momentary relationship prose toward the response target (or the stranger notice on a first encounter)."},
+  feelings:{label:"How you feel toward them",kind:"dyn",desc:"The SETTLED view of the response target — the filtered opinion that governs behaviour — plus the stranger notice on a first encounter. The live charge is its own block now (\u201cWhat you feel right now\u201d), delivered after the dialogue."},
   distant_memories:{label:"Distant memories",kind:"dyn",desc:"Long-term, condensed recollections, numbered. (Diaries are never injected.)"},
   latest_arcs:{label:"The last things that happened",kind:"dyn",desc:"The newest few memory arcs for this character, injected on EVERY turn regardless of what semantic retrieval matched — closes the gap between the transcript window and the retrieved memories."},
   recent_memories:{label:"Recent memories",kind:"dyn",desc:"Fresh experiential memories, numbered. The transcript counts as memory too — this list covers what came before it."},
@@ -16577,10 +16748,14 @@ const REPLY_BLOCKS={
   already_said:{label:"⚠️ What you already said",kind:"dyn",desc:"This character's own last one or two lines in the scene, quoted verbatim, with the rule that this turn may not repeat or rephrase them — plus a stronger directive when the exchange has visibly stalled on the same request."},
   last_line:{label:"⚠️ The line you are responding to",kind:"dyn",desc:"The last real DIALOGUE line in the transcript — not a day marker, presence note, travel beat or narration — pulled out and highlighted."},
   speaking_style:{label:"⚠️ How you speak",kind:"dyn",desc:"This character's voice, delivered where the line actually gets written."},
-  scene_now:{label:"Scene right now",kind:"dyn",desc:"How to read the situation, then CURRENT DAY · your current location · sub-areas · privacy (who can hear you, who is one door away) · your trackers."},
+  scene_now:{label:"Scene right now",kind:"dyn",desc:"How to read the situation, then CURRENT DAY · your current location (and whose ground it is) · the sub-areas of this place and which one you are standing in · what has changed since you last spoke. Privacy and trackers are their own blocks since v30.3."},
+  privacy:{label:"Privacy — who can hear you",kind:"dyn",desc:"Everything about who can actually hear this: alone with someone, in front of an audience, or apart from everyone; who is elsewhere in the building and could walk in; how exposed this place is, and the one sub-area worth moving to if something must not carry."},
+  trackers:{label:"Your trackers",kind:"dyn",desc:"The conditions that are true of this character right now — story-wide trackers, anything of theirs that has become publicly visible, and their own private ones. Split out of the scene block in v30.3."},
+  promises:{label:"Your word (promises & commitments)",kind:"dyn",desc:"Open-ended commitments with no date on them: what this character swore and is bound by, what was sworn to them, and anything broken, kept or released in the last couple of days. Extracted from play by the promises engine."},
   calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
   quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text) — so the people a quest is about actually know their part of it."},
   private_intent:{label:"Private intent coloring",kind:"dyn",desc:"A one-turn instruction when this character holds a live scheme/warmth toward someone PRESENT. (A standing aim toward someone absent rides in the bio, under the goals.)"},
+  feelings_now:{label:"⚠️ What you feel right now",kind:"dyn",desc:"The live emotional charge this character carries into THIS reply, written as a state they are in rather than a list of axis labels, plus the fast read's playable note on how it should visibly land. True for one turn and then it decays — so it sits at the very end, right above the guidance, instead of beside their bio."},
   response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to, and what the turn has to do."},
   final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing, consistency, and the no-fabricated-past rules."},
   spoken_delivery:{label:"Spoken delivery / voice format reset",kind:"dyn",desc:"While voicing is on with the xAI engine: the delivery-tag coaching (xAI TTS renders the tags expressively; they're hidden on screen). Otherwise, while recent replies still carry the markup: the format reset that orders the model to drop it."}
@@ -16712,16 +16887,21 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     already_said:["already_said_header","already_said_instr","already_said_stalled"],
     rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_carrier_header","rumor_carrier_instr"],
     speaking_style:["style_header","style_notes"],
-    scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_privacy","scene_present","scene_present_others","scene_alone","scene_nearby","scene_apart","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
+    scene_now:["scene_header","scene_intro","scene_day","scene_loc","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
+    privacy:["privacy_header","scene_present","scene_present_others","scene_alone","scene_apart","scene_nearby","scene_privacy","scene_area_privacy","scene_area_quieter"],
+    trackers:["trackers_header"],
+    promises:["promise_header","promise_yours","promise_owed","promise_ended"],
+    calendar:["calendar_header"],
     private_intent:["intent_warm","intent_hostile"],
     latest_arcs:["mem_latest_header","mem_latest_instr"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","heat_guidance"],
-    feelings:["feel_header","feel_lasting","feel_lasting_alt","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear","stranger"],
+    feelings:["feel_header","feel_lasting","feel_lasting_alt","stranger"],
+    feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
-  const SCOPE={rumors:"chat",already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",calendar:"chat",quests:"chat"};
+  const SCOPE={rumors:"chat",already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",feelings_now:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",privacy:"chat",trackers:"chat",promises:"chat",calendar:"chat",quests:"chat"};
   // All three payloads share ONE block map now, so a single pass covers them.
   Object.keys(REPLY_BLOCKS).forEach(id=>{
     if(T[id])REPLY_BLOCKS[id].tpls=T[id];
@@ -16955,16 +17135,29 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
 - CURRENT DAY is your anchor for time. Judge how long ago a memory or event was and refer to it the way a person would: if it is Day 5 now and it happened on Day 4, that is "yesterday"; a few days back is "the other day"; long ago is "a while ago". Never say a day number out loud.
 - TIME OF DAY sets what is plausible right now — who is awake, what is open, what fits the hour. Let it bound what you suggest and what you do.
 - YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.
-- PRIVACY sets how freely you speak. Alone, you can be open and intimate. With others in earshot, weigh what each of them is to you before you speak: guard secrets, choose your words, pick who you aim a line at. Someone whose presence makes the moment dangerous should change how you react — not always the same way, but never ignored.
-- YOUR TRACKERS are real conditions about you. They shape mood, choices, and what is at stake. Act on them instead of leaving them unused.`,
+- Who can hear you is covered under PRIVACY below, and it sets how freely you speak — read it before you decide what to say out loud.`,
   scene_day:`CURRENT DAY: Day {{day}}{{period}}`,
   scene_loc:`⚠️ YOUR CURRENT LOCATION: {{where}}. THIS IS WHERE YOU ARE RIGHT NOW. ⚠️`,
   scene_loc_sub:` — specifically the {{sub}}`,
   // Whose ground this is — home/host dynamics. Fires only when the current place has a resident.
   scene_here_yours:`This place is YOUR home — you live here. You are on your own ground: everyone else present is a guest or visitor unless they're noted as living here too. Carry the ease, ownership, and small authority of someone in their own space.`,
   scene_here_host:`This place is {{host}}'s home — {{host}} lives here and you do not. You are a GUEST on their ground, not your own: it is their kitchen, their kettle, their chair. Do not host, do not offer what isn't yours to offer, and do not speak as though the place were yours. Let being a visitor show.`,
-  scene_subareas:`SUB-AREAS: these are the sub-areas inside {{loc}} (and how private each is): {{areas}}.\nYou are in the {{sub}}. Each sub-area is its own earshot — people in another sub-area cannot hear you here. If you want privacy you may suggest moving to a more private sub-area.`,
-  scene_privacy:`PRIVACY: {{label}}.`,
+  // v30.3 — the areas, and which one you are in. How private each of them is belongs to the PRIVACY
+  // block; repeating it here for every room was the noise this split exists to remove.
+  scene_subareas:`SUB-AREAS of {{loc}}: {{areas}}.\nYou are in the {{sub}}. Each sub-area is its own earshot — people in another sub-area cannot hear you here.`,
+  privacy_header:`# PRIVACY — WHO CAN HEAR YOU`,
+  scene_privacy:`How exposed this place is: {{label}}.`,
+  // Only the areas that would genuinely buy more discretion than the one you are standing in.
+  scene_area_privacy:`How exposed the area you are standing in is: {{label}}.{{quieter}}`,
+  scene_area_quieter:` If you need to say something that must not carry, {{names}} is quieter — you can suggest moving there.`,
+  trackers_header:`# YOUR TRACKERS — CONDITIONS THAT ARE TRUE OF YOU RIGHT NOW\nThese are facts about your body, your circumstances or your standing, not moods. They shape what you can do, what you are worried about, and what is at stake for you in this scene. Act from them; never read one out, and never name a number.`,
+  calendar_header:`# MEETINGS — PLANS WITH A TIME ON THEM\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.`,
+  /* v30.3 — the commitment ledger, in the character's own voice. The rule at the top is the load-
+     bearing part: a promise that gets recited is not a promise, it is a receipt. */
+  promise_header:`# YOUR WORD — COMMITMENTS THAT ARE STILL IN FORCE\nThese have no date on them. They started when they were said and they hold until something ends them. You do NOT recite them, quote them back, or remind anyone that you gave them — that is what someone does when they are already failing to keep one. They show up as the thing you will not do, the thing you do without being asked, and the cost you are quietly carrying.`,
+  promise_yours:`WHAT YOU SWORE — you are bound by this. Going against one of these is a real act with a real price, and if you do it, it is a decision you made, not an oversight:`,
+  promise_owed:`WHAT WAS SWORN TO YOU — {{self}} was given this word. You expect it kept. You do not have to trust it:`,
+  promise_ended:`JUST ENDED — this is live between you right now; a word broken in the last day or two is the loudest thing in any room:`,
   scene_present:`PRIVACY: you are NOT alone with {{target}}. Others are in the room, seeing and hearing everything you say and do: {{names}}. They, with {{target}}, are the ONLY people who can see or hear you. Weigh what each of them is to you before you speak — what you would say to {{target}} alone is not what you can say in front of them. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot.`,
   // Same, for a scene the player is not in (two characters in another sub-area).
   scene_present_others:`PRIVACY: here in the room with you, seeing and hearing everything you say and do: {{names}}. They are the ONLY people who can see or hear you. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot.`,
@@ -17037,9 +17230,16 @@ React to it — do not recap it. Never quote it back, never paraphrase it, never
   // (!) {{momentary}} carries the actual charge (relMomentaryProse — e.g. "strongly intense
   // attraction; clearly provoked & angry"). It was declared but never placed, so the fragment
   // described a feeling it never named. Keep the token if you customize this text.
-  feel_momentary:`RIGHT-NOW FEELING — the live emotional charge you carry into THIS reply: {{momentary}}.
-It is momentary and impulsive, so it must NOT override the lasting view above or push you out of character — but it MUST visibly shape HOW you deliver this turn. Let it into your tone, your rhythm, your word choice, the set of your body — the same words land differently depending on this charge, and yours should carry it. Do NOT name or explain the feeling; let it leak through delivery, never as a stated emotion.`,
-  feel_momentary_impact:`How it's pulling at you right now, and how it should read: {{impact}}\nCarry exactly that into your very next line — in the way you speak and hold yourself, shown through delivery, never announced.`,
+  // v30.3 — {{momentary}} now carries relMomentaryNarrative: a written state in the second person
+  // ("What is actually running in you as you open your mouth: …"), not the old semicolon-joined axis
+  // labels. It is a full sentence already, so this fragment no longer punctuates it as a list item.
+  feel_now_header:`# ⚠️ WHAT YOU ARE FEELING RIGHT NOW, THIS SECOND ⚠️
+This is not who {{target}} is to you and it is not your opinion of them — that was settled earlier and still governs what you DO. This is the state you are in as this line leaves your mouth, and it decides HOW it comes out.`,
+  feel_momentary:`{{momentary}}
+This is momentary and impulsive. It must NOT override your settled view of {{target}} or push you out of character — a mood does not rewrite a person. But it MUST be visible in this turn, because a line delivered under this charge does not sound like the same line delivered calm.
+Put it into the delivery, not the content: where the sentence breaks, how long you let a silence run, which word you land on, what your hands and your eyes are doing, what you start to say and swallow, whether you answer too fast or a beat too late. A person under pressure gets SHORTER, not more articulate.
+And do NOT name it. Never write that you are afraid, angry, or wanting; never explain your own feeling to anyone. It reaches the page only as the shape of what you say and do — if a reader could infer it, you have done it right.`,
+  feel_momentary_impact:`Read this before you write anything — it is the single most specific thing you have been given about this turn:\n{{impact}}\nCarry exactly that into your very next line: the tone it describes, the rhythm it describes, the body it describes. Not a version of it, not a summary of it, and never a sentence stating it — the behaviour itself.`,
   feel_tension_desire:`This heat isn't backed by deeper feeling — act on it and you'd likely feel a flush of regret or self-consciousness after.`,
   feel_tension_anger:`You're more provoked than the situation truly warrants — a sharp word may escape, and you might quietly regret the overreaction.`,
   feel_tension_fear:`The flash of fear sits oddly against how much you actually trust them — it may make you flinch or overreact, then feel foolish.`,
@@ -17172,30 +17372,39 @@ function briefDesc(s,max){
    charge (impulsive, colors this beat only), and the first-encounter notice when there is no
    relationship at all. Prose only, never numbers. Returned as {text, knowsTarget} because the
    guardrails need to know whether this person is still a stranger. */
+/* v30.3 — TWO BLOCKS, NOT ONE. The settled view of a person is part of knowing who they are: it
+   belongs where it has always been, with their card, before the transcript. The live emotional
+   charge is not that at all — it is how THIS turn comes out, it is true for one reply and then it
+   decays, and it was being read thousands of tokens before the line got written.
+   So feelingsBlock returns both halves separately: `text` (lasting + the stranger notice) for the
+   head, `nowText` (the live charge + its playable note) for the tail, where it sits immediately
+   above RESPONSE GUIDANCE — the last thing read before the model speaks. */
 function feelingsBlock(chat,selfId,targetId,targetName){
-  const parts=[]; let knowsTarget=true;
-  if(!state.relOn||!chat||!targetId)return {text:"",knowsTarget};
+  const parts=[]; let knowsTarget=true, nowText="";
+  if(!state.relOn||!chat||!targetId)return {text:"",nowText:"",knowsTarget};
   const o=relObj(chat,selfId,targetId);
   const desc=relDescription(o);
   const hasEval=relHasContent(o);
   const considered=relConsideredProse(o);
-  const momentary=relMomentaryProse(o);
+  const momentary=relMomentaryNarrative(o)||relMomentaryProse(o);
   const hasDesc=!!(desc && desc.trim() && !/^Roughly:/.test(desc.trim()) && hasEval);
-  if(hasDesc || considered || momentary){
+  if(hasDesc || considered){
     let fb=fillTpl(blkTpl("feel_header"),{target_up:(targetName||"THEM").toUpperCase()});
     if(hasDesc) fb+=`\n\n${fillTpl(blkTpl("feel_lasting"),{desc:desc.trim()})}`;
     else if(considered) fb+=`\n\n${fillTpl(blkTpl("feel_lasting_alt"),{considered:considered})}`;
-    if(momentary){
-      fb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary})}`;
-      // The verbose, playable "how it colors your next reply" note from the latest fast read. Only
-      // while there IS a live momentary lean — once the fast axes decay, the note is stale.
-      if(o.stNote && o.stNote.trim()) fb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
-      const tension=relImpulseTension(o);
-      if(tension==="desire") fb+=" "+blkTpl("feel_tension_desire");
-      else if(tension==="anger") fb+=" "+blkTpl("feel_tension_anger");
-      else if(tension==="fear") fb+=" "+blkTpl("feel_tension_fear");
-    }
     parts.push(fb);
+  }
+  if(momentary){
+    let nb=fillTpl(blkTpl("feel_now_header"),{target_up:(targetName||"THEM").toUpperCase(),target:(targetName||"them")});
+    nb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary,target:(targetName||"them")})}`;
+    // The verbose, playable "how it colors your next reply" note from the latest fast read. Only
+    // while there IS a live momentary lean — once the fast axes decay, the note is stale.
+    if(o.stNote && o.stNote.trim()) nb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
+    const tension=relImpulseTension(o);
+    if(tension==="desire") nb+=" "+blkTpl("feel_tension_desire");
+    else if(tension==="anger") nb+=" "+blkTpl("feel_tension_anger");
+    else if(tension==="fear") nb+=" "+blkTpl("feel_tension_fear");
+    nowText=nb;
   }
   // FIRST ENCOUNTER (player only): no recorded relationship yet → they don't know this person.
   // An AUTHORED tie from the character sheet ("brother", "wife") still counts as knowing them,
@@ -17208,7 +17417,7 @@ function feelingsBlock(chat,selfId,targetId,targetName){
       parts.push(fillTpl(blkTpl("stranger"),{target_up:(targetName||state.user).toUpperCase(),target:(targetName||state.user)}));
     }
   }
-  return {text:parts.join("\n\n"),knowsTarget};
+  return {text:parts.join("\n\n"),nowText,knowsTarget};
 }
 
 /* Build the PRE-DIALOGUE system blocks for the ONE character who is speaking this turn. Every
@@ -17469,11 +17678,20 @@ function buildTailBlocks(opts){
   }
   // v28.8 — the character's own recent lines, quoted verbatim, immediately before generation.
   // Abstract "don't repeat yourself" loses to the context; the actual sentences do not.
+  /* v30.3 — TWO LINES, ONE OF THEM TRIMMED. Two is the right window: one line does not show a
+     pattern, three is a transcript the model has already been given. But quoting BOTH in full ran to
+     a page of prose in a heat scene, and the older of the two is not there to be re-read — it is
+     there so the model can see the shape it is about to repeat. So the last line goes in verbatim,
+     word for word, because that is the one that must not be said again; the one before it is trimmed
+     on a word boundary. Same signal, roughly half the tokens. */
   {
     const mine=ownRecentLines(chat,selfP,2);
     if(mine.length){
       let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`
-           +mine.map((x,i)=>`(${i===0?"your last line":"the line before that"}) ${x}`).join("\n\n");
+           +mine.map((x,i)=>i===0
+              ? `(your last line, word for word) ${x}`
+              : `(the line before that, shortened — you are being shown its shape, not asked to re-read it) ${briefDesc(x,320)}`
+             ).join("\n\n");
       if(exchangeIsStalled(chat,selfP)) t+=`\n\n${blkTpl("already_said_stalled")}`;
       B.already_said=t;
     }
@@ -17562,45 +17780,21 @@ function buildTailBlocks(opts){
       }catch(e){}
       lines.push(loc);
     }
-    // SUB-AREAS (and how private each is), so a character can reason about discretion.
+    /* v30.3 — SUB-AREAS, WITHOUT THE PRIVACY LABELS. This used to read "Entrance — private (nothing
+       said here gets out); Yatak Odası — private (nothing said here gets out); …" for every area in
+       the house: five repetitions of the same clause, in the block whose job is telling the model
+       WHERE it is. The labels are privacy information and they now live once, in the PRIVACY block,
+       where they are actually reasoned about. Here: the names, and which one you are standing in. */
     try{
       if(_here2){
         ensureSublocations(_here2);
         if(Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){
           const pSub=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat));   // the VIEWER's area
-          const areaList=_here2.sublocations.map(s=>`${s.name} — ${gossipLabel(areaGossipChance(_here2,s.id))}`).join("; ");
+          const areaList=_here2.sublocations.map(x=>x.name).join("; ");
           lines.push(fillTpl(blkTpl("scene_subareas"),{loc:_here2.name,areas:areaList,sub:(pSub?pSub.name:"Entrance"),target:(targetName||state.user)}));
-        }else{
-          lines.push(fillTpl(blkTpl("scene_privacy"),{label:gossipLabel(locGossipChance(_here2))}));
         }
       }
     }catch(e){}
-    // PRIVACY — who can actually hear you, and who is one door away.
-    {
-      const v=(typeof _viewer==="object"&&_viewer)||{sub:curSubId(chat),playerHere:true};
-      const _withPlayer=(!selfId)||v.playerHere;
-      let priv;
-      if(othersHere){
-        // Someone else shares the room, so this is NOT the private state — say so against the
-        // player when they are here, and plainly list the audience when they are not.
-        priv=_withPlayer
-          ? fillTpl(blkTpl("scene_present"),{names:othersHere,target:state.user})
-          : fillTpl(blkTpl("scene_present_others"),{names:othersHere});
-      }else if(_withPlayer){
-        // Nobody but the player shares your earshot → you are ALONE WITH them. This is the private
-        // state, and the one that most changes how a character speaks.
-        priv=fillTpl(blkTpl("scene_alone"),{target:state.user});
-      }else{
-        let _sn="the entrance";
-        try{ const _s=_here2&&subById(_here2,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
-        priv=fillTpl(blkTpl("scene_apart"),{sub:_sn});
-      }
-      if(nearbyHere)priv+=`\n${fillTpl(blkTpl("scene_nearby"),{loc:(_here2&&_here2.name)||chat.location||"here",names:nearbyHere})}`;
-      lines.push(priv);
-    }
-    // YOUR TRACKERS — real conditions about you, read as part of the live situation (v26: folded
-    // back into SCENE RIGHT NOW, where the brief above tells the model what to do with them).
-    try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)lines.push(tc); }catch(e){}
 
     let sn=`${blkTpl("scene_header")}\n${lines.filter(Boolean).join("\n\n")}`;
     // If the scene just shifted (place/time/who's here), lead the block with a blunt call-out of
@@ -17608,7 +17802,63 @@ function buildTailBlocks(opts){
     {const chg=sceneChangeNotice(chat,selfId); if(chg)sn=`${blkTpl("scene_header")}\n${chg}\n\n${lines.filter(Boolean).join("\n\n")}`;}
     B.scene_now=sn;
 
-    {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId):""; if(cl)B.calendar=cl;}
+    /* PRIVACY — its own block since v30.3. Who can actually hear you, who is one door away, and how
+       leaky this place is: one subject, stated once, under its own heading. It was previously three
+       fragments buried inside SCENE RIGHT NOW between the location and the trackers, which is why a
+       payload capsule showed a single wall labelled "YOU ARE AT Emre's HOME" containing the room,
+       the privacy of five sub-areas, who was present, the pregnancy tracker and tonight's meeting. */
+    {
+      const pl=[];
+      const v=(typeof _viewer==="object"&&_viewer)||{sub:curSubId(chat),playerHere:true};
+      const _withPlayer=(!selfId)||v.playerHere;
+      if(othersHere){
+        // Someone else shares the room, so this is NOT the private state — say so against the
+        // player when they are here, and plainly list the audience when they are not.
+        pl.push(_withPlayer
+          ? fillTpl(blkTpl("scene_present"),{names:othersHere,target:state.user})
+          : fillTpl(blkTpl("scene_present_others"),{names:othersHere}));
+      }else if(_withPlayer){
+        // Nobody but the player shares your earshot → you are ALONE WITH them. This is the private
+        // state, and the one that most changes how a character speaks.
+        pl.push(fillTpl(blkTpl("scene_alone"),{target:state.user}));
+      }else{
+        let _sn="the entrance";
+        try{ const _s=_here2&&subById(_here2,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
+        pl.push(fillTpl(blkTpl("scene_apart"),{sub:_sn}));
+      }
+      if(nearbyHere)pl.push(fillTpl(blkTpl("scene_nearby"),{loc:(_here2&&_here2.name)||chat.location||"here",names:nearbyHere}));
+      /* How leaky the place is, and — only when it is actually useful — where to go to be quieter.
+         Naming every area's privacy level was the noise; naming the ones that would genuinely buy
+         you more discretion than where you stand is the move a character can make. */
+      try{
+        if(_here2){
+          const subs=Array.isArray(_here2.sublocations)?_here2.sublocations:[];
+          if(subs.length>1){
+            const hereSub=(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat);
+            const mine=areaGossipChance(_here2,hereSub);
+            const quieter=subs.filter(x=>x&&x.id!==hereSub&&areaGossipChance(_here2,x.id)<mine-0.01)
+                              .map(x=>x.name);
+            pl.push(fillTpl(blkTpl("scene_area_privacy"),{label:gossipLabel(mine),
+              quieter:quieter.length?fillTpl(blkTpl("scene_area_quieter"),{names:quieter.join(", ")}):""}));
+          }else{
+            pl.push(fillTpl(blkTpl("scene_privacy"),{label:gossipLabel(locGossipChance(_here2))}));
+          }
+        }
+      }catch(e){}
+      const pb=pl.filter(Boolean).join("\n\n");
+      if(pb)B.privacy=`${blkTpl("privacy_header")}\n${pb}`;
+    }
+
+    // YOUR TRACKERS — real conditions about you. Their own block since v30.3: they are facts with
+    // numbers on them, they have nothing to do with where the character is standing, and folding
+    // them into the scene wall (v26) is what made them easy for the model to skim past.
+    try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)B.trackers=`${blkTpl("trackers_header")}\n${tc}`; }catch(e){}
+
+    // PROMISES — the open-ended words this character gave, and the ones given to them.
+    try{ const pr=promiseContextFor(chat,selfId,selfName); if(pr)B.promises=pr; }catch(e){}
+
+    {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true}):"";
+     if(cl)B.calendar=`${blkTpl("calendar_header")}\n${cl}`;}
     // quests — per-character awareness of the active quests this character is named in (key
     // figure, listed cast, or named in the quest text). Same scoping idea as the calendar line.
     try{ const qc=(typeof questContextFor==="function")?questContextFor(chat,selfName,selfId):""; if(qc)B.quests=qc; }catch(e){}
@@ -17662,7 +17912,12 @@ function buildTailBlocks(opts){
   // (6) FINAL GUARDRAILS — fires last, closest to generation. The consistency rules (hold your
   //     facts, push back on contradictions, never fabricate a past) used to be a wall of prose in
   //     the shipped default; they are individual fragments now, so each one is editable on its own.
-  const knowsTarget=feelingsBlock(chat,selfId,targetId,targetName).knowsTarget;
+  const _feel=feelingsBlock(chat,selfId,targetId,targetName);
+  const knowsTarget=_feel.knowsTarget;
+  // v30.3 — the LIVE emotional charge, delivered in the tail. The default order puts it immediately
+  // above RESPONSE GUIDANCE, so the last thing the model reads before writing is the state the
+  // character is in this second — not a line it passed thousands of tokens ago beside their bio.
+  if(_feel.nowText)B.feelings_now=_feel.nowText;
   // v26.7 — ONE placeholder map for every rail. Several were read with a bare blkTpl(), so a rail
   // the user had customized to mention {{user}} reached the model as the literal characters
   // "{{user}}". Filling them all uniformly means any override can use any of these tokens.
@@ -30861,11 +31116,13 @@ function wipeUniverseState(uniId){
   // 3) evolved character state: the GENERATED relationship data in ALL its forms — the structured
   //    map (p.relationships), the generated sheet text + stamp (p.relationshipsGen/At, rewritten
   //    by the End-Day re-eval), and the append-only "Discovered in play" social-graph lines
-  //    (p.socialGraphAuto). The authored card fields (the socialGraph text included) ARE the
-  //    initial state — they stay.
+  //    (p.socialGraphAuto), its replacement (p.socialFacts — one current fact per person), and the
+  //    maintained goals & ambitions list (p.goalsLive). The authored card fields (the socialGraph
+  //    text and the goals field included) ARE the initial state — they stay.
   personasInUniverse(uniId).forEach(p=>{
     if(!p)return;
     p.relationships={}; p.relationshipsGen=""; p.relationshipsGenAt=null; p.socialGraphAuto="";
+    p.socialFacts={}; delete p.goalsLive;
   });
   persistPersonas();
   // 4) per-chat engine state in this universe (transcripts stay).

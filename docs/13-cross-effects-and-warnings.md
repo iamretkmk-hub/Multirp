@@ -17,6 +17,10 @@ before any non-trivial change.**
 | Reintroducing a per-path content producer | every reply path | Guard #2: every reply is one character speaking for themselves. `buildSystemPromptBlocks` is only a thin wrapper that delegates to `buildCharPromptBlocks`; the whole-cast `Name:` branch was deleted as unreachable. |
 | `ENGINE_PAYLOAD_DEFS` entries | boot | The array property must be `blocks` — a different name crashed boot in v19.81. `promptKey` strings must match `PROMPT_REGISTRY` exactly. |
 | Engine part order | JSON parsing | Engine payload assembly is code-defined *because* outputs feed parsers — reordering needs a per-engine refactor, don't expose it. |
+| Adding an LLM call with **no language directive** (v30.3) | the payload's language | It inherits whatever the prompt hardcodes, and its output ends up quoted verbatim inside a reply payload. Pick exactly one: `langDirective()` (the player reads it as story), `engineLangDirective()` (English — it is a record), `mixedLangDirective([fields])` (both in one answer; name the player-facing fields). This is the bug that made the ties block half English and half Turkish. |
+| Writing to `persona.goals` from an engine (v30.3) | the goals curator | `goals` is the untouchable FOUNDATION the curator is handed and told not to contradict; the maintained list lives in `persona.goalsLive`. Writing to `goals` also silently clears `goalsLive` on the next character save. Engines READ via `engineGoals()`. |
+| Adding a consumer of the promise ledger, or forgetting one (v30.3) | characters contradicting their own word | A commitment is injected in four places that must stay in step — the speaking character's payload, `directorContext` (GM + Scene Writer), the offstage engines via `promiseContextForNames`, and the goals curator. A fifth is fine; a missing one means the world writes straight through a standing promise. |
+| Folding `privacy` / `trackers` / `promises` back into `scene_now` (v30.3) | the debug inspector and the payload editor | They were split out because one block holding five subjects renders as one wall in the capsule view and cannot be reordered or removed independently. Each carries its own `#` heading; that heading is what makes it a capsule. |
 
 ## Prompts & models
 
@@ -57,7 +61,8 @@ before any non-trivial change.**
 
 | Change | Effect |
 |---|---|
-| Reordering `endDayBackground` | The pipeline is dependency-ordered: memory flush FIRST (everything reads today's memories), chronicler LAST (reads everything). Diaries⇄relationships are the only intentionally-parallel pair. |
+| Reordering `endDayBackground` | The pipeline is dependency-ordered: memory flush FIRST (everything reads today's memories), chronicler LAST (reads everything). Diaries⇄relationships are the only intentionally-parallel pair. The goals curator (v30.3) sits after the quest passes and the intent engine — the two things most likely to have changed what a character wants — and before the chronicler. |
+| Removing the cap in `runGoalsCurator` / `runPromiseEngine` (v30.3) | cost per day / per turn | The curator is deliberately bounded to six characters a day and skips anyone the day did not move (`_goalsMoveScore`); the promise engine runs every second turn. Both are one model call each; lifting the caps turns End Day into a queue. |
 | Passing `uid` (string) where `uniObj` is expected (or vice versa) | The pass silently no-ops (`uni.gameData` undefined) — this killed the whole char-quest pipeline in v24.4. `endDayBackground` resolves both shapes; keep doing that. |
 | Snapshotting the day *after* pushing the dayMarker | Diaries + slow-axis relationships read "today's messages" via the last marker → they'd see an empty day. `endDay` snapshots **before** advancing; preserve that. |
 | Letting two scene-owners fire in one turn | `postTurn`'s early `return`s exist so Scene Writer / armed plans / quest approaches / due meetings and the Gamemaster can't stack. New turn-consuming features must join that ladder. |

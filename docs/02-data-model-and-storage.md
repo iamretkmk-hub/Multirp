@@ -60,7 +60,8 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
   presentIds: ["p_…"],                   // who is in the scene (cast "nearby")
   worldPositions: { [personaId]: locId|null },   // offstage placements for the day
   companionLock: { [personaId]: true },  // travel companions pinned to the player today
-  calendar: [ …plan entries… ],          // meetings/tasks (see doc 08)
+  calendar: [ …plan entries… ],          // meetings/tasks — things with a DATE (see doc 08)
+  promises: [ …commitment entries… ],    // v30.3: open-ended words with NO date (see doc 08)
   intents: [ …offstage motives… ],       // living-universe layer 4 (see doc 08)
   activeEvent: {...}|null,               // live Scene-Writer event (confrontation/overture/GM event)
   pendingGmNudge: string|null,           // hidden director note consumed by the next reply
@@ -104,13 +105,19 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
   id, name, universeId, avatar /*emoji*/, image /*portrait*/,
   instructions, personality, backstory,
   traits,        // five-axis behavior profile (one rule per line)
-  goals,         // drives GM / intent engine / quests
+  goals,         // the FOUNDATION: authored, never written to by any engine
+  goalsLive: {lines[], day, at, changed},  // v30.3: the MAINTAINED want-list rewritten each End Day
+                 // by the goals curator; absent ⇒ `goals` is used as-is. Read via
+                 // liveGoalsLines/liveGoalsText (payload) and engineGoals() (every other engine).
   style,         // speaking style
   voiceId,       // Inworld voice (calls), ttsVoice (xAI dub voice)
   look: { faceMap, hair, face, body },  // structured appearance (doc 10)
   wardrobe, tags: "a, b",               // tags feed World Rules group matching
   interject,     // pressure points / hooks — read by GM & Scene Writer only
-  socialGraph,   // hand-written ties (never overwritten; engines may append)
+  socialGraph,   // hand-written ties — never overwritten by anything
+  socialFacts: { [targetId]: {text, day} },  // v30.3: ONE durable fact per person, REWRITTEN in
+                 // place by the daily relationship pass. Replaces socialGraphAuto, an append-only
+                 // blob that grew a line a day and was cleared by a one-time migration.
   relGen,        // AI-generated factual tie sheet (re-run at End Day when bonds shift)
   visitLocs, schedule/whereabouts,      // daily placement inputs
   temp,          // true = auto-created mid-story, card pending

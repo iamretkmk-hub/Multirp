@@ -362,7 +362,8 @@ hard-coded `DEFAULT_*`.
 Engine payload cards (`ENGINE_PAYLOAD_DEFS`), current set:
 `familiarity`, `turn_router`, `player_narrator`, `presence`, `memory_builder`,
 `memory_retrieval`, `tracker_gen`, `latent_npcs`, `world_pulse`, `memory_condenser`,
-`relationships`, `trackers`, `gossip`, `goals`, `promises`, `intent`, `judges`, `scene_events`,
+`relationships`, `trackers`, `gossip`, `char_quests`, `goals`, `promises`, `intent`, `judges`,
+`scene_events`,
 `gamemaster_engine`, `diaries`, `calendar`, `calendar_reconcile`, `travel`, `char_move`,
 `text_reply`, `text_proactive`, `voice_check`, `image_writer`, `video_writer`,
 `char_generator`, `world_authoring`, `universe_memory`.
@@ -372,6 +373,52 @@ assembles — those dyn descriptions are the documentation of each engine's user
 `_enginePayloadCoverage()` surfaces any unmapped registry prompt under "Other prompts" with a
 console warning. ⚠️ The array property **must** be named `blocks` (a wrong name crashed boot
 in v19.81), and `promptKey` strings must match registry keys exactly.
+
+## v30.5 — the engine-prompt audit
+
+Three checks over all 62 registry prompts. Two came back clean, which is worth recording so nobody
+re-runs them: **every `{{placeholder}}` a live prompt declares is actually filled** (the apparent
+misses were ES6 shorthand in the fill object, explicit `.replace()` substitution, prose *about*
+placeholders in `promptTuner`, or — in `trackerGen` — `{{name}}`, which is deliberately a RUNTIME
+template that `trackerPublicText` fills per owner, not a build-time token). And **no engine reads a
+JSON field its prompt never asks for** (`questGen`'s `j.quests` is documented legacy tolerance;
+`gistBuild`'s apparent misses belong to `memBuild`, which shares the parse).
+
+The third check found three things.
+
+**(!) A regression from v30.3, in memory retrieval.** `genQuery` appended *"Write the query in
+{storyLanguage} — the story's selected language, which the memories are written in"*. That was true
+until memories moved to the engine language, and then it was false and harmful: retrieval scores a
+memory partly on token overlap between the query and the memory text (`memTokens`), so a Turkish
+query against English memories overlaps on almost nothing and recall silently degrades to recency +
+importance. The query is English now, via a `query_lang` fragment that states the coupling in words
+so it cannot drift again. Proper nouns are what keep the other half of the query — the player's raw
+text — still matching, since `engineLangDirective` never translates names.
+**If the story language is not English, semantic embeddings are now worth more than they were:** the
+lexical facet can only match on names and places.
+
+**The meetings detector shipped 11 literal `{{user}}` tokens.** `runCalendarEngine` called
+`up("calPrompt")` bare. `{{user}}` is the token the whole prompt turns on — *"EITHER {{user}} and a
+character, OR two characters (not {{user}})"* — so every turn it ran, it had to guess which party the
+rules meant. It goes through `fillTpl` now.
+
+**Two prompts were editable and read by nothing.** A sweep for a matching `up("key")` found exactly
+two of 62 with none — both loaded into state, persisted, listed on an engine card, fully editable,
+and never consulted:
+
+| Prompt | Why it was dead |
+|---|---|
+| `ranker` | Memory ranking is entirely code-side (the six-facet weighted scorer). There is no second LLM pass. |
+| `textReplyPrompt` | Superseded in v28.6, when texting moved onto the shared reply payload and its rules became the `text_format` fragment. |
+
+Both are removed from `PROMPT_REGISTRY` and their cards now describe what actually happens. The
+constants and storage keys stay so old backups import. **Wiring either back up is a deliberate
+change, not a bug fix** — the ranker would add an LLM call per turn, and `textReplyPrompt` would
+duplicate `text_format`.
+
+Also: the three character-quest prompts had no card, so they landed in the auto-generated "Other
+prompts" bucket and warned on every boot. They have a `char_quests` card now, and the coverage check
+is clean: **60 registry prompts, none dead, none unmapped.**
 
 ## Placeholders
 

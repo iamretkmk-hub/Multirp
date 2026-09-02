@@ -9224,8 +9224,19 @@ const PROMPT_REGISTRY=[
    hint:"When a motive is ready to act on, the holder chooses HOW (direct, public spectacle, proxy, undermine first, ambush, leverage) — genre-blind, warm or hostile. Returns a method + approach + gate. Use {{holder}}, {{nature}}, {{kind}}, {{valence}}, {{target}}, {{aim}}, {{trigger}}, {{strength}}, {{allies}}, {{leverage}}, {{world}}."},
   {key:"queryGen", label:"Memory query generator", def:()=>DEFAULT_QUERYGEN, json:false,
    hint:"Turns the current moment into a search query."},
-  {key:"ranker", label:"Memory ranker", def:()=>DEFAULT_RANKER, json:true,
-   hint:"Picks the most relevant memories. Use {{maxCount}}."},
+  /* v30.5 — `ranker` and `textReplyPrompt` were REMOVED from the registry, not from the codebase.
+     A sweep of all 62 registry prompts for a matching up("key") read found exactly these two with
+     none: both were loaded into state, persisted by saveSettings, listed in an engine payload card
+     and fully editable in Settings — and never consulted when the call was actually made. Editing
+     one changed nothing, which is worse than not offering the knob.
+       · ranker — memory ranking is done entirely by the code-side multi-signal scorer (semantic,
+         people, location, recency, emotion, importance, each user-weighted). There has been no
+         second LLM pass to rank the shortlist for a long time.
+       · textReplyPrompt — superseded in v28.6, when texting moved onto the shared reply payload and
+         its rules became the `text_format` block fragment (editable under FORMATTING RULES).
+     DEFAULT_RANKER / DEFAULT_TEXT_REPLY and their storage keys stay so old backups still import.
+     Wiring either back up is a deliberate change, not a bug fix: the ranker would add an LLM call
+     per turn, and textReplyPrompt would duplicate `text_format`. */
   {key:"condensePrompt", label:"Memory condenser", def:()=>DEFAULT_CONDENSE, json:true,
    hint:"Merges old low-importance memories. Use {{char}} and {{user}}."},
   {key:"bioPrompt", label:"Character bio generator", def:()=>DEFAULT_BIO, json:true,
@@ -9260,8 +9271,6 @@ const PROMPT_REGISTRY=[
    hint:"Narrates a journey between places. Use {{user}}."},
   {key:"charMovePrompt", label:"Character move narration", def:()=>DEFAULT_CHAR_MOVE, json:false,
    hint:"Short beat when a CHARACTER enters, leaves, or crosses to another area — where from, where to, and why. Shorter than the player's travel narration. Use {{user}}."},
-  {key:"textReplyPrompt", label:"Text-message reply rules", def:()=>DEFAULT_TEXT_REPLY, json:false,
-   hint:"Layered onto the full roleplay-style payload when a character replies to the player's text: dialogue only, no narration/inner thoughts. Use {{user}}, {{char}}."},
   {key:"textProactivePrompt", label:"Proactive text judge", def:()=>DEFAULT_TEXT_PROACTIVE, json:true,
    hint:"Decides whether a character texts the player unprompted (and what), from their feelings + memories + events. Returns {text, message, why}. Use {{user}}, {{char}}."},
   {key:"calPrompt", label:"Meetings detector", def:()=>DEFAULT_CAL, json:true,
@@ -10655,7 +10664,12 @@ async function runCalendarEngine(chat){
     const openItems=_openAll
       .map(e=>`- ${e.title}${e.who?` (with ${e.who})`:""}${e.day!=null?` day ${e.day}`:""}`)
       .slice(-40).join("\n");
-    const msgs=[{role:"system",content:up("calPrompt")+"\n\n"+engineLangDirective()}];
+    // (!) v30.5 — fillTpl, not a bare up(). DEFAULT_CAL names {{user}} ELEVEN times — it is the
+    // token the whole prompt turns on ("a plan for two people to be in the same place… EITHER
+    // {{user}} and a character, OR two characters (not {{user}})") — and this call site never
+    // substituted it, so the meetings detector read the literal characters "{{user}}" on every
+    // single turn and had to guess which party the rules were talking about.
+    const msgs=[{role:"system",content:fillTpl(up("calPrompt"),{user:state.user||"the player"})+"\n\n"+engineLangDirective()}];
     // Include recent phone texts alongside the spoken scene — a plan made over text is still a plan.
     recentExchangeMsgsWithTexts(chat,ENGINE_RECENT_TURNS+4).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${today}, ${chatPeriod(chat)}.\n\nALREADY TRACKED MEETINGS (do NOT re-emit these, nor any re-wording or translation of them):\n${openItems||"(none yet)"}\n\nBased ONLY on the exchange above, return {"new":[...]}: genuinely NEW dated meetings agreed in this exchange.`});
@@ -16955,7 +16969,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     promises:["promise_header","promise_yours","promise_owed","promise_ended"],
     calendar:["calendar_header"],
     private_intent:["intent_warm","intent_hostile"],
-    latest_arcs:["mem_latest_header","mem_latest_instr"],
+    latest_arcs:["mem_latest_header","mem_latest_instr","query_lang"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","stranger"],
@@ -17004,9 +17018,9 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"memory_builder",label:"Memory Builder",desc:"Tracks memory arcs each turn, builds a structured memory when an arc closes, and forms bystander gists for characters who were present but not in the conversation.",blocks:[
     {kind:"prompt",promptKey:"memEval"},{kind:"prompt",promptKey:"memBuild"},{kind:"prompt",promptKey:"gistBuild"},
     {kind:"dyn",label:"Scene arc transcript + authoritative location",scope:"chat",desc:"The finished arc's messages; the memory's location is stamped by CODE from the chat's location/sub-area (not by the model)."}]},
-  {key:"memory_retrieval",label:"Memory Retrieval",desc:"Per turn: a search query is generated, candidates are pre-ranked by the code-side multi-signal scorer, then the ranker picks the injected set.",blocks:[
-    {kind:"prompt",promptKey:"queryGen"},{kind:"prompt",promptKey:"ranker"},
-    {kind:"dyn",label:"Pre-filtered candidate memories",scope:"chat",desc:"The multi-signal scorer's shortlist (lexical/tags/people/location/emotion/recency/importance) that the ranker judges."}]},
+  {key:"memory_retrieval",label:"Memory Retrieval",desc:"Per turn: an LLM writes a search query from the current moment, then the code-side multi-signal scorer picks what gets injected. There is no second LLM ranking pass — the scorer IS the ranker (v30.5 corrected this card; it used to describe a `ranker` prompt that nothing called).",blocks:[
+    {kind:"prompt",promptKey:"queryGen"},
+    {kind:"dyn",label:"The code-side scorer",scope:"chat",desc:"Each candidate memory scores on up to six facets — semantic (embedding cosine, or lexical overlap when embeddings are off), people in the scene, location, recency, mood congruence and the memory's own importance — blended by the weights in Settings → Memory. No prompt to edit; the weights are the control."}]},
   // (!) the array property MUST be `blocks` — _enginePayloadCoverage (load-time IIFE) and the
   // Write-with-AI badge lookup both do d.blocks.forEach/some; a wrong name crashes BOOT (v19.81).
   {key:"tracker_gen",label:"Tracker Generator",desc:"Builds a complete tracker (mechanics + stage texts) from a plain description and a segment count, straight into the universe editor for review.",blocks:[
@@ -17030,6 +17044,12 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"gossip",label:"Gossip",desc:"End-of-day rumor propagation along the relationship graph, plus the location leak planted when you leave a watched place \u2014 and the ledger that gives each rumor a stakeholder, one raise, and an ending.",blocks:[
     {kind:"prompt",promptKey:"gossipPrompt"},{kind:"prompt",promptKey:"poiGossip"},{kind:"prompt",promptKey:"rumorJudge"},
     {kind:"dyn",label:"Witness observation, ties & candidates / place info",scope:"chat",desc:"Charged observations from today, who cares about whom, and the place's privacy profile."}]},
+  /* v30.5 — the three character-quest prompts had no card, so _enginePayloadCoverage swept them into
+     an auto-generated "Other prompts" bucket and warned about it on every boot. They are a pipeline
+     of their own and now say so. */
+  {key:"char_quests",label:"Character Quests",desc:"The cast's own quest lines: a character commits to something personal (grown from their goals and the day's undercurrents), then pursues it. Char\u2192char quests advance offstage and narrate each move; a quest that needs the PLAYER arrives as a text ask or an in-person approach through a scene gate that CODE evaluates, never the model.",blocks:[
+    {kind:"prompt",promptKey:"charQuestGen"},{kind:"prompt",promptKey:"charQuestStep"},{kind:"prompt",promptKey:"charQuestText"},
+    {kind:"dyn",label:"Holder, target, progress log & standing",scope:"chat",desc:"Built live at day end: who holds the quest and what drives them, the other party's sheet and their tie, every move made so far, what the holder has learned recently, and where they are. The approach gates and all the anti-spam limits are code-side."}]},
   {key:"goals",label:"Goals & Ambitions Curator",desc:"At day's end, rewrites each active character's goals & ambitions section from what actually happened — dropping what is finished, rewording what has moved, folding in their live pursuit and their private aim. It REPLACES the section rather than appending to it, which is why the payload carries one bounded want-list instead of three stacked ones.",blocks:[
     {kind:"prompt",promptKey:"goalsCurator"},
     {kind:"dyn",label:"Foundation, current section, pursuits, intents, the day's memories",scope:"chat",desc:"Built live per character: the authored goals (the untouchable foundation), the section as it currently reads, their active character quests and live private intents, the commitments they are carrying, the memories they formed today and how their standings moved."}]},
@@ -17063,9 +17083,8 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"char_move",label:"Character Move Narrator",desc:"Short beat when a character enters, leaves, or crosses to another area — where from, where to, and why. Shorter than the player's travel narration.",blocks:[
     {kind:"prompt",promptKey:"charMovePrompt"},
     {kind:"dyn",label:"Who moved, from/to, and why",scope:"chat",desc:"The character, the origin and destination places, the reason (recent exchange, an event, a plan), and the time."}]},
-  {key:"text_reply",label:"Text Message Reply",desc:"A character replying to the player's text. Gets the full roleplay-style payload (bio, relationships, memories, feelings, calendar) with output adapted to a phone text: dialogue only, no narration.",blocks:[
-    {kind:"prompt",promptKey:"textReplyPrompt"},
-    {kind:"dyn",label:"Full character payload + text thread",scope:"chat",desc:"Bio, relationship & feelings toward the player, memories, their calendar, and the running text thread."}]},
+  {key:"text_reply",label:"Text Message Reply",desc:"A character replying to the player's text. Since v28.6 this is the SHARED reply payload under the `text` layout key — edit its blocks under Reply Payloads, not here. What makes it a text rather than a spoken turn is the `text_format` fragment (Reply Payloads → FORMATTING RULES) plus the two text rails; v30.5 also gives it its own PRIVACY and location, because the character is on their phone somewhere else rather than standing in the player's scene.",blocks:[
+    {kind:"dyn",label:"The `text` reply payload",scope:"chat",desc:"Bio, ties, memories, feelings, promises, trackers and their calendar — the same blocks a spoken turn gets — plus the running text thread and how long the message sat unanswered."}]},
   {key:"text_proactive",label:"Proactive Text Judge",desc:"Decides whether a character texts the player unprompted, and composes it — from their feelings, memories and any event.",blocks:[
     {kind:"prompt",promptKey:"textProactivePrompt"},
     {kind:"dyn",label:"Character, feelings, memories, event",scope:"chat",desc:"Who they are, how they feel about the player (fast + slow), recent memories, any background event, and whether a prior text went unanswered."}]},
@@ -17318,6 +17337,11 @@ This applies to your ACTIONS exactly as much as to your words. If you already gr
      phrase "context window" — a concept the person they are playing does not have — three blocks
      after telling them never to mention being an AI. What this block actually holds is the last
      few things that happened, from just before the transcript picks up. So that is what it says. */
+  /* The memory search query's language. It is a fragment so it stays visible and editable next to
+     the retrieval prompt, and so the coupling to engineLangDirective is stated once, in words. */
+  query_lang:`# LANGUAGE OF THE QUERY — ENGLISH (this overrides any other language instruction above)
+Write the search query in English. The memories you are searching are stored in English, whatever language the scene itself is played in, and a query in another language would match almost nothing.
+Keep proper nouns exactly as they appear in the conversation — names of people and places are never translated, in the memories or here, so they are the strongest thing you can search on.`,
   mem_latest_header:`# ⚠️ WHAT HAPPENED JUST BEFORE THIS ⚠️`,
   mem_latest_instr:`The last things that passed between you, in the hours before the conversation below picks up. Newest first. You are not remembering these with effort — they are simply the recent past, still close enough to be in the room with you. If one of them bears on what is being said now, you already know it; nobody has to remind you. Never recite one back, and never bring one up just because it is here.`,
   mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
@@ -29016,7 +29040,16 @@ async function genQuery(userText,chat){
   const recent=chat.messages.filter(m=>m.role!=='system'&&!m.sysError).slice(-4)
     .map(m=>`${m.role==='user'?state.user:(m.speaker||p.name)}: ${m.content}`).join("\n");
   const out=await chatCompletion([
-    {role:"system",content:up("queryGen")+"\n\nWrite the query in "+storyLangName()+" — the story's selected language, which the memories are written in (this overrides any other language instruction above)."},
+    /* (!) v30.5 — THE QUERY MUST BE IN THE LANGUAGE THE MEMORIES ARE IN, and since v30.3 that is
+       ENGLISH, not the story language. This line used to say "write the query in {storyLang} — the
+       language the memories are written in", which was true when memory prose followed the story
+       language and became false the moment memories moved to the engine language. The damage is
+       quiet and total on the lexical path: retrieval scores a memory partly on token overlap with
+       the query (memTokens), so a Turkish query against English memories overlaps on almost
+       nothing, and recall silently degrades to recency + importance.
+       Proper nouns are the exception that keeps the fallback half working — engineLangDirective
+       never translates names or places, so the player's own words still match those. */
+    {role:"system",content:up("queryGen")+"\n\n"+blkTpl("query_lang")},
     {role:"user",content:`Recent conversation:\n${recent}\n\n${state.user}'s newest message:\n${userText}`}
   ],state.mcModel||state.memModel||state.model,{temp:fnTemp("mc",0.3),max:fnTok("mc",120),dbg:"Memory query generator"});
   return (out||"").replace(/```/g,"").trim();

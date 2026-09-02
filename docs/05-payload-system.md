@@ -246,6 +246,30 @@ the two things only it carries — the *only*, and never breaking character.
 Also fixed: the quest-approach opener (`charBioBlock(p)` with no opts) handed the bystander wording
 to the very character it was asking to speak.
 
+### Two people, one set of tag names
+
+`target_bg` / `target_look` used `<backstory>` and `<appearance>` — **the same tags `charBioBlock`
+uses for the speaking character's own sheet a few blocks earlier**. So one payload carried
+`<backstory>` twice and `<appearance>` twice, for two different people, with nothing in the markup
+saying which was whose. The identity sheet spends its whole length teaching the model that those
+tags mean *me*; the second pair then quietly means *her*, which is a direct invitation to answer in
+someone else's history. They are `<their_backstory>` / `<their_appearance>` now, and every tag in a
+rendered payload is unique again.
+**(!) Any new block that emits an XML tag must not reuse one `charBioBlock` already owns** — check a
+rendered payload with `grep -o "<[a-z_]*>" | sort | uniq -c` before shipping it.
+
+### Three rules that all began "one beat"
+
+Genuinely different rules — how much *narration*, how much *story time*, how much *emotional
+resolution* — worded so alike that only their position told them apart, and two of the three were in
+the weakest position while the third was in the strongest:
+
+| Was | Where | Now |
+|---|---|---|
+| "At most ONE narration beat per reply" | format · LIMITS | "HOW MUCH NARRATION: at most one *narrated span* per reply" |
+| "One beat per turn. React to THIS moment; don't narrate a sequence or jump ahead in time." | format · LIMITS | "HOW MUCH TIME: stay inside this moment… the reply happens now and stops" |
+| "One emotional beat lands harder than five." | `rail_beat` | "Leave things unsaid. Don't resolve everything in one reply…" |
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

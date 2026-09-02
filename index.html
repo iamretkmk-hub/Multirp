@@ -5811,6 +5811,21 @@ function loadState(){
     });
     store.set(K.blockTpls,state.blockTpls||{});
   }catch(e){}
+  /* v30.7 — the same treatment for the two fragments that told the character about "context
+     windows". This is not a taste change a user might have meant: it is a fourth-wall leak, three
+     blocks after the payload tells them never to mention being an AI, and a saved override keeps
+     shipping it. A live payload confirmed it reaching a real character. So an override that still
+     carries the phrase, and has not been rewritten to say what the block actually holds, is dropped
+     back to the new default. An override that says something else entirely is a real hand-edit and
+     is kept, exactly as the heat rebalance above decides it. */
+  try{
+    ["mem_latest_header","mem_latest_instr"].forEach(k=>{
+      const cur=state.blockTpls&&state.blockTpls[k];
+      if(typeof cur==="string" && /out of (the )?context window/i.test(cur))
+        delete state.blockTpls[k];
+    });
+    store.set(K.blockTpls,state.blockTpls||{});
+  }catch(e){}
   // Same rebalance for the per-position templates. A stored template still carrying the v27 default's
   // "HER FACE (every block):" inventory (or the non-explicit one's equivalent) and lacking the new
   // markers is one of ours, so refresh it; a hand-edited template won't match and is preserved.
@@ -18224,12 +18239,35 @@ function buildTailBlocks(opts){
   // v28.3 — drop a rail whose text is already carried by another rail. A customized fragment often
   // grows to contain the whole of a neighbouring default, and both then ship: the same rule, twice,
   // at double weight, in the highest-attention block of the payload.
-  const _seen=[];
+  /* v30.7 — CATCH THE PARAPHRASE, NOT JUST THE COPY. This dedupe existed because a customized
+     fragment tends to grow until it contains its neighbours, and it only tested for a verbatim
+     substring. A live payload showed the case it was built for and could not see: a hand-merged
+     rail_consistent_known that had absorbed REWORDED versions of the four rails after it
+     ("Hold the established facts: who you are, who owns which place…" vs "Stay consistent with the
+     established facts: who you are, who owns which place…"), so all five shipped and the same four
+     rules arrived twice, in the highest-attention block of the payload.
+     Content-word overlap catches that. The threshold is deliberately high — a rail must be almost
+     entirely contained in one already sent before it is dropped — because the cost of a false
+     positive here is silently losing a rule the user wanted. Order still decides: an earlier rail
+     wins, which is why the merged one keeps its place and the four it swallowed fall away. */
+  const _words=t=>String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/).filter(w=>w.length>3);
+  const _seen=[], _seenW=[];
   const railsOut=rails.filter(r=>{
     const n=String(r).replace(/\s+/g," ").trim().toLowerCase();
     if(!n)return false;
     if(_seen.some(s=>s===n||(n.length>60&&s.includes(n))||(s.length>60&&n.includes(s))))return false;
-    _seen.push(n); return true;
+    const w=_words(n);
+    if(w.length>=8 && _seenW.some(sw=>{
+      if(sw.length<w.length)return false;                 // only fold INTO something at least as full
+      const set=new Set(sw); let hit=0; w.forEach(x=>{ if(set.has(x))hit++; });
+      /* 0.78, chosen from measurement rather than feel. Across the twelve shipped rails the highest
+         overlap any pair reaches is 0.364, so the margin here is more than double the worst honest
+         case; the hand-merged rails that prompted this sit at 0.82-0.84. rail_unknown_past scores
+         0.576 against the same merged text and correctly survives — it is about THIS conversation,
+         not about the past, and it is the one of the four that says something the others do not. */
+      return (hit/w.length)>=0.78;                        // near-total containment, reworded
+    }))return false;
+    _seen.push(n); _seenW.push(w); return true;
   });
   B.final_guardrails=`${blkTpl("rails_header")}\n`+railsOut.map(r=>`- ${r}`).join("\n");
 

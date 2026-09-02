@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11919,6 +11919,21 @@ function ownerLabel(ownerKey){
   if(ownerKey==="__user__")return state.user||"You";
   const p=state.personas.find(x=>x.id===ownerKey); return p?p.name:"(unknown)";
 }
+/* (!) PAYLOAD-SAFE name resolution. ownerLabel() answers "(unknown)" for an id that no longer
+   resolves — a deleted character, or a relationship keyed to someone from another universe. That is
+   the right badge in a Settings list, and poison in a prompt: it shipped
+     • [(unknown) — his oldest friend]
+       The person he is betraying, daily, in the smallest possible increments.
+   which tells a character they have an oldest friend with no name — unusable as a fact, and an open
+   invitation to invent one. "(unknown)" is also truthy, so every `if(!who)continue` guard sailed
+   past it. Anything that names a person INSIDE A PAYLOAD resolves through this instead: a real name,
+   or "" so the caller drops the entry. Dead ties are dropped, never narrated. */
+function castLabel(id){
+  if(id==="__user__")return state.user||"You";
+  if(id==="__story__")return "";                       // the story is not a person
+  const p=(state.personas||[]).find(x=>x.id===id);
+  return (p&&p.name)?String(p.name).trim():"";
+}
 // Migrate an old FLAT trackerVals[id]=number into the new per-owner shape {owner:number}.
 // Idempotent: leaves already-migrated objects untouched.
 function _migrateTrackerVal(chat,t){
@@ -12777,7 +12792,14 @@ function socialFactLines(persona){
     const m=persona&&persona.socialFacts; if(!m||typeof m!=="object")return [];
     return Object.keys(m).map(id=>{
       const e=m[id]; const t=e&&String(e.text||"").trim(); if(!t)return null;
-      return {id, day:(e.day||0), text:t};
+      // (!) A fact is stored PER PERSON — the subject lives in the key, not in the sentence. The id
+      // was computed here and then thrown away by the old .map(x=>x.text), so "has stopped answering
+      // the phone" reached the payload with no idea who "has". Put the name back, and skip the
+      // prefix when the fact already says it, so it never reads "Duygu: Duygu is carrying a child".
+      const who=castLabel(id); if(!who)return null;    // subject deleted — the fact has no referent
+      const esc=who.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+      const named=new RegExp("(^|[^\\p{L}])"+esc+"([^\\p{L}]|$)","iu").test(t);
+      return {id, day:(e.day||0), text:named?t:(who+" — "+t)};
     }).filter(Boolean).sort((a,b)=>(b.day||0)-(a.day||0)).slice(0,10).map(x=>x.text);
   }catch(e){ return []; }
 }
@@ -14978,10 +15000,10 @@ function relSheetBlock(persona){
     const lines=[];
     // player first, then others by name
     const order=Object.keys(rels).sort((a,b)=>{ if(a==="__user__")return -1; if(b==="__user__")return 1;
-      return (ownerLabel(a)||"").localeCompare(ownerLabel(b)||""); });
+      return (castLabel(a)||"").localeCompare(castLabel(b)||""); });
     for(const id of order){
       const e=rels[id]; if(!e)continue;
-      const who=(id==="__user__")?state.user:ownerLabel(id);
+      const who=castLabel(id); if(!who)continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
       if(!tie&&!rel)continue;
@@ -15002,6 +15024,14 @@ function relSheetBlock(persona){
    when no generated sheet existed, leaving the character with NO relationship block. */
 function relSheetBlockFull(persona){
   if(!persona)return "";
+  /* (!) THREE DIFFERENT SOURCES, THREE DIFFERENT VOICES. The author's social-graph note is written
+     in the first person ("Hakan is my oldest friend"); the discovered facts are third-person
+     statements about other people; the structured sheet is third-person prose about the character
+     ("She is the whole argument he keeps having with himself"). Joined with a single "\n" they read
+     as one run-on paragraph that changes person twice mid-block, and the middle group had no label
+     at all — a bare bullet with no way to tell what it was or where it came from. Each group is
+     separated and the discovered facts are headed, so provenance is legible without a rewrite of
+     data the author owns. */
   const parts=[];
   const sg=subUser(String(persona.socialGraph||"")).trim();
   if(sg)parts.push(sg);
@@ -15010,7 +15040,7 @@ function relSheetBlockFull(persona){
   // socialGraphAuto blob appended a line per day and never removed one; it is migrated away at load
   // and only read here so an import made on an older build still shows something.
   {const facts=socialFactLines(persona);
-   if(facts.length)parts.push(facts.map(t=>"- "+t).join("\n"));
+   if(facts.length)parts.push(fillTpl(blkTpl("rel_learned"),{lines:facts.map(t=>"- "+t).join("\n")}));
    else{ const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim(); if(sgAuto)parts.push(sgAuto); }}
   const hereSet=new Set(presentCast().map(c=>c.id));
   const mark=id=>hereSet.has(id)?" [here now]":"";
@@ -15018,24 +15048,30 @@ function relSheetBlockFull(persona){
   let sheet="";
   if(rels&&typeof rels==="object"&&Object.keys(rels).length){
     const lines=[];
+    // The player, then whoever is actually in the room, then everyone else by name. The block keeps
+    // every tie on purpose (you don't forget a brother because he isn't here), but the people this
+    // turn is being spoken to should not be sitting below three absent ones.
     const order=Object.keys(rels).sort((a,b)=>{ if(a==="__user__")return -1; if(b==="__user__")return 1;
-      return (ownerLabel(a)||"").localeCompare(ownerLabel(b)||""); });
+      const ha=hereSet.has(a)?0:1, hb=hereSet.has(b)?0:1; if(ha!==hb)return ha-hb;
+      return (castLabel(a)||"").localeCompare(castLabel(b)||""); });
     for(const id of order){
       const e=rels[id]; if(!e)continue;
       if(id===persona.id)continue;
-      const who=(id==="__user__")?state.user:ownerLabel(id);
+      const who=castLabel(id);
       if(!who)continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
       if(!tie&&!rel)continue;
-      lines.push(`• [${who}${tie?` — ${tie}`:""}${id==="__user__"?"":mark(id)}]\n  ${rel||tie}`);
+      // (!) the presence marker closes OUTSIDE the name bracket — inside it produced "]]" and read
+      // as part of the tie ("the woman he loves [here now]") rather than as a note about the scene.
+      lines.push(`• [${who}${tie?` — ${tie}`:""}]${id==="__user__"?"":mark(id)}\n  ${rel||tie}`);
     }
     if(lines.length)sheet=lines.join("\n");
   }
   // Legacy prose blob: the character's whole relationship description — their own knowledge, as-is.
   if(!sheet)sheet=(persona.relationshipsGen||"").trim();
   if(sheet)parts.push(sheet);
-  return parts.join("\n");
+  return parts.join("\n\n");
 }
 // SCOPED relationship block — only this persona's relationships toward the given target ids
 // (plus the player by default). Used in the roleplay payload so a speaking character only carries
@@ -15048,10 +15084,10 @@ function relSheetBlockFor(persona,targetIds){
   if(rels&&typeof rels==="object"&&Object.keys(rels).length){
     const lines=[];
     const order=[...want].sort((a,b)=>{ if(a==="__user__")return -1; if(b==="__user__")return 1;
-      return (ownerLabel(a)||"").localeCompare(ownerLabel(b)||""); });
+      return (castLabel(a)||"").localeCompare(castLabel(b)||""); });
     for(const id of order){
       const e=rels[id]; if(!e)continue;
-      const who=(id==="__user__")?state.user:ownerLabel(id);
+      const who=castLabel(id); if(!who)continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
       if(!tie&&!rel)continue;
@@ -15068,7 +15104,7 @@ function relSheetBlockFor(persona,targetIds){
   if(!prose)return "";
   const wantNames=[];
   if(want.has("__user__"))wantNames.push(state.user);
-  [...want].forEach(id=>{ if(id!=="__user__"){ const nm=ownerLabel(id); if(nm)wantNames.push(nm); } });
+  [...want].forEach(id=>{ if(id!=="__user__"){ const nm=castLabel(id); if(nm)wantNames.push(nm); } });
   const namesLc=wantNames.map(n=>String(n).toLowerCase()).filter(Boolean);
   if(!namesLc.length)return "";
   let units=prose.split(/\n+/).map(s=>s.trim()).filter(Boolean);
@@ -16982,7 +17018,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
   const T={
     task:["task","gm_private_lock"],world:["world_header"],format:["format_header","narr_shape","heat_format","text_format"],
     your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","intent_aim_warm","intent_aim_cool"],
-    relationships:["rel_header"],scenario:["scenario_header"],
+    relationships:["rel_header","rel_learned"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
     response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
     player:["player_intro","player_bg","player_look"],
@@ -17236,6 +17272,7 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   // first is rewritten each day and can be wrong-but-current, the second is code-tracked and exact.
   goals_live_intro:`What you are actually after, as it stands today. This list is kept current — things you have already got, already lost, or stopped caring about have been taken out of it, so everything here is still live. It is not a script and not a checklist: it is the pressure under what you say. Never announce one of these, and never work through them in order.`,
   pursuit_status_intro:`Where your live pursuit actually stands right now — this part is fact, not mood. Above all: if you have already asked, you have asked. Asking again in new words is the thing that makes a person unbearable.`,
+  rel_learned:`What you have found out about them since — one line per person, newest first. You know these things. Do NOT assume they know that you know, and do not put one to somebody just because it is written here:\n{{lines}}`,
   rel_header:`# {{char}}'s RELATIONSHIPS (who the people in your life are to you)\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.`,
   others_header:`# OTHERS PRESENT (within earshot)`,
   // v30.4 — this used to restate the earshot rule ("the ONLY people present… don't refer to anyone

@@ -71,7 +71,7 @@ an empty block renders nothing.
 | `world` | The universe's `setting` text. Universal. |
 | `format` | Formatting contract (`*narration*`, `_thoughts_`, `"dialogue"`) **+ the player's story language**. Swapped for the text/heat format in those payloads. |
 | `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, the **maintained** goals & ambitions list, the live `<pursuit_status>`, appearance, wardrobe, where they live. See "v30.3 — one maintained want-list" below. |
-| `relationships` | Full relationship sheet; `[here now]` marks who is present. |
+| `relationships` | Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. |
 | `scenario` | The character's scenario, when set. |
 | `others_present` | Who else is within earshot + the "only these people exist" footer. |
 | `response_target` ⚠️ | **The person this turn is aimed at** — player *or* another character — with their backstory and appearance. |

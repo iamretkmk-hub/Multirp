@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -16737,6 +16737,45 @@ function _overlap(wa,wb){
   return smaller?inter/smaller:0;
 }
 function narrationSimilarity(a,b){ return _overlap(_narrWords(a),_narrWords(b)); }
+/* ============ NARRATION VOLUME ============
+   The FORMATTING RULES say it plainly — "at most one *narrated span* per reply", "never open with
+   scene-setting before the character speaks", "more narration than dialogue -> cut the narration" —
+   and a live reply came back with FOUR narration paragraphs around three lines of speech, opening
+   on a four-sentence one. The rule was not unclear; it was outvoted. It is stated once, in block 3
+   of 30, ~20,000 characters before generation, while the LAST thing the model reads (the rails) had
+   nothing to say about form at all and ended on "End on something you DO" — which is precisely the
+   closing stage direction that came back. Five other blocks ask for physical behaviour by then
+   (feelings_now's "what your hands are doing", the momentary-impact line, already_said's "your body
+   has moved on", RESPONSE GUIDANCE's "do something").
+   So: rail_form puts the contract in the last slot before generation, and this measures the result.
+   Deliberately conservative — a false positive rewrites a reply that was fine — so it fires only on
+   an unarguable wall: three or more spans, or two spans that between them run to a paragraph and
+   outweigh the speech. Heat and text replies are exempt; they have their own form rails. */
+function narrationLoad(text){
+  const t=String(text||"");
+  const spans=t.match(/\*[^*]*\*/g)||[];
+  const words=x=>String(x).replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/).filter(Boolean).length;
+  const narr=words(spans.join(" "));
+  const said=words((t.match(/"[^"]*"/g)||[]).join(" "));
+  return {spans:spans.length, narr, said};
+}
+function overNarrated(text){
+  const L=narrationLoad(text);
+  if(L.spans>=3)return L;                                   // "never stack two or three" — this is three
+  if(L.spans>=2 && L.narr>=60 && L.narr>L.said)return L;    // two spans that add up to a wall
+  return null;
+}
+/* Names the offence with its own numbers and tells the model to KEEP the dialogue — the lesson from
+   repeatRetryNote: told only "that was wrong", a model rewrites the half it got right. */
+function overNarratedNote(L){
+  return "That reply is "+L.spans+" separate *narration* passages ("+L.narr+" words of description against "
+    +L.said+" words of speech). The formatting rules allow ONE short narrated beat in a whole turn, and this "
+    +"character's turn is carried by what they SAY.\n\nWrite it again. Keep the spoken lines — they were the "
+    +"right lines. Keep at most the FIRST narrated beat and cut it down to a few words: one gesture, one "
+    +"movement, nothing about the room, the light, or the air. Every other passage either becomes something "
+    +"the character says out loud, or it goes. Do not open with scene-setting, and do not close on a "
+    +"paragraph of stage direction.";
+}
 /* "" when the reply is new, otherwise which half of it is a repeat. Narration sits a little
    lower because stage directions are short and a shared verb or two is normal. */
 function repeatKind(a,b){
@@ -17091,7 +17130,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt","stranger"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
-    final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"],
+    final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"],
     spoken_delivery:["spoken_delivery","voice_format_reset"]
   };
   const SCOPE={rumors:"chat",already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",feelings_now:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",privacy:"chat",trackers:"chat",promises:"chat",calendar:"chat",quests:"chat"};
@@ -17538,6 +17577,11 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
      "At most ONE narration beat per reply" and "One beat per turn" — three genuinely different
      rules (how much narration, how much story time, how much emotional resolution) all opening with
      the same three words, in three places. Each one names its own subject now. */
+  /* (!) The one form rule in the last slot before generation. FORMATTING RULES already says this,
+     20,000 characters earlier in block 3 of 30 — and a live reply still came back as four narration
+     paragraphs around three lines of speech. By the time the model writes, five blocks have asked it
+     for physical behaviour and nothing since block 3 has capped it. This is the counterweight. */
+  rail_form:`Dialogue carries this turn. ONE short *narrated* beat in the whole reply at most — a gesture, a movement, a few words — and everything else is spoken. Do not open with scene-setting before you speak. If you find yourself writing a second narrated passage, it belongs in your mouth or it goes.`,
   rail_beat:`Leave things unsaid. Don't resolve everything in one reply — one thing landing hard is worth more than five landing softly, and what you hold back is what the next turn is for.`,
   rail_indirect:`Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.`,
   /* v30.4 — this was one fragment doing two jobs. The first half is general craft and belongs on
@@ -17549,7 +17593,7 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
   rail_oblique_once:`CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.`,
   rail_noecho:`Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said, and never mirror their sentence back with a twist on the end. One short callback to a specific WORD of theirs is allowed when you are turning it against them — never a restatement of their line.`,
   rail_norepeat:`Write only NEW material. Never reproduce, re-narrate or paraphrase a line you already wrote earlier in this scene — not to set the mood again, not as a run-up to what comes next. Your last turn already happened; start from where it left off.`,
-  rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO, or on a beat left hanging.`,
+  rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO — a few words of it, not a paragraph — or on a beat left hanging.`,
   rail_consistent_known:`Hold your voice, your mood, and the relationship you already have. You do not reset between replies.`,
   rail_consistent_stranger:`Hold your voice and your mood — you do not reset between replies. And remember you do not know {{who}} yet: don't manufacture familiarity you haven't earned.`,
   rail_facts:`Hold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.`,
@@ -18294,13 +18338,16 @@ function buildTailBlocks(opts){
           return !!(uni&&_charQuests(uni).some(q=>q&&q.holderId===selfP.id&&q.status==="active"&&q.delivered));
         }catch(e){ return false; } })();
         const _continuing=(()=>{ try{ return !!selfContinueLine(chat,selfP); }catch(e){ return false; } })();
+        /* rail_form goes LAST on purpose. Every other rail here is about WHAT to say; this is the
+           only one about what the turn is made of, it is the most-violated rule in the payload, and
+           the end of the last block is the closest any instruction gets to generation. */
         return ["rail_indirect","rail_oblique",
                 ...((_stalled||_pendingAsk)?["rail_oblique_once"]:[]),
                 "rail_beat",
                 ...(_continuing?[]:["rail_noecho"]),
                 "rail_norepeat","rail_question","rail_voice",
                 (knowsTarget?"rail_consistent_known":"rail_consistent_stranger"),
-                "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"];
+                "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"];
       })())
     .map(k=>fillTpl(blkTpl(k),_rmap)).filter(Boolean);
   // v28.3 — drop a rail whose text is already carried by another rail. A customized fragment often
@@ -20229,13 +20276,18 @@ async function sendMessage(){
       try{ noteRumorRaise(chat,solo,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
       const _mine=ownRecentLines(chat,solo,3);
       const _hit=_mine.find(x=>repeatKind(reply,x));
-      if(_hit){
+      /* ONE retry, shared. A repeat is the worse fault, so it wins the budget when both apply;
+         over-narration takes it otherwise. Heat writes long by design and has its own form rails. */
+      const _narr=(!_hit && !(chat&&chat._heatBeat))?overNarrated(reply):null;
+      if(_hit||_narr){
+        const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
         const _again=await chatCompletion(
           messages.concat([{role:"assistant",content:reply},
-            {role:"system",content:repeatRetryNote(repeatKind(reply,_hit),_hit)}]),
-          _rpModel,{rp:true,dbg:"Roleplay reply (repeat retry)"});
+            {role:"system",content:_note}]),
+          _rpModel,{rp:true,dbg:"Roleplay reply ("+(_hit?"repeat":"narration")+" retry)"});
         if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
-           !_mine.some(x=>repeatKind(_again,x))) reply=_again;
+           (_hit?!_mine.some(x=>repeatKind(_again,x))
+                :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
       }
     }catch(e){}
     // REFUSAL HANDLING (mirrors the multi-character path): a non-empty reply can be a content
@@ -21539,13 +21591,17 @@ async function playCharacterTurn(chat,p,addressed){
       try{ noteRumorRaise(chat,p,reply); }catch(e){}      // v28.9 — raising a rumor spends the move
       const _mine=ownRecentLines(chat,p,3);
       const _hit=_mine.find(x=>repeatKind(reply,x));
-      if(_hit){
+      // ONE retry, shared — see the solo path. Repeat wins the budget; over-narration takes it otherwise.
+      const _narr=(!_hit && !(chat&&chat._heatBeat))?overNarrated(reply):null;
+      if(_hit||_narr){
+        const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
         const _again=await chatCompletion(
           messages.concat([{role:"assistant",content:reply},
-            {role:"system",content:repeatRetryNote(repeatKind(reply,_hit),_hit)}]),
-          _rpModel,Object.assign({},_rpOpts,{dbg:_rpOpts.dbg+" (repeat retry)"}));
+            {role:"system",content:_note}]),
+          _rpModel,Object.assign({},_rpOpts,{dbg:_rpOpts.dbg+" ("+(_hit?"repeat":"narration")+" retry)"}));
         if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
-           !_mine.some(x=>repeatKind(_again,x))) reply=_again;
+           (_hit?!_mine.some(x=>repeatKind(_again,x))
+                :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
       }
     }catch(e){}
     // REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a

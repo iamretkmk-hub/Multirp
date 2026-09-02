@@ -95,7 +95,7 @@ an empty block renders nothing.
 | `private_intent` | One-turn coloring from a live scheme/warmth toward someone **present**. `{{kind}}` is the taxonomy label and `{{aim}}` the actual want, joined so one frames the other ("a courtship, and what you actually want out of it is this: …") rather than reading as two rival labels. When the intent's target is **not** the person the turn is aimed at, `intent_side` ranks it as a side-current so it can't take the turn over. |
 | `feelings_now` ⚠️🆕 | The **live** emotional charge carried into THIS reply, written as a state the character is in (`relMomentaryNarrative`) rather than a list of axis labels, plus the fast read's playable note. True for one turn, so it sits last — immediately above the guidance. |
 | `response_guidance` | Who you are, who you're replying to, what the turn has to do. |
-| `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. |
+| `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. Ends on **`rail_form`** — see below. |
 | `spoken_delivery` | xAI TTS delivery-tag coaching while voicing; otherwise the `voice_format_reset` while stale markup lingers. |
 
 ## v30.3 — one maintained want-list, and the two blocks that were walls
@@ -498,3 +498,26 @@ through `sLine({en,tr,de})`.
 relInterpretation/diaryVoice/pacing) to genre-sensitive engines. `langDirective()` (story
 language) rides in the `format` block for replies and is appended to every other
 content-producing payload — never to pure-JSON parsers whose enums must stay stable.
+
+## Form is a position problem, not a wording problem
+
+`format` is block 3 of 30. By the time the model generates, ~20,000 characters have gone by and
+**five** later blocks have asked it for physical behaviour — `feelings_now` ("what your hands are
+doing"), the momentary-impact line, `already_said` ("your body has moved on"), RESPONSE GUIDANCE
+("do something"), and `rail_question` ("End on something you DO"). Nothing since block 3 capped it.
+A live reply came back as four narration paragraphs wrapped around three lines of speech, opening on
+a four-sentence one — every content rule obeyed, every form rule ignored.
+
+Two counterweights, because either alone is thin:
+
+- **`rail_form`** is deliberately the LAST rail in the solo/multi set, so the one rule about what a
+  turn is *made of* is the final thing read before generation. `rail_question` was also softened
+  ("a few words of it, not a paragraph") — as written it invited exactly the closing stage-direction
+  paragraph that came back.
+- **`overNarrated()` / `overNarratedNote()`** measure the finished reply and retry once, on the same
+  single-retry budget as the repeat guard (a repeat wins the budget; over-narration takes it
+  otherwise). Heat and text replies are exempt — they carry their own form rails. The thresholds are
+  conservative on purpose, since a false positive rewrites a reply that was fine: **3+ spans**, or
+  **2 spans totalling 60+ words that outweigh the speech**. Like `repeatRetryNote`, the note names
+  the offence with its own numbers and tells the model to KEEP the dialogue — told only "that was
+  wrong", a model rewrites the half it got right.

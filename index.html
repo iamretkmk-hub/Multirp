@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -5637,17 +5637,18 @@ function loadState(){
   // earlier defaults (stable opening fingerprint) but lacks the new gate marker. Hand-edited prompts
   // won't carry the fingerprint and are kept. Each is independent, and per-universe overrides are
   // dropped (fall back to the new default via up()).
+  // (!) A pipe only discriminates while the CURRENT default still carries newMarker. Once a LATER
+  // revision drops that marker, the default itself satisfies the reset condition, and the pipe can no
+  // longer tell "a stale stored copy" from "the text the user edited yesterday" — it would silently
+  // wipe live customizations on EVERY boot, forever. So a pipe whose own default trips it is dead:
+  // it refuses to fire and is reported by _stalePipeReport(). Later pipes on the same key still run.
+  const _stalePipes=[];
   const _refreshPipe=(key,fingerprint,newMarker,def)=>{
-    const cur=state[key];
-    if(typeof cur==="string" && cur.indexOf(fingerprint)!==-1 && cur.indexOf(newMarker)===-1){
-      state[key]=def; store.setRaw(K[key],def);
-    }
-    (state.universes||[]).forEach(u=>{
-      if(u&&u.prompts&&typeof u.prompts[key]==="string"
-         && u.prompts[key].indexOf(fingerprint)!==-1 && u.prompts[key].indexOf(newMarker)===-1){
-        delete u.prompts[key];
-      }
-    });
+    const marks=Array.isArray(fingerprint)?fingerprint:[fingerprint];
+    const hits=t=>typeof t==="string" && marks.every(m=>t.indexOf(m)!==-1) && t.indexOf(newMarker)===-1;
+    if(hits(def)){ _stalePipes.push(key+" \u2192 "+newMarker); return; }
+    if(hits(state[key])){ state[key]=def; store.setRaw(K[key],def); }
+    (state.universes||[]).forEach(u=>{ if(u&&u.prompts&&hits(u.prompts[key])) delete u.prompts[key]; });
   };
   // v25 — sm_style historically stored a style NAME; resolve it to the style's id (or first style).
   { const cur=state.style;
@@ -5665,12 +5666,9 @@ function loadState(){
   _refreshPipe("questGen","You are the QUEST DESIGNER for an ongoing roleplay","UNIVERSE MEMORY",DEFAULT_QUEST_GEN);
   _refreshPipe("questNext","You are the QUEST DESIGNER continuing a story arc DURING play","UNIVERSE MEMORY",DEFAULT_QUEST_NEXT);
   _refreshPipe("sceneWriter","You are the SCENE WRITER directing an active event","A NAME IS NOT A SUMMONS",DEFAULT_SCENE_WRITER);
-  // Second-stage Scene-Writer upgrade: authorize naming an unnamed person already physically in the
-  // scene that the player engages (so a nameless servant/guard can answer instead of staying silent).
-  // Installs already on the "name is not a summons" default won't be caught by the line above (they
-  // HAVE that marker), so refresh again when the newer "unnamed figure" marker is missing.
-  _refreshPipe("sceneWriter","You are the SCENE WRITER directing an active event","UNNAMED FIGURE ALREADY PHYSICALLY IN THE SCENE",DEFAULT_SCENE_WRITER);
-  _refreshPipe("sceneSetup","## YOUR INPUTS","NOT a person event",DEFAULT_SCENE_SETUP);
+  // (The second-stage "UNNAMED FIGURE …" and sceneSetup "NOT a person event" pipes lived here. Later
+  // rewrites dropped both markers from the defaults, which made each pipe match its own default —
+  // see docs/02 — so they were deleted. The "name is not a summons" pipe above still covers the era.)
   // v22.x — GM/Scene overhaul: the Gamemaster only brings in EXISTING roster characters as named
   // arrivals — no invented people, no environment/phone-buzz beats. Migrate unmodified defaults.
   _refreshPipe("sceneWriter","You are the SCENE WRITER directing an active event","ONLY EXISTING ROSTER CHARACTERS",DEFAULT_SCENE_WRITER);
@@ -5712,9 +5710,10 @@ function loadState(){
   _refreshPipe("calPrompt","MEETINGS TRACKER for a roleplay","OR two characters (not {{user}})",DEFAULT_CAL);
   // v22 — intent formation now weighs GOALS & AMBITIONS as a first-class input.
   _refreshPipe("intentForm","WHAT STRUCK THEM TODAY","GOALS & AMBITIONS",DEFAULT_INTENT_FORM);
-  // v21.2 — SkyrimNet-derived prompt craft baked into the defaults: character embodiment (base),
-  // richer diary writing, and memory density/relevance guidance. Refresh unmodified stored copies.
-  _refreshPipe("baseInstruction","You are playing a real person","EMBODY YOUR CHARACTER",DEFAULT_BASE_INSTRUCTION);
+  // v21.2 — SkyrimNet-derived prompt craft baked into the defaults: richer diary writing and memory
+  // density/relevance guidance. (Its baseInstruction pipe is gone: EMBODY YOUR CHARACTER was later
+  // removed from the default, so the pipe matched the default's own opening and reset every edited
+  // base instruction on load. The base-instruction pipes that still discriminate are further down.)
   _refreshPipe("daySummaryPrompt","private DIARY ENTRY","Expand the scenes that matter",DEFAULT_DAY_SUMMARY);
   // v22.x — diaries are now SHORT real-diary entries (the day's 1-3 key things), not a full-day recap.
   // v22.8 — diaries tighten further: one information-dense entry built around THE ONE EVENT that
@@ -5725,8 +5724,8 @@ function loadState(){
   // boundary. Fixes scenes being shattered into many mid-weight memories.
   _refreshPipe("memEval","silent ARC TRACKER","GOLDEN RULE — KEEP ARCS OPEN",DEFAULT_MEMEVAL);
   _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","ARRIVALS HAPPEN AT THE ENTRANCE",DEFAULT_GM_AUTHOR);
-  _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","A mention is NOT a reason to make someone arrive",DEFAULT_GM_AUTHOR);
-  _refreshPipe("gmAuthor","You are the GAMEMASTER, an unseen narrator","YOUR ONLY MOVE",DEFAULT_GM_AUTHOR);
+  // ("A mention is NOT a reason…" and "YOUR ONLY MOVE" pipes deleted — both markers were later
+  // rewritten out of DEFAULT_GM_AUTHOR, so each matched the current default. The line above holds.)
   _refreshPipe("gmJudge","invisible GAMEMASTER observing an ongoing roleplay","Mentioning a person is not a trigger to summon",DEFAULT_GM_JUDGE);
   // Router-2 (character interjection) upgrade: add the "spoken about / undermining" override so a
   // character referenced indirectly (criticized, blamed, or whose failure a rival exploits) can speak,
@@ -5738,7 +5737,8 @@ function loadState(){
   // address. Refresh stored/older copies (and per-universe overrides) lacking the new marker; hand-
   // customized prompts (no fingerprint) are preserved.
   _refreshPipe("routerPlayer","You are the conversation director for a multi-character roleplay","GROUP ADDRESS —",DEFAULT_ROUTER_PLAYER);
-  _refreshPipe("routerPrompt","You are a routing assistant for an image generator","route on what the scene has BECOME",DEFAULT_ROUTER);
+  // (The "route on what the scene has BECOME" pipe is gone — marker no longer in DEFAULT_ROUTER.
+  //  The STICKY-router pipe further down still catches the copies this one was written for.)
   // v24.x — TEXT↔ROLEPLAY CONTINUITY: texts are one life with the in-person scenes. Replies and
   // proactive texts are grounded in the scene just lived through together, and meeting in person
   // supersedes an "unanswered" text. Refresh unmodified stored defaults.
@@ -5869,48 +5869,21 @@ function loadState(){
   // v19.3 — the scene router became STICKY (previous scene TYPE + latest exchange; no image prompt).
   _refreshPipe("routerPrompt","You are a routing assistant for an image generator","PREVIOUSLY SELECTED SCENE TYPE",DEFAULT_ROUTER);
   try{persistUniverses&&persistUniverses();}catch(e){}
-  // One-time upgrade: refresh the stock base instruction for installs still running the older one.
-  // Only when it still looks like the unedited default (PUSH AND PULL + PACING markers) AND the new
-  // section isn't present yet — custom instructions are never overwritten.
-  if(state.baseInstruction
-     && state.baseInstruction.indexOf("HOW TO END A REPLY")===-1
-     && state.baseInstruction.indexOf("PUSH AND PULL")!==-1
-     && state.baseInstruction.indexOf("PACING AND RESTRAINT")!==-1){
-    state.baseInstruction=DEFAULT_BASE_INSTRUCTION;
-    store.setRaw(K.baseInstruction,state.baseInstruction);
-  }
-  // One-time upgrade: the global character instruction was rewritten around "real human responses —
-  // no reflexive advice or manufactured drama, dialogue-forward." Refresh a stored copy that is our
-  // earlier default (carries the stable "fully realized fictional character with real human
-  // psychology" opening) but lacks the new "not a helper, not a storyteller" marker. Hand-edited
-  // instructions won't match the opening and are kept.
-  if(typeof state.baseInstruction==="string"
-     && state.baseInstruction.indexOf("fully realized fictional character with real human psychology")!==-1
-     && state.baseInstruction.indexOf("not a helper, not a storyteller")===-1){
-    state.baseInstruction=DEFAULT_BASE_INSTRUCTION;
-    store.setRaw(K.baseInstruction,state.baseInstruction);
-  }
-  // One-time upgrade: the base instruction gained a "STAYING TRUE UNDER PRESSURE" section (characters
-  // resist persuasion in proportion to their values, and recover from consequences instead of going
-  // permanently "broken"). Refresh a stored copy that is our current default (carries the stable
-  // "not a helper, not a storyteller" opening) but lacks the new marker. Hand-edited instructions
-  // (which won't carry that exact opening, or which the user has changed) are preserved.
-  if(typeof state.baseInstruction==="string"
-     && state.baseInstruction.indexOf("not a helper, not a storyteller")!==-1
-     && state.baseInstruction.indexOf("STAYING TRUE UNDER PRESSURE")===-1){
-    state.baseInstruction=DEFAULT_BASE_INSTRUCTION;
-    store.setRaw(K.baseInstruction,state.baseInstruction);
-  }
+  // Base-instruction refreshes, in era order. These were hand-written copies of _refreshPipe; they
+  // are pipes now, so they inherit its staleness self-guard and clean per-universe copies too.
+  // A third one ("not a helper, not a storyteller" -> STAYING TRUE UNDER PRESSURE) was deleted: that
+  // fingerprint is still the CURRENT default's opening while the marker was rewritten out of it, so
+  // the pipe matched the default itself and reset an edited base instruction on every single load.
+  _refreshPipe("baseInstruction",["PUSH AND PULL","PACING AND RESTRAINT"],"HOW TO END A REPLY",DEFAULT_BASE_INSTRUCTION);
+  _refreshPipe("baseInstruction","fully realized fictional character with real human psychology","not a helper, not a storyteller",DEFAULT_BASE_INSTRUCTION);
   // One-time upgrade: the formatting rules gained the dialogue-forward guidance and the
   // INTENSE/INTIMATE MOMENTS section. Refresh a stored copy that is our earlier default (carries the
   // stable "renders as bold" or "Do NOT use fluffy dialogue" fingerprint) but lacks the new intimate
   // marker. Hand-edited format rules won't match and are kept.
-  if(typeof state.formatRules==="string"
-     && (state.formatRules.indexOf("This renders as bold")!==-1 || state.formatRules.indexOf("Do NOT use fluffy dialogue")!==-1)
-     && state.formatRules.indexOf("INTENSE / INTIMATE MOMENTS")===-1){
-    state.formatRules=DEFAULT_FORMAT_RULES;
-    store.setRaw(K.formatRules,state.formatRules);
-  }
+  // (two pipes rather than one OR-ed guard — same reach, and per-universe copies get cleaned too)
+  _refreshPipe("formatRules","This renders as bold","INTENSE / INTIMATE MOMENTS",DEFAULT_FORMAT_RULES);
+  _refreshPipe("formatRules","Do NOT use fluffy dialogue","INTENSE / INTIMATE MOMENTS",DEFAULT_FORMAT_RULES);
+  if(_stalePipes.length) console.warn("[StoryMind] stale refresh pipes stood down (their marker is gone from the current default):\n  "+_stalePipes.join("\n  "));
   // Repair any existing temp characters that were saved with a placeholder name like
   // "null" (from the old Scene-Setup flaw). Rename them to a readable descriptor so they
   // don't show up as a character literally called "null".

@@ -194,3 +194,25 @@ are empty), a guaranteed default universe, orphan personas re-parented to the fi
 (`sm_queststandalone_v1`), Seedance→wan model id mapping, and style NAME→ID migration.
 **Never write a destructive migration** — the codebase's rule is visible in every one of these:
 old data is repaired or left reachable, never dropped.
+
+### `_refreshPipe(key, fingerprint, marker, def)` — refreshing stale prompt copies
+
+The one place a migration *does* overwrite user data: a stored prompt override that is recognizably
+one of our own earlier defaults gets refreshed to the current one, so a saved copy doesn't freeze a
+prompt at a design the engine has moved past. `fingerprint` (a string, or an array of strings that
+must ALL be present) identifies the era; `marker` identifies the revision. Present fingerprint +
+absent marker = a stale copy of ours, refreshed; per-universe copies are deleted so `up()` falls
+through to the new default. A hand-written prompt lacks the fingerprint and is never touched.
+
+**(!) A pipe is only valid while the CURRENT default still contains `marker`.** When a later rewrite
+drops that marker, the default itself satisfies the reset condition, and the pipe can no longer tell
+"a stale copy" from "the text the user edited today" — it wipes live customizations on every single
+load, forever, with no error. `_refreshPipe` therefore tests its own `def` first and stands down
+when it matches, pushing the pipe onto `_stalePipes`; the list is `console.warn`ed once per load.
+**Any name in that warning is dead code to be deleted, not a runtime problem to work around.** When
+you rewrite a default, either keep its pipes' markers in the text or delete those pipes in the same
+commit.
+
+There are no hand-written copies of this pattern left. Three base-instruction guards and one
+format-rules guard used to be inline `if(state.x.indexOf(...))` blocks; two of them had gone stale
+exactly this way, so they are pipes now and inherit the self-guard.

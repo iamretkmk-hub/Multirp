@@ -53,6 +53,7 @@ before any non-trivial change.**
 | Mutating a message/chat in place without `markChatDirty(chat)` | The signature cache (`_chatSig`) sees no change — **the edit never persists** and vanishes on reload. |
 | Storing durable data in `_`-prefixed props | Stripped by `_slimChat` on every persist — data loss by design. Conversely, storing busy-flags in normal props dead-locks after a mid-flight reload. |
 | Renaming any `sm_*` key / IDB kv key | Users' data orphans silently (defaults kick in; old value ignored forever). Additive migration only. |
+| Rewriting a default prompt while a `_refreshPipe` for it looks for a marker you removed | The current default now matches the pipe's own reset condition, so every saved override of that prompt is overwritten with the default **on every load** — silent, permanent loss of the user's edits. `_refreshPipe` self-disables and `console.warn`s the pipe name; delete the dead pipe rather than leaving it listed. |
 | Removing a Settings input without removing its `saveSettings` read | `getElementById` → null → **saveSettings throws → nothing saves for anyone**. |
 | Writing big blobs to localStorage | ~5 MB ceiling; collections/media belong in IndexedDB (`mediaDB`). |
 | Skipping `flushPersistChats` semantics (e.g. new exit paths) | Mobile backgrounding loses the last debounced write — bind to `pagehide`/`visibilitychange`. |

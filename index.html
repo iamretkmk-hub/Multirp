@@ -11817,7 +11817,11 @@ async function _fireArrival(chat,subId,item){
             if(lt.length)X.push("# YOUR LONG-TERM MEMORY\n"+lt.map(t=>"- "+t).join("\n"));
           }
         }catch(e){}
-        const csys=`You are ${p.name}.\n${charBioBlock(p)}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+        // v30.5 — self:true. This prompt opens "You are <name>" and then asks them to speak in
+        // character, so it must hand them the second-person sheet; without the flag charBioBlock
+        // returns the bystander wording ("How they act", "Their usual clothing") to the very
+        // character it belongs to.
+        const csys=`You are ${p.name}.\n${charBioBlock(p,{self:true,noWho:true})}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
         return chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
       })().catch(()=>"");
     }
@@ -16476,12 +16480,22 @@ function charBioBlock(c,opts){
   opts=opts||{};
   const who=opts.noWho?"":(opts.self?`You are ${c.name}.`:`${c.name}:`);
   const L=[];
-  if(c.instructions) L.push(`  <play_notes>${subUser(c.instructions)}</play_notes>`);
+  /* v30.5 — the play notes used to print HERE and again in the speaking-style block, word for word.
+     v28.3 did that on purpose ("repeat them beside the voice, where they can actually govern the
+     line") and the second copy was the one that worked — speaking_style is the last thing read
+     before the transcript, this sheet is thousands of tokens earlier. So the repeat stays where it
+     lands and goes from here. A bystander's sheet keeps it: nothing else carries it for them. */
+  if(c.instructions && !(opts.self&&opts.styleTail)) L.push(`  <play_notes>${subUser(c.instructions)}</play_notes>`);
   if(c.backstory)    L.push(`  <backstory>${subUser(c.backstory)}</backstory>`);
   if(c.personality)  L.push(`  <personality>${subUser(c.personality)}</personality>`);
   // v26 — was <core_traits>, a bare five-axis dump. Same authored data, framed as what it actually
   // is: playable rules ("this sets me off → this is what I do"), which is what the model can use.
-  if(c.traits)       L.push(`  <how_you_behave>Rules for how you act — the situation that sets each one off, then the thing you actually do:\n${subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n")}\n  </how_you_behave>`);
+  /* v30.5 — the fixed sentence is a FRAGMENT now (it was inline prose, so it never appeared in
+     Settings → Payloads and could not be edited — the leg-2 break the BLOCK_TPL_DEFAULTS header
+     warns about), and it has a second-person and a third-person form. The same producer builds the
+     speaking character's own sheet AND the bystander sheets other characters see, so a single
+     wording was always wrong for one of them. */
+  if(c.traits)       L.push(`  <how_you_behave>${blkTpl(opts.self?"bio_behave_self":"bio_behave_other")}\n${subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n")}\n  </how_you_behave>`);
   /* v30.3 — ONE GOALS SECTION, MAINTAINED. This used to be three: <your_quests> (a growing dump of
      every pursuit and its whole progress log), <goals_ambitions> (frozen at character creation), and
      <what_you_quietly_want> (the live private aim). None of them ever removed anything, so the
@@ -16509,7 +16523,11 @@ function charBioBlock(c,opts){
   // right where the line gets written. Bystander sheets keep it inline.
   if(c.style && !opts.styleTail) L.push(`  <speaking_style>${subUser(c.style)}</speaking_style>`);
   {const _lk=lookProse(c.look); if(_lk) L.push(`  <appearance>${subUser(_lk)}</appearance>`);}
-  if(c.wardrobe) L.push(`  <wardrobe>Their usual clothing (dress them plausibly from this, fitting the scene and time of day): ${subUser(String(c.wardrobe).slice(0,400))}</wardrobe>`);
+  /* v30.5 — this read "Their usual clothing (dress them plausibly from this…)" inside a block whose
+     first line is "You are Emre". Third person about yourself, in your own identity sheet, is a
+     small push toward writing ABOUT the character rather than AS them — which is the exact failure
+     the whole block exists to prevent. Second person for the speaker, third for everyone else. */
+  if(c.wardrobe) L.push(`  <wardrobe>${blkTpl(opts.self?"bio_wardrobe_self":"bio_wardrobe_other")} ${subUser(String(c.wardrobe).slice(0,400))}</wardrobe>`);
   // v26 — was <home_base>, which was fed the character's CURRENT location (already stated,
   // authoritatively, in SCENE RIGHT NOW). This is the place they actually live.
   {try{ const _h=homeLocOf(c); if(_h) L.push(`  <where_you_live>${subUser(_h.name+(_h.description?` — ${_h.description}`:""))}</where_you_live>`); }catch(e){}}
@@ -16920,7 +16938,7 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
 (function _attachBlockTpls(){
   const T={
     task:["task","gm_private_lock"],world:["world_header"],format:["format_header","narr_shape","heat_format","text_format"],
-    your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","intent_aim_warm","intent_aim_cool"],
+    your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","intent_aim_warm","intent_aim_cool"],
     relationships:["rel_header"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
     response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
@@ -17154,7 +17172,10 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   scenario_header:`# SCENARIO`,
   // --- head: THE CHARACTER YOU PLAY ---
   bio_header:`# ⚠️ THIS IS WHO YOU ARE ROLEPLAYING AS ⚠️`,
-  bio_intro:`You are {{char}}. Stay fully in character as {{char}} only, at all times. Never break character or mention being an AI.`,
+  // v30.5 — TASK opens "You are {{char}}" one block earlier and rail_voice says it again at the very
+  // end; three announcements of the same name is two too many. What only this line carries is the
+  // ONLY, and the never-break-character rule — so that is what it keeps.
+  bio_intro:`Stay in character as {{char}} and nobody else, at all times. Never break character or mention being an AI.`,
   // v30.3 — the maintained want-list and the live state of a pursuit, kept apart on purpose: the
   // first is rewritten each day and can be wrong-but-current, the second is code-tracked and exact.
   goals_live_intro:`What you are actually after, as it stands today. This list is kept current — things you have already got, already lost, or stopped caring about have been taken out of it, so everything here is still live. It is not a script and not a checklist: it is the pressure under what you say. Never announce one of these, and never work through them in order.`,
@@ -17175,8 +17196,16 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   player_intro:`# PLAYER CHARACTER\n{{user}} is the human player in this roleplay — in the story with you, even though this particular reply is aimed at someone else.`,
   player_bg:`Background: {{bio}}`,
   player_look:`Appearance: {{look}}`,
-  situation_leaving:`# SITUATION\n{{char}} is leaving the scene right now. Give a brief parting beat — a final line, gesture, or exit consistent with why you're going. Keep it short.`,
-  situation_arriving:`# SITUATION\n{{char}} has just entered the scene. Give a brief entrance beat — how you arrive and your first words or action as you join.`,
+  // v30.5 — these named the character in the third person ("Emre has just entered the scene") and
+  // then switched to second ("how you arrive") mid-sentence, inside a block written entirely to
+  // "you". Second person throughout now.
+  situation_leaving:`# SITUATION\nYou are leaving the scene right now. Give a brief parting beat — a final line, a gesture, an exit that fits why you are going. Keep it short.`,
+  situation_arriving:`# SITUATION\nYou have just walked in. Give a brief entrance beat — how you come in, and your first words or action as you join them.`,
+  // v30.5 — the two fixed sentences of the identity sheet, in the person each reader needs.
+  bio_behave_self:`Rules for how you act — the situation that sets each one off, then the thing you actually do:`,
+  bio_behave_other:`How they act — the situation that sets each one off, then the thing they do:`,
+  bio_wardrobe_self:`What you usually wear (dress yourself plausibly from this, fitting the scene and the time of day):`,
+  bio_wardrobe_other:`Their usual clothing (picture them plausibly from this, fitting the scene and the time of day):`,
   // --- tail: scene ---
   scene_header:`# SCENE RIGHT NOW`,
   // Opening brief: how to READ the rest of this block. Rendered as the "scene" part.
@@ -17259,8 +17288,14 @@ Whatever you were reaching for in these lines, you have already reached for it. 
 This applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.`,
   already_said_continues:`Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.`,
   already_said_stalled:`⚠️ YOU HAVE ASKED AND THEY HAVE NOT GIVEN IT. Asking again in any form is over — you have spent that move. A real person does one of these instead, and you pick the one that fits you: drop it and let the silence sit; say the thing you were circling, plainly, and take the risk; get short and turn away; let it show that being stonewalled by THIS person stings; or change the subject entirely and carry the sting with you. The one thing you may NOT do is put the same question a fourth time.`,
-  mem_latest_header:`# ⚠️ LATEST DIALOGUE OUT OF CONTEXT WINDOW ⚠️`,
-  mem_latest_instr:`These are your latest dialogue summaries that are now out of the context window. Use them for consistency during the conversation. You don't mention them unless it's required — they are here to give you grounding, not lines to recite. Newest first. If any of them bears on what is being said now, you know it without having to be reminded.`,
+  /* v30.5 — this block used to say "your latest dialogue summaries that are now out of the context
+     window". A scan of all 122 fragments for machinery language found only this one: the payload
+     spends thousands of tokens keeping a character inside their own head, and then hands them the
+     phrase "context window" — a concept the person they are playing does not have — three blocks
+     after telling them never to mention being an AI. What this block actually holds is the last
+     few things that happened, from just before the transcript picks up. So that is what it says. */
+  mem_latest_header:`# ⚠️ WHAT HAPPENED JUST BEFORE THIS ⚠️`,
+  mem_latest_instr:`The last things that passed between you, in the hours before the conversation below picks up. Newest first. You are not remembering these with effort — they are simply the recent past, still close enough to be in the room with you. If one of them bears on what is being said now, you already know it; nobody has to remind you. Never recite one back, and never bring one up just because it is here.`,
   mem_distant_header:`# ⚠️ THESE ARE YOUR DISTANT MEMORIES ⚠️`,
   mem_distant_instr:`Older, condensed recollections — the lasting things you carry from further back. They are background: they colour who you are and how you read people, but you do not recite them. As above, this list is not exhaustive: the conversation below is also yours to remember in full.`,
   // --- tail: guidance ---

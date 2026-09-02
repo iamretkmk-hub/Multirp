@@ -210,6 +210,42 @@ current scene**, which is when it carries information.
 Reference payload across the whole pass: **27,475 → 23,585 characters (−14%)**, with both
 contradictions gone.
 
+## v30.5 — the identity sheet: person, duplication, and machinery
+
+**`charBioBlock` builds two different documents and had one wording.** The same producer writes the
+speaking character's own sheet (`opts.self`) and the bystander sheets other characters see, so
+whichever person it was written in was wrong for the other. Inside a block whose first line is "You
+are Emre", it said *"Their usual clothing (dress **them** plausibly from this…)"* and the situation
+block said *"Emre has just entered the scene. Give a brief entrance beat — how **you** arrive"*,
+switching person mid-sentence. Third person about yourself, in your own identity sheet, is a small
+push toward writing ABOUT the character rather than AS them — the exact failure the block exists to
+prevent. Both fixed sentences are now `bio_behave_self`/`_other` and `bio_wardrobe_self`/`_other`,
+and `situation_arriving`/`_leaving` are second person throughout.
+
+**Two of those sentences were inline prose in the producer** — the leg-2 break the
+`BLOCK_TPL_DEFAULTS` header warns about. They never appeared in Settings → Payloads, so the editor
+silently disagreed with what was actually sent. They are fragments now.
+
+**`play_notes` was printed twice, verbatim** — once in `your_bio` and once in `speaking_style`.
+v28.3 did that deliberately ("repeat them beside the voice, where they can actually govern the
+line") and the second copy is the one that works: `speaking_style` is the last block before the
+transcript, `your_bio` is thousands of tokens earlier. So it ships once, in the tail copy. It is
+still emitted in the bio when `styleTail` is NOT set — the bystander sheets and the voice-call
+payload have no `speaking_style` block, and nothing else would carry it for them.
+
+**`latest_arcs` talked to the character about context windows.** A scan of all 122 fragments for
+machinery language ("payload", "prompt", "the model", "token", "context window", "summary") found
+exactly one offender, and it was this block: *"your latest dialogue summaries that are now out of the
+context window"* — handed to a character three blocks after being told never to mention being an AI.
+It now says what it actually is: the last few things that happened, just before the transcript picks
+up.
+
+**`bio_intro` re-announced the name** `task` had just given and `rail_voice` gives again. It keeps
+the two things only it carries — the *only*, and never breaking character.
+
+Also fixed: the quest-approach opener (`charBioBlock(p)` with no opts) handed the bystander wording
+to the very character it was asking to speak.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

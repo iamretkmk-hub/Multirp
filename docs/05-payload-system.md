@@ -270,6 +270,39 @@ the weakest position while the third was in the strongest:
 | "One beat per turn. React to THIS moment; don't narrate a sequence or jump ahead in time." | format · LIMITS | "HOW MUCH TIME: stay inside this moment… the reply happens now and stops" |
 | "One emotional beat lands harder than five." | `rail_beat` | "Leave things unsaid. Don't resolve everything in one reply…" |
 
+## v30.5 — the conditional blocks (the ones you only see in one state)
+
+**The continue-target block named one person and described another.** `cont_target_self` and
+`heat_target_self` introduce the card that follows them — and that card is the RESPONSE TARGET's,
+which is only the player some of the time. Both fragments hardcoded `{{user}}`. In a multi-character
+scene the target is resolved from the freshest real line in the transcript, so whenever this
+character had been talking to somebody else the block read *"Duygu's last line is already answered…
+Duygu is still here with you, and this is who they are:"* and then printed **Burcu's** backstory and
+appearance. They use `{{target}}` now (both tokens are still filled, so a customized copy keeps
+working), and the producer defaults `target` to the player so an id passed without a name can't
+render `"'s last line is already answered"`.
+
+**A text is not a scene.** v28.6 gave texting the spoken payload block for block, which is right for
+who you are, what you remember, how you feel and what you owe — and wrong for the two blocks that
+describe a *room*. The text format says in its second line *"You are not in the room with {{user}} —
+you are wherever you are, on your phone"*, and the payload then shipped:
+
+- `scene_now`: "⚠️ YOUR CURRENT LOCATION: Emre's House — specifically the Kitchen ⚠️" — the
+  **player's** scene, not the texter's, plus the sub-area earshot rule;
+- `privacy`: "you are NOT alone with Duygu. Others are in the room, seeing and hearing everything you
+  say and do: Burcu" — which governs how freely the character speaks, and **nobody overhears a text**.
+
+In text mode now: the location resolves to the character's **own** world position
+(`resolveWorldPositions`), sub-areas are dropped, `scene_intro_text` covers time without earshot, and
+`privacy` carries `privacy_text` — a text is as private as talking gets, but it is *written down*,
+which is a different kind of exposure and a more interesting one.
+**(!) When adding a block to the reply set, ask whether it describes a ROOM.** If it does, it needs a
+`textMode` branch; `buildTailBlocks` exposes `_textMode` for exactly this.
+
+**Last hardcoded Turkish in any fragment.** A scan of all 122 found one: `spoken_delivery`'s tag
+example, `"Buraya... [pause] <whisper>geleceğini hiç sanmıyordum.</whisper>"`. The tags are the same
+in every language, so the example is English now like the instruction around it.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

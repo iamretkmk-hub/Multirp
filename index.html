@@ -922,7 +922,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v30.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -12590,7 +12590,17 @@ async function runShortTermRel(chat){
       // v26.8 — was slice(0,300), which cut mid-word and shipped the fragment to the model as-is.
       // v30.3 — and 300 was itself the cut: the prompt asks for 2-3 vivid sentences and they do not
       // fit. briefDesc still trims on a word boundary; it just rarely needs to now.
-      if(touched && j.note && String(j.note).trim()){ o.stNote=briefDesc(String(j.note).trim(),560); o.stNoteDay=chat.gameDay||1; }
+      /* v30.7 — stamp WHEN. The note is injected under "the most specific thing you have been
+         given about this turn — play exactly this", and it had no staleness gate whatsoever: the
+         comment claimed one existed at injection, but feelingsBlock only checked that the string
+         was non-empty. A live payload showed a note describing an act from a dozen messages earlier
+         still being handed to the actor as the state they are in RIGHT NOW, while the scene had
+         moved on completely. A stale instruction that specific is worse than none. */
+      if(touched && j.note && String(j.note).trim()){
+        o.stNote=briefDesc(String(j.note).trim(),560);
+        o.stNoteDay=chat.gameDay||1;
+        o.stNoteAt=(chat.messages&&chat.messages.length)||0;
+      }
       // Log a compact episode for end-of-day consolidation (cap the log).
       if(touched){
         o.episodes.push({day:chat.gameDay||1, d:REL_FAST.map(k=>Math.round(o.st[k])), note:(j.note||"").slice(0,180)});
@@ -17360,7 +17370,15 @@ It is NOT your business and you do NOT raise it. Do not ask {{user}} about it, d
 Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
 This applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.`,
   already_said_continues:`Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.`,
-  already_said_stalled:`⚠️ YOU HAVE ASKED AND THEY HAVE NOT GIVEN IT. Asking again in any form is over — you have spent that move. A real person does one of these instead, and you pick the one that fits you: drop it and let the silence sit; say the thing you were circling, plainly, and take the risk; get short and turn away; let it show that being stonewalled by THIS person stings; or change the subject entirely and carry the sting with you. The one thing you may NOT do is put the same question a fourth time.`,
+  /* v30.7 — this used to assert "YOU HAVE ASKED AND THEY HAVE NOT GIVEN IT", but the thing that
+     fires it (exchangeIsStalled) measures only ONE thing: that this character's own recent lines
+     resemble each other. It does not look at whether the other person answered. A live payload
+     caught it inverted — she had asked to be told she was loved, he had said it twice, and she
+     asked a third time, and the rail told her she was being stonewalled. Handing a character a
+     grievance they have not earned is worse than saying nothing. It names the repetition, which is
+     what was actually detected, and lets both endings play. */
+  already_said_stalled:`⚠️ YOU HAVE MADE THIS SAME MOVE SEVERAL TURNS RUNNING. Whatever you keep reaching for — an answer, a promise, reassurance, a yes — you have now reached for it more than once, and reaching again is spent. That is true whether they refused you or gave you exactly what you asked for: asking a third time for something already given is not devotion, it reads as not having heard them.
+Do one of these instead, whichever fits you: let it go and sit in the silence; take what they gave and let it be enough, visibly; say the larger thing you have been circling, plainly, and wear the risk; go short and turn away; or change the subject and carry it with you. The one thing you may NOT do is put it to them again in new words.`,
   /* v30.5 — this block used to say "your latest dialogue summaries that are now out of the context
      window". A scan of all 122 fragments for machinery language found only this one: the payload
      spends thousands of tokens keeping a character inside their own head, and then hands them the
@@ -17578,7 +17596,15 @@ function feelingsBlock(chat,selfId,targetId,targetName){
     nb+=`\n\n${fillTpl(blkTpl("feel_momentary"),{momentary:momentary,target:(targetName||"them")})}`;
     // The verbose, playable "how it colors your next reply" note from the latest fast read. Only
     // while there IS a live momentary lean — once the fast axes decay, the note is stale.
-    if(o.stNote && o.stNote.trim()) nb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;
+    /* v30.7 — only while it is still THIS moment. The fast read refreshes every `stInterval`
+       player turns, so a note more than about two cycles old has been superseded by a scene that
+       simply never triggered a re-score. The axis narrative above stays either way — those decay
+       properly on their own; it is the written note that goes out of date and it is the written
+       note the model is told to play exactly. */
+    {const _age=((chat&&chat.messages)?chat.messages.length:0)-(o.stNoteAt||0);
+     const _win=Math.max(6,((+state.stInterval||3)*2)+2);
+     if(o.stNote && o.stNote.trim() && (!o.stNoteAt || _age<=_win) && (o.stNoteDay==null||o.stNoteDay===(chat&&chat.gameDay||1)))
+       nb+=`\n\n${fillTpl(blkTpl("feel_momentary_impact"),{impact:o.stNote.trim()})}`;}
     const tension=relImpulseTension(o);
     if(tension==="desire") nb+=" "+blkTpl("feel_tension_desire");
     else if(tension==="anger") nb+=" "+blkTpl("feel_tension_anger");
@@ -27186,8 +27212,15 @@ function charQuestSheetLines(c,opts){
         ? `What you are pursuing with ${tgt}:`
         : `YOUR OWN PURSUIT — "${q.title}" (involves ${tgt}): ${String(q.desc||"").slice(0,240)}`;
       if(q.targetId==="__user__"&&q.ask){
-        if(!opts.brief)line+=` What you want from ${tgt}: ${String(q.ask).slice(0,160)}`;
-        line+=q.delivered?` you have ALREADY asked${q.awaitingUser?"; no real answer yet — let it breathe, do not nag":""}.`:` you have NOT asked yet — you may raise it when the moment fits.`;
+        // v30.7 — the ask ran straight into the status with no separator ("…böyle bir akşam  you
+        // have ALREADY asked"), because v30.3 moved the status out of the parentheses it used to
+        // sit in and never put punctuation back. briefDesc instead of slice, too: a hard 160-char
+        // cut landed mid-word in the middle of a sentence the model then had to make sense of.
+        // The separator only earns its place when the ask precedes it; in brief mode the status IS
+        // the sentence, so it just continues from the colon.
+        const _sep=opts.brief?" ":" — ";
+        if(!opts.brief)line+=` What you want from ${tgt}: ${briefDesc(String(q.ask),170)}`;
+        line+=q.delivered?`${_sep}you have ALREADY asked${q.awaitingUser?"; no real answer yet, so let it breathe and do not nag":""}.`:`${_sep}you have NOT asked yet; you may raise it when the moment fits.`;
       }
       if(last)line+=` Latest: ${briefDesc(String(last.text),160)}`;
       L.push(line);

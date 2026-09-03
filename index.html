@@ -927,7 +927,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11218,7 +11218,41 @@ function calendarContextLine(chat,selfName,selfId,opts){
       return ` — ${state.user} is the one coming; you are expected to be there`;
     return ` — ${ex} is the one who acts on this`;
   };
-  const fmt=e=>`${e.title}${e.period?" ("+e.period+")":""}${e.who?" with "+e.who:""}${locOf(e)?" at "+locOf(e):""}${e.detail?` — for: ${String(e.detail).slice(0,120)}`:""}${certOf(e)}${actorOf(e)}`;
+  /* (!) `who` is the full participant list, and the SCOPING above keeps an event precisely BECAUSE
+     the reader is named in it — so rendering `who` verbatim told Emre he had a meeting "with Duygu,
+     Emre". You are never someone you are meeting. Strip the reader, and when nobody else is left
+     say nothing rather than "with". */
+  const _others=e=>{
+    const names=String(e.who||"").split(/\s*,\s*/).map(x=>x.trim()).filter(Boolean);
+    const meL=String(selfName||"").toLowerCase();
+    const out=names.filter(n=>n.toLowerCase()!==meL);
+    return out.length?out.join(", "):"";
+  };
+  /* (!) A meeting whose hour has come reads "X is the one coming; you are expected to be there" —
+     which is wrong, and visibly so, when X is standing in front of you. The payload was telling a
+     character to wait for someone already in the room. When the counterpart is present and the
+     meeting is due, the plan is not pending: it is happening, and that is the thing to play. */
+  const _hereNow=e=>{
+    try{
+      // A meeting pinned to somewhere else is NOT happening just because both parties are standing
+      // here — that would tell them to hold the café meeting in the kitchen.
+      if(e.locationId && c.locationId && e.locationId!==c.locationId)return false;
+      const here=new Set((presentCast(c)||[]).map(x=>x&&x.name&&x.name.toLowerCase()).filter(Boolean));
+      if(String(state.user||"").trim())here.add(String(state.user).toLowerCase());   // the player is always in their own scene
+      const others=_others(e).split(/\s*,\s*/).map(x=>x.trim()).filter(Boolean);
+      if(!others.length)return false;
+      return others.every(n=>here.has(n.toLowerCase()));
+    }catch(_){ return false; }
+  };
+  const fmt=(e,due)=>{
+    const others=_others(e);
+    const arrived=due&&_hereNow(e);
+    return `${e.title}${e.period?" ("+e.period+")":""}${others?" with "+others:""}${locOf(e)?" at "+locOf(e):""}`
+      +`${e.detail?` — for: ${String(e.detail).slice(0,120)}`:""}${certOf(e)}`
+      +(arrived
+        ? ` — ⚠️ ${others} ${others.indexOf(",")<0?"is":"are"} HERE, and the hour is now: this is the meeting, happening. Do not wait for it or talk about arranging it.`
+        : actorOf(e));
+  };
   const overdue=cal.filter(e=>_calOverdue(c,e) && e.day>=today-3);   // missed within the last few days
   const active=cal.filter(e=>!_calOverdue(c,e));
   const dueNow=active.filter(e=>planDueNow(c,e));
@@ -11227,10 +11261,10 @@ function calendarContextLine(chat,selfName,selfId,opts){
   const parts=[];
   // UNKEPT goes FIRST and is framed with weight — the character felt the meeting not happen, and it
   // colours how they treat whoever missed it.
-  if(overdue.length) parts.push("UNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): "+overdue.map(e=>`${e.title}${e.who?" with "+e.who:""} — was for Day ${e.day}, never happened`).join("; "));
-  if(dueNow.length)    parts.push("⏰ HAPPENING NOW: "+dueNow.map(fmt).join("; "));
-  if(todayPlans.length)parts.push("TODAY: "+todayPlans.map(fmt).join("; "));
-  if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e)} (Day ${e.day})`).join("; "));
+  if(overdue.length) parts.push("UNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): "+overdue.map(e=>`${e.title}${_others(e)?" with "+_others(e):""} — was for Day ${e.day}, never happened`).join("; "));
+  if(dueNow.length)    parts.push("⏰ HAPPENING NOW: "+dueNow.map(e=>fmt(e,true)).join("; "));
+  if(todayPlans.length)parts.push("TODAY: "+todayPlans.map(e=>fmt(e,false)).join("; "));
+  if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e,false)} (Day ${e.day})`).join("; "));
   if(!parts.length)return "";
   // v30.3 — opts.bare returns just the entries: the reply payload wraps them in its own MEETINGS
   // heading (blkTpl("calendar_header")) so the block is a section of its own rather than a sentence
@@ -11315,12 +11349,36 @@ function _prPrune(chat,day){
   if(keep.length!==list.length)chat.promises=keep;
   if(chat.promises.length>60)chat.promises=chat.promises.slice(-60);
 }
+/* (!) EVERY LINE IN A GROUP ALREADY KNOWS WHOSE IT IS. promiseContextFor splits by holder and by
+   recipient, so under "WHAT YOU SWORE" every entry is the reader's, and under what they are owed
+   every entry is owed to them — yet each line opened by restating it: "- you to Duygu — …". A bare
+   "you" at the head of a bullet reads like an unfilled name slot, and it is the one word in the
+   line carrying no information. What DOES vary inside a group is the other party, so that is what
+   is kept.
+   The `ask` had a second problem. It is written by the extractor ABOUT the pair, so it arrives in
+   the third person ("She asked him never to tell Hakan") and lands directly after a second-person
+   promise — two voices in one bullet. Worse, it is usually the same sentence twice: the promise
+   said forward, the ask said backward. It is kept only when it actually adds the REASON, measured
+   the same way the rails dedupe is. */
+function _prSameThing(a,b){
+  const w=t=>String(t||"").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/)
+              .filter(x=>x.length>3).map(x=>x.slice(0,5));
+  const A=w(a), B=new Set(w(b));
+  if(A.length<3)return false;
+  let hit=0; A.forEach(x=>{ if(B.has(x))hit++; });
+  return (hit/A.length)>=0.6;
+}
 function _prRender(pr,viewerId){
   const mine=viewerId&&pr.holderId===viewerId;
-  const who=mine?"you":pr.holderName;
-  const to=pr.toId&&viewerId&&pr.toId===viewerId?"to you":(pr.toName?`to ${pr.toName}`:"");
+  const owedToMe=pr.toId&&viewerId&&pr.toId===viewerId;
+  // Name only the party the group header does NOT already establish.
+  let head="";
+  if(mine)              head=pr.toName?`to ${pr.toName}`:"";
+  else if(owedToMe)     head=pr.holderName||"";
+  else                  head=`${pr.holderName||""}${pr.toName?` to ${pr.toName}`:""}`.trim();
+  const ask=(pr.ask&&!_prSameThing(pr.ask,pr.promise))?` (why: ${pr.ask})`:"";
   const soft=pr.weight==="soft"?" (given lightly — it binds you less, but it was still said)":"";
-  return `- ${who} ${to?to+" ":""}— ${pr.promise}${pr.ask?` (what was asked: ${pr.ask})`:""}${soft}`;
+  return `- ${head?head+" — ":""}${pr.promise}${ask}${soft}`;
 }
 /* The block for ONE character's reply payload: what they are bound by, what they are owed, and any
    commitment that has just ended (broken word is the loudest thing in a room). Never a script — the
@@ -17508,7 +17566,7 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
   // Opening brief: how to READ the rest of this block. Rendered as the "scene" part.
   scene_intro:`This is your live situation. Do not recite it — let it shape what you do.
 - CURRENT DAY is your anchor for time. Judge how long ago a memory or event was and refer to it the way a person would: if it is Day 5 now and it happened on Day 4, that is "yesterday"; a few days back is "the other day"; long ago is "a while ago". Never say a day number out loud.
-- TIME OF DAY sets what is plausible right now — who is awake, what is open, what fits the hour. Let it bound what you suggest and what you do.
+- The hour named beside it is what is plausible right now — who is awake, what is open, what fits the time. Let it bound what you suggest and what you do.
 - YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.
 - Who can hear you is covered under PRIVACY below, and it sets how freely you speak — read it before you decide what to say out loud.`,
   scene_day:`CURRENT DAY: Day {{day}}{{period}}`,

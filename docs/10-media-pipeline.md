@@ -98,6 +98,39 @@ the per-image menu (frame picker `pickFrame`, retry, view prompt, Animate/Movie/
   (`playSceneInChat`, resizable overlay; landscape uses the right rail). **Scene mode**: while
   the video window is open, `autoVisualize` routes new beats to scene selection instead of
   images (`routeSceneForBeat`).
+## Video cues — what is playing becomes something the cast answers
+
+A gallery video carries **`cues: [{t, text}]`** — the player's own description of what the clip
+shows at *t* seconds, edited from the gallery cell's cue button (`openVidCues`). Cues live on the
+**video record, not the scene**, so a clip reused in five scenes is described once. While a scene
+plays over the story (dock or fullscreen modal), crossing a mark hands that description to the cast
+through `fireVidCue` → `runWatchTurn` → **`runMultiCharTurn`** — the same dispatch a typed message
+uses, so nobody-present / one-present / many-present all behave as they already do. The description
+is pushed first as a `watchCue` narrator beat (it is in the transcript and in history before anyone
+answers it), and `chat.watchingNow` renders the **`watching_now`** payload block for that one turn.
+
+**(!) This spends money and attention with nobody pressing send.** A 60 s clip marked every 15 s is
+four full reply turns — payload, reply, and the whole `postTurn` tail — and a five-clip scene is
+twenty. The feature ships **off** (`state.vidCueOn`), and every rule below exists to bound it:
+
+| Rule | Why |
+|---|---|
+| One in flight, never a queue (`_vidCueBusy`) | A queued reaction arrives 40 s after the moment left the screen, and pushes the next later still. A mark that lands mid-generation is **dropped**. |
+| Cooldown gates **every** fire, not just clip starts (`state.vidCueCool`, default 15 s), stored on `chat.vidCueAt` | This is the requested "skipping clips fires nothing", and it costs nothing to apply uniformly. On the chat rather than in memory so a reload cannot step around it. |
+| Cap per play-through (`state.vidCueMax`, default 6; `resetVidCueRun` on open/re-dock) | A long playlist must not react all night unattended. |
+| **Only the latest crossed mark fires** | A backgrounded tab stops `timeupdate`, so playback jumps 5 s → 40 s in one event; firing every mark between would dump three reactions at once on moments already gone. |
+| A looping clip does not re-fire (`loopedOnce`) | `smCreatePlayer` loops a single clip forever; the same four descriptions on repeat is a stutter, not a scene. |
+| Scrubbing back ≥1.5 s resets that clip's fired set | Otherwise re-watching a moment is silent. |
+| `document.hidden` blocks | Nothing fires at a screen nobody is looking at. |
+
+`watching_now` is a **one-turn** block: `runWatchTurn` clears it in a `finally`, and the producer
+additionally checks the message index it was stamped at (`w.at`), so a stale clip can never be
+narrated into the next typed message.
+
+The editor warns rather than blocks, on the things the user cannot see for themselves: a mark past
+the clip's real duration (probed via `loadedmetadata`), two marks on the same second, marks packed
+closer than the cooldown, and cues being switched off globally.
+
 - **Playground (v28)**: compose an image from actor · location · pose · AI-written prompt
   (`openPlayground`, `pgWritePrompt`, `pgGenerate`), and image→video for any gallery image
   (`openImg2Video`, `i2vWritePrompt`, `i2vGenerate`).

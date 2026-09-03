@@ -46,7 +46,7 @@ who you answer   response_target · player (only when the target isn't them) · 
 what you recall  distant_memories · recent_memories · situation
 voice + gap      speaking_style · latest_arcs        ← last thing read going in (v28.7)
                  ───────── [ THE DIALOGUE ] ─────────
-after            last_line · already_said · rumors · scene_now · privacy · trackers ·
+after            watching_now · last_line · already_said · rumors · scene_now · privacy · trackers ·
                  promises · calendar · quests · private_intent · feelings_now ·
                  response_guidance · final_guardrails · spoken_delivery
 ```
@@ -54,7 +54,7 @@ after            last_line · already_said · rumors · scene_now · privacy · 
 `REPLY_ORDER` verbatim:
 `task, world, format, your_bio, relationships, scenario, others_present, response_target,
 player, feelings, distant_memories, recent_memories, situation, speaking_style, latest_arcs,
-__history__, last_line, already_said, rumors, scene_now, privacy, trackers, promises, calendar,
+__history__, watching_now, last_line, already_said, rumors, scene_now, privacy, trackers, promises, calendar,
 quests, private_intent, feelings_now, response_guidance, final_guardrails, spoken_delivery`
 
 v28.7's rationale (from the source): the order that plays best is *who you are and what you
@@ -83,6 +83,7 @@ an empty block renders nothing.
 | `situation` | Only when this character is arriving/leaving this turn. |
 | `speaking_style` ⚠️ | The character's voice, delivered where the line actually gets written (just before the transcript). |
 | `__history__` | The witness-scoped, compacted transcript (doc 04). |
+| `watching_now` | The description attached to the video mark that just played, framed as happening in front of the character right now. Present **only** on a turn a video cue fired (doc 10). |
 | `last_line` ⚠️ | The last real **dialogue** line — not a day marker, presence note, travel beat or narration — pulled out and highlighted. |
 | `already_said` ⚠️ | This character's own last one or two lines quoted verbatim, with the rule that this turn may not repeat or rephrase them, plus a stronger directive when the exchange has visibly stalled on the same request. |
 | `rumors` 🗣️ | Live rumors from the **gossip ledger**, split by standing: the one rumor this character has a **stake** in (may be put to the player **once**, then they must live with the answer), and separately talk they merely overheard and may **not** raise at all. |

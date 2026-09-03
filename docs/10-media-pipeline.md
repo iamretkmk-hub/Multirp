@@ -23,6 +23,23 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
    (`_imgSpeakerAppearance` from structured `look` + wardrobe), the location clause, the
    time-of-day lighting clause — then the user's selected **style tail** last
    (`styleTail()`, idempotent append).
+5b. **Reference roster (edit models only)** — `buildRefPack` gathers the pictures, and
+   `editPrompt` prepends a roster tying each one to a person in the frame.
+   **(!) The roster and the scene text must share a vocabulary.** `rewritePrompt` orders the
+   writer to *"Refer to people as Man and Woman (or Girl if she reads as under ~20). NEVER use
+   character names in the prompt"* — so a roster that said *"Images 1-2 are Nil Akbaba"* handed
+   the model a name it would never see again and then asked it to draw a `Woman`, with nothing
+   connecting the two halves; which face landed on which body was chance. The roster now uses
+   **`look.subject`** (Man/Woman/Girl/Boy — the same four words, on the character card; the
+   player's is `state.userSubject`, Settings › You and per-universe) and counts in **Figure
+   1..N**, the unit these editors actually index by. A person's FIRST picture is their profile
+   one (`splitPersonRefs`), so it is named as the face anchor and the rest as further views for
+   build and colouring. No subject word ⇒ **"Person 2"**, numbered by place in the roster and
+   never guessed: a confident "the Man" over a woman is worse than a number, and the grouping
+   (which figures are one person) is the part that must never be wrong. `_refSubject` falls back
+   to reading the look text so cards written before the field still resolve.
+   Identity only — face, build, colouring. **Not** rendering style: `styleTail()` owns the
+   aesthetic, and matching a photo's rendering would fight the style the player picked.
 6. **Generate** via the rule's provider (`genImageForRule` → AtlasCloud / fal / ModelsLab /
    OpenRouter). Frame resolution: per-image `msg.ratio` → rule `ratio` → global
    (`_frameOverride` transient during the call).

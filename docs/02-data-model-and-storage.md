@@ -111,7 +111,12 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
                  // liveGoalsLines/liveGoalsText (payload) and engineGoals() (every other engine).
   style,         // speaking style
   voiceId,       // Inworld voice (calls), ttsVoice (xAI dub voice)
-  look: { faceMap, hair, face, body },  // structured appearance (doc 10)
+  look: { subject, face_map, hair, face, body },  // structured appearance (doc 10).
+                 // `subject` is one word - Man/Woman/Girl/Boy - and exists for the image
+                 // reference roster ONLY: it is what ties a picture to the person the scene
+                 // text calls "Woman". Deliberately kept out of lookProse/lookForCamera.
+                 // The player's equivalent is state.userSubject (K.userSubject, per-universe
+                 // override on universe.userSubject, same shape as userLook).
   wardrobe, tags: "a, b",               // tags feed World Rules group matching
   interject,     // pressure points / hooks — read by GM & Scene Writer only
   socialGraph,   // hand-written ties — never overwritten by anything

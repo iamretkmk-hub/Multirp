@@ -98,6 +98,44 @@ the per-image menu (frame picker `pickFrame`, retry, view prompt, Animate/Movie/
   (`playSceneInChat`, resizable overlay; landscape uses the right rail). **Scene mode**: while
   the video window is open, `autoVisualize` routes new beats to scene selection instead of
   images (`routeSceneForBeat`).
+## Edit models: per-field opt-in, not a shared body
+
+`ATLAS_EDIT_MODELS` declares only what differs between the four, and the request builder adds a
+field **only when that model's spec names it** — pointing the id at a sibling must never ship a
+field it would reject with a 400.
+
+| | refs | prompt | notes |
+|---|---|---|---|
+| `alibaba/qwen-image/edit-plus-20251215` | 3 | 800 | `num_images`, `prompt_extend`, `negative_prompt`, `seed` |
+| `alibaba/wan-2.6/image-edit` | 4 | 1200 | as above, fixed `sizes` enum |
+| `alibaba/wan-2.7/image-edit` | 9 | 5000 | `n` not `num_images`; boolean `thinking_mode`; `sizeTier` — frame follows the first reference |
+| `bytedance/seedream-v5.0-pro/edit` | **10** | 3600 | **no count field at all**, no `prompt_extend`, no `negative_prompt`, no `seed`; `thinking` is the **string** `"enabled"/"disabled"`, not wan 2.7's boolean; plus `prompt_optimization_mode`, `output_format`, `background` |
+
+Seedream's four extra fields are surfaced in Settings and shown **only** when the entered model id
+declares them (`syncAtlasImgOpts` reads the same `opts` list the builder does, so the panel and the
+request cannot disagree). `background: transparent` is silently downgraded to `opaque` unless the
+output is PNG *and* exactly one reference is sent — the API also requires that reference to carry an
+alpha channel, which is not knowable here, so the impossible combination is never sent rather than
+returning a 400 the user cannot read. `promptMax` is 3600 chars for the model's stated "under 600
+English words".
+
+## The sticky scene picture
+
+An edit model of this class takes a long time per frame, and the reply lands long before the
+picture: the scene area under a fresh line was a spinner, and under a line the "illustrate every N
+replies" setting skipped, nothing at all. So a reply with **no picture of its own** shows the most
+recent one from earlier in the scene (`_stickyImg` → `_stickyHTML`), covering all three empty
+states — generating, failed, and never-illustrated.
+
+It is **carried over, never regenerated** (no request, no cost), and display-only: pin, frame,
+animate and dub all act on the message that *owns* an image, so they are not offered on a borrowed
+one; clicking opens the owner's full-size view. Phone-text pictures are never borrowed — they live
+in their own window. Chronological by design: each line shows the newest picture *at or before it*,
+so nothing behind needs re-rendering when a new one lands, and the newest bubble is always showing
+the newest picture. The backward scan is bounded at 60 messages — an unbounded walk from every
+bubble in a long chat is quadratic, and at 1–12 replies per picture 60 always finds one. Toggle:
+`state.imgSticky` (Settings → Image, on by default).
+
 ## Video cues — what is playing becomes something the cast answers
 
 A gallery video carries **`cues: [{t, text}]`** — the player's own description of what the clip

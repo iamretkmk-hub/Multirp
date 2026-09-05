@@ -124,6 +124,25 @@ cancelled by any new player input (`_heatSeq`).
   cannot see that it already gripped the counter or already looked away, so it does it again. That
   repetition is what the `already_said` block exists to paper over.
 
+### Catching a repeat: three different measurements, because it fails three different ways
+
+`repeatKind(a,b)` runs after every reply and returns which kind of repeat it is; each has its own
+retry note, because a model told only "you repeated yourself" rewrites the half it got right.
+
+| kind | test | trigger |
+|---|---|---|
+| `line` | `replySimilarity` — content-word overlap of the **spoken** halves (narration stripped) | ≥ 0.72 |
+| `narration` | `narrationSimilarity` — the same, over the `*…*` spans only | ≥ 0.70 |
+| `opening` | `openingEcho` — the first **five** content words of the first narration span, stemmed and matched **positionally** | ≥ 0.8 (4 of 5) |
+
+**(!) The opening needed its own test.** Three turns of one live scene each began
+`*Sırtım koltuğa iyice gömülürken…*` and then went somewhere different — and
+`narrationSimilarity` scored those pairs at **0.37**, nowhere near its trigger, because it weighs
+the whole span and the spans diverge after the shared run-up. A repeated opening is the most
+*visible* repetition there is: it is the first thing on screen every time. Matching is positional
+because a formula is a fixed order, not a bag of words — four of five in the same places is a
+formula, three is a coincidence.
+
 ### The ratio worth watching
 
 On a reference 35-message scene with two characters present, default settings: **instructions

@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v31.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -16967,6 +16967,27 @@ function _overlap(wa,wb){
   return smaller?inter/smaller:0;
 }
 function narrationSimilarity(a,b){ return _overlap(_narrWords(a),_narrWords(b)); }
+/* (!) THE OPENING IS ITS OWN FAILURE MODE, AND THE OVERLAP TESTS ARE BLIND TO IT. Three turns of one
+   live scene each began with the identical words "Sırtım koltuğa iyice gömülürken…" and then went
+   somewhere different — and narrationSimilarity scored those pairs at 0.37, nowhere near its 0.70
+   trigger, because it weighs the whole span and the spans diverge after the shared run-up. Yet a
+   repeated opening is the most VISIBLE repetition there is: it is the first thing on screen every
+   time. So the opening is compared on its own — the first five content words of the first narration
+   span, stemmed and matched POSITIONALLY, because a formula is a fixed order, not a bag of words.
+   Four of five in the same places is a formula; three is a coincidence. */
+function _openWords(s){
+  const m=String(s||"").match(/\*[^*]*\*/);
+  const t=m?m[0]:String(s||"").slice(0,120);
+  return t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/)
+          .filter(w=>w.length>2).slice(0,5).map(w=>w.slice(0,5));
+}
+function openingEcho(a,b){
+  const A=_openWords(a), B=_openWords(b);
+  if(A.length<4||B.length<4)return 0;
+  const n=Math.min(A.length,B.length);
+  let same=0; for(let i=0;i<n;i++) if(A[i]===B[i])same++;
+  return same/n;
+}
 /* ============ NARRATION VOLUME ============
    The FORMATTING RULES say it plainly — "at most one *narrated span* per reply", "never open with
    scene-setting before the character speaks", "more narration than dialogue -> cut the narration" —
@@ -16992,7 +17013,12 @@ function narrationLoad(text){
 function overNarrated(text){
   const L=narrationLoad(text);
   if(L.spans>=3)return L;                                   // "never stack two or three" — this is three
-  if(L.spans>=2 && L.narr>=60 && L.narr>L.said)return L;    // two spans that add up to a wall
+  /* Two spans fire as soon as the description OUTWEIGHS the speech. The first cut of this needed 60+
+     narration words as well, which was too generous by half: a live reply came back at two spans,
+     35 words of narration against 17 spoken — more than two thirds stage direction, breaking the
+     format's own "at most one narrated span" — and sailed straight through. The 25-word floor is
+     what keeps a small exchange ("*He steps closer.* \"Don't.\" *She doesn't move.*") out of it. */
+  if(L.spans>=2 && L.narr>L.said && L.narr>=25)return L;
   return null;
 }
 /* Names the offence with its own numbers and tells the model to KEEP the dialogue — the lesson from
@@ -17011,6 +17037,7 @@ function overNarratedNote(L){
 function repeatKind(a,b){
   if(replySimilarity(a,b)>=0.72) return "line";
   if(narrationSimilarity(a,b)>=0.70) return "narration";
+  if(openingEcho(a,b)>=0.8) return "opening";
   return "";
 }
 /* The nudge sent back to the model when a reply came out as a repeat. Naming WHICH half repeated
@@ -17018,6 +17045,13 @@ function repeatKind(a,b){
    model rewrites the dialogue it just got right and recycles the narration again. */
 function repeatRetryNote(kind,hit){
   const q="\n\n\u201C"+String(hit||"").slice(0,400)+"\u201D\n\n";
+  if(kind==="opening")
+    return "You have opened a turn with these exact words before, earlier in this scene:"+q
+      +"Same first move, same first image, same run-up. A person does not begin three turns the same "
+      +"way — that is a tic, and it is the first thing on screen every time, so it is the first thing "
+      +"that reads as broken. Write the turn again and START somewhere else entirely: open on speech "
+      +"with no run-up at all, or on a different part of your body doing a different thing, or on "
+      +"something you notice rather than something you do. Keep whatever the turn was going to SAY.";
   if(kind==="narration")
     return "Your stage directions in that reply are the same ones you already used earlier in this scene:"+q
       +"Same body, same gesture, same description of your own voice. Bodies do not loop. Whatever you were doing, you are already done doing it \u2014 be somewhere else in the room, or doing something else with your hands, or simply still. Write the turn again with COMPLETELY different action and completely different description of yourself. Do not open the same way twice.";
@@ -17814,7 +17848,12 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
      paragraphs around three lines of speech. By the time the model writes, five blocks have asked it
      for physical behaviour and nothing since block 3 has capped it. This is the counterweight. */
   watching_now:`# \u26a0\ufe0f THIS IS WHAT IS HAPPENING IN FRONT OF YOU RIGHT NOW \u26a0\ufe0f\nYou are seeing this as it happens. It is not a memory, not something you were told, and not something anyone said — it is in front of you:\n{{what}}\nThis is what your turn answers. React to it as this person would, from where you stand and from what it means to YOU — do not narrate it back, do not describe it as though reporting it to someone, and do not explain what it is. If it does not concern you, that too is a reaction.`,
-  rail_form:`Dialogue carries this turn. ONE short *narrated* beat in the whole reply at most — a gesture, a movement, a few words — and everything else is spoken. Do not open with scene-setting before you speak. If you find yourself writing a second narrated passage, it belongs in your mouth or it goes.`,
+  /* (!) VOLUME ONLY — WHERE the narration sits belongs to FORMAT RULES, which states it already.
+     This rail used to carry "Do not open with scene-setting before you speak" as well, and that is
+     a POSITION rule: it flatly contradicted a format edited to require an opening narration, from
+     the last line of the payload, where it carries the most weight. Two blocks giving opposite
+     orders about the same thing is the duplication this rail exists to reduce, not add to. */
+  rail_form:`Dialogue carries this turn. ONE short *narrated* beat in the whole reply at most — a gesture, a movement, a few words — and everything else is spoken. If you find yourself writing a second narrated passage, it belongs in your mouth or it goes.`,
   rail_beat:`Leave things unsaid. Don't resolve everything in one reply — one thing landing hard is worth more than five landing softly, and what you hold back is what the next turn is for.`,
   rail_indirect:`Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.`,
   /* v30.4 — this was one fragment doing two jobs. The first half is general craft and belongs on
@@ -18206,10 +18245,18 @@ function sceneChangeNotice(chat,selfId){
 
 /* v19.5 — did the recent replies carry voice-session markup? ([tag] inside quotes, or the strict
    narration-block-first shape). Checked over the last 3 assistant messages. */
+/* (!) BRACKETED DELIVERY TAGS ONLY. This also used to match "opens with a narration span, then a
+   newline, then a quote" as evidence of a stale voice session — but that shape is not an artifact,
+   it is a perfectly ordinary house format, and one the FORMAT RULES can be edited to REQUIRE
+   ("A response starts with narration, then continues with Direct Speech"). Anyone writing that way
+   got the reset block on every single turn, telling the model that the formatting in its own
+   history was stale and should be ignored: 85 tokens of instruction to distrust the format the
+   player had chosen. The bracketed tags are the unambiguous signal, and they are the thing the
+   reset actually asks the model to drop, so they are the only test. */
 function _recentVoiceMarkup(chat){
   try{
     const rec=(chat.messages||[]).filter(m=>m.role==='assistant'&&!m.sysError&&!m.dayMarker&&m.content).slice(-3);
-    return rec.some(m=>/"[^"\n]*\[[^\]\n]{2,28}\][^"\n]*"/.test(m.content) || /^\s*\*[^*\n][^*]*\*\s*\n+\s*"/.test(m.content));
+    return rec.some(m=>/"[^"\n]*\[[^\]\n]{2,28}\][^"\n]*"/.test(m.content));
   }catch(e){ return false; }
 }
 function buildTailBlocks(opts){

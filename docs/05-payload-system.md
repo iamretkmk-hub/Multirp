@@ -514,11 +514,17 @@ Two counterweights, because either alone is thin:
 - **`rail_form`** is deliberately the LAST rail in the solo/multi set, so the one rule about what a
   turn is *made of* is the final thing read before generation. `rail_question` was also softened
   ("a few words of it, not a paragraph") — as written it invited exactly the closing stage-direction
-  paragraph that came back.
+  paragraph that came back. **(!) `rail_form` governs VOLUME only.** It briefly also carried "do not
+  open with scene-setting", which is a *position* rule owned by FORMAT RULES — and from the last
+  line of the payload it flatly contradicted any format edited to require an opening narration
+  ("A response starts with narration…"). Two blocks giving opposite orders about one thing is the
+  duplication this rail exists to reduce.
 - **`overNarrated()` / `overNarratedNote()`** measure the finished reply and retry once, on the same
   single-retry budget as the repeat guard (a repeat wins the budget; over-narration takes it
   otherwise). Heat and text replies are exempt — they carry their own form rails. The thresholds are
   conservative on purpose, since a false positive rewrites a reply that was fine: **3+ spans**, or
-  **2 spans totalling 60+ words that outweigh the speech**. Like `repeatRetryNote`, the note names
+  **2 spans where the narration outweighs the speech and runs to 25+ words**. (The first cut needed
+  60+ words on the two-span case and was too generous by half — a live reply came back at 35
+  narration words against 17 spoken, two thirds stage direction, and sailed through.) Like `repeatRetryNote`, the note names
   the offence with its own numbers and tells the model to KEEP the dialogue — told only "that was
   wrong", a model rewrites the half it got right.

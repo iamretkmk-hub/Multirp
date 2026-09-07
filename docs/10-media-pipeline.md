@@ -136,6 +136,58 @@ the newest picture. The backward scan is bounded at 60 messages — an unbounded
 bubble in a long chat is quadratic, and at 1–12 replies per picture 60 always finds one. Toggle:
 `state.imgSticky` (Settings → Image, on by default).
 
+## Video rules are SHOT SETUPS (v31.9)
+
+They used to be **positions** (missionary, doggy, blowjob…). They are now five **shot setups**,
+chosen by what the clip has to work with, because that is what decides which reference goes in which
+`@slot` and what has to be held steady:
+
+| rule | `@image1` | `@image2` | `@image3` |
+|---|---|---|---|
+| `rv_first_pov` First Scene POV | woman's reference sheet | the location (empty room) | — |
+| `rv_first` First Scene | woman's sheet | the location | man's sheet |
+| `rv_last_pov` Last Frame POV | **the first frame** | woman's sheet | — |
+| `rv_last` Last Frame | **the first frame** | woman's sheet | man's sheet |
+| `rv_transition` Transition | **the first frame** | woman's sheet | — |
+
+- **`keywords`** carries the consistency + sound block, identical in all five and prepended verbatim
+  to the finished prompt by `injectRuleKeywords`. It says the reference video supplies *movement
+  only*, locks identity/body/clothing/location/light/render style for the whole clip against
+  mid-clip drift in the source, and specifies diegetic sound with **no music**.
+- **`bare: true`** means the template IS the whole instruction: `videoWriterSystem` skips
+  `DEFAULT_VIDRULES_BLOCK` and the separate SOUND section rather than stacking a second, longer
+  ruleset written for the old axis on top of it. A rule without the flag behaves exactly as before.
+- `applyRuleTemplate` copies `keywords`, `bare` and (only over the untouched placeholder) `when` —
+  inserting just `motionStyle` gives a rule that reads right in the editor and generates the old thing.
+- **Migration is additive.** `sm_vidshotaxis_v1` adds the five if absent and only *disables* the old
+  position rules. A position ruleset can be hours of writing; an id that no longer ships is not
+  permission to delete it.
+
+**`msg.imgCore`** — the still prompt *before* the deterministic tail (appearance · location ·
+lighting · style). The motion writer reads it instead of `msg.imgPrompt`, because everything in that
+tail is furniture the reference images are supposed to be deciding, and the writer was re-describing
+all of it: the location got named again, the light re-specified, the face re-described, and all three
+then fought the references.
+
+## One reference sheet per character (v31.9)
+
+`persona.mediaRef` / `state.userMediaRef` (per-universe override `universe.userMediaRef`) is **the
+one picture** an image or video model is given for that person — a sheet: full body plus several face
+angles in a single frame. When it is set `personRefs()` returns *only* it; sending the avatar
+alongside defeats the point, since two sources for one face is how a face drifts. `personRefs(o,
+{avatars:true})` asks for the profile pictures instead, for the places that want the avatar strip.
+Empty = the old behaviour, unchanged.
+
+**Locations** carry `imgPrompt` (and each sub-location its own), edited in the `locImgModal` that the
+generate button now opens. A location's `description` is written for the ROLEPLAY — what the room
+means, who uses it — and none of that draws; it is now only the fallback for a place with no prompt
+of its own.
+
+**`autoFillVidRefs(ruleId, chat, speaker)`** fills the reference tray in the template's own order
+(the "Auto-fill" button in the tray, or an empty tray). Order matters absolutely: the prompt says
+"@image2 is the location" and the model believes it. It never writes over a hand-picked tray unless
+asked with `{replace:true}`.
+
 ## Video cues — what is playing becomes something the cast answers
 
 A gallery video carries **`cues: [{t, text}]`** — the player's own description of what the clip

@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v32.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v33.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1089,6 +1089,11 @@
           <h3><svg class="ic"><use href="#i-masks"/></svg> Reply payloads</h3>
           <div class="desc">The messages a roleplay reply model receives, as an <b>ordered part list</b> — use ▲▼ to reorder, ✕ to remove a placeholder part, <b>＋ Placeholder</b> to bring one back. Parts below the <b><svg class="ic"><use href="#i-message"/></svg> DIALOGUE</b> marker are delivered <i>after</i> the chat history (closest to generation — strongest influence; moving live facts above the dialogue increases drift). Order is global for all universes.</div>
           <div id="payloadList"></div>
+        </div>
+        <div class="card">
+          <h3><svg class="ic"><use href="#i-edit"/></svg> Payload templates — write it yourself</h3>
+          <div class="desc">Instead of ordering the parts above, write the whole payload as text and call the pieces you want, wherever you want them. Use <code>[system]</code> / <code>[system end]</code> and <code>[user]</code> / <code>[end user]</code> to choose which message each part goes into, <code>{{call//piece}}</code> to drop a piece in, and <code>{{call//dialogue_history}}</code> for the conversation itself. A heading you write above a piece that turns out to be empty is removed along with it.</div>
+          <div id="payloadTplList"></div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-tools"/></svg> Engine payloads</h3>
@@ -32039,6 +32044,151 @@ function renderPlaceholderGuide(){
     return `<div class="phGuideRow"><code>{{${t}}}</code> — ${esc(_phDoc(t))} <span class="desc" style="display:inline">· works in: ${esc(shown)}</span></div>`;
   }).join("")||`<div class="desc">No placeholders found.</div>`;
 }
+/* ===== PAYLOAD TEMPLATE EDITOR (v33.0) =====
+   The writing surface for the layer above. Three jobs, and the second two matter as much as the
+   first: let the user type a template, tell them immediately when a name does not exist, and show
+   them the assembled result with their own live story in it. A template editor without those two
+   is a place to make invisible mistakes. */
+
+/* Every callable name, with its human label. Reply pieces + the text-only timing note. */
+function ptCatalog(){
+  const out=[];
+  REPLY_ORDER.forEach(id=>{
+    if(id==="__history__")return;
+    const b=REPLY_BLOCKS[id]||{};
+    out.push({name:id,label:String(b.label||id).replace(/[⚠️🗣🆕]/g,"").trim(),desc:b.desc||""});
+  });
+  out.push({name:"text_timing",label:"How long the text sat unanswered",desc:"Text payload only — how much game time passed before this reply."});
+  out.push({name:"dialogue_history",label:"THE TRANSCRIPT",desc:"The chat history itself. Put it on its own line; everything before it is sent before the conversation, everything after it comes after."});
+  return out;
+}
+function ptKnownNames(){ const k={}; ptCatalog().forEach(c=>k[c.name]=true); return k; }
+
+/* Which templates currently reference a given piece — the "used by" button. */
+function ptUsedBy(name){
+  const hits=[];
+  PT_KINDS.forEach(kind=>{
+    const re=new RegExp("\\{\\{\\s*call\\s*\\/\\/\\s*"+name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\}\\}","i");
+    if(re.test(ptTemplate(kind))) hits.push((PAYLOAD_DEFS[kind]||{}).label||kind);
+  });
+  return hits;
+}
+function ptShowUsedBy(name){
+  const hits=ptUsedBy(name);
+  toast(hits.length?(name+" is used by: "+hits.join(", ")):(name+" is not used by any payload right now"));
+}
+function ptShowCallName(name){
+  const t="{{call//"+name+"}}";
+  try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t); toast("Copied "+t); return; } }catch(e){}
+  toast("Type this: "+t);
+}
+
+function renderPayloadTemplates(){
+  const host=document.getElementById('payloadTplList'); if(!host)return;
+  const on=!!state.payloadTplOn;
+  const cat=ptCatalog();
+  host.innerHTML=
+    `<label class="switchLbl" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+       <input type="checkbox" id="payloadTplOn" ${on?"checked":""} onchange="ptToggle(this.checked)">
+       <span class="sl"></span><b>Write my own payload structure</b>
+     </label>
+     <div class="desc" style="margin-bottom:8px">While this is off, payloads are built the normal way (the ordered part list above). Turning it on uses the templates below — and each one starts as an exact copy of what your app already sends, so <b>nothing changes until you edit the text</b>.</div>
+     <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Every piece you can call</b> — ${cat.length} of them</summary>
+       <div class="desc" style="margin:6px 0">Tap a row to copy its call. <b>i</b> shows the name, <b>used by</b> shows which payloads currently use it.</div>
+       <div style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:10px">
+       ${cat.map(c=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border)">
+          <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{call//${esc(c.name)}}}</code>
+          <span class="desc" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}</span>
+          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" title="${esc(c.desc||c.label)}" onclick="ptShowCallName('${c.name}')">i</button>
+          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="ptShowUsedBy('${c.name}')">used by</button>
+        </div>`).join("")}
+       </div>
+     </details>`
+    +PT_KINDS.map(kind=>{
+      const d=PAYLOAD_DEFS[kind]||{label:kind,desc:""};
+      const custom=ptIsCustom(kind);
+      return `<details class="acc" data-pttpl="${kind}"><summary><b>${esc(d.label)}</b> <span class="desc" style="display:inline">— ${custom?"edited by you":"default"}</span></summary>
+        <div class="desc" style="margin:6px 0">${esc(d.desc||"")}</div>
+        <div id="ptWarn_${kind}"></div>
+        <textarea id="ptTpl_${kind}" rows="16" spellcheck="false"
+          style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
+          oninput="ptTplInput('${kind}')">${esc(ptTemplate(kind))}</textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${kind}')">Preview with my story</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${kind}')">Reset to default</button>
+        </div>
+        <div id="ptPrev_${kind}" style="margin-top:8px"></div>
+      </details>`;
+    }).join("");
+  PT_KINDS.forEach(k=>ptValidate(k));
+}
+function ptToggle(on){
+  state.payloadTplOn=!!on; store.set(K.payloadTplOn,state.payloadTplOn);
+  toast(on?"Payload templates ON — your templates are being sent":"Payload templates off — using the standard payload");
+}
+function ptTplInput(kind){
+  const el=document.getElementById('ptTpl_'+kind); if(!el)return;
+  ptSetTemplate(kind,el.value);
+  ptValidate(kind);
+}
+function ptResetTpl(kind){
+  ptSetTemplate(kind,null);
+  const el=document.getElementById('ptTpl_'+kind); if(el)el.value=ptTemplate(kind);
+  ptValidate(kind); toast("Reset to the default structure");
+}
+/* The red warnings. Runs on every keystroke — a name that does not exist must never reach a
+   payload without the user having been told. */
+function ptValidate(kind){
+  const host=document.getElementById('ptWarn_'+kind); if(!host)return;
+  const sc=ptScan(ptTemplate(kind),ptKnownNames());
+  const bits=[];
+  if(sc.unknownCall.length)
+    bits.push(`<b>${icon("warn")} These pieces do not exist:</b> ${sc.unknownCall.map(n=>"<code>{{call//"+esc(n)+"}}</code>").join(", ")}<br>They will send nothing. Check the list of pieces above for the right name.`);
+  if(sc.unknownVar.length)
+    bits.push(`<b>${icon("warn")} These values do not exist:</b> ${sc.unknownVar.map(n=>"<code>{{"+esc(n)+"}}</code>").join(", ")}<br>They will be sent to the model as literal text, exactly as typed.`);
+  if(!sc.hasHistory)
+    bits.push(`<b>${icon("warn")} No <code>{{call//dialogue_history}}</code>.</b> The character will not see the conversation.`);
+  host.innerHTML=bits.length
+    ? `<div class="desc" style="border:1px solid var(--danger);border-radius:10px;padding:8px;margin-bottom:6px">${bits.join("<hr style='opacity:.25;margin:6px 0'>")}</div>`
+    : `<div class="desc" style="border:1px solid var(--border);border-radius:10px;padding:6px 8px;margin-bottom:6px">${icon("check")} Every name in this template exists.</div>`;
+}
+
+/* Build the real blocks for the scene that is open, so the preview shows the user's own story.
+   Memory retrieval is skipped on purpose — it costs a model call — and said so plainly. */
+function ptPreviewBlocks(kind){
+  const chat=curChat(); if(!chat) return {err:"Open a story first — the preview fills the template with your current scene."};
+  const ids=presentIds(chat)||[];
+  const p=(ids.length?state.personas.find(x=>x.id===ids[0]):null)
+        ||state.personas.find(x=>x.universeId===chat.universeId&&!x.removed);
+  if(!p) return {err:"This universe has no characters yet."};
+  const injected={recent:[],diary:[],longterm:[]};
+  const opts={chat,targetName:state.user,targetId:"__user__",textMode:kind==="text"};
+  const hb=buildCharPromptBlocks(p,[],injected,state.user,opts);
+  const tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
+    targetName:state.user,targetId:"__user__",multi:(kind==="multi"),injected,textMode:kind==="text"});
+  return {blocks:Object.assign({},hb,tb,{text_timing:""}),npc:p,chat};
+}
+function ptPreview(kind){
+  const host=document.getElementById('ptPrev_'+kind); if(!host)return;
+  const pb=ptPreviewBlocks(kind);
+  if(pb.err){ host.innerHTML=`<div class="desc">${esc(pb.err)}</div>`; return; }
+  const hist=[{role:"user",content:"(your last line goes here)"},
+              {role:"assistant",content:"(their last line goes here)"}];
+  const was=state.payloadTplOn; state.payloadTplOn=true;
+  let msgs=null;
+  try{ msgs=ptBuildMessages(kind,pb.blocks,hist,{chat:pb.chat,npc:pb.npc,targetName:state.user}); }
+  finally{ state.payloadTplOn=was; }
+  if(!msgs||!msgs.length){ host.innerHTML=`<div class="desc">This template produced nothing to send.</div>`; return; }
+  const empties=Object.keys(pb.blocks).filter(k=>!String(pb.blocks[k]||"").trim());
+  host.innerHTML=
+    `<div class="desc" style="margin-bottom:6px">This is exactly what would be sent, using <b>${esc(pb.npc.name)}</b> in your current scene. Memories are left out of the preview because fetching them costs a model call.</div>`
+    +msgs.map((m,i)=>`<div style="margin-bottom:8px">
+        <div class="plqBadge" style="display:inline-block;margin-bottom:4px">message ${i+1} — ${esc(m.role)}</div>
+        <pre style="white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;font-size:11.5px;max-height:340px;overflow:auto">${esc(m.content)}</pre>
+      </div>`).join("")
+    +(empties.length?`<div class="desc">Empty in this scene, so dropped from the payload: ${empties.map(e=>"<code>"+esc(e)+"</code>").join(", ")}</div>`:"");
+}
+
 function renderPayloadList(){
   const host=document.getElementById('payloadList');
   if(host){
@@ -32055,6 +32205,7 @@ function renderPayloadList(){
       det.addEventListener('toggle',()=>{ if(det.open)renderPayloadEditor(det.dataset.plq); });
     });
   }
+  renderPayloadTemplates();
   renderEnginePayloads();
   renderPlaceholderGuide();
 }
@@ -32070,6 +32221,8 @@ function renderPayloadEditor(pKey){
       <div class="plqHead">
         <span class="plqBadge">${badge}</span>
         <span class="plqLabel">${esc(b.label)}</span>
+        <button type="button" class="btn sec small" style="width:auto;padding:2px 7px;margin-left:4px" title="Show the name you type to call this piece in a payload template" onclick="event.stopPropagation();ptShowCallName('${isHist?"dialogue_history":id}')">i</button>
+        <button type="button" class="btn sec small" style="width:auto;padding:2px 7px" title="Which payload templates use this piece" onclick="event.stopPropagation();ptShowUsedBy('${isHist?"dialogue_history":id}')">used by</button>
         <span class="plqArrows">
           <button type="button" onclick="movePayloadBlock('${pKey}','${id}',-1)">▲</button>
           <button type="button" onclick="movePayloadBlock('${pKey}','${id}',1)">▼</button>
@@ -33027,7 +33180,7 @@ const PROMPT_PACK_KEYS=[
   "authorModel","gossipModel","playerNarrateModel","callModel",
   // v21 — surfaced hidden models + payload placeholder removals
   "fallbackModel","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
-  "payloadRemoved","payloadLayouts","blockTpls",
+  "payloadRemoved","payloadLayouts","blockTpls","payloadTemplates","payloadTplOn",
   "temp","tokens","histTurns","gmEvery","gmSensitivity","mcChainCap","steps",
   "condenseThreshold","condenseKeep","condenseBatch","stripKeepFull","travelTime","sceneMin","sceneMax",
   "mem","gmOn","sceneOn","routeOn","condenseOn","autoCharOn","stripNarr","recapOn","relOn","trackOn","voiceCheckOn","calOn","autoImg","presenceOff","textsOn","goalsCuratorOn","promiseOn"

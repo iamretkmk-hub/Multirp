@@ -936,7 +936,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2290,7 +2290,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   fallbackModel:"sm_fallbackmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",
-  payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",
+  payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",dbgView:"sm_dbgview",
   storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
@@ -4883,6 +4883,13 @@ function payloadCapsules(p){
   return cap;
 }
 // Pretty-print the capsule view for a payload, or null if it isn't a chat payload.
+/* v34.6 — WHICH VIEW. Capsules are a reading aid the inspector builds by CHOPPING the assembled
+   system message into labelled sections; the model never sees them, it receives p.messages. For a
+   long while capsules were the only view offered for a chat payload, which made the payload look
+   like something it is not — a stack of little objects rather than the text you wrote. "As sent"
+   is now the default and shows exactly the messages that went on the wire. */
+function dbgViewMode(){ try{ return store.raw(K.dbgView,"sent")==="capsules"?"capsules":"sent"; }catch(e){ return "sent"; } }
+function setDbgView(m){ try{ store.setRaw(K.dbgView, m==="capsules"?"capsules":"sent"); }catch(e){} renderDebug(); }
 function fmtCapsules(p){
   const c=payloadCapsules(p);
   return c?JSON.stringify(c,null,2):null;
@@ -4922,8 +4929,11 @@ function renderDebug(){
     // Prefer the structured JSON-capsule view for chat payloads; fall back to the
     // readable payload dump for image/video calls that have no messages array.
     const capStr=fmtCapsules(e.payload);
-    const payloadView=capStr||fmtPayload(e.payload);
-    const payloadLabel=capStr?"JSON capsules":"Payload sent";
+    const wantCaps=(dbgViewMode()==="capsules");
+    const usingCaps=!!(capStr&&wantCaps);
+    const payloadView=usingCaps?capStr:fmtPayload(e.payload);
+    const payloadLabel=usingCaps?"JSON capsules"
+      :(capStr?"Exactly what was sent":"Payload sent");
     card.innerHTML=`
       <div class="kvline" style="padding:0;align-items:flex-start">
         <div style="min-width:0">
@@ -4943,11 +4953,17 @@ function renderDebug(){
         <div class="desc" style="word-break:break-all">${esc(e.endpoint)}</div>
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
         ${_dbgMixLine(e.payload)}
-        <label style="margin:0">${payloadLabel}</label>
+        <div class="kvline" style="padding:0">
+          <label style="margin:0">${payloadLabel}</label>
+          ${capStr?`<span class="seg" style="flex-shrink:0">
+            <button type="button" data-dbgview="sent" class="${usingCaps?"":"on"}">As sent</button>
+            <button type="button" data-dbgview="capsules" class="${usingCaps?"on":""}">Capsules</button>
+          </span>`:""}
+        </div>
         <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-x:auto">${esc(payloadView)}</pre>
         ${e.result!=null?`<label style="margin:0">Result (${esc(e.status)})</label>
           <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word">${esc(fullResult(e.result))}</pre>`:""}
-        <button class="btn sec small" data-copy>Copy ${capStr?"JSON":"payload"} + response</button>
+        <button class="btn sec small" data-copy>Copy ${usingCaps?"JSON":"payload"} + response</button>
       </div>`;
     const body=card.querySelector('[data-body]');
     const arrow=card.querySelector('[data-arrow]');
@@ -4955,10 +4971,14 @@ function renderDebug(){
     if(_dbgOpen.has(e.id)){ body.classList.remove('hide'); arrow.textContent="▾"; }
     card.addEventListener('click',ev=>{
       if(ev.target.closest('[data-copy]'))return;
+      if(ev.target.closest('[data-dbgview]'))return;
       if(ev.target.closest('pre'))return;          // selecting text inside a payload must not collapse it
       const open=body.classList.toggle('hide')===false;
       arrow.textContent=open?"▾":"▸";
       if(open)_dbgOpen.add(e.id); else _dbgOpen.delete(e.id);
+    });
+    card.querySelectorAll('[data-dbgview]').forEach(btn=>{
+      btn.addEventListener('click',ev=>{ ev.stopPropagation(); setDbgView(btn.dataset.dbgview); });
     });
     card.querySelector('[data-copy]').addEventListener('click',ev=>{
       ev.stopPropagation();
@@ -4967,7 +4987,7 @@ function renderDebug(){
       // still one valid document.
       let out=payloadView;
       if(e.result!=null){
-        if(capStr){
+        if(usingCaps){
           try{ const o=JSON.parse(payloadView); o.response=fullResult(e.result); o.status=e.status;
                if(e.ms!=null)o.ms=e.ms; out=JSON.stringify(o,null,2); }
           catch(_){ out=payloadView+"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result); }

@@ -70,6 +70,40 @@ const {chromium}=require('playwright');
   ok("toggle writes state+storage", await pg.evaluate(()=>state.payloadTplOn===true && store.get(K.payloadTplOn,false)===true));
   await pg.evaluate(()=>ptToggle(false));
 
+
+  console.log("\n[engine templates]");
+  ok("engines registered", await pg.evaluate(()=>Object.keys(ENGINE_PARTS).length>=60));
+  ok("engine editor rendered", await pg.evaluate(()=>{ renderEngineTemplates();
+      return document.querySelectorAll('[data-eptpl]').length>=60; }));
+  ok("shared library callable everywhere", await pg.evaluate(()=>{
+      const k=Object.keys(ENGINE_PARTS)[0]; const n=epKnownNames(k);
+      return n.trackers&&n.promises&&n.rumors&&n.scene&&n.prompt; }));
+  ok("library is lazy (functions until called)", await pg.evaluate(()=>{
+      const lib=engineLibrary(null); return typeof lib.trackers==="function"; }));
+  ok("adding a library call to an engine works", await pg.evaluate(()=>{
+      const k="gossipPrompt";
+      ptSetTemplate(epTplKey(k),"[system]\n{{call//prompt}}\n[system end]\n[user]\n{{call//data}}\n\nTRACKERS:\n{{call//trackers}}\n[end user]\n");
+      const was=state.payloadTplOn; state.payloadTplOn=true;
+      const m=epMessages(k,"SYS",{data:"DATA_HERE"});
+      state.payloadTplOn=was; ptSetTemplate(epTplKey(k),null);
+      return !!m && m.some(x=>x.role==="user"&&x.content.indexOf("DATA_HERE")>-1); }));
+  ok("engine warns on unknown name", await pg.evaluate(()=>{
+      const k="gossipPrompt";
+      ptSetTemplate(epTplKey(k),"[system]\n{{call//prompt}}\n[system end]\n[user]\n{{call//not_a_thing}}\n[end user]");
+      renderEngineTemplates(); epValidate(k);
+      const h=document.getElementById('epWarn_'+k).innerHTML;
+      ptSetTemplate(epTplKey(k),null); return h.indexOf("not_a_thing")>-1; }));
+  ok("engine warns when the prompt is dropped", await pg.evaluate(()=>{
+      const k="gossipPrompt";
+      ptSetTemplate(epTplKey(k),"[user]\n{{call//data}}\n[end user]");
+      renderEngineTemplates(); epValidate(k);
+      const h=document.getElementById('epWarn_'+k).innerHTML;
+      ptSetTemplate(epTplKey(k),null); return /stop working/i.test(h); }));
+  ok("templates OFF => classic engine payload", await pg.evaluate(()=>{
+      state.payloadTplOn=false;
+      const m=epSend("gossipPrompt","SYS",{data:"D"});
+      return m.length===2&&m[0].content==="SYS"&&m[1].content==="D"; }));
+
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));
 

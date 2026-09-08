@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v33.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v33.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1094,6 +1094,11 @@
           <h3><svg class="ic"><use href="#i-edit"/></svg> Payload templates — write it yourself</h3>
           <div class="desc">Instead of ordering the parts above, write the whole payload as text and call the pieces you want, wherever you want them. Use <code>[system]</code> / <code>[system end]</code> and <code>[user]</code> / <code>[end user]</code> to choose which message each part goes into, <code>{{call//piece}}</code> to drop a piece in, and <code>{{call//dialogue_history}}</code> for the conversation itself. A heading you write above a piece that turns out to be empty is removed along with it.</div>
           <div id="payloadTplList"></div>
+        </div>
+        <div class="card">
+          <h3><svg class="ic"><use href="#i-tools"/></svg> Engine payload templates — write those yourself too</h3>
+          <div class="desc">Every background engine — gamemaster, gossip, intents, memory, diaries, quests, calendar, the world pulse — with the same freedom. <b>If an engine is missing something, add a call instead of asking for a code change:</b> the shared pieces work in every engine whether or not it was built to receive them.</div>
+          <div id="engineTplList"></div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-tools"/></svg> Engine payloads</h3>
@@ -8348,10 +8353,7 @@ function cleanMoanScript(s){
 async function writeMoanScript(actor,sec){
   if(!state.key)throw{friendly:"No OpenRouter key set (Settings → API keys)."};
   const s=sec||videoSeconds();
-  const out=await chatCompletion([
-    {role:"system",content:moanWriterSystem(s)},
-    {role:"user",content:`CLIP LENGTH: ${s} seconds — the track must last that long.\n\nTHE CHARACTER MAKING THESE SOUNDS:\n${moanActorBrief(actor)}`}
-  ],state.rewriter,{temp:fnTemp("rewriter",0.9),max:fnTok("rewriter",Math.min(900,160+moanBeats(s)*60)),
+  const out=await chatCompletion(epSend("x_voice_sample_script_writer",moanWriterSystem(s),{data:`CLIP LENGTH: ${s} seconds — the track must last that long.\n\nTHE CHARACTER MAKING THESE SOUNDS:\n${moanActorBrief(actor)}`}),state.rewriter,{temp:fnTemp("rewriter",0.9),max:fnTok("rewriter",Math.min(900,160+moanBeats(s)*60)),
                     dbg:"Voice sample script writer"});
   const script=cleanMoanScript(out);
   if(!script)throw{friendly:"The writer returned an empty vocal script. Try again."};
@@ -10525,10 +10527,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
       user:state.user, place:leftLoc.name||"the place",
       place_desc:(leftLoc.description||"").slice(0,200), others, visit
     });
-    const out=await chatCompletion([
-      {role:"system",content:sys+"\n\n"+engineLangDirective()},
-      {role:"user",content:`What are people saying about ${state.user}'s time at ${leftLoc.name||"this place"}? Return the JSON.`}
-    ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",260),dbg:"Location gossip · "+(leftLoc.name||"?")});
+    const out=await chatCompletion(epSend("poiGossip",sys+"\n\n"+engineLangDirective(),{data:`What are people saying about ${state.user}'s time at ${leftLoc.name||"this place"}? Return the JSON.`}),model,{temp:fnTemp("mem",0.5),max:fnTok("mem",260),dbg:"Location gossip · "+(leftLoc.name||"?")});
     const j=parseJSON(out); if(!j||!j.content)return;
     const charge=typeof j.charge==="number"?Math.max(0,Math.min(1,j.charge)):0;
     const baseContent=String(j.content).trim();
@@ -10592,7 +10591,7 @@ async function maybeSeedLocationNpcs(chat){
       cast:cast.map(p=>p.name).join(", ")||"(none)",
       quests:quests||"(none)"
     });
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Respond with ONLY the JSON array."}],
+    const out=await chatCompletion(epSend("latentNpc",sys,{data:"Respond with ONLY the JSON array."}),
       state.bioModel,{temp:fnTemp("unigen",0.85),max:fnTok("unigen",900),frequency_penalty:0,presence_penalty:0,dbg:"Latent NPCs — "+(loc.name||"")});
     const arr=parseJSON(out); if(!Array.isArray(arr))return;
     const have=new Set(cast.map(p=>p.name.toLowerCase()));
@@ -10690,10 +10689,7 @@ async function travelTo(locId,companionIds,opts){
       ? `\nWHY ${state.user} makes this trip — this narration is the OPENING BEAT of the matter below; arrive leaning into it, plant its mood and stakes on arrival, but resolve nothing and reveal no outcome:\n${String(opts.purpose).slice(0,600)}`
       : "";
     const ctx=`Origin: ${fromName}\nDestination: ${dest.name} — ${dest.description||""}\nTravelling: ${who}\nWorld: ${curWorldSetting()||""}\nTime now: Day ${chat.gameDay}, ${chatPeriod(chat)}${thereLine}${purposeLine}`;
-    narration=await chatCompletion([
-      {role:"system",content:sys+"\n\n"+langDirective()},
-      {role:"user",content:ctx+"\n\nWrite the travel narration."}
-    ],state.model,{dbg:"Travel narration"});
+    narration=await chatCompletion(epSend("travelPrompt",sys+"\n\n"+langDirective(),{data:ctx+"\n\nWrite the travel narration."}),state.model,{dbg:"Travel narration"});
   }catch(e){}
   if(narration&&narration.trim()){
     chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,
@@ -11324,7 +11320,7 @@ async function estimateAttendance(chat,e){
   const dir=e.executor==="user"?`${state.user} would come to ${p.name}`:`${p.name} would come to ${state.user}`;
   const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral / no strong feeling"}\n\n# The meeting\n"${e.title}"${where?` at ${where}`:""}${e.period?` (${e.period})`:""} on day ${e.day} — ${dir}. ${p.name} did NOT firmly commit.\n\nHow likely is ${p.name} to actually attend? Return {"probability": N}.`;
   try{
-    const out=await chatCompletion([{role:"system",content:fillTpl(up("attendanceEstimate"),{user:state.user})},{role:"user",content:usr}],
+    const out=await chatCompletion(epSend("attendanceEstimate",fillTpl(up("attendanceEstimate"),{user:state.user}),{data:usr}),
       state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance estimate · "+p.name});
     const j=parseJSON(out)||{}; let n=Number(j.probability);
     e.probability=isFinite(n)?Math.max(0,Math.min(100,Math.round(n))):50;
@@ -11346,10 +11342,7 @@ async function adjustAttendance(chat){
     if(!presentIds(chat).includes(p.id) && !textedIds.has(p.id))continue;   // only when the player is actually dealing with them
     try{
       const convo=recentExchangeMsgsWithTexts(chat,6).map(m=>`${m.name}: ${m.content}`).join("\n");
-      const out=await chatCompletion([
-        {role:"system",content:fillTpl(up("attendancePersuade"),{user:state.user,char:p.name,probability:(e.probability!=null?e.probability:50)})},
-        {role:"user",content:`The meeting: "${e.title}"${e.period?` (${e.period})`:""}, day ${e.day}.\n\nRecent exchange:\n${convo}\n\nReturn {"probability": N}.`}
-      ],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance persuasion · "+p.name});
+      const out=await chatCompletion(epSend("attendancePersuade",fillTpl(up("attendancePersuade"),{user:state.user,char:p.name,probability:(e.probability!=null?e.probability:50)}),{data:`The meeting: "${e.title}"${e.period?` (${e.period})`:""}, day ${e.day}.\n\nRecent exchange:\n${convo}\n\nReturn {"probability": N}.`}),state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance persuasion · "+p.name});
       const j=parseJSON(out)||{}; let n=Number(j.probability); if(!isFinite(n))continue;
       n=Math.max(0,Math.min(100,Math.round(n)));
       if(n<=10){ e.done=true; e.outcome="cancelled"; try{ _calNotice(chat,`${p.name} won't be coming to "${e.title}"`); }catch(_){} }
@@ -11471,8 +11464,7 @@ async function narrateMeetingOutcome(chat,e,p){
     if(state.key){
       const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
       const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
-      const out=await chatCompletion(
-        [{role:"system",content:"You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.\n\n"+langDirective()},{role:"user",content:ask}],
+      const out=await chatCompletion(epSend("x_meeting_no_show_beat","You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.\n\n"+langDirective(),{data:ask}),
         state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
       line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
     }
@@ -12325,7 +12317,7 @@ async function revealLatentNpc(chat,p){
       const uni=universeById(chat.universeId);
       const sys=`You flesh out a roleplay character from a short sketch, consistent with the world. Return ONLY JSON: {"personality":"2-4 sentences","look":"English visual appearance for image generation (hair, build, face, clothing)","backstory":"1-3 sentences","style":"how they speak","goals":"what they want"}.`;
       const usr=`WORLD: ${uni?uni.name:""} — ${(uni&&uni.setting||"").slice(0,700)}\n\nSKETCH:\nName: ${p.name}\n${p.instructions?"Role/hook: "+p.instructions+"\n":""}${p.personality?"Notes: "+p.personality:""}`;
-      const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.bioModel,{temp:fnTemp("mem",0.8),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Reveal NPC — "+p.name});
+      const out=await chatCompletion(epSend("x_reveal_npc",sys,{data:usr}),state.bioModel,{temp:fnTemp("mem",0.8),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Reveal NPC — "+p.name});
       const j=parseJSON(out);
       if(j&&typeof j==="object"){
         if(j.personality)p.personality=String(j.personality).slice(0,600);
@@ -12394,7 +12386,7 @@ async function _fireArrival(chat,subId,item){
     const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid ${storyLangName().toUpperCase()} narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
     // v23.4 — skipNarration: the quest play button already narrated the journey AS the quest's
     // opening beat (purpose-aware travelTo); a second scene-setting here would double-narrate.
-    const narrP=item.skipNarration?Promise.resolve(""):chatCompletion([{role:"system",content:narrSys},{role:"user",content:"Narrate the arrival."}],rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
+    const narrP=item.skipNarration?Promise.resolve(""):chatCompletion(epSend("x_arrival",narrSys,{data:"Narrate the arrival."}),rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
     let lineP=Promise.resolve("");
     if(p){
       // v23.4 — the opening line knows the quest's SUBSTANCE (desc), not just its title, and knows
@@ -12439,7 +12431,7 @@ async function _fireArrival(chat,subId,item){
         // returns the bystander wording ("How they act", "Their usual clothing") to the very
         // character it belongs to.
         const csys=`You are ${p.name}.\n${charBioBlock(p,{self:true,noWho:true})}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
-        return chatCompletion([{role:"system",content:csys},{role:"user",content:"Speak."}],rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
+        return chatCompletion(epSend("x_arrival_line",csys,{data:"Speak."}),rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
       })().catch(()=>"");
     }
     const [nout,cout]=await Promise.all([narrP,lineP]);
@@ -13319,10 +13311,7 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day)
   const userMsg=`${bioBlock}${foundBlock}${memBlock}${fastBlock}\n\n${curLine}\n\n`+
     `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence description of how ${fromP.name} feels about ${tName} now. ALSO: "social_fact" — what ${fromP.name} durably KNOWS about ${tName} as a matter of fact, not feeling (a kinship or role, a history, a thing they did — e.g. "${tName} is X's brother", "${tName} is my new boss", "${tName} betrayed Y"). You are shown what ${fromP.name} already knows${_knownFact?"":" (nothing on record yet)"}: if today added to it or changed it, return the COMPLETE CURRENT version as ONE short sentence, rewritten to include the old and the new together — it REPLACES what is on record, so anything you leave out is forgotten. If today added nothing, omit the field entirely and the existing record is kept as it is. Never put a feeling here; feelings belong in "description".`;
 
-  const out=await chatCompletion([
-    {role:"system",content:sys+"\n\n"+engineLangDirective()},
-    {role:"user",content:userMsg}
-  ],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",340),dbg:"Daily relationship · "+fromP.name+" → "+toName});
+  const out=await chatCompletion(epSend("relPrompt",sys+"\n\n"+engineLangDirective(),{data:userMsg}),state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",340),dbg:"Daily relationship · "+fromP.name+" → "+toName});
   const j=parseJSON(out); if(!j||typeof j!=="object")return;
   let movedSlow=false;
   // Capture the SLOW swing (direction + magnitude per axis), not just the "it moved" flag. The
@@ -13807,10 +13796,7 @@ async function runVoiceCheck(chat,msg,p){
   if(!state.voiceCheckOn||!state.key||!msg||!p)return;
   try{
     const prof=`Character: ${p.name}\nPersonality: ${p.personality||"(none)"}\nSpeaking style: ${p.style||"(none)"}`;
-    const out=await chatCompletion([
-      {role:"system",content:up("voiceCheckPrompt")},
-      {role:"user",content:`${prof}\n\nLatest line:\n${msg.content}`}
-    ],state.mcModel,{temp:fnTemp("mc",0),max:fnTok("mc",60),dbg:"Voice check · "+p.name});
+    const out=await chatCompletion(epSend("voiceCheckPrompt",up("voiceCheckPrompt"),{data:`${prof}\n\nLatest line:\n${msg.content}`}),state.mcModel,{temp:fnTemp("mc",0),max:fnTok("mc",60),dbg:"Voice check · "+p.name});
     const j=parseJSON(out);
     if(j&&j.ok===false&&j.note){ msg.voiceFlag=j.note.trim(); persistChats(); refreshBubble(msg.mid); }
   }catch(e){/* best-effort */}
@@ -13983,7 +13969,7 @@ async function genTrackerAI(){
   const btn=document.getElementById('tgGo'); if(btn){btn.disabled=true;btn.textContent="Designing…";}
   try{
     const sys=fillTpl(up("trackerGen"),{world:String(uni.setting||"").slice(0,900),brief:brief.slice(0,600),segments:String(segs),owner:ownerName});
-    const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Design it and respond with ONLY the JSON."}],
+    const out=await chatCompletion(epSend("trackerGen",sys,{data:"Design it and respond with ONLY the JSON."}),
       state.bioModel,{temp:fnTemp("unigen",0.8),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Tracker generator"});
     const j=parseJSON(out);
     if(!j||!j.name||!Array.isArray(j.stages)||!j.stages.length){ toast("Couldn't design it — try a more concrete description"); return; }
@@ -14728,8 +14714,7 @@ async function runWriteAi(){
     const sys=`You are a prompt engineer. You write a single, complete SYSTEM PROMPT that will be given to another AI model.
 Write the full prompt text only — no preamble, no explanation, no surrounding quotes or code fences. The prompt should be clear, well-structured, and directly usable.${jsonRule}${phRule}`;
     const usr=`PURPOSE OF THIS PROMPT (what the function does):\n${reg.label} — ${reg.hint||""}\n\nREFERENCE PROMPT (current/default version — match its output format and any JSON schema; improve or replace the rest per the request):\n"""\n${tpl}\n"""\n\nUSER'S REQUEST (what they want this prompt to do):\n${brief}\n\nWrite the new system prompt now.`;
-    const out=await chatCompletion(
-      [{role:"system",content:sys},{role:"user",content:usr}],
+    const out=await chatCompletion(epSend("x_write_prompt_with_ai",sys,{data:usr}),
       state.bioModel||state.model,
       {temp:0.6,max:1500,dbg:"Write prompt with AI · "+reg.key}
     );
@@ -15526,10 +15511,7 @@ async function generateBio(brief,context,opts){
   const user=parts.join("\n\n———\n\n");
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:user}
-    ],authoringModel(),{temp:fnTemp("mem",0.9),max:fnTok("mem",800),dbg:"Character bio generator"});
+    out=await chatCompletion(epSend("bioPrompt",sys,{data:user}),authoringModel(),{temp:fnTemp("mem",0.9),max:fnTok("mem",800),dbg:"Character bio generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -15573,10 +15555,7 @@ Return ONLY strict JSON mapping each period to {locationName: points}:
 Use EXACT location names from the list. No commentary.`;
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Character: ${persona.name}\nPersonality: ${persona.personality||""}\nRoutine: ${routineText||persona.routine||"(infer from personality)"}\n\nLocations:\n${locList}`}
-    ],state.bioModel,{temp:fnTemp("mem",0.4),max:fnTok("mem",500),dbg:"Schedule generator · "+persona.name});
+    out=await chatCompletion(epSend("x_schedule_generator",sys,{data:`Character: ${persona.name}\nPersonality: ${persona.personality||""}\nRoutine: ${routineText||persona.routine||"(infer from personality)"}\n\nLocations:\n${locList}`}),state.bioModel,{temp:fnTemp("mem",0.4),max:fnTok("mem",500),dbg:"Schedule generator · "+persona.name});
   }catch(e){ return null; }
   const j=parseJSON(out); if(!j||typeof j!=="object")return null;
   // Map names → ids per period.
@@ -15655,10 +15634,7 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
 
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:userMsg}
-    ],authoringModel(),{temp:fnTemp("mem",0.5),max:fnTok("mem",1100),dbg:"Relationship generator · "+persona.name});
+    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),{temp:fnTemp("mem",0.5),max:fnTok("mem",1100),dbg:"Relationship generator · "+persona.name});
   }catch(e){ return null; }
   const text=(out||"").trim();
   if(!text)return null;
@@ -16007,7 +15983,7 @@ async function generateLocations(uni,liveLocs,userInstr){
   }
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Generate the JSON array now."}],
+    out=await chatCompletion(epSend("x_location_generator",sys,{data:"Generate the JSON array now."}),
       state.bioModel,{temp:fnTemp("unigen",0.85),max:fnTok("unigen",2600),frequency_penalty:0,presence_penalty:0,dbg:"Location generator ("+mode+")"});
   }catch(e){ return null; }
   const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return null;
@@ -16040,10 +16016,7 @@ async function generateUniverse(brief,count){
   const user=`USER BRIEF:\n${brief||"(none — invent a fitting world)"}\n\nNUMBER OF CHARACTERS TO CREATE: ${n}`;
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:user}
-    ],authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,dbg:"Universe generator"});
+    out=await chatCompletion(epSend("univPrompt",sys,{data:user}),authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,dbg:"Universe generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -16084,10 +16057,7 @@ async function generateDirectingNotes(universe,userInstr){
   });
   try{
     const uReq=(userInstr&&userInstr.trim())?`\n\nUSER'S REQUEST (weave this into the notes): ${userInstr.trim()}`:"";
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Write the director notes for "${universe.name}". Output only the notes.${uReq}`}
-    ],authoringModel(),{temp:fnTemp("mem",0.7),max:fnTok("mem",500),dbg:"Director notes · "+universe.name});
+    const out=await chatCompletion(epSend("directorAuthor",sys,{data:`Write the director notes for "${universe.name}". Output only the notes.${uReq}`}),authoringModel(),{temp:fnTemp("mem",0.7),max:fnTok("mem",500),dbg:"Director notes · "+universe.name});
     const notes=stripInlineReasoning(String(out||"")).trim();
     if(notes && notes.length>40){ universe.directingNotes=notes; return notes; }
   }catch(e){}
@@ -16209,10 +16179,7 @@ async function generateGenrePack(universe,userInstr){
   });
   try{
     const uReq=(userInstr&&userInstr.trim())?`\n\nUSER'S REQUEST (shape the pack around this, keep JSON only): ${userInstr.trim()}`:"";
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Write the genre pack + guide for "${universe.name||"this world"}". JSON only.${uReq}`}
-    ],authoringModel(),{temp:fnTemp("unigen",0.8),max:fnTok("unigen",3800),
+    const out=await chatCompletion(epSend("genrePackAuthor",sys,{data:`Write the genre pack + guide for "${universe.name||"this world"}". JSON only.${uReq}`}),authoringModel(),{temp:fnTemp("unigen",0.8),max:fnTok("unigen",3800),
       frequency_penalty:0,presence_penalty:0,dbg:"Genre pack · "+(universe.name||"")});
     const j=parseJSON(out); if(!j)return null;
     const pick=k=>typeof j[k]==="string"?j[k].trim():"";
@@ -16302,10 +16269,7 @@ async function compileWorldRule(text,locList,uniId){
     tags:[...tagSet].join(", ")||"(none yet)"
   });
   try{
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:"Compile the rule. JSON only."}
-    ],authoringModel(),{temp:fnTemp("mem",0.2),max:fnTok("mem",300),
+    const out=await chatCompletion(epSend("ruleCompiler",sys,{data:"Compile the rule. JSON only."}),authoringModel(),{temp:fnTemp("mem",0.2),max:fnTok("mem",300),
       frequency_penalty:0,presence_penalty:0,dbg:"World-rule compiler"});
     const j=parseJSON(out);
     if(!j){ toast("Compiler returned nothing usable"); return null; }
@@ -16447,10 +16411,7 @@ async function tuneUniversePrompts(universe){
       // so custom tuners still get it and a missing {{focus}} token can never be an issue.
       const sys=fillTpl(up("promptTuner"),{ setting, directing, base })
         +(t.focus?`\n\nFOR THIS PARTICULAR PROMPT — WHAT TO ADAPT (and nothing else):\n${t.focus}`:"");
-      const out=await chatCompletion([
-        {role:"system",content:sys},
-        {role:"user",content:`Output the lightly-adjusted version of the prompt for "${universe.name}".`}
-      ],authoringModel(),{temp:fnTemp("mem",0.4),
+      const out=await chatCompletion(epSend("promptTuner",sys,{data:`Output the lightly-adjusted version of the prompt for "${universe.name}".`}),authoringModel(),{temp:fnTemp("mem",0.4),
         // long bases (e.g. the char-quest designer) need more output room than the old flat cap
         max:Math.max(fnTok("mem",1400),Math.min(3000,Math.ceil(base.length/2))),
         dbg:"Prompt tuner · "+t.key});
@@ -16575,10 +16536,7 @@ async function generateBatchBios(brief,count,opts){
     // it: a truncated batch is unparseable JSON and silently yields zero cards. We take the LARGER of
     // the configured cap and what the batch actually needs, then bound it so it can't run away.
     const batchTok=Math.min(8000,Math.max(fnTok("mem",0)||0, 1500+count*750));
-    out=await chatCompletion([
-      {role:"system",content:sys.replace(/\{\{count\}\}/g,String(count))},
-      {role:"user",content:user}
-    ],authoringModel(),{temp:fnTemp("mem",0.9),max:batchTok,dbg:"Batch character generator ×"+count});
+    out=await chatCompletion(epSend("batchBioPrompt",sys.replace(/\{\{count\}\}/g,String(count)),{data:user}),authoringModel(),{temp:fnTemp("mem",0.9),max:batchTok,dbg:"Batch character generator ×"+count});
   }catch(e){ return []; }
   const j=parseJSON(out);
   const arr=Array.isArray(j)?j:(j&&Array.isArray(j.characters)?j.characters:null);
@@ -16666,10 +16624,7 @@ async function generateAppearance(){
 }
 ALL fields in ENGLISH regardless of the card's language. Keep each field to its own category. Be concrete and image-promptable.`;
     const instrBlock=(instr&&instr.trim())?("USER'S REQUEST (follow this closely, still valid JSON):\n"+instr.trim()):"";
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}
-    ],authoringModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",650),dbg:"Appearance generator"});
+    const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",650),dbg:"Appearance generator"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Appearance generation failed — try again"); return; }
     const clean=s=>typeof s==="string"?s.trim():"";
@@ -17055,11 +17010,8 @@ async function noteRumorRaise(chat,p,reply){
       .sort((a,b)=>(b.heat||0)-(a.heat||0))[0];
     if(!g)return;
     if(replySimilarity(reply,g.text)<0.12)return;   // cheap gate: nothing of the rumor is in here
-    const out=await chatCompletion([
-      {role:"system",content:fillTpl(up("rumorJudge"),{rumor:g.text,mode:"RAISE",user:state.user,
-        text:`${p.name} says:\n${String(reply).slice(0,900)}`})},
-      {role:"user",content:"Return the JSON."}
-    ],state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",60),dbg:"Rumor judge (raise) · "+p.name});
+    const out=await chatCompletion(epSend("rumorJudge",fillTpl(up("rumorJudge"),{rumor:g.text,mode:"RAISE",user:state.user,
+        text:`${p.name} says:\n${String(reply).slice(0,900)}`}),{data:"Return the JSON."}),state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",60),dbg:"Rumor judge (raise) · "+p.name});
     const j=parseJSON(out)||{};
     if(!j.raised)return;
     (g.raisedBy=g.raisedBy||{})[g.stakeholderId]=day;
@@ -17079,11 +17031,8 @@ async function settleRumors(chat,playerText){
     const pending=liveGossip(uid).filter(g=>g._awaitAnswer);
     for(const g of pending){
       g._awaitAnswer=false;
-      const out=await chatCompletion([
-        {role:"system",content:fillTpl(up("rumorJudge"),{rumor:g.text,mode:"ANSWER",user:state.user,
-          text:`${state.user} answers:\n${String(playerText).slice(0,900)}`})},
-        {role:"user",content:"Return the JSON."}
-      ],state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",80),dbg:"Rumor judge (answer)"});
+      const out=await chatCompletion(epSend("rumorJudge",fillTpl(up("rumorJudge"),{rumor:g.text,mode:"ANSWER",user:state.user,
+          text:`${state.user} answers:\n${String(playerText).slice(0,900)}`}),{data:"Return the JSON."}),state.gmModel,{temp:fnTemp("gm",0),max:fnTok("gm",80),dbg:"Rumor judge (answer)"});
       const j=parseJSON(out)||{};
       const v=String(j.verdict||"open");
       if(v==="settled"||v==="believed") resolveGossip(g.id,v,j.why||"");
@@ -17248,10 +17197,7 @@ async function _migrateLookSplitOnce(){
     for(const p of targets){
       const sys=`Split a character's freeform appearance string into STRUCTURED JSON for an image generator. Output ONLY: {"face_map":"the celebrity name if one is present, else \\"\\"","hair":"hair only","face":"non-celebrity face details only (never repeat the celebrity name)","body":"physique/build only"}. English only. If a field isn't present in the input, use "".`;
       try{
-        const out=await chatCompletion([
-          {role:"system",content:sys},
-          {role:"user",content:`Appearance: ${p.look.raw}`}
-        ],authoringModel(),{temp:fnTemp("mem",0.2),max:fnTok("mem",300),dbg:"Look split · "+(p.name||p.id)});
+        const out=await chatCompletion(epSend("x_look_split",sys,{data:`Appearance: ${p.look.raw}`}),authoringModel(),{temp:fnTemp("mem",0.2),max:fnTok("mem",300),dbg:"Look split · "+(p.name||p.id)});
         const j=parseJSON(out);
         if(j&&typeof j==="object"){
           const clean=s=>typeof s==="string"?s.trim():"";
@@ -17885,7 +17831,16 @@ function ptSources(blocks){
 }
 function ptResolve(srcs,name,sub,report){
   const key=sub?(name+"//"+sub):name;
-  if(Object.prototype.hasOwnProperty.call(srcs,key)) return srcs[key]||"";
+  if(Object.prototype.hasOwnProperty.call(srcs,key)){
+    let v=srcs[key];
+    /* Lazy piece: the shared context library hands over functions, so a piece nobody calls costs
+       nothing. Resolved once, then cached back onto the map for this assembly. */
+    if(typeof v==="function"){
+      try{ v=v()||""; }catch(e){ v=""; }
+      srcs[key]=v;
+    }
+    return v||"";
+  }
   if(report&&report.unknownCall.indexOf(key)===-1) report.unknownCall.push(key);
   return "";
 }
@@ -17974,6 +17929,7 @@ function ptScan(tpl,known){
 /* The default template for a payload kind, generated from that kind's CURRENT block order, so
    an unedited template reproduces buildPayload exactly. */
 function ptDefaultTemplate(kind){
+  if(String(kind).indexOf("eng:")===0) return epDefaultTemplate(String(kind).slice(4));
   const order=payloadOrder(kind)||[];
   const head=[],tail=[]; let after=false;
   order.forEach(id=>{
@@ -18048,6 +18004,281 @@ function ptBuildMessages(kind,blocks,history,ctx){
     return null;
   }
   return msgs.length?msgs:null;
+}
+
+/* ===== ENGINE PAYLOAD TEMPLATES (v33.1) =====
+   Every background job — gamemaster, gossip, intents, memory, calendar, quests — is a system
+   prompt plus a user message the call site hand-assembles out of named pieces of live data. The
+   prompt half was always editable; the DATA half was welded shut in code. This opens it.
+
+   A call site declares its pieces by name instead of concatenating them:
+
+       const parts={scene:ctx, memories:memBlock, exchange:since};
+       const msgs=epMessages("gm_judge",systemText,parts) || [classic fallback];
+
+   ENGINE_PARTS below is the registry: for each engine, the ordered pieces of its user message,
+   with the literal text that sits between them. That order + those separators are what the
+   default template reproduces, so an unedited engine template assembles byte-identically to the
+   concatenation it replaced. tests/engine-parity.test.js holds every engine to that.
+
+   (!) ONE deliberate difference from the concatenations this replaces: a piece that comes back
+   empty takes its label with it. The old code emitted "Recent exchange:" with nothing after it
+   when a scene had no recent lines. Both paths now drop it, so they agree by construction rather
+   than by special case.
+
+   (!) Engine output is PARSED. Reordering the pieces of a user message is safe — the model reads
+   context in any order — but deleting the piece an engine reasons from, or editing the system
+   prompt's output contract, will break the parse and the feature goes quiet. epValidate warns on
+   a missing declared piece; the JSON contract itself is guarded where the prompt lives. */
+
+const ENGINE_PARTS={};
+/* sep: text placed BEFORE this piece when it is non-empty (the "Recent exchange:\n" style labels
+   the old concatenations carried inline). gap: separator between pieces, default a blank line. */
+function epDefine(key,label,promptKey,parts,opts){
+  ENGINE_PARTS[key]=Object.assign({key,label,promptKey,parts:parts||[]},opts||{});
+}
+function epDef(key){ return ENGINE_PARTS[key]||null; }
+/* ===== THE SHARED CONTEXT LIBRARY (v33.1) =====
+   Every engine template can call any of these, whether or not its call site was built to supply
+   it. This is the point of the whole exercise: noticing the Gamemaster is missing the trackers
+   should mean typing {{call//trackers}} into its template, not asking for a code change.
+
+   Each entry is a FUNCTION, resolved by ptResolve only when a template actually calls it, so a
+   piece nobody uses costs nothing. Failures return "" — a context piece must never take down the
+   engine that was merely offered it. */
+function engineLibrary(chat){
+  const c=()=>chat||(typeof curChat==="function"?curChat():null);
+  const safe=fn=>function(){ try{ const v=fn(); return v==null?"":String(v); }catch(e){ return ""; } };
+  const uni=()=>{ try{ const ch=c(); return ch?universeById(ch.universeId):curUniverseObj(); }catch(e){ return null; } };
+  return {
+    scene:        safe(()=>directorContext(c(),"gm")),
+    scene_writer: safe(()=>directorContext(c(),"scene")),
+    exchange:     safe(()=>recentExchangeText(c(),DIRECTOR_RECENT_TURNS)),
+    memories:     safe(()=>directorMemoryDigest(c(),8)),
+    world_log:    safe(()=>worldLogDigest(c(),6)),
+    trackers:     safe(()=>trackerContext(c())),
+    promises:     safe(()=>promiseDirectorBlock(c())),
+    staging:      safe(()=>{ let x=(state.intentOn!==false)?armedStagingSummary(c()):"";
+                             try{ const q=charQuestStagingSummary(c()); if(q)x+=(x?"\n\n":"")+q; }catch(e){}
+                             return x; }),
+    offstage:     safe(()=>offstageRoster(c())),
+    calendar:     safe(()=>calendarContextLine(c(),state.user,"__user__",{bare:true})),
+    quests:       safe(()=>questContextFor(c(),state.user,"__user__")),
+    universe_memory: safe(()=>universeMemoryBlock(uni(),{})),
+    hot_pairs:    safe(()=>hotPairsBlock(c(),uni())),
+    world_setting:safe(()=>(uni()||{}).setting||""),
+    directing_notes: safe(()=>(uni()||{}).directingNotes||""),
+    rumors:       safe(()=>{
+      const u=uni(); if(!u) return "";
+      const g=liveGossip(u.id)||[];
+      if(!g.length) return "";
+      return "Live rumours in this world:\n"+g.map(r=>"- "+(r.text||r.summary||"")).filter(x=>x.trim()!=="- ").join("\n");
+    }),
+    intents:      safe(()=>{
+      const ch=c(); if(!ch||!Array.isArray(ch.intents)) return "";
+      const live=ch.intents.filter(i=>i&&i.status!=="resolved");
+      if(!live.length) return "";
+      return "Private motives in play:\n"+live.map(i=>{
+        const h=castLabel?castLabel(ch,i.holderId):""; const t=castLabel?castLabel(ch,i.targetId):"";
+        return "- "+(h||"someone")+(t?(" toward "+t):"")+": "+(i.aim||i.kind||"");
+      }).join("\n");
+    }),
+    cast_here:    safe(()=>{
+      const ch=c(); if(!ch) return "";
+      return (presentIds(ch)||[]).map(id=>{const p=state.personas.find(x=>x.id===id);return p?p.name:"";})
+        .filter(Boolean).join("; ");
+    }),
+    cast_all:     safe(()=>{
+      const ch=c(); if(!ch) return "";
+      return state.personas.filter(p=>p.universeId===ch.universeId&&!p.removed).map(p=>p.name).join("; ");
+    })
+  };
+}
+/* Labels for the editor's piece list — same order the library is written in. */
+const ENGINE_LIBRARY_LABELS={
+  scene:"Scene, place, time, who is here",
+  scene_writer:"Scene context as the Scene Writer sees it",
+  exchange:"The recent exchange",
+  memories:"What the cast remembers lately",
+  world_log:"What the world did offstage",
+  trackers:"Tracker values",
+  promises:"Open promises and commitments",
+  staging:"Schemes waiting on a scene condition",
+  offstage:"Who is where, offstage",
+  calendar:"Plans and meetings due",
+  quests:"Active quests",
+  universe_memory:"State zero + the world's chronicle",
+  hot_pairs:"Bonds that moved recently",
+  world_setting:"The universe setting text",
+  directing_notes:"How drama works in this world",
+  rumors:"Live rumours",
+  intents:"Private motives in play",
+  cast_here:"Who is present right now",
+  cast_all:"Everyone in this world"
+};
+
+
+
+/* Auto-registered from the converted call sites. Each starts with ONE data piece — exactly what
+   the call site used to concatenate — plus the whole shared library above, so anything missing
+   can be added by typing a {{call//...}} rather than by changing code. Engines wanting finer
+   pieces get decomposed like gmJudge/gmAuthor below. */
+epDefine("attendanceEstimate","Attendance estimate","attendanceEstimate",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("attendancePersuade","Attendance persuasion","attendancePersuade",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("batchBioPrompt","Batch character generator \u00d7","batchBioPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("bioPrompt","Character bio generator","bioPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("calExec","World pulse (calendar executor)","calExec",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("charMovePrompt","Character move (2 call sites share this)","charMovePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("charQuestGen","Char quest (spawn)","charQuestGen",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("charQuestStep","Char quest (step)","charQuestStep",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("charQuestText","Char quest (text)","charQuestText",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("chronicler","Universe chronicle \u00b7 day","chronicler",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("condensePrompt","Long-term condense (2 call sites share this)","condensePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("confrontJudge","Confrontation judge","confrontJudge",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("contemplate","Contemplate","contemplate",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("daySummaryPrompt","Diary","daySummaryPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("directorAuthor","Director notes","directorAuthor",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("genrePackAuthor","Genre pack","genrePackAuthor",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("goalPursuit","World pulse (goal pursuit)","goalPursuit",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("goalsCurator","Goals curator","goalsCurator",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("gossipPrompt","Gossip","gossipPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("intentForm","Intent form","intentForm",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("intentTick","Intent tick","intentTick",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("latentNpc","Latent NPCs \u2014","latentNpc",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("memBuild","Memory (text) (2 call sites share this)","memBuild",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("memEval","Memory arc tracker","memEval",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("offstageEvent","World pulse (offstage interaction)","offstageEvent",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("originGen","Universe memory (state zero) \u2014","originGen",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("overtureJudge","Overture judge","overtureJudge",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("playerNarratePrompt","Auto-RP player narrator","playerNarratePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("poiGossip","Location gossip","poiGossip",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("presencePrompt","Presence tracker","presencePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("promptTuner","Prompt tuner","promptTuner",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("questGen","Quest arc \u2014","questGen",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("questNext","Quest next \u2014","questNext",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("relGenPrompt","Relationship generator","relGenPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("relPrompt","Daily relationship","relPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("rewritePrompt","Image prompt writer (2 call sites share this)","rewritePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("routerChar","Turn router \u00b7 character (2 call sites share this)","routerChar",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("routerPlayer","Turn router \u00b7 player","routerPlayer",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("ruleCompiler","World-rule compiler","ruleCompiler",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("rumorJudge","Rumor judge (raise) (2 call sites share this)","rumorJudge",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("sceneSetup","Scene writer: setup","sceneSetup",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("trackerGen","Tracker generator","trackerGen",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("travelPrompt","Travel narration","travelPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("univPrompt","Universe generator","univPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("voiceCheckPrompt","Voice check","voiceCheckPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_appearance_generator","Appearance generator","x_appearance_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_arrival","Arrival \u2014","x_arrival",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_arrival_line","Arrival line \u2014","x_arrival_line",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_bg_task","BG task \u2014","x_bg_task",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_char_quest_reconcile","Char quest reconcile","x_char_quest_reconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_day_transition_narration","Day transition narration","x_day_transition_narration",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_location_generator","Location generator (","x_location_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_look_split","Look split","x_look_split",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_meeting_no_show_beat","Meeting no-show beat","x_meeting_no_show_beat",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_playground_video_prompt_writ","Playground video prompt writer","x_playground_video_prompt_writ",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_proactive_text","Proactive text \u2014","x_proactive_text",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_quest_reconcile","Quest reconcile","x_quest_reconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_reveal_npc","Reveal NPC \u2014","x_reveal_npc",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_scene_recap","Scene recap","x_scene_recap",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_schedule_generator","Schedule generator","x_schedule_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_video_motion_prompt_writer","Video motion prompt writer","x_video_motion_prompt_writer",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_voice_sample_script_writer","Voice sample script writer","x_voice_sample_script_writer",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_write_prompt_with_ai","Write prompt with AI","x_write_prompt_with_ai",[{name:"data",label:"Everything this engine sends about your story"}]);
+/* ---- Engine part registries. Order + separators here reproduce the concatenation each call site
+   used to build inline; tests/engine-parity.test.js holds every entry to that. ---- */
+epDefine("gmJudge","Gamemaster — is the scene stale?","gmJudge",[
+  {name:"scene",     label:"Scene, cast, place, trackers, plans"},
+  {name:"memories",  label:"What the cast remembers lately"},
+  {name:"director_log",label:"What this director already staged"},
+  {name:"exchange",  label:"The recent exchange", sep:"Recent exchange:\n"},
+  {name:"staging",   label:"Schemes waiting on a scene condition"},
+  {name:"world",     label:"What the world did offstage"}
+]);
+epDefine("gmAuthor","Gamemaster — write the beat","gmAuthor",[
+  {name:"scene",     label:"Scene, cast, place, trackers, plans"},
+  {name:"cast",      label:"Who is present, and who could arrive"},
+  {name:"memories",  label:"What the cast remembers lately"},
+  {name:"director_log",label:"What this director already staged"},
+  {name:"world",     label:"What the world did offstage"},
+  {name:"exchange",  label:"The recent exchange", sep:"Recent exchange:\n"},
+  {name:"staging",   label:"Schemes waiting on a scene condition"}
+]);
+
+function epTplKey(key){ return "eng:"+key; }
+
+/* The classic concatenation, rebuilt from the registry — the fallback AND the parity target. */
+function epClassicUser(key,parts){
+  const d=epDef(key); if(!d) return "";
+  const gap=(d.gap==null?"\n\n":d.gap);
+  const out=[];
+  d.parts.forEach(p=>{
+    const v=parts&&parts[p.name]!=null?String(parts[p.name]):"";
+    if(!v.trim()) return;   // a label with nothing under it is noise — both paths drop it
+    out.push((p.sep||"")+v);
+  });
+  return out.join(gap);
+}
+function epDefaultTemplate(key){
+  const d=epDef(key); if(!d) return "";
+  let out="[system]\n{{call//prompt}}\n[system end]\n\n[user]\n";
+  out+=d.parts.map(p=>(p.sep?p.sep.replace(/\n+$/,"")+"\n":"")+"{{call//"+p.name+"}}").join("\n\n");
+  out+="\n[end user]\n";
+  return out;
+}
+/* Names an engine template may call, for the editor's warnings and its piece list. */
+function epKnownNames(key){
+  const d=epDef(key); const k={prompt:true};
+  Object.keys(ENGINE_LIBRARY_LABELS).forEach(n=>k[n]=true);
+  if(d) d.parts.forEach(p=>k[p.name]=true);
+  return k;
+}
+function epMessages(key,systemText,parts){
+  if(!state.payloadTplOn) return null;
+  const d=epDef(key); if(!d) return null;
+  let msgs=[];
+  try{
+    const report={unknownCall:[],unknownVar:[]};
+    const own=Object.assign({},parts||{});
+    Object.keys(own).forEach(k=>{ own[k]=(own[k]==null?"":String(own[k])); });
+    /* Library first, the engine's own pieces second — a call site that supplies `trackers` itself
+       wins over the generic one, and anything it does NOT supply is still callable. */
+    const srcs=Object.assign(engineLibrary(typeof curChat==="function"?curChat():null),
+                             {prompt:String(systemText==null?"":systemText)}, own);
+    const vars=ptVars({chat:(typeof curChat==="function"?curChat():null)});
+    ptParse(ptTemplate(epTplKey(key))).forEach(pt=>{
+      if(pt.type==="history") return;           // engines have no transcript slot
+      const body=ptExpand(pt.text,srcs,vars,report);
+      if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
+    });
+    if(report.unknownCall.length||report.unknownVar.length){
+      const e=dbg("Engine template — names that do not exist ("+key+")","In-app",
+        "(template check — no network request)",
+        {engine:d.label,unknown_calls:report.unknownCall,unknown_values:report.unknownVar,
+         note:"Typed in Settings → Payloads but not recognised for this engine. Calls sent nothing."});
+      dbgDone(e,"error",{fix:"Settings → Payloads → Engine payload templates → "+d.label});
+    }
+  }catch(err){
+    try{ const e=dbg("Engine template FAILED ("+key+") — used the standard payload instead","In-app",
+      "(template error — no network request)",{error:String(err&&err.message||err)});
+      dbgDone(e,"error",{fix:"Settings → Payloads → reset this engine template."}); }catch(e2){}
+    return null;
+  }
+  /* An engine that ends up with no user message would be asking the model to answer about
+     nothing — safer to fall back than to send it. */
+  if(!msgs.length || !msgs.some(m=>m.role==="user")) return null;
+  return msgs;
+}
+/* One call for a converted call site: template if enabled and valid, classic otherwise. */
+function epSend(key,systemText,parts){
+  const m=epMessages(key,systemText,parts);
+  if(m) return m;
+  /* The classic path — what runs whenever templates are off, which is the default. It MUST be
+     byte-identical to the concatenation this replaced, including sending an empty user message if
+     that is what the old code did: some providers reject a system-only request. */
+  return [{role:"system",content:String(systemText==null?"":systemText)},
+          {role:"user",content:epClassicUser(key,parts)}];
 }
 
 /* v19.2 — attach editable template-fragment lists (`tpls`) + scope tags to the reply-payload
@@ -19643,10 +19874,7 @@ async function maybeShowRecap(chat){
   bn.innerHTML=`<div class="recap"><span class="recapTag">Previously…</span> <span class="desc">recapping…</span></div>`;
   try{
     const convo=msgs.slice(-16).map(m=>`${m.role==='user'?state.user:(m.speaker||'Narrator')}: ${m.content}`).join("\n");
-    const out=await chatCompletion([
-      {role:"system",content:"You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands.\n\n"+langDirective()},
-      {role:"user",content:`Scene so far:\n${convo}\n\nWrite the one-line recap.`}
-    ],state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
+    const out=await chatCompletion(epSend("x_scene_recap","You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands.\n\n"+langDirective(),{data:`Scene so far:\n${convo}\n\nWrite the one-line recap.`}),state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
     const txt=(out||"").trim().replace(/^["']|["']$/g,"");
     if(txt){
       bn.innerHTML=`<div class="recap"><span class="recapTag">Previously…</span> ${esc(txt)} <button class="recapX" onclick="document.getElementById('recapBanner').classList.add('hide')"><svg class="ic"><use href="#i-x"/></svg></button></div>`;
@@ -19949,10 +20177,7 @@ async function narrateCharMove(chat,mover,opts){
       `Time: Day ${chat.gameDay||1}, ${period}`
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
-    const out=await chatCompletion([
-      {role:"system",content:sys+"\n\n"+langDirective()},
-      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}
-    ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
+    const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}),state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
     let beat=(out||"").trim().replace(/^["']|["']$/g,"");
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
@@ -19986,10 +20211,7 @@ async function narrateCharMoveGroup(chat,movers,opts){
       `Write ONE short beat (${Math.min(4,movers.length+1)} sentences at most) covering ALL of them together. Give EACH character a DISTINCT action, manner or detail true to who they are — never recycle the same phrasing between two people. No dialogue.`
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
-    const out=await chatCompletion([
-      {role:"system",content:sys+"\n\n"+langDirective()},
-      {role:"user",content:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}
-    ],state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
+    const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx+"\n\nWrite the short movement beat now, in "+storyLangName()+"."}),state.gmModel,{temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
     let beat=(out||"").trim().replace(/^["']|["']$/g,"");
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     return beat;
@@ -21166,10 +21388,7 @@ async function narratePlayerTurn(rawText,chat,opts){
     +"\n\n"+langDirective();
   const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
   try{
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:(recent?`Recent lines:\n${recent}\n\n`:"")+`${state.user} just typed (rewrite this as their turn):\n${rawText}`}
-    ],model,{temp:fnTemp("mem",0.6),max:fnTok("mem",200),dbg:"Auto-RP player narrator"});
+    const out=await chatCompletion(epSend("playerNarratePrompt",sys,{data:(recent?`Recent lines:\n${recent}\n\n`:"")+`${state.user} just typed (rewrite this as their turn):\n${rawText}`}),model,{temp:fnTemp("mem",0.6),max:fnTok("mem",200),dbg:"Auto-RP player narrator"});
     const clean=(out||"").trim().replace(/^["']|["']$/g,"").trim();
     return clean||rawText;   // fall back to raw text if the model returns nothing
   }catch(e){ return rawText; }   // never block the turn — fall back to what they typed
@@ -21530,10 +21749,7 @@ async function rememberTextExchange(chat,p){
     const convo=th.slice(Math.max(prevLen,th.length-10)).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
       `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`+"\n\n"+engineLangDirective();
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Text conversation ${p.name} had with ${state.user}:\n\n${convo}`}
-    ],state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
+    const out=await chatCompletion(epSend("memBuild",sys,{data:`Text conversation ${p.name} had with ${state.user}:\n\n${convo}`}),state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
     const j=parseJSON(out);
     if(!j||!j.content)return;
     const importance=typeof j.importance_score==="number"?j.importance_score:0.4;
@@ -21762,7 +21978,7 @@ async function maybeProactiveText(chat,opts){
       +`\n# Now\nDay ${today}, ${chatPeriod(chat)}. Decide whether ${p.name} texts ${state.user} now. Return the JSON.`;
     // v28.6 — was state.gmModel, so an unprompted text was written by a different model than every
     // other line this character speaks. It is the same character on the same channel: same model.
-    const outr=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],rpModel(),{temp:fnTemp("rp",0.8),max:fnTok("rp",220),dbg:"Proactive text — "+p.name});
+    const outr=await chatCompletion(epSend("x_proactive_text",sys,{data:usr}),rpModel(),{temp:fnTemp("rp",0.8),max:fnTok("rp",220),dbg:"Proactive text — "+p.name});
     const j=parseJSON(outr)||{};
     if(!j.text || !j.message || !String(j.message).trim())return false;
     let m=_cleanTextReply(j.message,p.name); m=m.trim();
@@ -22399,10 +22615,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     let responders=[],addressed="group";
     try{
       const sys=fillTpl(up("routerPlayer"),{user:state.user});
-      const out=await chatCompletion([
-        {role:"system",content:sys},
-        {role:"user",content:`Characters present (in earshot):\n${roster}\n\n${stimulus||`${state.user} just said:\n"${playerText}"`}\n\nRecent exchange:\n${castConvoText(chat,8)}`}
-      ],state.mcModel,{temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
+      const out=await chatCompletion(epSend("routerPlayer",sys,{data:`Characters present (in earshot):\n${roster}\n\n${stimulus||`${state.user} just said:\n"${playerText}"`}\n\nRecent exchange:\n${castConvoText(chat,8)}`}),state.mcModel,{temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
       const j=parseJSON(out);
       if(j){addressed=j.addressed||"group";
         responders=(Array.isArray(j.responders)?j.responders:[]).map(n=>cast.find(c=>c.name.toLowerCase()===String(n).toLowerCase())).filter(Boolean);
@@ -22469,10 +22682,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
            five inputs arrived twice, on a call that fires after every character line in a
            multi-character chain and returns eighty tokens of JSON. The system prompt is the record;
            the user message is the question. */
-        const out=await chatCompletion([
-          {role:"system",content:sys},
-          {role:"user",content:`Should one of the other characters present respond to that, or does the turn return to ${state.user}? Return only the JSON.`}
-        ],state.mcModel,{temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
+        const out=await chatCompletion(epSend("routerChar",sys,{data:`Should one of the other characters present respond to that, or does the turn return to ${state.user}? Return only the JSON.`}),state.mcModel,{temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
         const j=parseJSON(out);
         if(j&&j.continue===true&&j.responder&&String(j.responder).toLowerCase()!=="null"){
           next=others.find(c=>c.name.toLowerCase()===String(j.responder).toLowerCase());
@@ -22776,10 +22986,7 @@ async function runPresenceTracker(chat){
         `If someone PRESENT moves to a DIFFERENT area of this same place (e.g. steps out to the toilet, goes to the bedroom, heads to the lounge), report it in "move" — NOT as an exit. Only use "exit" when they leave the whole place.`;
     }
     const sys=fillTpl(up("presencePrompt"),{user:state.user});
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}\n\nLatest exchange:\n${castConvoText(chat,4)}`}
-    ],state.mcModel,{temp:fnTemp("mc",0),max:fnTok("mc",110),dbg:"Presence tracker"});
+    const out=await chatCompletion(epSend("presencePrompt",sys,{data:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}\n\nLatest exchange:\n${castConvoText(chat,4)}`}),state.mcModel,{temp:fnTemp("mc",0),max:fnTok("mc",110),dbg:"Presence tracker"});
     const j=parseJSON(out);
     if(!j)return result;
     const all=cast.concat(chat.tempChars||[]);
@@ -23119,10 +23326,7 @@ async function illustrate(mid,replyText,force){
     const usr=_dress
       +(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any location/setting/lighting in it, those are added automatically). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
       +`LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
-    const rewritten=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:usr}
-    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Image prompt writer"});
+    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Image prompt writer"});
     // Style tail: the 30-style picker (state.style) OWNS the quality/aesthetic ending now. Append the
     // selected style's keywords unless the writer already produced them (idempotent — avoids a double
     // tail if a rule template still bakes the same words). This is the global style auto-injection,
@@ -23300,10 +23504,7 @@ async function animateScene(mid){
     const _vidRule=await pickRule(state.vidRules,_scenePrompt);       // which POSITION this is
     const _isExplicit=!!(_vidRule&&_vidRule.explicit);
     const _sys=videoWriterSystem(_vidRule);
-    const motion=await chatCompletion([
-      {role:"system",content:_sys},
-      {role:"user",content:`CLIP LENGTH: ${videoSeconds()} seconds\n\nStill scene:\n${_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)"}`}
-    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Video motion prompt writer"});
+    const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{data:`CLIP LENGTH: ${videoSeconds()} seconds\n\nStill scene:\n${_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)"}`}),state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Video motion prompt writer"});
     const vidPrompt=injectRuleKeywords(motion.trim().replace(/^["']|["']$/g,""),_vidRule);
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}
 
@@ -24527,10 +24728,7 @@ async function pgWritePrompt(){
       _dress=_wb?[_wb,_dc].filter(Boolean).join("\n\n")+"\n\n":"";
     }
     const usr=_dress+`(No previous image — describe the scene fresh.)\n\nLATEST EXCHANGE (what just happened — the authority on the current moment):\nNarrator: ${brief}`;
-    const rewritten=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:usr}
-    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Playground image prompt writer"});
+    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Playground image prompt writer"});
     _pg.prompt=rewritten.trim().replace(/^["']|["']$/g,"");
   }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
   _pg.busy=null; renderPlayground();
@@ -25011,10 +25209,7 @@ async function i2vWritePrompt(){
     const _isExplicit=!!(rule&&rule.explicit);
     const lastRec=_i2vLastRec();
     const _sys=videoWriterSystem(rule,{endPrompt:lastRec?(lastRec.prompt||""):""});
-    const out=await chatCompletion([
-      {role:"system",content:_sys},
-      {role:"user",content:`CLIP LENGTH: ${videoSeconds()} seconds\n\nStill scene:\n${rec.prompt||"(no stored prompt — write natural motion for the pictured scene)"}`}
-    ],state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Playground video prompt writer"});
+    const out=await chatCompletion(epSend("x_playground_video_prompt_writ",_sys,{data:`CLIP LENGTH: ${videoSeconds()} seconds\n\nStill scene:\n${rec.prompt||"(no stored prompt — write natural motion for the pictured scene)"}`}),state.rewriter,{temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Playground video prompt writer"});
     _i2v.prompt=out.trim().replace(/^["']|["']$/g,"");
   }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
   _i2v.busy=null; renderImg2Video();
@@ -25663,10 +25858,7 @@ async function endDay(){
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
       const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.\n\n`+langDirective();
-      const nout=await chatCompletion([
-        {role:"system",content:nsys},
-        {role:"user",content:`The scene so far (Day ${day}):\n${lastMsgs||"(a quiet day)"}\n\nWrite the day-ending transition into Day ${day+1}.`}
-      ],state.model,{temp:0.8,max:160,dbg:"Day transition narration"});
+      const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{data:`The scene so far (Day ${day}):\n${lastMsgs||"(a quiet day)"}\n\nWrite the day-ending transition into Day ${day+1}.`}),state.model,{temp:0.8,max:160,dbg:"Day transition narration"});
       if(nout&&nout.trim())narration=nout.trim().replace(/^["']|["']$/g,"");
     }catch(e){/* keep default */}
   }
@@ -25770,10 +25962,7 @@ async function runGossipPropagation(chat,day,uni){
         charge:String(obs.charge), location:obs.location||(chat&&chat.location)||"",
         witness_ties:ties, candidates:candList
       });
-      const out=await chatCompletion([
-        {role:"system",content:sys+"\n\n"+engineLangDirective()},
-        {role:"user",content:`Decide what ${witness.name} does with what they saw.`}
-      ],model,{temp:fnTemp("mem",0.6),max:fnTok("mem",400),dbg:"Gossip · "+witness.name});
+      const out=await chatCompletion(epSend("gossipPrompt",sys+"\n\n"+engineLangDirective(),{data:`Decide what ${witness.name} does with what they saw.`}),model,{temp:fnTemp("mem",0.6),max:fnTok("mem",400),dbg:"Gossip · "+witness.name});
       const j=parseJSON(out);
       const spread=j&&Array.isArray(j.spread)?j.spread:[];
       for(const g of spread.slice(0,2)){
@@ -25941,15 +26130,12 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
   const world=(()=>{ try{ const u=universeById(uid); return (u&&u.directingNotes&&u.directingNotes.trim())?u.directingNotes.trim().slice(0,400):"(ordinary social world)"; }catch(e){ return "(ordinary social world)"; } })();
   const allies=(it.allies||[]).map(nameById).filter(Boolean).join(", ")||"(none)";
   try{
-    const out=await chatCompletion([
-      {role:"system",content:fillTpl(up("contemplate"),{
+    const out=await chatCompletion(epSend("contemplate",fillTpl(up("contemplate"),{
         holder:holder.name,
         nature:(holder.personality?String(holder.personality).slice(0,200):"ordinary")+((()=>{const g=engineGoals(holder,200);return g?` | driven by: ${g}`:"";})()),
         kind:it.kind, valence:it.valence||"hostile", target:it.targetName||nameById(it.targetId)||state.user,
         aim:it.aim||"", trigger:it.trigger||"", strength:String((it.strength||0.6).toFixed(2)),
-        allies, leverage, world })+"\n\n"+engineLangDirective()},
-      {role:"user",content:`How does ${holder.name} make their move? Return the JSON.`}
-    ],model,{temp:fnTemp("mem",0.6),max:fnTok("mem",300),dbg:"Contemplate · "+holder.name});
+        allies, leverage, world })+"\n\n"+engineLangDirective(),{data:`How does ${holder.name} make their move? Return the JSON.`}),model,{temp:fnTemp("mem",0.6),max:fnTok("mem",300),dbg:"Contemplate · "+holder.name});
     const j=parseJSON(out)||{};
     const METHODS=new Set(["direct","public_spectacle","proxy","undermine_first","ambush_isolation","leverage"]);
     let method=String(j.method||"").toLowerCase();
@@ -26293,8 +26479,7 @@ async function runOffstageInteraction(chat,uni){
     world:String(curWorldSetting()||"").slice(0,700)
   });
   const _prB=promiseContextForNames(chat,[best.a.name,best.b.name]);
-  const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+mixedLangDirective(["headline","event"])},
-    {role:"user",content:(_prB?`WORDS THESE TWO ARE BOUND BY (open-ended commitments — the event must not contradict one; a character choosing between a commitment and what they want is the good version of using these):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}],
+  const out=await chatCompletion(epSend("offstageEvent",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{data:(_prB?`WORDS THESE TWO ARE BOUND BY (open-ended commitments — the event must not contradict one; a character choosing between a commitment and what they want is the good version of using these):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}),
     state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (offstage interaction)"});
   const j=parseJSON(out);
   if(!j||!j.happened)return false;
@@ -26355,8 +26540,7 @@ async function runCalendarExecutor(chat,uni){
     });
     try{
       const _prB=promiseContextForNames(chat,parts.map(pp=>pp.name));
-      const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+mixedLangDirective(["headline","event"])},
-        {role:"user",content:(_prB?`WORDS THESE PEOPLE ARE BOUND BY (open-ended commitments — how this plays out must not contradict one):\n${_prB}\n\n`:"")+"Resolve it and respond with ONLY the JSON."}],
+      const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{data:(_prB?`WORDS THESE PEOPLE ARE BOUND BY (open-ended commitments — how this plays out must not contradict one):\n${_prB}\n\n`:"")+"Resolve it and respond with ONLY the JSON."}),
         state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (calendar executor)"});
       const j=parseJSON(out); if(!j||!j.event){ e.result=e.result||""; continue; }
       const uniObj=uni||universeById(chat.universeId);
@@ -26449,8 +26633,7 @@ async function runGoalPursuit(chat,day,uni){
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[p.name]);
-        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+engineLangDirective()},
-          {role:"user",content:(_prB?`WORDS ${p.name} IS BOUND BY (open-ended commitments — never choose a move that breaks one unless breaking it IS the move, and then say so plainly):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion(epSend("goalPursuit",tpl+"\n\n"+engineLangDirective(),{data:(_prB?`WORDS ${p.name} IS BOUND BY (open-ended commitments — never choose a move that breaks one unless breaking it IS the move, and then say so plainly):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}),
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (goal pursuit) · "+p.name});
         j=parseJSON(out);
       }catch(err){}
@@ -26601,14 +26784,11 @@ async function runIntentEngine(chat,day,uni){
     const rosterList=roster.filter(p=>p.id!==holderId).map(p=>p.name).concat(state.user).join(", ");
     const relBlock=holderRelationshipBlock(chat,holder,day,nameById)||"(no notable relationships on record)";
     try{
-      const out=await chatCompletion([
-        {role:"system",content:fillTpl(up("intentForm"),{
+      const out=await chatCompletion(epSend("intentForm",fillTpl(up("intentForm"),{
           user:state.user, char:holder.name,
           nature:(holder.personality?String(holder.personality).slice(0,220):"ordinary"),
           goals:engineGoals(holder,300)||"(no stated goals — judge from nature and events)",
-          day_memories:mems, relationships:relBlock, roster:rosterList })+"\n\n"+engineLangDirective()},
-        {role:"user",content:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}
-      ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
+          day_memories:mems, relationships:relBlock, roster:rosterList })+"\n\n"+engineLangDirective(),{data:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}),model,{temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
       const j=parseJSON(out)||{};
       const arr=Array.isArray(j.intents)?j.intents:[];
       for(const it of arr.slice(0,1)){
@@ -26649,15 +26829,12 @@ async function runIntentEngine(chat,day,uni){
                 return `- ${p.name}${tieH?` (${holder.name}'s ${tieH})`:""}${tieT?`, and ${it.targetName}'s ${tieT}`:""}`; })
       .join("\n")||"(no one available)";
     try{
-      const out=await chatCompletion([
-        {role:"system",content:fillTpl(up("intentTick"),{
+      const out=await chatCompletion(epSend("intentTick",fillTpl(up("intentTick"),{
           holder:holder.name, nature:holder.personality?String(holder.personality).slice(0,160):"ordinary",
           kind:it.kind, target:it.targetName, aim:it.aim, trigger:it.trigger,
           strength:String(it.strength.toFixed(2)),
           allies:(it.allies||[]).map(nameById).filter(Boolean).join(", ")||"(none)",
-          candidates:cand })+"\n\n"+engineLangDirective()},
-        {role:"user",content:`Develop ${holder.name}'s ${it.kind} over one more day. Return the JSON.`}
-      ],model,{temp:fnTemp("mem",0.5),max:fnTok("mem",200),dbg:"Intent tick · "+holder.name});
+          candidates:cand })+"\n\n"+engineLangDirective(),{data:`Develop ${holder.name}'s ${it.kind} over one more day. Return the JSON.`}),model,{temp:fnTemp("mem",0.5),max:fnTok("mem",200),dbg:"Intent tick · "+holder.name});
       const j=parseJSON(out)||{};
       const d=typeof j.strength_delta==="number"?Math.max(-0.3,Math.min(0.3,j.strength_delta)):0;
       it.strength=Math.max(0,Math.min(1,it.strength+d));
@@ -27066,10 +27243,7 @@ async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
       // it silently return "" — the diary's genre voice was never injected from this path).
       const sys=fillTpl(up("daySummaryPrompt"),{char:c.name,user:state.user})+_gpTailU("diaryVoice",universeById(uni))+
         `\n\nWrite strictly from ${c.name}'s own perspective, grounded ONLY in the memories below — the things ${c.name} personally experienced and would actually record. Never reference events ${c.name} did not witness.`+"\n\n"+langDirective();
-      const out=await chatCompletion([
-        {role:"system",content:sys},
-        {role:"user",content:`Day ${day} — ${c.name}'s diary. The memories ${c.name} formed today:\n\n${memList}`}
-      ],state.memModel,{temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",500),900),dbg:"Diary · "+c.name});   // generous token headroom so a dense diary isn't cut off mid-sentence
+      const out=await chatCompletion(epSend("daySummaryPrompt",sys,{data:`Day ${day} — ${c.name}'s diary. The memories ${c.name} formed today:\n\n${memList}`}),state.memModel,{temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",500),900),dbg:"Diary · "+c.name});   // generous token headroom so a dense diary isn't cut off mid-sentence
       const j=_parseDiaryOut(out);
       if(j&&j.content){
         state.memory.push({
@@ -27575,7 +27749,7 @@ async function generateOriginDoc(u,ovr){
   let out=null;
   const uReq=(ovr.instr&&String(ovr.instr).trim())?`\n\nUSER'S REQUEST (shape the briefing around this): ${String(ovr.instr).trim()}`:"";
   try{
-    out=await chatCompletion([{role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:"Write the STATE ZERO briefing now."+uReq}],
+    out=await chatCompletion(epSend("originGen",sys+"\n\n"+engineLangDirective(),{data:"Write the STATE ZERO briefing now."+uReq}),
       authoringModel(),{temp:fnTemp("unigen",0.7),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
   }catch(e){ _qlog("origin.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const doc=String(out||"").trim();
@@ -27664,7 +27838,7 @@ async function runUniverseChronicler(chat,day,uni){
     if(!mems.length&&!qlines.length)return;
     const sys=fillTpl(up("chronicler",uni.id),{user:uni.userName||state.user||"the player",day:String(day)});
     const usr=`Day ${day} evidence.\n\nMEMORIES FORMED TODAY (all characters, [owner] prefixed):\n${mems.join("\n")||"(none)"}\n\nQUEST MOVEMENTS TODAY:\n${qlines.join("\n")||"(none)"}\n\nReturn the JSON now.`;
-    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:usr}],state.memModel,
+    const out=await chatCompletion(epSend("chronicler",sys+"\n\n"+engineLangDirective(),{data:usr}),state.memModel,
       {temp:fnTemp("mem",0.3),max:fnTok("mem",500),frequency_penalty:0,presence_penalty:0,dbg:"Universe chronicle · day "+day});
     const j=parseJSON(out); const arr=Array.isArray(j)?j:(j&&Array.isArray(j.entries)?j.entries:null);
     if(!arr||!arr.length){ _qlog("chronicle",`day ${day}: nothing consequential recorded`); return; }
@@ -27736,7 +27910,7 @@ async function generateQuestArc(u,brief){
   });
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:"Write the arc JSON now."}],
+    out=await chatCompletion(epSend("questGen",sys+"\n\n"+engineLangDirective(),{data:"Write the arc JSON now."}),
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,dbg:"Quest arc — "+brief});
   }catch(e){ _qlog("arc.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("arc.fail","reply didn't parse as JSON"); return null; }
@@ -27972,7 +28146,7 @@ async function generateNextQuest(chat,uni,arc){
   _qlog("next.design",`arc "${arc}" day ${day} — history ${gd.quests.filter(q=>q&&q.arc===arc).length} quest(s), ${under?"undercurrents fed":"no undercurrents"}`);
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys+"\n\n"+mixedLangDirective(["epilogue"])},{role:"user",content:"Write the JSON now."}],
+    out=await chatCompletion(epSend("questNext",sys+"\n\n"+mixedLangDirective(["epilogue"]),{data:"Write the JSON now."}),
       authoringModel(),{temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Quest next — "+arc});
   }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
@@ -28098,7 +28272,7 @@ OUTPUT FORMAT — return ONLY a JSON array. No prose, no explanation, no markdow
 Example of a valid reply:
 [{"id":"q_abc123","done":false,"progress":"Aysu babasının çekmecesindeki mektubu buldu ama kimseye göstermedi."}]`;
     const usr=`Day ${day} just ended.\n\nACTIVE QUESTS — each with its own character(s) and THEIR memories from today:\n\n${sections.join("\n\n")}\n\nReturn the JSON array now (or [] if no quest changed).`;
-    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:usr}],state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
+    const out=await chatCompletion(epSend("x_quest_reconcile",sys+"\n\n"+engineLangDirective(),{data:usr}),state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
     const arr=parseJSON(out);
     if(!Array.isArray(arr)||!arr.length){ _qlog("reconcile",`day ${day}: no quest movement judged (${active.length} active)`); return; }
     _qlog("reconcile",`day ${day}: ${arr.length} verdict(s) for ${active.length} active quest(s)`);
@@ -28638,7 +28812,7 @@ async function runBackgroundTasks(chat,day,uni){
       const sys=`You narrate a brief OFFSTAGE outcome in a roleplay, in ${storyLangName().toUpperCase()}. ${doer.name} spent time — away from ${state.user} — working on this on their own: "${String(e.title||"").slice(0,120)}". It ${success?"SUCCEEDED":"FAILED"}. Write ONE short, vivid third-person beat (1-2 sentences)${success?"":" showing what went wrong"}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`;
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:"Narrate it."}],state.bioModel,{temp:fnTemp("mem",0.85),max:fnTok("mem",260),frequency_penalty:0,presence_penalty:0,dbg:"BG task — "+e.title});
+        const out=await chatCompletion(epSend("x_bg_task",sys,{data:"Narrate it."}),state.bioModel,{temp:fnTemp("mem",0.85),max:fnTok("mem",260),frequency_penalty:0,presence_penalty:0,dbg:"BG task — "+e.title});
         j=parseJSON(out);
       }catch(err){}
       const headline=(j&&j.headline)||(success?(doer.name+" görevi tamamladı"):(doer.name+" başarısız oldu"));
@@ -28927,7 +29101,7 @@ async function _curateGoalsFor(chat,p,day,uid,max){
   ].filter(Boolean).join("\n\n");
   let out;
   try{
-    out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],
+    out=await chatCompletion(epSend("goalsCurator",sys,{data:usr}),
       state.memModel,{temp:fnTemp("mem",0.4),max:fnTok("mem",420),frequency_penalty:0,presence_penalty:0,
       dbg:"Goals curator · "+p.name});
   }catch(e){ return; }
@@ -29104,7 +29278,7 @@ async function runCharQuestSpawn(chat,day,uni){
       });
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+engineLangDirective()},{role:"user",content:"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion(epSend("charQuestGen",tpl+"\n\n"+engineLangDirective(),{data:"Decide and respond with ONLY the JSON."}),
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (spawn) · "+p.name});
         j=parseJSON(out);
       }catch(err){}
@@ -29184,8 +29358,7 @@ async function runCharQuestPursuit(chat,day,uni){
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[holder.name,target.name]);
-        const out=await chatCompletion([{role:"system",content:tpl+"\n\n"+mixedLangDirective(["headline","event"])},
-          {role:"user",content:(_prB?`WORDS THESE TWO ARE BOUND BY (open-ended commitments — the move must not contradict one):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}],
+        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{data:(_prB?`WORDS THESE TWO ARE BOUND BY (open-ended commitments — the move must not contradict one):\n${_prB}\n\n`:"")+"Decide and respond with ONLY the JSON."}),
           state.memModel,{temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (step) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -29252,7 +29425,7 @@ async function maybeCharQuestText(chat){
       const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${state.user}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${state.user}.`}\n${seenLine?seenLine+"\n":""}Write the text message. Return the JSON.`;
       let j=null;
       try{
-        const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],
+        const out=await chatCompletion(epSend("charQuestText",sys,{data:usr}),
           state.gmModel,{temp:fnTemp("gm",0.8),max:fnTok("gm",220),dbg:"Char quest (text) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -29307,7 +29480,7 @@ Never on a hunch; if unsure it stays pending.
 Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if none:
 [{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense ENGLISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense ENGLISH sentence>"}]`;
     const usr=`Day ${day} just ended.\n\nMEMORIES FORMED TODAY (all characters — scenes and phone texts):\n${mems.join("\n")}\n\nDELIVERED CHARACTER QUESTS (asks made of ${state.user}):\n${qList}\n\nReturn the JSON array.`;
-    const out=await chatCompletion([{role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:usr}],
+    const out=await chatCompletion(epSend("x_char_quest_reconcile",sys+"\n\n"+engineLangDirective(),{data:usr}),
       state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",480),frequency_penalty:0,presence_penalty:0,dbg:"Char quest reconcile"});
     const arr=parseJSON(out);
     if(!Array.isArray(arr)||!arr.length){ _qlog("cq.reconcile",`day ${day}: no movement judged (${active.length} delivered)`); return; }
@@ -29579,7 +29752,8 @@ async function maybeGamemaster(chat,force){
     // v28.4 — what the world has been doing offstage that the player was never told. The GM can let
     // its consequences surface (that is exactly the pressure it should be building) but never
     // announce it as news.
-    const worldPart=(()=>{ try{ const w=worldLogDigest(chat,6); return w?("\n\n"+w):""; }catch(e){ return ""; } })();
+    const worldRaw=(()=>{ try{ return worldLogDigest(chat,6)||""; }catch(e){ return ""; } })();
+    const worldPart=worldRaw?("\n\n"+worldRaw):"";
     // v26.4 — and what this director has already staged, so it stops re-running its own beats.
     const logBlock=directorEventLog(chat);
     const logPart=logBlock?("\n\n"+logBlock):"";
@@ -29588,10 +29762,10 @@ async function maybeGamemaster(chat,force){
     if(!force){
       const judgeSys=fillTpl(up("gmJudge"),{user:state.user,sensitivity:state.gmSensitivity||"balanced"})+_gpTail("pacing",chat)   // v20 — genre defines what "stale" means
         +(_private?"\n\n## THIS MOMENT IS PRIVATE\nThe player is in an intimate or private scene right now. Nobody may arrive, and nothing may interrupt. Do NOT flag a tension trigger for the intimacy itself — that is the scene working, not a problem to solve. Flag `stale` only if this has genuinely stopped going anywhere. Anything the world wants to do about this waits until afterwards.":"")
-      const judgeOut=await chatCompletion([
-        {role:"system",content:judgeSys},
-        {role:"user",content:(ctx?ctx+"\n\n":"")+(memBlock?memBlock+"\n\n":"")+(logBlock?logBlock+"\n\n":"")+`Recent exchange:\n${since}`+stagingBlock+worldPart}
-      ],state.gmModel,{temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
+      const judgeOut=await chatCompletion(
+        epSend("gmJudge",judgeSys,{scene:ctx,memories:memBlock,director_log:logBlock,
+          exchange:since,staging:staging,world:worldRaw}),
+        state.gmModel,{temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
       const j=parseJSON(judgeOut);
       // The judge now reports TWO independent signals: staleness (the scene has stalled) and a
       // tension trigger (the scene is healthy but ripe for an external complication). Intervene if
@@ -29621,16 +29795,15 @@ async function maybeGamemaster(chat,force){
     })+(_private?"\n\n"+blkTpl("gm_private_lock"):"");
     const presentSheet=present.map(c=>{const _lk=lookProse(c.look);return c.name+(_lk?` (${_lk})`:"");}).join("; ")||"(nobody is currently nearby)";
     const offstageSheet=cast.filter(c=>!present.some(pc=>pc.id===c.id)).map(c=>c.name).join("; ");
-    const nudge=await chatCompletion([
-      {role:"system",content:authorSys+"\n\n"+engineLangDirective()},
-      // v26.4 — the day/time is already stated once, authoritatively, in the CURRENT SCENE line of
-      // directorContext; it used to be repeated here as a bare "Day N."
-      {role:"user",content:(ctx?ctx+"\n\n":"")
-        +`Characters present now: ${presentSheet}`
-        +(offstageSheet?`\nCharacters in this world who could arrive: ${offstageSheet}`:``)
-        +memPart+logPart+worldPart
-        +`\n\nRecent exchange:\n${since}`+stagingBlock}
-    ],state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
+    // v26.4 — the day/time is already stated once, authoritatively, in the CURRENT SCENE line of
+    // directorContext; it used to be repeated here as a bare "Day N."
+    const castSheet=`Characters present now: ${presentSheet}`
+      +(offstageSheet?`\nCharacters in this world who could arrive: ${offstageSheet}`:``);
+    const nudge=await chatCompletion(
+      epSend("gmAuthor",authorSys+"\n\n"+engineLangDirective(),
+        {scene:ctx,cast:castSheet,memories:memBlock,director_log:logBlock,world:worldRaw,
+         exchange:since,staging:staging}),
+      state.gmModel,{temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
     if(!clean)return;
     chat.pendingGmNudge=clean;persistChats();
@@ -29682,10 +29855,7 @@ async function setupActiveEvent(chat,eventText){
     const known=curCast().map(c=>c.name).join(", ");
     const ctx=directorContext(chat,"scene");
     const _mem=directorMemoryDigest(chat,8);
-    const out=await chatCompletion([
-      {role:"system",content:up("sceneSetup")+_gpTail("stakes",chat)+"\n\n"+engineLangDirective()},
-      {role:"user",content:(ctx?ctx+"\n\n":"")+(_mem?_mem+"\n\n":"")+`Known characters already in the cast: ${known}\nPlayer: ${state.user}\n\nThe event just introduced:\n${eventText}`}
-    ],state.gmModel,{temp:fnTemp("gm",0.4),max:fnTok("gm",200),dbg:"Scene writer: setup"});
+    const out=await chatCompletion(epSend("sceneSetup",up("sceneSetup")+_gpTail("stakes",chat)+"\n\n"+engineLangDirective(),{data:(ctx?ctx+"\n\n":"")+(_mem?_mem+"\n\n":"")+`Known characters already in the cast: ${known}\nPlayer: ${state.user}\n\nThe event just introduced:\n${eventText}`}),state.gmModel,{temp:fnTemp("gm",0.4),max:fnTok("gm",200),dbg:"Scene writer: setup"});
     // If the classifier reply doesn't parse, still set up a minimal environment
     // event so the Scene Writer keeps driving the scene instead of going silent.
     const j=parseJSON(out)||{type:"environment",summary:eventText};
@@ -29752,10 +29922,7 @@ async function runConfrontJudge(chat,ev,playerTurn){
     player_turn:(playerTurn||"(no response)").slice(0,600)
   });
   try{
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Score ${state.user}'s latest turn. Return the JSON.`}
-    ],state.gmModel,{temp:fnTemp("gm",0.1),max:fnTok("gm",120),dbg:"Confrontation judge"});
+    const out=await chatCompletion(epSend("confrontJudge",sys,{data:`Score ${state.user}'s latest turn. Return the JSON.`}),state.gmModel,{temp:fnTemp("gm",0.1),max:fnTok("gm",120),dbg:"Confrontation judge"});
     const j=parseJSON(out)||{};
     let d=typeof j.delta==="number"?j.delta:0;
     d=Math.max(-0.4,Math.min(0.4,d));            // clamp the delta itself
@@ -29851,10 +30018,7 @@ async function runOvertureJudge(chat,ev,playerTurn){
     player_turn:(playerTurn||"(no response)").slice(0,600)
   });
   try{
-    const out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`Score ${state.user}'s latest turn. Return the JSON.`}
-    ],state.gmModel,{temp:fnTemp("gm",0.1),max:fnTok("gm",120),dbg:"Overture judge"});
+    const out=await chatCompletion(epSend("overtureJudge",sys,{data:`Score ${state.user}'s latest turn. Return the JSON.`}),state.gmModel,{temp:fnTemp("gm",0.1),max:fnTok("gm",120),dbg:"Overture judge"});
     const j=parseJSON(out)||{};
     let d=typeof j.delta==="number"?j.delta:0;
     d=Math.max(-0.4,Math.min(0.4,d));
@@ -30258,10 +30422,7 @@ async function gamemasterReactions(chat){
       const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${c.interject.trim().slice(0,140)}`:"")).join("\n");
       const sys=fillTpl(up("routerChar"),{user:state.user,speaker:lastSpeaker?lastSpeaker.name:"the narrator",
         last_line:_lastLine,present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
-      const out=await chatCompletion([
-        {role:"system",content:sys},
-        {role:"user",content:`A narrator event just occurred. Which present character (if any) would react? Present:\n${_hooksSheet}\n\nRecent exchange:\n${castConvoText(chat,6)}`}
-      ],state.mcModel,{temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
+      const out=await chatCompletion(epSend("routerChar",sys,{data:`A narrator event just occurred. Which present character (if any) would react? Present:\n${_hooksSheet}\n\nRecent exchange:\n${castConvoText(chat,6)}`}),state.mcModel,{temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
       const j=parseJSON(out);
       if(j&&j.continue&&j.responder&&String(j.responder).toLowerCase()!=="null"){
         next=others.find(c=>c.name.toLowerCase()===String(j.responder).toLowerCase());
@@ -30432,9 +30593,7 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp){
         userMsg=`Complete event ${p.name} witnessed (with ${state.user}):\n\n${convo}`;
         max=fnTok("mem",560);
       }
-      const out=await chatCompletion([
-        {role:"system",content:sys+"\n\n"+engineLangDirective()},{role:"user",content:userMsg}
-      ],state.memModel,{temp:fnTemp("mem",0.3),max,dbg:(isBystander?"Bystander gist · ":"Memory (arc) · ")+p.name});
+      const out=await chatCompletion(epSend("memBuild",sys+"\n\n"+engineLangDirective(),{data:userMsg}),state.memModel,{temp:fnTemp("mem",0.3),max,dbg:(isBystander?"Bystander gist · ":"Memory (arc) · ")+p.name});
       const j=parseJSON(out);
       if(!j||!j.content)continue;
       const importance=typeof j.importance_score==="number"?j.importance_score:(isBystander?0.3:0.5);
@@ -30513,10 +30672,7 @@ async function maybeBuildMemory(chat){
 
   let progress="ongoing", topic="same", summary=ev.summary||"";
   try{
-    const out=await chatCompletion([
-      {role:"system",content:fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange})},
-      {role:"user",content:"Judge the arc now. Return the JSON."}
-    ],state.mcModel||state.model,{temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Memory arc tracker"});
+    const out=await chatCompletion(epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange}),{data:"Judge the arc now. Return the JSON."}),state.mcModel||state.model,{temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Memory arc tracker"});
     const j=parseJSON(out)||{};
     if(j.progress==="finished"||j.progress==="paused"||j.progress==="ongoing")progress=j.progress;
     if(j.topic==="same"||j.topic==="different")topic=j.topic;
@@ -30598,10 +30754,7 @@ async function maybeCondenseMemories(ownerId,name){
     const listed=cl.map((m,i)=>`[${i}] ${memText(m)} | day: ${m.gameDay||1} | importance: ${m.importance} | tags: ${(m.tags||[]).join(", ")}`).join("\n");
     let out;
     try{
-      out=await chatCompletion([
-        {role:"system",content:sys},
-        {role:"user",content:`These ${cl.length} of ${name}'s memories are about the SAME thread/topic. Merge them into ONE durable long-term memory that keeps the concrete who/where/what-changed and the lasting significance, dropping repetition and day-to-day trivia:\n\n${listed}`}
-      ],state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",500),dbg:"Long-term condense · "+name});
+      out=await chatCompletion(epSend("condensePrompt",sys,{data:`These ${cl.length} of ${name}'s memories are about the SAME thread/topic. Merge them into ONE durable long-term memory that keeps the concrete who/where/what-changed and the lasting significance, dropping repetition and day-to-day trivia:\n\n${listed}`}),state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",500),dbg:"Long-term condense · "+name});
     }catch(e){ continue; }
     const arr=parseJSON(out); const j=Array.isArray(arr)?arr[0]:arr;
     if(!j||!j.content) continue;
@@ -30646,10 +30799,7 @@ async function condenseDiaries(ownerId,name){
   const sys=fillTpl(up("condensePrompt"),{char:name,user:state.user})+"\n\n"+langDirective();
   let out;
   try{
-    out=await chatCompletion([
-      {role:"system",content:sys},
-      {role:"user",content:`${name}'s older DIARY entries (oldest first) — merge them into 1-2 durable PERIOD recollections that keep the concrete who/where/what-changed and the lasting feelings while dropping day-to-day trivia and any repeated beats. Information-dense, not prose, not repetitive:\n\n${listed}`}
-    ],state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Diary condenser · "+name});
+    out=await chatCompletion(epSend("condensePrompt",sys,{data:`${name}'s older DIARY entries (oldest first) — merge them into 1-2 durable PERIOD recollections that keep the concrete who/where/what-changed and the lasting feelings while dropping day-to-day trivia and any repeated beats. Information-dense, not prose, not repetitive:\n\n${listed}`}),state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Diary condenser · "+name});
   }catch(e){ return; }
   const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return;
   const earliestDay=Math.min(...older.map(m=>m.gameDay||1));
@@ -32083,6 +32233,104 @@ function ptShowCallName(name){
   toast("Type this: "+t);
 }
 
+/* ===== ENGINE TEMPLATE EDITOR (v33.1) =====
+   One editor per background engine. Same three jobs as the reply editor: type it, be told
+   immediately when a name does not exist, see the assembled result. */
+
+function epCatalog(key){
+  const d=epDef(key); const out=[];
+  out.push({name:"prompt",label:"The engine's own prompt",own:true});
+  (d?d.parts:[]).forEach(p=>out.push({name:p.name,label:p.label||p.name,own:true}));
+  Object.keys(ENGINE_LIBRARY_LABELS).forEach(n=>{
+    if(!out.some(o=>o.name===n)) out.push({name:n,label:ENGINE_LIBRARY_LABELS[n],own:false});
+  });
+  return out;
+}
+function epUsedBy(name){
+  const hits=[];
+  Object.keys(ENGINE_PARTS).forEach(k=>{
+    const re=new RegExp("\\{\\{\\s*call\\s*\\/\\/\\s*"+name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\}\\}","i");
+    if(re.test(ptTemplate(epTplKey(k)))) hits.push((epDef(k)||{}).label||k);
+  });
+  return hits;
+}
+function epShowUsedBy(name){
+  const hits=epUsedBy(name);
+  toast(hits.length?(name+" is used by: "+hits.slice(0,6).join(", ")+(hits.length>6?" +"+(hits.length-6)+" more":""))
+                   :(name+" is not used by any engine template right now"));
+}
+function renderEngineTemplates(){
+  const host=document.getElementById('engineTplList'); if(!host)return;
+  const keys=Object.keys(ENGINE_PARTS).sort((a,b)=>
+    String((epDef(a)||{}).label||a).localeCompare(String((epDef(b)||{}).label||b)));
+  host.innerHTML=
+    `<div class="desc" style="margin-bottom:8px">${keys.length} background engines. Each one's prompt is <code>{{call//prompt}}</code> and the story data it already sends is <code>{{call//data}}</code>. <b>Anything else you want it to know, add with a call</b> — the shared pieces below work in every engine, whether or not that engine was built to receive them.</div>
+     <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Shared pieces — work in every engine</b></summary>
+       <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:10px;margin-top:6px">
+       ${Object.keys(ENGINE_LIBRARY_LABELS).map(n=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border)">
+          <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{call//${esc(n)}}}</code>
+          <span class="desc" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(ENGINE_LIBRARY_LABELS[n])}</span>
+          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="ptShowCallName('${n}')">i</button>
+          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="epShowUsedBy('${n}')">used by</button>
+        </div>`).join("")}
+       </div>
+     </details>`
+    +keys.map(k=>{
+      const d=epDef(k), tk=epTplKey(k);
+      return `<details class="acc" data-eptpl="${k}"><summary><b>${esc(d.label||k)}</b> <span class="desc" style="display:inline">— ${ptIsCustom(tk)?"edited by you":"default"}</span></summary>
+        <div id="epWarn_${k}"></div>
+        <textarea id="epTpl_${k}" rows="12" spellcheck="false"
+          style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
+          oninput="epTplInput('${k}')">${esc(ptTemplate(tk))}</textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${k}')">Preview</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${k}')">Reset to default</button>
+        </div>
+        <div id="epPrev_${k}" style="margin-top:8px"></div>
+      </details>`;
+    }).join("");
+  keys.forEach(k=>epValidate(k));
+}
+function epTplInput(k){
+  const el=document.getElementById('epTpl_'+k); if(!el)return;
+  ptSetTemplate(epTplKey(k),el.value); epValidate(k);
+}
+function epResetTpl(k){
+  ptSetTemplate(epTplKey(k),null);
+  const el=document.getElementById('epTpl_'+k); if(el)el.value=ptTemplate(epTplKey(k));
+  epValidate(k); toast("Reset to the default structure");
+}
+function epValidate(k){
+  const host=document.getElementById('epWarn_'+k); if(!host)return;
+  const sc=ptScan(ptTemplate(epTplKey(k)),epKnownNames(k));
+  const bits=[];
+  if(sc.unknownCall.length)
+    bits.push(`<b>${icon("warn")} These pieces do not exist:</b> ${sc.unknownCall.map(n=>"<code>{{call//"+esc(n)+"}}</code>").join(", ")}<br>They will send nothing.`);
+  if(sc.unknownVar.length)
+    bits.push(`<b>${icon("warn")} These values do not exist:</b> ${sc.unknownVar.map(n=>"<code>{{"+esc(n)+"}}</code>").join(", ")}<br>They reach the model as literal text.`);
+  if(!/\{\{\s*call\s*\/\/\s*prompt\s*\}\}/i.test(ptTemplate(epTplKey(k))))
+    bits.push(`<b>${icon("warn")} No <code>{{call//prompt}}</code>.</b> This engine's own instructions are not being sent — it will very likely stop working. Put your own instructions in the template if you meant to replace them.`);
+  host.innerHTML=bits.length
+    ? `<div class="desc" style="border:1px solid var(--danger);border-radius:10px;padding:8px;margin-bottom:6px">${bits.join("<hr style='opacity:.25;margin:6px 0'>")}</div>`
+    : `<div class="desc" style="border:1px solid var(--border);border-radius:10px;padding:6px 8px;margin-bottom:6px">${icon("check")} Every name in this template exists.</div>`;
+}
+function epPreview(k){
+  const host=document.getElementById('epPrev_'+k); if(!host)return;
+  const d=epDef(k);
+  const parts={};
+  (d?d.parts:[]).forEach(p=>parts[p.name]="(this engine's "+(p.label||p.name).toLowerCase()+", filled in when it runs)");
+  const was=state.payloadTplOn; state.payloadTplOn=true;
+  let msgs=null;
+  try{ msgs=epMessages(k,"(this engine's prompt, from Settings above)",parts); }
+  finally{ state.payloadTplOn=was; }
+  if(!msgs||!msgs.length){ host.innerHTML=`<div class="desc">This template produced nothing to send — the engine would fall back to its standard payload.</div>`; return; }
+  host.innerHTML=`<div class="desc" style="margin-bottom:6px">Structure preview. The engine's own pieces are shown as labels; the shared pieces are filled from your current story.</div>`
+    +msgs.map((m,i)=>`<div style="margin-bottom:8px">
+        <div class="plqBadge" style="display:inline-block;margin-bottom:4px">message ${i+1} — ${esc(m.role)}</div>
+        <pre style="white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;font-size:11.5px;max-height:300px;overflow:auto">${esc(m.content)}</pre>
+      </div>`).join("");
+}
+
 function renderPayloadTemplates(){
   const host=document.getElementById('payloadTplList'); if(!host)return;
   const on=!!state.payloadTplOn;
@@ -32206,6 +32454,7 @@ function renderPayloadList(){
     });
   }
   renderPayloadTemplates();
+  renderEngineTemplates();
   renderEnginePayloads();
   renderPlaceholderGuide();
 }

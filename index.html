@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v32.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v32.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7340,7 +7340,13 @@ async function modelslabVideo(prompt,imageUrl,negative,rule){
 // where outputs carries the clip AND its final frame as a separate image).
 async function atlasGenerate(kind,body,label,setStat,opts){
   const wantAll=!!(opts&&opts.all);
-  const _ret=(url,outputs)=>wantAll?{url,outputs:Array.isArray(outputs)?outputs:(url?[url]:[])}:url;
+  /* `raw` is the WHOLE completed payload, not just `outputs`. return_last_frame does not always
+     come back as a second entry in `outputs` — depending on the model it can be a sibling field
+     on the result, or a second URL inside the single output object — and forwarding only
+     `dd.outputs` threw those shapes away before anything could look for them. */
+  const _ret=(url,outputs,raw)=>wantAll
+    ?{url,outputs:Array.isArray(outputs)?outputs:(url?[url]:[]),raw:raw||null}
+    :url;
   if(!state.atlasKey)throw{friendly:"No AtlasCloud API key set. Add it in Settings."};
   // AtlasCloud expects sizes as "width*height" (asterisk). Our RATIOS table and user-entered
   // rule sizes use "1024x576" style — normalize here, centrally, so every image call (scene,
@@ -7383,7 +7389,7 @@ async function atlasGenerate(kind,body,label,setStat,opts){
   const id=sub&&(sub.id||sub.request_id);
   // Some models may already return outputs synchronously.
   const immediate=sub&&Array.isArray(sub.outputs)&&sub.outputs[0];
-  if(immediate){const u=atlasOut(immediate,kind);dbgDone(entry,"ok",u);return _ret(u,sub.outputs);}
+  if(immediate){const u=atlasOut(immediate,kind);dbgDone(entry,"ok",u+_dbgOutsNote(sub));return _ret(u,sub.outputs,sub);}
   if(!id){dbgDone(entry,"error","No prediction id");throw{friendly:"AtlasCloud gave no result to fetch."};}
   // Poll the prediction endpoint. The canonical path is /model/prediction/{id}
   // (see AtlasCloud docs); some older/newer routes used /model/result/{id}, so we
@@ -7405,7 +7411,7 @@ async function atlasGenerate(kind,body,label,setStat,opts){
     if(st==="completed"||st==="succeeded"||st==="success"){
       // Result URL may live in outputs[0] (array) or output (object/string) depending on model.
       const out=atlasOut(dd.outputs&&dd.outputs[0],kind)||atlasOut(dd.output,kind)||atlasOut(dd.video_url,kind)||atlasOut(dd.url,kind);
-      if(out){dbgDone(entry,"ok",out);return _ret(out,dd.outputs);}
+      if(out){dbgDone(entry,"ok",out+_dbgOutsNote(dd));return _ret(out,dd.outputs,dd);}
     }
     if(st==="failed"||st==="error"||st==="canceled"||st==="cancelled"){
       dbgDone(entry,"error",(dd&&dd.error)||st);throw{friendly:"AtlasCloud: "+((dd&&dd.error)||"generation failed")};
@@ -7460,6 +7466,13 @@ function atlasOut(o,kind){
     for(const k in o){ if(_isUrl(o[k])) return o[k]; }
   }
   return null;
+}
+/* How many results came back, appended to the debug log's "ok" line. With return_last_frame on,
+   a clip that produced its final frame reports "2 outputs" — which is how you tell, without
+   guessing, whether the model returned the frame at all or the app failed to find it. */
+function _dbgOutsNote(d){
+  const n=(d&&Array.isArray(d.outputs))?d.outputs.length:0;
+  return n>1?"  ("+n+" outputs)":"";
 }
 /* Name the first media field still holding an un-uploaded data:/blob: URI, or null when the body
    is clean. Only the fields that carry a URL are inspected — `prompt` may legitimately mention
@@ -8130,25 +8143,63 @@ async function generateVideo(prompt,imageUrl,opts){
 
   const label="Video generation"+(rule&&rule.label?" \u00b7 "+rule.label:"")+" \u00b7 "+body.duration+"s";
   const r=await atlasGenerate("video",body,label,opts.setStat||null,{all:true});
-  if(opts.out) opts.out.lastFrame=body.return_last_frame?_pickLastFrame(r.outputs,r.url):null;
+  if(opts.out) opts.out.lastFrame=body.return_last_frame?_pickLastFrame(r.outputs,r.url,r.raw):null;
   return r.url;
 }
 // With return_last_frame on, `outputs` holds the clip plus its final frame as a separate image.
 // Pick the entry that is an IMAGE and is not the clip URL itself.
-function _pickLastFrame(outputs,videoUrl){
-  if(!Array.isArray(outputs)) return null;
-  for(const o of outputs){
-    const u=atlasOut(o,"image");
-    if(!u||u===videoUrl) continue;
-    if(_VIDEO_EXT.test(u)) continue;
-    if(_IMAGE_EXT.test(u)) return u;
+/* Keys that NAME a final frame. Matched case-insensitively anywhere in the result, because the
+   frame is not reliably the second entry of `outputs`: some shapes return it as a sibling field
+   on the result object, and some return ONE output object carrying the clip and the frame
+   together. Searching only outputs[] is what made "return last frame is on but I only get the
+   video" — the frame was in the response the whole time, in a place nothing looked. */
+const _LASTFRAME_KEY=/^(last_?frame|last_?frame_url|last_?image|last_?image_url|end_?frame|end_?frame_url|final_?frame|final_?frame_url|tail_?image)$/i;
+// Weaker signal — a key that merely sounds like a picture. Used only after the named keys and the
+// outputs array have come up empty, and never for a bare "url"/"output": those are the clip.
+const _FRAMEISH_KEY=/(frame|image|thumb|cover|poster|snapshot)/i;
+
+// Walk an arbitrary result object for a URL under a key the matcher accepts. Depth-bounded, and
+// it never returns the clip itself or anything carrying a video extension.
+function _findFrameUrl(node,videoUrl,keyRe,depth){
+  if(node==null||depth>5) return null;
+  if(Array.isArray(node)){
+    for(const v of node){ const u=_findFrameUrl(v,videoUrl,keyRe,depth+1); if(u) return u; }
+    return null;
   }
-  // Extension-less OSS URLs: fall back to "any output that isn't the clip".
-  for(const o of outputs){
-    const u=atlasOut(o,"image");
-    if(u&&u!==videoUrl&&!_VIDEO_EXT.test(u)) return u;
+  if(typeof node!=="object") return null;
+  // Named keys on THIS level win before descending, so a nested generic "url" can't outrank a
+  // "last_frame" sitting beside it.
+  for(const k in node){
+    const v=node[k];
+    if(keyRe.test(k)&&_isUrl(v)&&v!==videoUrl&&!_VIDEO_EXT.test(v)) return v;
+  }
+  for(const k in node){
+    const v=node[k];
+    if(v&&typeof v==="object"){ const u=_findFrameUrl(v,videoUrl,keyRe,depth+1); if(u) return u; }
   }
   return null;
+}
+
+function _pickLastFrame(outputs,videoUrl,raw){
+  // 1. A key that explicitly says "last frame", anywhere in the result. Strongest signal there is.
+  const named=_findFrameUrl(raw,videoUrl,_LASTFRAME_KEY,0)||_findFrameUrl(outputs,videoUrl,_LASTFRAME_KEY,0);
+  if(named) return named;
+  if(Array.isArray(outputs)){
+    // 2. An output that is plainly an image.
+    for(const o of outputs){
+      const u=atlasOut(o,"image");
+      if(!u||u===videoUrl||_VIDEO_EXT.test(u)) continue;
+      if(_IMAGE_EXT.test(u)) return u;
+    }
+    // 3. Extension-less OSS URLs: any output that simply isn't the clip.
+    for(const o of outputs){
+      const u=atlasOut(o,"image");
+      if(u&&u!==videoUrl&&!_VIDEO_EXT.test(u)) return u;
+    }
+  }
+  // 4. Last resort — a picture-sounding key on the result. Deliberately NOT "any URL we can find":
+  //    a callback or docs link would end up saved to the gallery as if it were a frame.
+  return _findFrameUrl(raw,videoUrl,_FRAMEISH_KEY,0);
 }
 
 /* ===== xAI TTS (AtlasCloud) — text → spoken audio (mp3 URL) ====================
@@ -24790,7 +24841,13 @@ async function i2vGenerate(){
     _i2v.videoRecId=vrec.id;
     _i2v.videoUrl=httpsMedia(videoUrl);
     renderGallery();
-    toast(lf?"Video saved · last frame added to the gallery":"Video saved to the gallery");
+    // Say WHOSE fault an absent frame is. With the setting on and nothing to save, the model
+    // returned no frame — that is worth distinguishing from the setting simply being off, so a
+    // missing frame is never mistaken for the app losing it. The debug log's "(2 outputs)" note
+    // on the generation entry is the confirmation.
+    toast(lf?"Video saved · last frame added to the gallery"
+            :(state.vidLastFrame!==false?"Video saved — the model returned no last frame"
+                                        :"Video saved to the gallery"));
   }catch(err){ toast(""+(err&&err.friendly||"Video generation failed")); }
   _i2v.busy=null; renderImg2Video();
 }

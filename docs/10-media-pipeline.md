@@ -104,6 +104,34 @@ so an oversized body is visible in the debug log. **`images` is deliberately exe
 *edit* models take their references as inline base64 in that field by design. `atlasLipsync` hosts
 its image and voice track the same strict way.
 
+### The returned last frame is not always in `outputs` (v32.1)
+
+`return_last_frame` was being sent correctly, but the frame was only ever looked for in
+`dd.outputs` — and `atlasGenerate` forwarded *only* that array, discarding the rest of the
+completed payload before anything could search it. Any result shape that carries the frame
+elsewhere therefore came back as "video only":
+
+| shape | before | after |
+|---|---|---|
+| `outputs: [clip, frame]` | found | found |
+| `last_frame` / `last_frame_url` beside `outputs` | **null** | found |
+| one output object holding `{video_url, last_frame_url}` | **null** | found |
+| nested, e.g. `result.final_frame` | **null** | found |
+| clip only (model returned no frame) | null | null |
+| clip + an unrelated `callback_url` | null | null |
+
+`_ret` now carries `raw` (the whole completed payload) alongside `outputs`, and `_pickLastFrame`
+searches in confidence order: keys that explicitly name a last frame (`_LASTFRAME_KEY`, matched at
+any depth), then an image-extension output, then any output that simply is not the clip
+(extension-less OSS URLs), and only then a picture-sounding key (`_FRAMEISH_KEY`). It is
+deliberately **not** "any URL in the response" — a callback or docs link would otherwise be saved
+to the gallery as though it were a frame.
+
+Diagnosis: the debug log's `ok` line for a generation now appends `(N outputs)` when more than one
+result came back (`_dbgOutsNote`), so "did the model return a frame at all?" is answerable without
+guessing, and the playground toast distinguishes *"the model returned no last frame"* from the
+setting being off.
+
 ## Voice samples — the actor's own moaning track (v32.0)
 
 The **Create sample** button in Generate video (`_i2vSampleSection` → `i2vCreateSample`) builds a

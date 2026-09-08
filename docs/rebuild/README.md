@@ -61,6 +61,7 @@ enter at the layer you are working in.
 | 14 | [Observability & failure](14-observability-and-failure.md) | Operations | The debug surface, the fail-soft policy and its limits, boot self-checks |
 | 15 | [Redesign register](15-redesign-register.md) | Operations | Every departure from today's design in one table, with the bug each one closes |
 | 16 | [Build order](16-build-order.md) | Operations | The phase plan: what to build first, and the acceptance criteria that end each phase |
+| 17 | [Port & verification](17-port-and-verification.md) | Operations | Getting there from the app that exists: corpus extraction, the differential payload harness, the parity checklist |
 
 ## How requirements are written
 
@@ -81,12 +82,16 @@ bugs this spec set exists to prevent were introduced exactly that way.
 ## What this set does not contain
 
 - **Code.** No function signatures, no snippets to paste. The specs name behaviours and
-  contracts; naming is the implementer's.
+  contracts; naming is the implementer's. The one exception is
+  [`17-port-and-verification.md`](17-port-and-verification.md), which is operational rather than
+  normative and carries harness sketches.
 - **A schedule.** [`16-build-order.md`](16-build-order.md) gives dependency order and exit
   criteria, not dates.
 - **Provider API documentation.** [`06-provider-layer.md`](06-provider-layer.md) specifies the
   gateway's contract with the rest of the app; the wire format of any given vendor is
   external, changes without notice, and is deliberately confined to one replaceable layer.
-- **A migration path from the current build.** The existing app's data is a real constraint on
-  a rebuild and is treated in [`13-settings-backup-migration.md`](13-settings-backup-migration.md)
-  as an import problem — reading old backups — not as a schema the rebuild must inherit.
+- **The old data model as a constraint.** The existing app's data is treated in
+  [`13-settings-backup-migration.md`](13-settings-backup-migration.md) as an import problem —
+  reading old backups — not as a shape the rebuild must inherit. How to carry the old build's
+  *prompt corpus and tuning* across, and how to prove you did, is
+  [`17-port-and-verification.md`](17-port-and-verification.md).

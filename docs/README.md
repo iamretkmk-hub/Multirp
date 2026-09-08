@@ -11,6 +11,13 @@ breaks when you change something in the wrong place.
 > of the script is delimited by a `===== NAME =====` banner. Navigate the file by searching
 > those banner strings, not by line number (line numbers drift with every release).
 
+> **Building it again from scratch?** `docs/` describes the app **as built**. The
+> [`rebuild/`](rebuild/README.md) folder is the other direction: a top-down specification set —
+> design principles, product definition, experience and visual design, then architecture, data,
+> engines, and subsystems — written so the app could be rebuilt by someone who has never seen
+> `index.html`. It covers full feature parity and, in a marked callout at every departure, what
+> the current design got wrong and what to do instead.
+
 ## Reading order
 
 | # | File | What it covers |

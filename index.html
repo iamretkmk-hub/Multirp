@@ -936,7 +936,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -17810,11 +17810,33 @@ const PT_CALL=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\
 const PT_VAR=/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 
 /* The values a template may interpolate. Anything not here stays visible as literal text. */
-function ptVars(ctx){
+/* Every value a template may interpolate, and where it works. A reply payload is one character
+   answering one target, so it knows who is speaking; a background engine is not, so the
+   character-scoped values are deliberately NOT offered there — an engine template that types
+   {{npc.name}} is told it does not exist rather than being handed a silent blank. */
+const PT_VALUES=[
+  {name:"user",            scope:"any",   label:"Your name"},
+  {name:"npc.name",        scope:"reply", label:"The character writing this turn"},
+  {name:"char",            scope:"reply", label:"Same as npc.name"},
+  {name:"npc.id",          scope:"reply", label:"That character's internal id"},
+  {name:"response.target", scope:"reply", label:"Who this turn is aimed at"},
+  {name:"target",          scope:"reply", label:"Same as response.target"},
+  {name:"current_day",     scope:"any",   label:"The game day number"},
+  {name:"day",             scope:"any",   label:"Same as current_day"},
+  {name:"period",          scope:"any",   label:"Morning, Afternoon, Evening…"},
+  {name:"location",        scope:"any",   label:"Where the scene is happening"},
+  {name:"sub_area",        scope:"any",   label:"Which part of that place — the earshot zone"},
+  {name:"universe",        scope:"any",   label:"The name of this world"},
+  {name:"story_language",  scope:"any",   label:"The language your story is written in"}
+];
+function ptVars(ctx,scope){
   ctx=ctx||{};
   const chat=ctx.chat||null, npc=ctx.npc||null;
   let uni=""; try{ uni=(curUniverseObj()||{}).name||""; }catch(e){}
-  const v={
+  let sub=""; try{ const l=chat&&chat.locationId?locById(chat.locationId):null;
+                   const sb=l?subById(l,curSubId(chat)):null; sub=(sb&&sb.name)||""; }catch(e){}
+  let lang=""; try{ lang=storyLangName()||""; }catch(e){}
+  const all={
     "user": state.user||"You",
     "npc.name": npc?(npc.name||""):"",
     "npc.id": npc?(npc.id||""):"",
@@ -17822,11 +17844,17 @@ function ptVars(ctx){
     "current_day": chat?String(chat.gameDay||1):"",
     "period": chat?(chat.period||chat.timeOfDay||""):"",
     "location": chat?(chat.location||""):"",
-    "universe": uni
+    "sub_area": sub,
+    "universe": uni,
+    "story_language": lang
   };
-  v["char"]=v["npc.name"]; v["target"]=v["response.target"]; v["day"]=v["current_day"];
+  all["char"]=all["npc.name"]; all["target"]=all["response.target"]; all["day"]=all["current_day"];
+  if(scope!=="any") return all;
+  const v={};
+  PT_VALUES.forEach(d=>{ if(d.scope==="any") v[d.name]=all[d.name]; });
   return v;
 }
+function ptValuesFor(scope){ return PT_VALUES.filter(d=>scope==="any"?d.scope==="any":true); }
 /* The call names a template may use — the same block map buildPayload receives. */
 function ptSources(blocks,rawFn){
   const s={};
@@ -17940,7 +17968,7 @@ function ptParse(tpl){
 
 /* Which names a template uses, and which of those do not exist. `known` is a block map (live) or
    the id set (editor). Drives the red warnings in the editor. */
-function ptScan(tpl,known){
+function ptScan(tpl,known,allowedVars){
   const body=String(tpl==null?"":tpl);
   const used=[],unknownCall=[],unknownVar=[];
   known=known||{};
@@ -17951,7 +17979,7 @@ function ptScan(tpl,known){
     if(key!=="dialogue_history"&&!Object.prototype.hasOwnProperty.call(known,key)&&unknownCall.indexOf(key)===-1)
       unknownCall.push(key);
   }
-  const vars=ptVars({});
+  const vars=allowedVars||ptVars({});
   PT_VAR.lastIndex=0;
   while((m=PT_VAR.exec(body))){
     const k=m[1];
@@ -18281,7 +18309,7 @@ function epMessages(key,systemText,parts){
        wins over the generic one, and anything it does NOT supply is still callable. */
     const srcs=Object.assign(engineLibrary(typeof curChat==="function"?curChat():null),
                              {prompt:String(systemText==null?"":systemText)}, own);
-    const vars=ptVars({chat:(typeof curChat==="function"?curChat():null)});
+    const vars=ptVars({chat:(typeof curChat==="function"?curChat():null)},"any");
     ptParse(ptTemplate(epTplKey(key))).forEach(pt=>{
       if(pt.type==="history") return;           // engines have no transcript slot
       const body=ptExpand(pt.text,srcs,vars,report);
@@ -32356,6 +32384,7 @@ function renderEngineTemplates(){
        ${Object.keys(ENGINE_LIBRARY_LABELS).map(n=>_ptPieceRow(n,ENGINE_LIBRARY_LABELS[n],"","library")).join("")}
        </div>
      </details>
+     ${_ptValuesBlock("any")}
      <div id="epNoMatch" class="desc" hidden style="padding:8px">No engine matches that.</div>`
     +keys.map(k=>{
       const d=epDef(k), tk=epTplKey(k);
@@ -32418,7 +32447,7 @@ function epResetTpl(k){
 }
 function epValidate(k){
   const host=document.getElementById('epWarn_'+k); if(!host)return;
-  const sc=ptScan(ptTemplate(epTplKey(k)),epKnownNames(k));
+  const sc=ptScan(ptTemplate(epTplKey(k)),epKnownNames(k),ptVars({},"any"));
   const bits=[];
   if(sc.unknownCall.length)
     bits.push(`<b>${icon("warn")} These pieces do not exist:</b> ${sc.unknownCall.map(n=>"<code>{{call//"+esc(n)+"}}</code>").join(", ")}<br>They will send nothing.`);
@@ -32467,6 +32496,23 @@ function _ptPieceRow(name,label,desc,kind,ctx){
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${editCall}">edit</button>
     </div>
   </div>`;
+}
+/* A value row. Same shape as a piece row, minus the buttons that make no sense for a value:
+   there is nothing to edit — the app fills it from the scene — and "used by" would just list
+   every template that mentions your own name. */
+function _ptValueRow(d){
+  return `<div style="padding:7px 9px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+    <code style="font-size:13.5px;color:var(--accent);cursor:pointer" title="Tap to copy"
+          onclick="ptCopyPlain('{{${d.name}}}','Value')">${esc(d.name)}</code>
+    <span class="desc" style="flex:1;min-width:130px">${esc(d.label)}</span>
+  </div>`;
+}
+function _ptValuesBlock(scope){
+  const list=ptValuesFor(scope);
+  return `<details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Values you can drop into your own sentences</b> <span class="desc" style="display:inline">— ${list.length}</span></summary>
+    <div class="desc" style="margin:6px 0">Written as <code>{{name}}</code>, with no <code>call//</code>. These are single words filled from the scene — for writing things like <i>${scope==="any"?"“It is {{period}} on day {{current_day}}, in {{location}}.”":"“You are {{npc.name}}. It is {{period}} on day {{current_day}}.”"}</i>${scope==="any"?" A background engine is not one character answering one person, so the character values are not offered here — typing one is flagged rather than silently sending a blank." : ""}</div>
+    <div style="border:1px solid var(--border);border-radius:10px">${list.map(_ptValueRow).join("")}</div>
+  </details>`;
 }
 function _ptOpenAncestors(el){ let n=el; while(n){ if(n.tagName==="DETAILS") n.open=true; n=n.parentElement; } }
 function _ptFlash(el){
@@ -32544,6 +32590,7 @@ function renderPayloadTemplates(){
        ${cat.map(c=>_ptPieceRow(c.name,c.label,c.desc,"reply")).join("")}
        </div>
      </details>`
+    +_ptValuesBlock("reply")
     +PT_KINDS.map(kind=>{
       const d=PAYLOAD_DEFS[kind]||{label:kind,desc:""};
       const custom=ptIsCustom(kind);

@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v32.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v32.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -24614,9 +24614,14 @@ function renderImg2Video(){
   h.innerHTML=`${icon("film")} <span>Generate video</span>`;
   box.appendChild(h);
   if(!rec||!rec.url){ box.appendChild(_pgLabelEl("Image not found.")); return; }
+  // Print the flags this clip will actually be REQUESTED with, not what a switch looks like on
+  // another screen — "return last frame is on but I only got the video" was exactly that gap.
+  const _lf=state.vidLastFrame!==false;
+  const _flags=`${state.vidSound!==false?", with audio":""}${_lf?", returning its last frame":", without a last frame"}`;
   box.appendChild(_pgLabelEl(vidIsRefOnly()
-    ? `One ${videoSeconds()}s clip at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. This model works from references, not a first frame — this image is sent as @image1 and a finishing image becomes @image2. Length and every other option are in Settings → Video.`
-    : `One ${videoSeconds()}s clip from this image at ${vidResolutionFor(vidModelId())}${state.vidSound!==false?", with audio":""}. Add a finishing frame to transition into a second image. Length and every other option are in Settings → Video.`));
+    ? `One ${videoSeconds()}s clip at ${vidResolutionFor(vidModelId())}${_flags}. This model works from references, not a first frame — this image is sent as @image1 and a finishing image becomes @image2. Length and every other option are in Settings → Video.`
+    : `One ${videoSeconds()}s clip from this image at ${vidResolutionFor(vidModelId())}${_flags}. Add a finishing frame to transition into a second image. Length and every other option are in Settings → Video.`));
+  if(!_lf) box.appendChild(_pgLabelEl("“Return last frame” is OFF, so this clip will not chain into the next one. Turn it on in Settings → Video."));
 
   // ---- first frame (+ finishing frame in clip mode) ----
   const frames=document.createElement('div'); frames.style.cssText="display:flex;gap:8px;align-items:stretch";
@@ -31943,7 +31948,35 @@ function syncVidModelUI(){
     }
   }
 }
+/* WRITE-THROUGH TOGGLES (v32.2)
+   Settings are otherwise only committed by the "Save settings" button, and for a switch that
+   decides what goes in a request body that is a trap: flick "Return last frame" on, leave the
+   screen without saving, and the switch reads ON for the rest of the session while `state` — and
+   therefore the request — still says off. The symptom is a generation that quietly omits the
+   field and returns only the clip, with the UI insisting the option was enabled.
+   These toggles now commit themselves the moment they change. Only the ONE key is touched, never
+   a whole re-read of the settings DOM, so a half-populated screen can never clobber anything. */
+const _LIVE_TOGGLES=[
+  {id:"setVidSound",     key:"vidSound",     raw:()=>K.vidSound,     def:true},
+  {id:"setVidLastFrame", key:"vidLastFrame", raw:()=>K.vidLastFrame, def:true},
+  {id:"setVidWatermark", key:"vidWatermark", raw:()=>K.vidWatermark, def:false},
+  {id:"setAnimVoice",    key:"animVoice",    raw:()=>K.animVoice,    def:false}
+];
+function bindLiveToggles(){
+  _LIVE_TOGGLES.forEach(t=>{
+    const e=document.getElementById(t.id);
+    if(!e||e._liveBound)return;
+    e._liveBound=true;
+    e.addEventListener("change",()=>{
+      state[t.key]=e.checked;
+      try{ const k=t.raw(); if(k) store.setRaw(k,e.checked?"1":"0"); }catch(_){}
+      // The Generate video panel prints what will actually be sent, so keep it truthful live.
+      try{ if(document.getElementById('img2vidModal')&&_i2v&&_i2v.imgId)renderImg2Video(); }catch(_){}
+    });
+  });
+}
 function syncSettingsUI(){
+  bindLiveToggles();   // idempotent — the listeners attach once, after the checkboxes exist
   {const gd=globalUserDefaults();
    document.getElementById('setUser').value=gd.user;
    document.getElementById('setUserLook').value=gd.userLook||'';

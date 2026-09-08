@@ -132,6 +132,24 @@ result came back (`_dbgOutsNote`), so "did the model return a frame at all?" is 
 guessing, and the playground toast distinguishes *"the model returned no last frame"* from the
 setting being off.
 
+### Toggles that decide a request body commit on change (v32.2)
+
+Settings are otherwise committed **only** by the "Save settings" button. For a switch that decides
+what goes in a request body that is a trap, and it produced a real report: *"return last frame is
+on but I only get the video"*. The pasted request body had no `return_last_frame` field at all
+while `generate_audio: true` — its neighbour, one line away in the same builder — was present, so
+`state.vidLastFrame` was genuinely `false` while the switch read ON. Flicking a switch and leaving
+the screen without saving updates the DOM and nothing else.
+
+`bindLiveToggles()` (called from `syncSettingsUI`, idempotent) makes `setVidSound`,
+`setVidLastFrame`, `setVidWatermark` and `setAnimVoice` write themselves through on `change` —
+state **and** their one storage key. Only that key is touched; it never re-reads the settings DOM,
+so a half-populated screen cannot clobber anything the way a full `saveSettings()` could.
+
+The Generate video panel now prints the flags the clip will actually be **requested** with
+("…returning its last frame" / "…without a last frame"), plus an explicit line when it is off, so
+the effective setting is visible where Generate is pressed rather than on another screen.
+
 ## Voice samples — the actor's own moaning track (v32.0)
 
 The **Create sample** button in Generate video (`_i2vSampleSection` → `i2vCreateSample`) builds a

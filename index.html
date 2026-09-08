@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -32340,16 +32340,21 @@ function renderEngineTemplates(){
   const keys=Object.keys(ENGINE_PARTS).sort((a,b)=>
     String((epDef(a)||{}).label||a).localeCompare(String((epDef(b)||{}).label||b)));
   host.innerHTML=
-    `<div class="desc" style="margin-bottom:8px">${keys.length} background engines. Each one's prompt is <code>{{call//prompt}}</code> and the story data it already sends is <code>{{call//data}}</code>. <b>Anything else you want it to know, add with a call</b> — the shared pieces below work in every engine, whether or not that engine was built to receive them.</div>
+    `<div class="desc" style="margin-bottom:8px">${keys.length} background engines. Open one to see the pieces it can call. <b>Anything it is missing, add with a call</b> — the shared pieces work in every engine, whether or not it was built to receive them.</div>
+     <input class="fld" id="epFilter" type="search" placeholder="Find an engine — gossip, memory, quest…"
+       oninput="epFilterList(this.value)" style="margin-bottom:8px">
      <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Shared pieces — work in every engine</b></summary>
        <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:10px;margin-top:6px">
        ${Object.keys(ENGINE_LIBRARY_LABELS).map(n=>_ptPieceRow(n,ENGINE_LIBRARY_LABELS[n],"","library")).join("")}
        </div>
-     </details>`
+     </details>
+     <div id="epNoMatch" class="desc" hidden style="padding:8px">No engine matches that.</div>`
     +keys.map(k=>{
       const d=epDef(k), tk=epTplKey(k);
-      return `<details class="acc" data-eptpl="${k}"><summary><b>${esc(d.label||k)}</b> <span class="desc" style="display:inline">— ${ptIsCustom(tk)?"edited by you":"default"}</span></summary>
+      return `<details class="acc" data-eptpl="${k}" data-find="${esc(String((d.label||k)+" "+k).toLowerCase())}">
+        <summary><b>${esc(d.label||k)}</b> <span class="desc" style="display:inline">— ${ptIsCustom(tk)?"edited by you":"default"}</span></summary>
         <div id="epWarn_${k}"></div>
+        <div id="epPieces_${k}"></div>
         <textarea id="epTpl_${k}" rows="12" spellcheck="false"
           style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
           oninput="epTplInput('${k}')">${esc(ptTemplate(tk))}</textarea>
@@ -32361,7 +32366,38 @@ function renderEngineTemplates(){
         <div id="epPrev_${k}" style="margin-top:8px"></div>
       </details>`;
     }).join("");
+  /* The piece list is filled when an engine is opened, not for all 65 up front — that would be
+     five hundred rows nobody has looked at yet. */
+  host.querySelectorAll('details[data-eptpl]').forEach(det=>{
+    det.addEventListener('toggle',()=>{ if(det.open)renderEnginePieces(det.dataset.eptpl); });
+  });
   keys.forEach(k=>epValidate(k));
+}
+/* This engine's own pieces, above its template. Shown here rather than left to memory: the whole
+   point of the shared library is that an engine can be handed something it was never built for,
+   and you cannot type a name you have never seen. */
+function renderEnginePieces(k){
+  const host=document.getElementById('epPieces_'+k); if(!host||host.dataset.done==="1")return;
+  const d=epDef(k); if(!d)return;
+  const own=[{name:"prompt",label:"This engine's own prompt",desc:"The instructions it was written with. Delete this call and write your own if you would rather."}]
+    .concat((d.parts||[]).map(p=>({name:p.name,label:p.label||p.name,desc:""})));
+  host.innerHTML=
+    `<details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Pieces this engine can call</b> <span class="desc" style="display:inline">— ${own.length} of its own, plus ${Object.keys(ENGINE_LIBRARY_LABELS).length} shared</span></summary>
+       <div style="border:1px solid var(--border);border-radius:10px;margin-top:6px">
+       ${own.map(p=>_ptPieceRow(p.name,p.label,p.desc,"engine",k)).join("")}
+       </div>
+       <div class="desc" style="margin-top:6px">Every shared piece above works here too — <code>trackers</code>, <code>promises</code>, <code>rumors</code>, <code>scene</code> and the rest.</div>
+     </details>`;
+  host.dataset.done="1";
+}
+function epFilterList(q){
+  q=String(q||"").trim().toLowerCase();
+  let shown=0;
+  document.querySelectorAll('#engineTplList details[data-eptpl]').forEach(det=>{
+    const hit=!q||(det.dataset.find||"").indexOf(q)>-1;
+    det.hidden=!hit; if(hit)shown++;
+  });
+  const none=document.getElementById('epNoMatch'); if(none)none.hidden=(shown>0);
 }
 function epTplInput(k){
   const el=document.getElementById('epTpl_'+k); if(!el)return;
@@ -32407,8 +32443,10 @@ function epPreview(k){
 /* One row in a piece list. The name is the thing you type, so it is the thing shown — the
    {{call//…}} wrapper around it was pure noise on a phone, truncating the only useful part.
    Tap the name to copy the whole call; Edit jumps to wherever that piece's own text lives. */
-function _ptPieceRow(name,label,desc,kind){
+function _ptPieceRow(name,label,desc,kind,ctx){
   const t=esc(desc||label||"");
+  const editCall=ctx?("epEditPiece('"+ctx+"','"+name+"')"):("ptEditPiece('"+name+"')");
+  const usedCall=(kind==="library"||ctx)?("epShowUsedBy('"+name+"')"):("ptShowUsedBy('"+name+"')");
   return `<div style="padding:8px 9px;border-bottom:1px solid var(--border)">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <code style="font-size:13.5px;color:var(--accent);cursor:pointer" title="Tap to copy {{call//${esc(name)}}}"
@@ -32417,8 +32455,8 @@ function _ptPieceRow(name,label,desc,kind){
     </div>
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${name}')">copy</button>
-      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${kind==="library"?"epShowUsedBy":"ptShowUsedBy"}('${name}')">used by</button>
-      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="ptEditPiece('${name}')">edit</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${usedCall}">used by</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${editCall}">edit</button>
     </div>
   </div>`;
 }
@@ -32455,6 +32493,18 @@ function ptEditPiece(name){
     toast(ENGINE_LIBRARY_LABELS[name]+" — assembled from your story as it runs, so it has no wording of its own");
     return;
   }
+  toast("This piece has no wording of its own to edit");
+}
+/* Edit, from inside an engine's own piece list. Only one of an engine's pieces has wording a
+   person can change — its prompt. The rest are assembled from the story as the engine runs, so
+   say where they come from instead of opening an empty box. */
+function epEditPiece(engineKey,name){
+  if(name==="prompt"){ epEditPrompt(engineKey); return; }
+  if(name==="data"){ toast("Built by the app from your story as this engine runs — nothing to type. Break it up with the shared pieces if you want it in a different order"); return; }
+  if(ENGINE_LIBRARY_LABELS[name]){ toast(ENGINE_LIBRARY_LABELS[name]+" — assembled from your story as it runs, so it has no wording of its own"); return; }
+  const d=epDef(engineKey);
+  const p=d&&(d.parts||[]).find(function(x){ return x.name===name; });
+  if(p){ toast((p.label||name)+" — this engine builds it live, so there is no wording to edit"); return; }
   toast("This piece has no wording of its own to edit");
 }
 /* The engine editors get the same jump — straight to that engine's prompt box below. */

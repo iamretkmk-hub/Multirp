@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v34.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -32343,12 +32343,7 @@ function renderEngineTemplates(){
     `<div class="desc" style="margin-bottom:8px">${keys.length} background engines. Each one's prompt is <code>{{call//prompt}}</code> and the story data it already sends is <code>{{call//data}}</code>. <b>Anything else you want it to know, add with a call</b> — the shared pieces below work in every engine, whether or not that engine was built to receive them.</div>
      <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Shared pieces — work in every engine</b></summary>
        <div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:10px;margin-top:6px">
-       ${Object.keys(ENGINE_LIBRARY_LABELS).map(n=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border)">
-          <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{call//${esc(n)}}}</code>
-          <span class="desc" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(ENGINE_LIBRARY_LABELS[n])}</span>
-          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="ptShowCallName('${n}')">i</button>
-          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="epShowUsedBy('${n}')">used by</button>
-        </div>`).join("")}
+       ${Object.keys(ENGINE_LIBRARY_LABELS).map(n=>_ptPieceRow(n,ENGINE_LIBRARY_LABELS[n],"","library")).join("")}
        </div>
      </details>`
     +keys.map(k=>{
@@ -32360,6 +32355,7 @@ function renderEngineTemplates(){
           oninput="epTplInput('${k}')">${esc(ptTemplate(tk))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
           <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${k}')">Preview</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epEditPrompt('${k}')">Edit this engine's prompt</button>
           <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${k}')">Reset to default</button>
         </div>
         <div id="epPrev_${k}" style="margin-top:8px"></div>
@@ -32407,25 +32403,87 @@ function epPreview(k){
       </div>`).join("");
 }
 
+
+/* One row in a piece list. The name is the thing you type, so it is the thing shown — the
+   {{call//…}} wrapper around it was pure noise on a phone, truncating the only useful part.
+   Tap the name to copy the whole call; Edit jumps to wherever that piece's own text lives. */
+function _ptPieceRow(name,label,desc,kind){
+  const t=esc(desc||label||"");
+  return `<div style="padding:8px 9px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+      <code style="font-size:13.5px;color:var(--accent);cursor:pointer" title="Tap to copy {{call//${esc(name)}}}"
+            onclick="ptShowCallName('${name}')">${esc(name)}</code>
+      <span class="desc" style="flex:1;min-width:130px">${esc(label||"")}</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${name}')">copy</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${kind==="library"?"epShowUsedBy":"ptShowUsedBy"}('${name}')">used by</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="ptEditPiece('${name}')">edit</button>
+    </div>
+  </div>`;
+}
+function _ptOpenAncestors(el){ let n=el; while(n){ if(n.tagName==="DETAILS") n.open=true; n=n.parentElement; } }
+function _ptFlash(el){
+  if(!el)return;
+  const prev=el.style.outline, prevOff=el.style.outlineOffset;
+  el.style.outline="2px solid var(--accent)"; el.style.outlineOffset="2px";
+  setTimeout(function(){ el.style.outline=prev||""; el.style.outlineOffset=prevOff||""; },1800);
+  try{ el.scrollIntoView({behavior:"smooth",block:"center"}); }catch(e){ try{ el.scrollIntoView(); }catch(_){} }
+}
+/* Open the place where this piece's own wording is edited and put it on screen, instead of making
+   the user hunt for it in two long accordions. Reply pieces live as rows in "Reply payloads";
+   engine library pieces are assembled in code and have no text of their own. */
+function ptEditPiece(name){
+  if(name==="dialogue_history"){ toast("The transcript is your conversation — there is no wording to edit"); return; }
+  if(name==="text_timing"){ toast("Written by the app from the clock — no wording to edit"); return; }
+  const det=document.querySelector('details[data-plq="solo"]');
+  if(det && REPLY_BLOCKS[name]){
+    _ptOpenAncestors(det); det.open=true;
+    try{ renderPayloadEditor("solo"); }catch(e){}
+    const row=document.querySelector('#plqBody_solo .plqRow[data-b="'+name+'"]');
+    if(row){
+      _ptOpenAncestors(row);
+      const inner=row.querySelector('details'); if(inner) inner.open=true;
+      _ptFlash(row);
+      toast("Opened “"+String((REPLY_BLOCKS[name]||{}).label||name).replace(/[\u26a0\ufe0f\ud83d\udde3\ud83c\udd95]/g,"").trim()+"”");
+      return;
+    }
+  }
+  /* A shared-library piece: built live from your story, so there is nothing to type. Say where it
+     comes from rather than opening an empty editor. */
+  if(ENGINE_LIBRARY_LABELS[name]){
+    toast(ENGINE_LIBRARY_LABELS[name]+" — assembled from your story as it runs, so it has no wording of its own");
+    return;
+  }
+  toast("This piece has no wording of its own to edit");
+}
+/* The engine editors get the same jump — straight to that engine's prompt box below. */
+function epEditPrompt(key){
+  const d=epDef(key); if(!d){ toast("Unknown engine"); return; }
+  const card=(typeof ENGINE_PAYLOAD_DEFS!=="undefined"?ENGINE_PAYLOAD_DEFS:[])
+    .find(function(c){ return (c.blocks||[]).some(function(b){ return b.promptKey===d.promptKey; }); });
+  const det=card?document.querySelector('details[data-eplq="'+card.key+'"]'):null;
+  if(!det){ toast("This engine's prompt is written in code — replace it in the template with your own text"); return; }
+  _ptOpenAncestors(det); det.open=true;
+  try{ renderEnginePayloadEditor(card.key); }catch(e){}
+  _ptFlash(det);
+  toast("Opened “"+esc(card.label||card.key).replace(/&amp;/g,"&")+"”");
+}
+
 function renderPayloadTemplates(){
   const host=document.getElementById('payloadTplList'); if(!host)return;
   const on=!!state.payloadTplOn;
   const cat=ptCatalog();
   host.innerHTML=
-    `<label class="switchLbl" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-       <input type="checkbox" id="payloadTplOn" ${on?"checked":""} onchange="ptToggle(this.checked)">
-       <span class="sl"></span><b>Write my own payload structure</b>
-     </label>
+    `<div class="kvline" style="padding:0 0 6px">
+       <label style="margin:0"><b>Write my own payload structure</b></label>
+       <label class="switchLbl"><input type="checkbox" id="payloadTplOn" ${on?"checked":""} onchange="ptToggle(this.checked)"><span class="sl"></span></label>
+     </div>
      <div class="desc" style="margin-bottom:8px">While this is off, payloads are built the normal way (the ordered part list above). Turning it on uses the templates below — and each one starts as an exact copy of what your app already sends, so <b>nothing changes until you edit the text</b>.</div>
      <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Every piece you can call</b> — ${cat.length} of them</summary>
        <div class="desc" style="margin:6px 0"><code>{{call//piece}}</code> gives you the <b>bare data</b> — no headings, no built-in wording, so whatever you write around it is all the model reads. <code>{{call//piece//full}}</code> is the app's original version with its own headings. The default templates use <code>//full</code>; the <b>Erase built-in headings</b> button swaps them all to bare in one go.</div>
-       <div style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:10px">
-       ${cat.map(c=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border)">
-          <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{call//${esc(c.name)}}}</code>
-          <span class="desc" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}</span>
-          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" title="${esc(c.desc||c.label)}" onclick="ptShowCallName('${c.name}')">i</button>
-          <button type="button" class="btn sec small" style="width:auto;padding:3px 8px" onclick="ptShowUsedBy('${c.name}')">used by</button>
-        </div>`).join("")}
+       <div style="max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:10px">
+       ${cat.map(c=>_ptPieceRow(c.name,c.label,c.desc,"reply")).join("")}
        </div>
      </details>`
     +PT_KINDS.map(kind=>{

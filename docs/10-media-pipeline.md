@@ -86,7 +86,7 @@ the per-image menu (frame picker `pickFrame`, retry, view prompt, Animate/Movie/
   animate (`animVoice`) sends the line's TTS as the clip's audio where the model supports it.
 - Async submit→poll via `atlasGenerate`.
 
-### Frames must be HOSTED before the request goes out (v31.10)
+### Frames must be HOSTED before the request goes out (v32.0)
 
 `generateVideo`'s `hostFrame` uploads the first frame (and a finishing frame) via `atlasUpload` and
 **throws** when the result is not an `https` URL. It used to be
@@ -104,7 +104,7 @@ so an oversized body is visible in the debug log. **`images` is deliberately exe
 *edit* models take their references as inline base64 in that field by design. `atlasLipsync` hosts
 its image and voice track the same strict way.
 
-## Voice samples — the actor's own moaning track (v31.10)
+## Voice samples — the actor's own moaning track (v32.0)
 
 The **Create sample** button in Generate video (`_i2vSampleSection` → `i2vCreateSample`) builds a
 vocal track for the clip in two separable steps:

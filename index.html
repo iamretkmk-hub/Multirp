@@ -2276,6 +2276,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   fallbackModel:"sm_fallbackmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",
+  payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",
   storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
@@ -5200,6 +5201,8 @@ function loadState(){
     // v19 — per-payload block ordering: {solo:[blockIds…], multi:[…], gm:[…]}. Absent/empty = the
     // default (current hardcoded) order, so old saves behave byte-identically with no migration.
     payloadLayouts:store.get(K.payloadLayouts,{})||{},
+    payloadTemplates:store.get(K.payloadTemplates,{}),
+    payloadTplOn:store.get(K.payloadTplOn,false),
     // v19.2 — user overrides for the fixed template fragments inside reply-payload blocks.
     // Absent/blank entry = the BLOCK_TPL_DEFAULTS text, so old saves behave byte-identically.
     blockTpls:store.get(K.blockTpls,{})||{},
@@ -17818,6 +17821,230 @@ function buildPayload(layoutKey, headBlocks, tailBlocks){
   return {head:h, tail:t2};
 }
 
+/* ============================================================================================
+   PAYLOAD TEMPLATES (v33.0) — "you write the payload, the app fills it in"
+   ============================================================================================
+   The block system above decides WHAT each piece of a payload says. This layer decides WHERE
+   the pieces go, and hands that decision to the user as plain text they type.
+
+   A template is free text holding:
+     [system] ... [system end]     role markers — each becomes one API message
+     [user]   ... [end user]       ("[user end]" accepted too; [assistant] likewise)
+     {{call//name}}                one payload piece (the ids in REPLY_BLOCKS)
+     {{call//dialogue_history}}    the transcript itself — a STRUCTURAL insert, not text
+     {{npc.name}} {{user}} ...     a value (see ptVars)
+
+   AUTO-DROP: a paragraph (text between blank lines) holding at least one {{call//…}} whose calls
+   ALL come back empty is removed WHOLE — the heading and framing the user wrote around it go
+   too. That is what stops "# RUMORS" appearing with nothing under it on a quiet turn.
+
+   (!) ptDefaultTemplate is generated from the user's CURRENT payload order, so an unedited
+   template assembles byte-identically to buildPayload. Turning templates on changes nothing
+   until the text is actually edited — that is the safety net, do not break it.
+
+   (!) NOTHING HERE MAY FAIL SILENTLY. An unknown {{call//…}} resolves empty AND is reported to
+   the Debug log; an unknown {{value}} is left standing as literal text so it shows up in the
+   preview and in Debug. Silent blanks are the exact failure this layer exists to end.
+   ============================================================================================ */
+
+const PT_KINDS=["solo","multi","gm","text","heat"];
+const PT_ROLE_OPEN=/^\s*\[(system|user|assistant)\]\s*$/i;
+const PT_ROLE_CLOSE=/^\s*\[(?:(?:system|user|assistant)\s+end|end\s+(?:system|user|assistant))\]\s*$/i;
+const PT_HISTORY_LINE=/^\s*\{\{\s*call\s*\/\/\s*dialogue_history\s*\}\}\s*$/i;
+const PT_CALL=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\s*)?\}\}/g;
+const PT_VAR=/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
+
+/* The values a template may interpolate. Anything not here stays visible as literal text. */
+function ptVars(ctx){
+  ctx=ctx||{};
+  const chat=ctx.chat||null, npc=ctx.npc||null;
+  let uni=""; try{ uni=(curUniverseObj()||{}).name||""; }catch(e){}
+  const v={
+    "user": state.user||"You",
+    "npc.name": npc?(npc.name||""):"",
+    "npc.id": npc?(npc.id||""):"",
+    "response.target": ctx.targetName||"",
+    "current_day": chat?String(chat.gameDay||1):"",
+    "period": chat?(chat.period||chat.timeOfDay||""):"",
+    "location": chat?(chat.location||""):"",
+    "universe": uni
+  };
+  v["char"]=v["npc.name"]; v["target"]=v["response.target"]; v["day"]=v["current_day"];
+  return v;
+}
+/* The call names a template may use — the same block map buildPayload receives. */
+function ptSources(blocks){
+  const s=Object.assign({},blocks||{});
+  delete s.__history__;                 // history is structural, handled by ptParse
+  return s;
+}
+function ptResolve(srcs,name,sub,report){
+  const key=sub?(name+"//"+sub):name;
+  if(Object.prototype.hasOwnProperty.call(srcs,key)) return srcs[key]||"";
+  if(report&&report.unknownCall.indexOf(key)===-1) report.unknownCall.push(key);
+  return "";
+}
+
+/* Expand one segment's text. Returns "" when everything in it dropped out. */
+function ptExpand(text,srcs,vars,report){
+  const paras=String(text==null?"":text).split(/\n[ \t]*\n/);
+  const keep=[];
+  paras.forEach(p=>{
+    /* pass 1 — resolve every call in this paragraph up front, so pass 2 can tell an empty call
+       from a filled one without re-running the lookup. */
+    const vals={}; let anyCall=false, anyFilled=false, m;
+    PT_CALL.lastIndex=0;
+    while((m=PT_CALL.exec(p))){
+      const key=m[2]?(m[1]+"//"+m[2]):m[1];
+      anyCall=true;
+      if(!Object.prototype.hasOwnProperty.call(vals,key)){
+        const v=ptResolve(srcs,m[1],m[2],report);
+        vals[key]=(v&&String(v).trim())?String(v):"";
+      }
+      if(vals[key]) anyFilled=true;
+    }
+    if(anyCall&&!anyFilled) return;                    // AUTO-DROP the whole paragraph
+    /* pass 2 — drop lines that hold nothing but empty calls, so a filled paragraph does not keep
+       a stray blank where an empty call sat. Done on the TEMPLATE, before substitution, so the
+       internal blank lines of a filled block are never touched. */
+    const lines=p.split("\n").filter(ln=>{
+      let has=false,filled=false,mm; PT_CALL.lastIndex=0;
+      while((mm=PT_CALL.exec(ln))){ has=true; const k=mm[2]?(mm[1]+"//"+mm[2]):mm[1]; if(vals[k])filled=true; }
+      if(!has||filled) return true;
+      return ln.replace(PT_CALL,"").trim()!=="";       // keep if the line says something itself
+    });
+    let out=lines.join("\n").replace(PT_CALL,(mm,n,s)=>vals[s?(n+"//"+s):n]||"");
+    out=out.replace(PT_VAR,(mm,k)=>{
+      if(k==="call") return mm;
+      if(Object.prototype.hasOwnProperty.call(vars,k)) return String(vars[k]==null?"":vars[k]);
+      if(report&&report.unknownVar.indexOf(k)===-1) report.unknownVar.push(k);
+      return mm;                                       // left visible on purpose
+    });
+    out=out.replace(/[ \t]+$/gm,"").replace(/\n{3,}/g,"\n\n");
+    if(out.trim()) keep.push(out.trim());
+  });
+  return keep.join("\n\n");
+}
+
+/* Split a template into ordered messages and history insertion points. */
+function ptParse(tpl){
+  const lines=String(tpl==null?"":tpl).split(/\r?\n/);
+  const out=[]; let cur=null, loose=[];
+  const closeCur=()=>{ if(cur){ out.push({type:"msg",role:cur.role,text:cur.buf.join("\n")}); cur=null; } };
+  const flushLoose=()=>{ const t=loose.join("\n"); loose=[]; if(t.trim()) out.push({type:"msg",role:"system",text:t}); };
+  lines.forEach(ln=>{
+    const m=ln.match(PT_ROLE_OPEN);
+    if(m){ closeCur(); flushLoose(); cur={role:m[1].toLowerCase(),buf:[]}; return; }
+    if(PT_ROLE_CLOSE.test(ln)){ closeCur(); return; }
+    if(PT_HISTORY_LINE.test(ln)){ closeCur(); flushLoose(); out.push({type:"history"}); return; }
+    if(cur) cur.buf.push(ln); else loose.push(ln);
+  });
+  closeCur(); flushLoose();
+  return out;
+}
+
+/* Which names a template uses, and which of those do not exist. `known` is a block map (live) or
+   the id set (editor). Drives the red warnings in the editor. */
+function ptScan(tpl,known){
+  const body=String(tpl==null?"":tpl);
+  const used=[],unknownCall=[],unknownVar=[];
+  known=known||{};
+  let m; PT_CALL.lastIndex=0;
+  while((m=PT_CALL.exec(body))){
+    const key=m[2]?(m[1]+"//"+m[2]):m[1];
+    if(used.indexOf(key)===-1) used.push(key);
+    if(key!=="dialogue_history"&&!Object.prototype.hasOwnProperty.call(known,key)&&unknownCall.indexOf(key)===-1)
+      unknownCall.push(key);
+  }
+  const vars=ptVars({});
+  PT_VAR.lastIndex=0;
+  while((m=PT_VAR.exec(body))){
+    const k=m[1];
+    if(k==="call") continue;
+    if(!Object.prototype.hasOwnProperty.call(vars,k)&&unknownVar.indexOf(k)===-1) unknownVar.push(k);
+  }
+  return {used,unknownCall,unknownVar,hasHistory:/\{\{\s*call\s*\/\/\s*dialogue_history\s*\}\}/i.test(body)};
+}
+
+/* The default template for a payload kind, generated from that kind's CURRENT block order, so
+   an unedited template reproduces buildPayload exactly. */
+function ptDefaultTemplate(kind){
+  const order=payloadOrder(kind)||[];
+  const head=[],tail=[]; let after=false;
+  order.forEach(id=>{
+    if(id==="__history__"){ after=true; return; }
+    (after?tail:head).push("{{call//"+id+"}}");
+  });
+  /* The text payload has one piece the others do not: how long the message sat unanswered. It is
+     appended to the tail in buildTextPayload, so the default template must place it there too or
+     turning templates on would silently drop it. */
+  if(kind==="text") tail.push("{{call//text_timing}}");
+  let out="";
+  if(head.length) out+="[system]\n"+head.join("\n\n")+"\n[system end]\n\n";
+  out+="{{call//dialogue_history}}\n";
+  if(tail.length) out+="\n[system]\n"+tail.join("\n\n")+"\n[system end]\n";
+  return out;
+}
+
+function ptTemplates(){ return state.payloadTemplates||{}; }
+function ptTemplate(kind){
+  const t=ptTemplates()[kind];
+  return (typeof t==="string"&&t.trim())?t:ptDefaultTemplate(kind);
+}
+function ptIsCustom(kind){
+  const t=ptTemplates()[kind];
+  return !!(typeof t==="string"&&t.trim()&&t.trim()!==ptDefaultTemplate(kind).trim());
+}
+function ptSetTemplate(kind,text){
+  const all=Object.assign({},ptTemplates());
+  if(text==null||!String(text).trim()) delete all[kind]; else all[kind]=String(text);
+  state.payloadTemplates=all; store.set(K.payloadTemplates,all);
+}
+
+/* MAIN ENTRY — returns the full messages[] for a reply, or null to use the classic path.
+   `history` is the already-built transcript message array. */
+function ptBuildMessages(kind,blocks,history,ctx){
+  if(!state.payloadTplOn) return null;
+  let msgs=[];
+  try{
+    const report={unknownCall:[],unknownVar:[]};
+    const srcs=ptSources(blocks), vars=ptVars(ctx||{});
+    const headSecs=new Set();
+    let seenInstruction=false;
+    ptParse(ptTemplate(kind)).forEach(pt=>{
+      if(pt.type==="history"){ if(Array.isArray(history)) msgs.push.apply(msgs,history); return; }
+      let body=ptExpand(pt.text,srcs,vars,report);
+      if(!body.trim()) return;
+      body=_dedupePayloadSections(body);
+      /* Same cross-message de-duplication buildPayload does between head and tail: a section
+         repeated after the transcript is still a repeat. */
+      if(!seenInstruction){
+        body.split(/\n(?=#{1,2} )/).forEach(s=>{ const k=s.replace(/\s+/g," ").trim(); if(k.length>40) headSecs.add(k); });
+        seenInstruction=true;
+      }else{
+        body=body.split(/\n(?=#{1,2} )/).filter(s=>!headSecs.has(s.replace(/\s+/g," ").trim())).join("\n");
+      }
+      if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
+    });
+    if(report.unknownCall.length||report.unknownVar.length){
+      const e=dbg("Payload template — names that do not exist ("+kind+")","In-app",
+        "(template check — no network request)",
+        {unknown_calls:report.unknownCall,unknown_values:report.unknownVar,
+         note:"Typed in Settings → Payloads but not recognised. Calls sent nothing; values were left as literal text."});
+      dbgDone(e,"error",{fix:"Open Settings → Payloads → Payload templates. Unknown names are marked in red."});
+    }
+  }catch(err){
+    /* A broken template must never cost the player their turn — fall back to the classic path
+       and say so loudly. */
+    try{ const e=dbg("Payload template FAILED ("+kind+") — used the standard payload instead","In-app",
+      "(template error — no network request)",{error:String(err&&err.message||err)});
+      dbgDone(e,"error",{fix:"Settings → Payloads → Reset this template to default."}); }catch(e2){}
+    try{ toast("Payload template error — sent the standard payload instead"); }catch(e2){}
+    return null;
+  }
+  return msgs.length?msgs:null;
+}
+
 /* v19.2 — attach editable template-fragment lists (`tpls`) + scope tags to the reply-payload
    blocks. The read-only previews of v19.1 are SUPERSEDED: every fixed sentence is now an
    editable fragment in BLOCK_TPL_DEFAULTS, listed under its block in the editor. `scope`
@@ -21030,20 +21257,26 @@ async function sendMessage(){
     // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
     // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
     const _tOpts={ chat, targetName:state.user, targetId:"__user__" };
-    const _pl=buildPayload("solo",
-      buildSystemPromptBlocks(injected,_tOpts),
-      buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
-        targetName:state.user, targetId:"__user__", multi:false, injected }));
+    const _hb=buildSystemPromptBlocks(injected,_tOpts);
+    const _tb=buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
+        targetName:state.user, targetId:"__user__", multi:false, injected });
+    const _pl=buildPayload("solo",_hb,_tb);
     // Build this character's history through the SAME witness/scene-scoped builder the multi-character
     // path uses, so a solo responder never inherits dialogue from before they arrived or that they
     // didn't witness. (Previously the solo path sent the whole transcript unfiltered — the core leak.)
     const history=castHistory(chat,solo);
     // Tag the last line as the response target, then append the post-dialogue guidance.
     const taggedHistory=tagLastForTarget(history);
-    const messages=[];
-    if(_pl.head)messages.push({role:"system",content:_pl.head});
-    messages.push(...taggedHistory);
-    if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    /* v33.0 — user payload template first; null means "not enabled, or it failed" and we use the
+       classic head/history/tail assembly, which is what the default template reproduces anyway. */
+    let messages=ptBuildMessages("solo",Object.assign({},_hb,_tb),taggedHistory,
+      {chat,npc:solo,targetName:state.user});
+    if(!messages){
+      messages=[];
+      if(_pl.head)messages.push({role:"system",content:_pl.head});
+      messages.push(...taggedHistory);
+      if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    }
     if(chat.pendingGmNudge){
       messages.push({role:"system",content:`[Director's note — do not mention or acknowledge this as out-of-character. React to it naturally in-scene as ${solo.name}:] ${chat.pendingGmNudge}`});
       chat.pendingGmNudge=null;persistChats();
@@ -21215,13 +21448,17 @@ async function buildTextPayload(chat,p){
     }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
   }
   const opts={chat,targetName:state.user,targetId:"__user__",textMode:true};
-  const pl=buildPayload("text",
-    buildCharPromptBlocks(p,[],injected,state.user,opts),
-    buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
-                     targetName:state.user,targetId:"__user__",multi:false,injected,textMode:true}));
+  const _hb=buildCharPromptBlocks(p,[],injected,state.user,opts);
+  const _tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
+                     targetName:state.user,targetId:"__user__",multi:false,injected,textMode:true});
+  const pl=buildPayload("text",_hb,_tb);
   // The one thing a text has that a spoken line cannot: how long this message sat unanswered. It
   // belongs closest to generation, so a late reply lands as a late reply.
-  try{ const tn=_textTimingNote(chat,p); if(tn) pl.tail=(pl.tail?pl.tail+"\n\n":"")+tn; }catch(e){}
+  let _tn=""; try{ _tn=_textTimingNote(chat,p)||""; }catch(e){}
+  if(_tn) pl.tail=(pl.tail?pl.tail+"\n\n":"")+_tn;
+  /* v33.0 — the raw pieces, so a user payload template can place them itself. The timing note is
+     exposed as its own callable ({{call//text_timing}}) rather than being welded to the tail. */
+  pl.blocks=Object.assign({},_hb,_tb,{text_timing:_tn});
   return pl;
 }
 // Strip anything that belongs to a spoken scene but never to a typed message.
@@ -21246,10 +21483,13 @@ async function sendTextMessage(chat,p,body){
     // The thread is not a separate conversation: it is the same one, on a different channel.
     const _pl=await buildTextPayload(chat,p);
     const _hist=tagLastForTarget(castHistory(chat,p));
-    const msgs=[];
-    if(_pl.head)msgs.push({role:"system",content:_pl.head});
-    msgs.push(..._hist);
-    if(_pl.tail)msgs.push({role:"system",content:_pl.tail});
+    let msgs=ptBuildMessages("text",_pl.blocks||{},_hist,{chat,npc:p,targetName:state.user});
+    if(!msgs){
+      msgs=[];
+      if(_pl.head)msgs.push({role:"system",content:_pl.head});
+      msgs.push(..._hist);
+      if(_pl.tail)msgs.push({role:"system",content:_pl.tail});
+    }
     let reply=await chatCompletion(msgs, rpModel(), {rp:true,dbg:"Text reply — "+p.name});
     _textTyping(p,false);
     reply=_cleanTextReply(reply,p.name);
@@ -22345,15 +22585,19 @@ async function playCharacterTurn(chat,p,addressed){
       if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
     }
     // v19 payload assembly: block content per character; block ORDER from the "multi" payload layout.
-    const _pl=buildPayload(chat._heatBeat?"heat":"multi",
-      buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
-      buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected }));
+    const _kind=chat._heatBeat?"heat":"multi";
+    const _hb=buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId});
+    const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected });
+    const _pl=buildPayload(_kind,_hb,_tb);
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
-    const messages=[];
-    if(_pl.head)messages.push({role:"system",content:_pl.head});
-    messages.push(...taggedHist);
-    if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName});
+    if(!messages){
+      messages=[];
+      if(_pl.head)messages.push({role:"system",content:_pl.head});
+      messages.push(...taggedHist);
+      if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    }
     if(chat.pendingGmNudge){
       messages.push({role:"system",content:`[Director's note — react naturally in-scene as ${p.name}, do not mention this:] ${chat.pendingGmNudge}`});
       chat.pendingGmNudge=null;persistChats();
@@ -30039,18 +30283,22 @@ async function playSingleReaction(chat,p,eventText){
       injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
     }catch(e){injected={recent:[],diary:[],longterm:[]};}}
     // v19 payload assembly: block content unchanged; block ORDER from the "gm" payload layout.
-    const _pl=buildPayload("gm",
-      buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" }),
-      buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
-        targetName:state.user, targetId:"__user__", multi:false, injected }));
+    const _hb=buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" });
+    const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
+        targetName:state.user, targetId:"__user__", multi:false, injected });
+    const _pl=buildPayload("gm",_hb,_tb);
     // Same witness/scene-scoped history as every other character reply (see castHistory) — so a
     // gamemaster-prompted responder also never inherits dialogue from before they arrived.
     const history=castHistory(chat,p);
     const taggedHistory=tagLastForTarget(history);
-    const _msgs=[];
-    if(_pl.head)_msgs.push({role:"system",content:_pl.head});
-    _msgs.push(...taggedHistory);
-    if(_pl.tail)_msgs.push({role:"system",content:_pl.tail});
+    let _msgs=ptBuildMessages("gm",Object.assign({},_hb,_tb),taggedHistory,
+      {chat,npc:p,targetName:state.user});
+    if(!_msgs){
+      _msgs=[];
+      if(_pl.head)_msgs.push({role:"system",content:_pl.head});
+      _msgs.push(...taggedHistory);
+      if(_pl.tail)_msgs.push({role:"system",content:_pl.tail});
+    }
     const _seq=_dirSeq;
     const reply=await chatCompletion(_msgs,rpModel(),{rp:true,dbg:"Roleplay reply (gamemaster reaction)"});
     typing.remove();

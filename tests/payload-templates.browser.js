@@ -14,13 +14,13 @@ const {chromium}=require('playwright');
   console.log("\n[boot]");
   ok("no page errors on load", errs.length===0, errs.join(" | "));
   ok("template engine loaded", await pg.evaluate(()=>typeof ptBuildMessages==="function"));
-  ok("templates OFF by default", await pg.evaluate(()=>state.payloadTplOn===false));
+  ok("templates ON by default", await pg.evaluate(()=>state.payloadTplOn===true));
 
   console.log("\n[defaults]");
   const d=await pg.evaluate(()=>ptDefaultTemplate("solo"));
   ok("solo default has [system]", d.includes("[system]"), d.slice(0,120));
   ok("solo default calls history", d.includes("{{call//dialogue_history}}"));
-  ok("text default carries timing note", await pg.evaluate(()=>ptDefaultTemplate("text").includes("{{call//text_timing}}")));
+  ok("text default carries timing note", await pg.evaluate(()=>ptDefaultTemplate("text").includes("{{call//text_timing//full}}")));
   ok("all 5 kinds generate", await pg.evaluate(()=>PT_KINDS.every(k=>ptDefaultTemplate(k).length>50)));
 
   console.log("\n[parity: default template === classic buildPayload]");
@@ -99,10 +99,24 @@ const {chromium}=require('playwright');
       renderEngineTemplates(); epValidate(k);
       const h=document.getElementById('epWarn_'+k).innerHTML;
       ptSetTemplate(epTplKey(k),null); return /stop working/i.test(h); }));
-  ok("templates OFF => classic engine payload", await pg.evaluate(()=>{
+  ok("toggling OFF => classic engine payload", await pg.evaluate(()=>{
       state.payloadTplOn=false;
       const m=epSend("gossipPrompt","SYS",{data:"D"});
       return m.length===2&&m[0].content==="SYS"&&m[1].content==="D"; }));
+
+
+  console.log("\n[bare vs full pieces]");
+  ok("bare and //full are both valid names", await pg.evaluate(()=>{
+      const k=ptKnownNames(); return k["recent_memories"]&&k["recent_memories//full"]; }));
+  ok("default template uses //full", await pg.evaluate(()=>ptDefaultTemplate("solo").includes("//full}}")));
+  ok("erase button swaps them all to bare", await pg.evaluate(()=>{
+      ptSetTemplate("solo",null); ptStripHeaders("solo");
+      const t=ptTemplate("solo"); ptSetTemplate("solo",null);
+      return t.indexOf("//full}}")===-1 && t.indexOf("{{call//your_bio}}")>-1; }));
+  ok("put-them-back restores //full", await pg.evaluate(()=>{
+      ptSetTemplate("solo",null); ptStripHeaders("solo"); ptRestoreHeaders("solo");
+      const t=ptTemplate("solo"); ptSetTemplate("solo",null);
+      return t.indexOf("{{call//your_bio//full}}")>-1 && t.indexOf("{{call//dialogue_history}}")>-1; }));
 
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));

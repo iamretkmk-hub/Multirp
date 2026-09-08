@@ -932,7 +932,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v33.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v33.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -5212,7 +5212,7 @@ function loadState(){
     // default (current hardcoded) order, so old saves behave byte-identically with no migration.
     payloadLayouts:store.get(K.payloadLayouts,{})||{},
     payloadTemplates:store.get(K.payloadTemplates,{}),
-    payloadTplOn:store.get(K.payloadTplOn,false),
+    payloadTplOn:store.get(K.payloadTplOn,true),
     // v19.2 — user overrides for the fixed template fragments inside reply-payload blocks.
     // Absent/blank entry = the BLOCK_TPL_DEFAULTS text, so old saves behave byte-identically.
     blockTpls:store.get(K.blockTpls,{})||{},
@@ -17824,9 +17824,29 @@ function ptVars(ctx){
   return v;
 }
 /* The call names a template may use — the same block map buildPayload receives. */
-function ptSources(blocks){
-  const s=Object.assign({},blocks||{});
-  delete s.__history__;                 // history is structural, handled by ptParse
+function ptSources(blocks,rawFn){
+  const s={};
+  Object.keys(blocks||{}).forEach(k=>{
+    if(k==="__history__") return;       // history is structural, handled by ptParse
+    s[k+"//full"]=blocks[k];            // the app's own wording, headings and all
+  });
+  /* The bare name is the DATA ONLY. Built lazily and once — a piece nobody calls costs nothing,
+     and a template calling ten of them still only rebuilds the producers a single time. */
+  let cache=null;
+  const raws=()=>{ if(cache) return cache;
+    try{ _ptRawMode=true; cache=(typeof rawFn==="function"?rawFn():null)||{}; }
+    catch(e){ cache={}; } finally{ _ptRawMode=false; }
+    return cache; };
+  Object.keys(blocks||{}).forEach(k=>{
+    if(k==="__history__") return;
+    s[k]=function(){
+      const r=raws()[k];
+      /* Some pieces ARE their prose (the scene lines, the guardrails) — stripping it leaves
+         nothing. Handing back an empty piece there would quietly delete content, so fall back. */
+      if(r!=null&&String(r).trim()) return r;
+      return blocks[k]||"";
+    };
+  });
   return s;
 }
 function ptResolve(srcs,name,sub,report){
@@ -17934,12 +17954,12 @@ function ptDefaultTemplate(kind){
   const head=[],tail=[]; let after=false;
   order.forEach(id=>{
     if(id==="__history__"){ after=true; return; }
-    (after?tail:head).push("{{call//"+id+"}}");
+    (after?tail:head).push("{{call//"+id+"//full}}");
   });
   /* The text payload has one piece the others do not: how long the message sat unanswered. It is
      appended to the tail in buildTextPayload, so the default template must place it there too or
      turning templates on would silently drop it. */
-  if(kind==="text") tail.push("{{call//text_timing}}");
+  if(kind==="text") tail.push("{{call//text_timing//full}}");
   let out="";
   if(head.length) out+="[system]\n"+head.join("\n\n")+"\n[system end]\n\n";
   out+="{{call//dialogue_history}}\n";
@@ -17964,12 +17984,12 @@ function ptSetTemplate(kind,text){
 
 /* MAIN ENTRY — returns the full messages[] for a reply, or null to use the classic path.
    `history` is the already-built transcript message array. */
-function ptBuildMessages(kind,blocks,history,ctx){
+function ptBuildMessages(kind,blocks,history,ctx,rawFn){
   if(!state.payloadTplOn) return null;
   let msgs=[];
   try{
     const report={unknownCall:[],unknownVar:[]};
-    const srcs=ptSources(blocks), vars=ptVars(ctx||{});
+    const srcs=ptSources(blocks,rawFn), vars=ptVars(ctx||{});
     const headSecs=new Set();
     let seenInstruction=false;
     ptParse(ptTemplate(kind)).forEach(pt=>{
@@ -18812,7 +18832,13 @@ Keep tags only inside the dialogue quotes. Do not tag stage directions or though
 - Combine styles for effect — <slow><soft>Goodnight, sleep well.</soft></slow>`
 };
 /* Resolver: user override (state.blockTpls) → default. Blank/whitespace override falls back. */
+/* v33.2 — RAW MODE. While set, every fixed sentence returns empty, so a producer emits only the
+   live data it wraps. That is what {{call//piece}} hands a template: the headings and framing are
+   the user's to write. {{call//piece//full}} still gives the app's own wording, and the default
+   template uses it, so an unedited template sends exactly what it always did. */
+let _ptRawMode=false;
 function blkTpl(key){
+  if(_ptRawMode) return "";
   const o=state.blockTpls&&state.blockTpls[key];
   return (typeof o==="string"&&o.trim())?o:(BLOCK_TPL_DEFAULTS[key]||"");
 }
@@ -21494,7 +21520,10 @@ async function sendMessage(){
     /* v33.0 — user payload template first; null means "not enabled, or it failed" and we use the
        classic head/history/tail assembly, which is what the default template reproduces anyway. */
     let messages=ptBuildMessages("solo",Object.assign({},_hb,_tb),taggedHistory,
-      {chat,npc:solo,targetName:state.user});
+      {chat,npc:solo,targetName:state.user},
+      ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
+        buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
+          targetName:state.user, targetId:"__user__", multi:false, injected })));
     if(!messages){
       messages=[];
       if(_pl.head)messages.push({role:"system",content:_pl.head});
@@ -21683,6 +21712,11 @@ async function buildTextPayload(chat,p){
   /* v33.0 — the raw pieces, so a user payload template can place them itself. The timing note is
      exposed as its own callable ({{call//text_timing}}) rather than being welded to the tail. */
   pl.blocks=Object.assign({},_hb,_tb,{text_timing:_tn});
+  pl.rawFn=()=>Object.assign({},
+    buildCharPromptBlocks(p,[],injected,state.user,opts),
+    buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
+      targetName:state.user,targetId:"__user__",multi:false,injected,textMode:true}),
+    {text_timing:_tn});
   return pl;
 }
 // Strip anything that belongs to a spoken scene but never to a typed message.
@@ -21707,7 +21741,7 @@ async function sendTextMessage(chat,p,body){
     // The thread is not a separate conversation: it is the same one, on a different channel.
     const _pl=await buildTextPayload(chat,p);
     const _hist=tagLastForTarget(castHistory(chat,p));
-    let msgs=ptBuildMessages("text",_pl.blocks||{},_hist,{chat,npc:p,targetName:state.user});
+    let msgs=ptBuildMessages("text",_pl.blocks||{},_hist,{chat,npc:p,targetName:state.user},_pl.rawFn);
     if(!msgs){
       msgs=[];
       if(_pl.head)msgs.push({role:"system",content:_pl.head});
@@ -22806,7 +22840,9 @@ async function playCharacterTurn(chat,p,addressed){
     const _pl=buildPayload(_kind,_hb,_tb);
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
-    let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName});
+    let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName},
+      ()=>Object.assign({},buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
+        buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected })));
     if(!messages){
       messages=[];
       if(_pl.head)messages.push({role:"system",content:_pl.head});
@@ -30458,7 +30494,10 @@ async function playSingleReaction(chat,p,eventText){
     const history=castHistory(chat,p);
     const taggedHistory=tagLastForTarget(history);
     let _msgs=ptBuildMessages("gm",Object.assign({},_hb,_tb),taggedHistory,
-      {chat,npc:p,targetName:state.user});
+      {chat,npc:p,targetName:state.user},
+      ()=>Object.assign({},buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" }),
+        buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
+          targetName:state.user, targetId:"__user__", multi:false, injected })));
     if(!_msgs){
       _msgs=[];
       if(_pl.head)_msgs.push({role:"system",content:_pl.head});
@@ -32212,7 +32251,33 @@ function ptCatalog(){
   out.push({name:"dialogue_history",label:"THE TRANSCRIPT",desc:"The chat history itself. Put it on its own line; everything before it is sent before the conversation, everything after it comes after."});
   return out;
 }
-function ptKnownNames(){ const k={}; ptCatalog().forEach(c=>k[c.name]=true); return k; }
+function ptKnownNames(){
+  const k={};
+  ptCatalog().forEach(c=>{ k[c.name]=true; k[c.name+"//full"]=true; });
+  return k;
+}
+/* Swap every {{call//x//full}} in a template for the bare {{call//x}} — the app's built-in
+   headings and framing stop being sent, and whatever the user writes around the piece is all the
+   model sees. One button because doing it by hand across five templates is exactly the kind of
+   time this feature exists to give back. */
+function ptStripHeaders(kind){
+  const before=ptTemplate(kind);
+  const after=before.replace(/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*\/\/\s*full\s*\}\}/g,"{{call//$1}}");
+  if(after===before){ toast("This template already uses the bare pieces"); return; }
+  ptSetTemplate(kind,after);
+  const el=document.getElementById('ptTpl_'+kind); if(el)el.value=after;
+  ptValidate(kind);
+  toast("Built-in headings removed — the wording is yours now");
+}
+function ptRestoreHeaders(kind){
+  const before=ptTemplate(kind);
+  const after=before.replace(/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*\}\}/g,(m,n)=>
+    (n==="dialogue_history")?m:"{{call//"+n+"//full}}");
+  ptSetTemplate(kind,after);
+  const el=document.getElementById('ptTpl_'+kind); if(el)el.value=after;
+  ptValidate(kind);
+  toast("The app's own headings are back");
+}
 
 /* Which templates currently reference a given piece — the "used by" button. */
 function ptUsedBy(name){
@@ -32342,7 +32407,7 @@ function renderPayloadTemplates(){
      </label>
      <div class="desc" style="margin-bottom:8px">While this is off, payloads are built the normal way (the ordered part list above). Turning it on uses the templates below — and each one starts as an exact copy of what your app already sends, so <b>nothing changes until you edit the text</b>.</div>
      <details style="margin-bottom:8px"><summary style="cursor:pointer"><b>Every piece you can call</b> — ${cat.length} of them</summary>
-       <div class="desc" style="margin:6px 0">Tap a row to copy its call. <b>i</b> shows the name, <b>used by</b> shows which payloads currently use it.</div>
+       <div class="desc" style="margin:6px 0"><code>{{call//piece}}</code> gives you the <b>bare data</b> — no headings, no built-in wording, so whatever you write around it is all the model reads. <code>{{call//piece//full}}</code> is the app's original version with its own headings. The default templates use <code>//full</code>; the <b>Erase built-in headings</b> button swaps them all to bare in one go.</div>
        <div style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:10px">
        ${cat.map(c=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border)">
           <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{call//${esc(c.name)}}}</code>
@@ -32363,6 +32428,8 @@ function renderPayloadTemplates(){
           oninput="ptTplInput('${kind}')">${esc(ptTemplate(kind))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
           <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${kind}')">Preview with my story</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptStripHeaders('${kind}')">Erase built-in headings</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptRestoreHeaders('${kind}')">Put them back</button>
           <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${kind}')">Reset to default</button>
         </div>
         <div id="ptPrev_${kind}" style="margin-top:8px"></div>

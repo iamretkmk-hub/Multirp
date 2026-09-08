@@ -39,12 +39,21 @@ const {chromium}=require('playwright');
   });
 
   console.log("\n[default view is the readable one]");
-  ok("label says it is what was sent", /Exactly what was sent/i.test(R.sentLabel), R.sentLabel);
-  ok("shows plain message blocks, not JSON", R.sentText.indexOf('"capsules"')===-1 && /SYSTEM/.test(R.sentText), R.sentText.slice(0,180));
-  ok("system message is one readable block", R.sentText.indexOf("# TASK")>-1 && R.sentText.indexOf("# RESPONSE FORMAT")>-1);
-  ok("dialogue is there as turns", /\[1\] USER/.test(R.sentText)&&/\[2\] ASSISTANT/.test(R.sentText), R.sentText.slice(0,300));
-  ok("the final user message is its own block", /\[3\] USER/.test(R.sentText));
-  ok("no capsule wrapping in the default", R.sentText.indexOf('"section"')===-1&&R.sentText.indexOf('"parts"')===-1);
+  ok("label says it is the request body", /request body/i.test(R.sentLabel), R.sentLabel);
+  // it must be VALID JSON and the exact request body
+  let parsed=null, perr=null;
+  try{ parsed=JSON.parse(R.sentText); }catch(x){ perr=x.message; }
+  ok("it is valid JSON", !!parsed, perr);
+  ok("has a messages array", !!(parsed&&Array.isArray(parsed.messages)));
+  ok("exactly 4 message brackets", parsed&&parsed.messages.length===4, parsed&&parsed.messages.length);
+  ok("ONE system bracket holding everything", parsed&&parsed.messages[0].role==="system"
+     && parsed.messages[0].content.indexOf("# TASK")>-1
+     && parsed.messages[0].content.indexOf("# RESPONSE FORMAT")>-1);
+  ok("dialogue turns are their own brackets", parsed&&parsed.messages[1].role==="user"&&parsed.messages[2].role==="assistant");
+  ok("ONE user bracket at the end", parsed&&parsed.messages[3].role==="user"
+     && parsed.messages[3].content.indexOf("Respond as Nil Akbaba")>-1);
+  ok("request params are there too", parsed&&parsed.model==="x/y"&&parsed.temperature===0.9);
+  ok("no capsule decomposition", R.sentText.indexOf('"capsules"')===-1&&R.sentText.indexOf('"parts"')===-1&&R.sentText.indexOf('"section"')===-1);
 
   console.log("\n[capsules still available]");
   ok("switch flips to capsules", /capsule/i.test(R.capLabel), R.capLabel);

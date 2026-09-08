@@ -86,6 +86,52 @@ the per-image menu (frame picker `pickFrame`, retry, view prompt, Animate/Movie/
   animate (`animVoice`) sends the line's TTS as the clip's audio where the model supports it.
 - Async submit→poll via `atlasGenerate`.
 
+### Frames must be HOSTED before the request goes out (v31.10)
+
+`generateVideo`'s `hostFrame` uploads the first frame (and a finishing frame) via `atlasUpload` and
+**throws** when the result is not an `https` URL. It used to be
+`try{ return await atlasUpload(u) }catch(e){ return u }`, and that fallback was the bug behind
+"video always errors and nothing reaches AtlasCloud": any failed upload — a rejected key, a 5xx, a
+blocked CORS preflight — handed the *original* source back, so `image` went out as a multi-megabyte
+base64 `data:` URI (or a `blob:` URL meaningless off the device). The resulting request is megabytes
+of JSON that the browser/network layer rejects **before delivery**, so the app reported
+"Couldn't reach AtlasCloud (network/CORS)" for a request AtlasCloud never received and never logged.
+The error now names the step and the real cause (usually the key).
+
+`atlasGenerate` carries the backstop: `_atlasUnhosted(body)` refuses to send any body whose media
+fields still hold a `data:`/`blob:` URI, and the CORS/network message now records the payload size
+so an oversized body is visible in the debug log. **`images` is deliberately exempt** — the image
+*edit* models take their references as inline base64 in that field by design. `atlasLipsync` hosts
+its image and voice track the same strict way.
+
+## Voice samples — the actor's own moaning track (v31.10)
+
+The **Create sample** button in Generate video (`_i2vSampleSection` → `i2vCreateSample`) builds a
+vocal track for the clip in two separable steps:
+
+1. `writeMoanScript(actor, sec)` — an LLM writes a **tagged vocal script**: voiced sound only, no
+   words. The prompt is the editable `moanPrompt` registry entry (`DEFAULT_MOANPROMPT`), which gets
+   `{{seconds}}` (the configured clip length) and `{{beats}}` (`moanBeats` — one tagged segment per
+   ~1.6s, so the track fills the clip rather than stopping a third of the way in). The tag
+   vocabulary is fixed: `<build-intensity>`, `<fast>`, `<slow>`, `<breathy>`, `<whimper>`,
+   `<shout>`, with `[breath]`/`[breathe]`/`[pause]` inside a segment and capitals carrying volume —
+   e.g. `<build-intensity> Ah [breathe] AH [breath] AAAH! </build-intensity> <fast> Ah Ah Ah Oh </fast>`.
+2. `speakMoanScript` → `atlasTTS` in the actor's **own** voice: `ttsVoiceFor(actor)`, i.e. the voice
+   set on their bio, falling back to the global default. `atlasTTS` calls `ttsCleanText` with
+   `stripTags` **false**, which is why the delivery markup survives to synthesis.
+
+`_i2vActor()` resolves who the clip is of from the gallery record (`characterId`, then `character`
+by name); `moanActorBrief` passes their temperament — not their whole bio — so the writer colours
+the delivery without being tempted into words. `cleanMoanScript` strips nested preambles, code
+fences and quotes (the engine would otherwise *pronounce* them), retrying until nothing more comes
+off. The result is attached as a reference sound via `_i2vAttachSample`, which **replaces** the
+sample a previous run attached so repeated takes cannot eat all three audio slots. The script stays
+on screen and editable: **Re-speak** re-runs TTS only, no LLM call.
+
+> The model only accepts `reference_audios` **alongside a reference image or video** (see
+> `generateVideo`), so with an empty image tray the sample would be dropped from the request without
+> a word. The panel says so instead of letting it happen silently.
+
 ## Gallery, scenes, playground
 
 - **Gallery** (`renderGallery`): Images/Videos tabs, per-character folders (`openGalFolder`),

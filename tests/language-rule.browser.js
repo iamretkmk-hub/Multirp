@@ -66,6 +66,29 @@ const {chromium}=require('playwright');
   ok("default template still byte-identical", R.same);
   ok("no internal _keys leak into a payload", !R.leaked);
   ok("editor knows the name", R.knownLang&&R.inCatalog);
+  console.log("\n[the directive does not contradict itself]");
+  ok("the story rule never overrides the language it just selected", await pg.evaluate(()=>{
+      const bad=[];
+      ["tr","en","fr","de"].forEach(code=>{
+        const was=state.storyLang; state.storyLang=code;
+        const d=langDirective(); const n=storyLangName();
+        state.storyLang=was;
+        // "write in X … overrides any instruction to write in X" is the self-contradiction
+        const m=d.match(/including any instruction to write in ([^)]+)\)/);
+        if(!m) bad.push(code+": no override clause");
+        else if(m[1].trim().toLowerCase()===n.toLowerCase()) bad.push(code+": overrides itself ("+n+")");
+      });
+      return bad.length?bad.join(", "):true; }));
+  ok("no language name is hardcoded into the story rule", await pg.evaluate(()=>{
+      const was=state.storyLang; state.storyLang="fr";
+      const d=langDirective(); state.storyLang=was;
+      return d.indexOf("Turkish")===-1 ? true : "still says Turkish with French selected"; }));
+  ok("the engine rule names the story language it has to beat", await pg.evaluate(()=>{
+      const was=state.storyLang; state.storyLang="fr";
+      const d=engineLangDirective(); state.storyLang=was;
+      return d.indexOf("French")>-1 && d.indexOf("Turkish")===-1
+        ? true : "engine rule: "+d.slice(0,140); }));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

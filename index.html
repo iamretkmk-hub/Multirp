@@ -678,6 +678,8 @@
   .plqRow details summary{font-size:12px;cursor:pointer;opacity:.85;}
   .plqRow textarea{width:100%;min-height:160px;margin-top:6px;}
   .plqShared{font-size:10px;opacity:.55;margin-top:3px;}
+  .plqWarn{font-size:11px;line-height:1.45;margin-top:5px;padding:6px 8px;border:1px solid var(--danger);border-radius:8px;color:var(--text)}
+  .plqWarn code{font-size:11px;word-break:break-all}
   .plqTpl{min-height:70px !important;font-size:12px;}
   /* Placeholder parts (dynamic blocks): visually distinct from editable text parts — dashed
      purple boxes that can be moved, removed and re-added between the text boxes. */
@@ -936,7 +938,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v35.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v35.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -9604,9 +9606,9 @@ Return ONLY JSON: {"message":"<the text message>","why":"<3-6 words: the impulse
 
 const PROMPT_REGISTRY=[
   {key:"baseInstruction", label:"Global Base Instruction", def:()=>DEFAULT_BASE_INSTRUCTION, json:false,
-   hint:"Applied to every character before their individual details."},
+   hint:"Applied to every character before their individual details. Supports {{char}}, {{self}}, {{user}} and {{target}}."},
   {key:"formatRules", label:"Response Format Rules", def:()=>DEFAULT_FORMAT_RULES, json:false,
-   hint:"How replies are written: *narration*, _thoughts_, \"dialogue\"."},
+   hint:"How replies are written: *narration*, _thoughts_, \"dialogue\". Supports {{char}}, {{self}}, {{user}} and {{target}}."},
   {key:"rewritePrompt", label:"Image-prompt rewriter", def:()=>DEFAULT_REWRITE, json:false,
    hint:"Turns each roleplay reply into a vivid image-generation prompt."},
   {key:"vidPrompt", label:"Video-prompt rewriter", def:()=>DEFAULT_VIDPROMPT, json:false,
@@ -19009,6 +19011,13 @@ function feelingsBlock(chat,selfId,targetId,targetName){
    reply path uses this (see buildSystemPromptBlocks) — there is no whole-cast variant.
    opts: {chat, targetName, targetId} — who this reply is aimed at. The target may be the player
    or another character; the "who you are responding to" block is built for whoever it is. */
+/* The placeholder vocabulary every reply-payload prompt and fragment is filled from. One map,
+   so {{char}} means the same thing in the base instruction, the format rules and the task line.
+   `self` is an alias for `char` because the guardrail fragments already spell it that way. */
+function _replyPh(p,opts,targetName){
+  const nm=(p&&p.name)||"";
+  return {char:nm,self:nm,user:state.user||"",target:targetName||state.user||""};
+}
 function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   opts=opts||{};
   const chat=opts.chat||curChat();
@@ -19018,9 +19027,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
 
   // ===== UNIVERSAL — true for every character in every scene, so it leads the payload. =====
   // task
-  {let task=fillTpl(blkTpl("task"),{char:p.name});
+  /* v35.6 \u2014 the base instruction is filled too. It used to be concatenated RAW, so a
+     {{char}} typed into that box reached the model as the literal characters "{{char}}" with
+     nothing to say what went wrong. Same map as the task line above it, plus the names the
+     other fragments already use, so one vocabulary covers the whole payload. */
+  {const _ph=_replyPh(p,opts,targetName);
+   let task=fillTpl(blkTpl("task"),_ph);
    const base=(up("baseInstruction")||"").trim();
-   if(base)task+=`\n\n${base}`;
+   if(base)task+=`\n\n${fillTpl(base,_ph)}`;
    B.task=task;}
 
   // world — UNIVERSE SETTING
@@ -19047,7 +19061,7 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
      const _n=Math.max(1,parseInt(chat._heatBeat.n,10)||1);
      B.format=fillTpl(blkTpl("heat_format"),{lines:"6",total:String(_t),n:String(_n),user:state.user});
    }else{
-     const _fr=(up("formatRules")||"").trim();
+     const _fr=fillTpl((up("formatRules")||"").trim(),_replyPh(p,opts,targetName));
      if(_fr)B.format=/^#/.test(_fr)?_fr:`${blkTpl("format_header")}\n${_fr}`;
      if(B.format&&narrActive())B.format+=`\n\n${blkTpl("narr_shape")}`;
    }
@@ -31952,7 +31966,8 @@ function plqTplInput(el){
   if(el.value===BLOCK_TPL_DEFAULTS[k]||!el.value.trim())delete state.blockTpls[k];  // default → keep lean, future default upgrades apply
   else state.blockTpls[k]=el.value;
   store.set(K.blockTpls,state.blockTpls);
-  document.querySelectorAll(`textarea[data-btpl="${CSS.escape(k)}"]`).forEach(t=>{ if(t!==el)t.value=el.value; });
+  document.querySelectorAll(`textarea[data-btpl="${CSS.escape(k)}"]`).forEach(t=>{ if(t!==el)t.value=el.value; _phWarnPaint(t); });
+  _phWarnPaint(el);
 }
 /* v26.8 — is this fragment overridden by the user (i.e. not the shipped default)? */
 function _tplCustomized(k){
@@ -32018,7 +32033,8 @@ function plqInput(el){
   const key=el.dataset.pkey; if(!key||!(key in K))return;
   state[key]=el.value;
   store.setRaw(K[key],state[key]);
-  document.querySelectorAll(`textarea[data-pkey="${CSS.escape(key)}"]`).forEach(t=>{ if(t!==el)t.value=el.value; });
+  document.querySelectorAll(`textarea[data-pkey="${CSS.escape(key)}"]`).forEach(t=>{ if(t!==el)t.value=el.value; _phWarnPaint(t); });
+  _phWarnPaint(el);
 }
 function plqReset(key){
   const reg=PROMPT_BY_KEY[key]; if(!reg)return;
@@ -32043,6 +32059,7 @@ function _plqBlockInner(pKey,b){
     const used=_plqUsedIn(key);
     return `<details><summary>Edit prompt text</summary>
       <textarea class="fld" id="${taId}" data-pkey="${key}" oninput="plqInput(this)">${esc(state[key]||"")}</textarea>
+      <div class="plqWarnHost">${_phWarnHtml(state[key]||"",promptPlaceholders(key))}</div>
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${key}')">Reset to default</button>
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${taId}','${key}')">${icon("sparkle")} Write with AI</button>
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${taId}','${key}',event)">{{&nbsp;}} Placeholder</button>
@@ -32058,6 +32075,7 @@ function _plqBlockInner(pKey,b){
         +(custom.length?`<button class="btn sec small" style="width:auto;padding:6px 10px;margin:6px 0" onclick="plqTplResetMany('${pKey}','${custom.join(",")}')">Reset ${custom.length} customized fragment${custom.length===1?"":"s"} to default</button>`:``)
         +b.tpls.map(k=>{const tid=`tpl_${pKey}_${k}`;const _c=_tplCustomized(k);return `<div style="margin-top:8px"><label style="font-size:11px;opacity:.75">${esc(_blkTplLabel(k))}${_c?` <span style="color:var(--accent);font-weight:600">● customized</span>`:``}</label>
           <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)">${esc(blkTpl(k))}</textarea>
+          <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k))}</div>
           <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>
           <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button></div>`;}).join("")
         +`<div class="plqShared">{{placeholders}} are filled with live story data at build time — keep the ones you need. Saved instantly; blank = default. A fragment marked <b>● customized</b> is YOUR text, not the shipped one — it stays as you wrote it across app updates, so an old override can end up repeating what a newer default already says.</div></details>`;
@@ -32189,7 +32207,43 @@ function promptPlaceholders(key){
   const reg=PROMPT_BY_KEY[key]; if(!reg)return [];
   return [...new Set([..._phTokens(reg.def?reg.def():""),..._phTokens(reg.hint||"")])].sort();
 }
-function tplPlaceholders(k){ return _phTokens(BLOCK_TPL_DEFAULTS[k]||"").sort(); }
+/* A few fragments are filled with MORE than their shipped default happens to spell — the
+   delivery blocks carry no token by default but are handed the cast, so a hand-written one can
+   name people. Declared here or the picker would call them unsupported. */
+const TPL_PH_EXTRA={voice_delivery:["user","self","target"],heat_delivery:["user","self","target"]};
+function tplPlaceholders(k){
+  return [...new Set([..._phTokens(BLOCK_TPL_DEFAULTS[k]||""),...(TPL_PH_EXTRA[k]||[])])].sort();
+}
+/* Every {{token}} the TEXT uses, including shapes fillTpl cannot even match. fillTpl's own
+   pattern is \w+, so a dotted token like {{npc.name}} is not a failed substitution — it is
+   never seen as a token at all and reaches the model as literal characters. That is exactly the
+   kind of silence this scanner exists to break, so it is deliberately looser than fillTpl. */
+function _phUsed(text){
+  return [...new Set((String(text||"").match(/\{\{\s*[^{}\n]{1,60}?\s*\}\}/g)||[])
+    .map(t=>t.slice(2,-2).trim()))];
+}
+function _phUnknown(text,allowed){
+  const ok=new Set(allowed||[]);
+  return _phUsed(text).filter(t=>!ok.has(t));
+}
+/* The live "this will be sent literally" note under a prompt or fragment box. */
+function _phWarnHtml(text,allowed){
+  const bad=_phUnknown(text,allowed);
+  if(!bad.length) return "";
+  const list=bad.map(t=>"<code>{{"+esc(t)+"}}</code>").join(", ");
+  const hint=allowed&&allowed.length
+    ? "This one fills "+allowed.map(t=>"<code>{{"+esc(t)+"}}</code>").join(", ")+"."
+    : "This one fills nothing \u2014 it takes no placeholders at all.";
+  return `<div class="plqWarn">${icon("warn")} ${list} ${bad.length===1?"is":"are"} not filled here and `
+    +`${bad.length===1?"reaches":"reach"} the model as literal text. ${hint}</div>`;
+}
+function _phWarnPaint(el){
+  const host=el&&el.nextElementSibling;
+  if(!host||!host.classList||!host.classList.contains("plqWarnHost"))return;
+  const allowed=el.dataset.pkey?promptPlaceholders(el.dataset.pkey)
+              : el.dataset.btpl?tplPlaceholders(el.dataset.btpl):[];
+  host.innerHTML=_phWarnHtml(el.value,allowed);
+}
 /* ---- floating picker menu (shared by token pickers + the ＋ Placeholder re-add list) ---- */
 function _phMenuClose(){ const m=document.getElementById('phMenu'); if(m)m.remove(); document.removeEventListener('click',_phMenuClose); }
 function _phMenuShow(ev,rowsHtml){

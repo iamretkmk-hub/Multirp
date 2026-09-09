@@ -103,7 +103,7 @@ The act CONTINUES — it did not end and it did not restart. Do not react as if 
 
 | From the Skyrim file | Why it is gone |
 |---|---|
-| All `{% %}` Jinja, `decnpc`, `sexlab_get_threads`, `read_json` | StoryMind has no template engine in this box; it takes plain text |
+| All the Jinja templating — control tags and expressions — plus `decnpc`, `sexlab_get_threads`, `read_json` | StoryMind has no template engine in this box; it takes plain text |
 | Position-change ladder driven by SexLab swap counts | No swap events here — the rungs are read off the scene instead |
 | Every `_forced` / victim / `_rape` branch | You asked for willing only |
 | Every `_role == "giver"` branch (you receiving) | You asked for you giving only |

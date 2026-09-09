@@ -113,6 +113,46 @@ const {chromium}=require('playwright');
   for(const tag of keep)
     ok("keeps "+tag, await pg.evaluate(t=>ttsCleanText('"'+t+' Hello."').indexOf(t)>-1,tag));
 
+  console.log("\n[every sound name the blocks name is one Inworld recognizes]");
+  ok("no invented sound names in the defaults", await pg.evaluate(()=>{
+      // Inworld makes a SOUND only for the names below; any other bracket becomes a persistent
+      // instruction, so an invented one ([squirm], [high-pitch cry]) silently flattens the rest
+      // of the line. Only the ROSTER lines are checked — a line listing four or more brackets is
+      // offering them as sounds; a lone [sad] inside prose is an example of a direction.
+      const OK=new Set(["breathe","sigh","gasp","pant","huff","grunt","groan","moan","laugh","chuckle",
+        "giggle","cackle","snort","scoff","cry","sob","wail","whimper","whine","sniffle","sniff","shriek",
+        "squeal","howl","clear throat","cough","sneeze","hiccup","yawn","burp","snore","choke","gag",
+        "swallow","gulp","spit","tongue click","mouth click","mouth sound","lip smack","kiss","shush",
+        "raspberry","whistle","bleh","chew","slurp","babble","beatbox","growl","reset"]);
+      const scan=txt=>{
+        const bad=[];
+        String(txt||"").split("\n").forEach(line=>{
+          const tags=line.match(/\[[a-z][a-z -]{0,18}\]/g)||[];   // hyphens too: [high-pitch cry] is invented
+          if(tags.length<4) return;                       // not a roster line
+          tags.forEach(t=>{ const w=t.slice(1,-1).trim(); if(!OK.has(w)) bad.push(t); });
+        });
+        return bad;
+      };
+      // positive control: the Skyrim file's own tags must be caught, or this check proves nothing
+      const control=scan("[gasp] [squirm] [breathe] [high-pitch cry] [long low groan] [moan]");
+      if(control.length!==3) return "checker is broken — caught "+control.length+" of 3: "+control.join(",");
+      const bad=[];
+      ["voice_delivery","heat_delivery"].forEach(k=>scan(BLOCK_TPL_DEFAULTS[k]).forEach(t=>bad.push(k+": "+t)));
+      return bad.length?bad.join(", "):true; }));
+
+  console.log("\n[a hand-written block can name the people in it]");
+  ok("{{user}} resolves inside heat_delivery", await pg.evaluate(()=>{
+      const p=state.personas.find(x=>x.id==="p_tts"); const chat=curChat();
+      state.blockTpls=state.blockTpls||{};
+      state.blockTpls.heat_delivery="{{user}} is doing this to {{self}}.";
+      state.user="Kemal"; state.autoSpeak=true; chat._heatBeat={n:2,total:5};
+      let out="";
+      try{ out=String(buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
+             targetName:state.user,targetId:"__user__",multi:false,
+             injected:{recent:[],diary:[],longterm:[]}}).spoken_delivery||""); }
+      finally{ delete state.blockTpls.heat_delivery; state.autoSpeak=false; delete chat._heatBeat; }
+      return out==="Kemal is doing this to Nil."; }));
+
   console.log("\n[nothing else moved]");
   ok("spoken_delivery still in REPLY_ORDER", await pg.evaluate(()=>REPLY_ORDER.indexOf("spoken_delivery")>-1));
   ok("saveSettings does not throw", await pg.evaluate(()=>{

@@ -349,6 +349,17 @@
   .empty .big{font-size:48px;}
   .toast{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--border);color:var(--text);padding:11px 18px;border-radius:24px;font-size:14px;z-index:200;opacity:0;transition:.25s;pointer-events:none;max-width:88%;text-align:center;}
   .toast.show{opacity:1;}
+  /* v35.7 — "a new build is on the server" bar. Sits above the toast lane and the nav so it
+     never covers either, and is dismissible: an update is never urgent enough to trap someone
+     mid-scene. */
+  .updBar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));
+    z-index:210;display:none;align-items:center;gap:10px;width:min(420px,92vw);
+    background:var(--card);border:1px solid var(--accent);border-radius:14px;
+    padding:9px 10px 9px 14px;box-shadow:0 10px 34px rgba(0,0,0,.45);font-size:13px;}
+  .updBar.show{display:flex;}
+  .updBar .updTxt{flex:1;min-width:0;line-height:1.35}
+  .updBar button{flex:none;width:auto;margin:0;padding:7px 12px;font-size:13px}
+  .updBar .updX{background:none;border:none;color:var(--text);opacity:.5;padding:6px 8px;font-size:16px;cursor:pointer}
   .spin{width:22px;height:22px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot .8s linear infinite;}
   @keyframes rot{to{transform:rotate(360deg);}}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
@@ -938,7 +949,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v35.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v35.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2191,6 +2202,11 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="updBar" id="updBar" role="status">
+  <span class="updTxt">A newer build is on the server.</span>
+  <button class="btn small" onclick="updReload()">Reload</button>
+  <button class="updX" title="Not now" onclick="updDismiss()">✕</button>
+</div>
 
 <nav>
   <button class="active" data-s="chat" onclick="show('chat')"><span class="ico"><svg class="ic"><use href="#i-message"/></svg></span>Story</button>
@@ -6623,6 +6639,40 @@ function bindMediaToUniverse(){
 }
 
 /* ---- helpers ---- */
+/* The update bar. Dismissing it is remembered for THIS page only — a reload either picks up the
+   new build (and the bar has nothing to announce) or it does not, in which case saying so again
+   is the right thing to do. */
+let _updDismissed=false;
+/* Set by the boot block once sw.js registers. Lives out here, not in that block, because the
+   build stamp in Settings calls swCheck() and a function scoped to the boot IIFE is invisible
+   to an onclick. */
+let _swReg=null,_swLastChk=0;
+function swCheck(force){
+  if(!_swReg)return false;
+  const now=Date.now();
+  if(!force && now-_swLastChk < 5*60*1000) return true;   // don't hammer it on every tab switch
+  _swLastChk=now;
+  try{ _swReg.update(); }catch(e){}
+  return true;
+}
+function updShow(){
+  if(_updDismissed)return;
+  const b=document.getElementById('updBar'); if(b)b.classList.add('show');
+}
+function updDismiss(){ _updDismissed=true; const b=document.getElementById('updBar'); if(b)b.classList.remove('show'); }
+function updReload(){ try{ location.reload(); }catch(e){} }
+/* Settings → the build stamp is a button: ask the server right now. */
+function updCheckNow(){
+  if(!swCheck(true)){
+    toast(location.protocol==='https:'?"No service worker registered — just reload the page":"Updates are only checked over https — reload the page to get the newest file");
+    return;
+  }
+  toast("Checking for a newer build…");
+  // update() resolves without telling us whether anything changed; updatefound/controllerchange
+  // do that. If neither fires, there was nothing new.
+  setTimeout(()=>{ const b=document.getElementById('updBar');
+    if(!b||!b.classList.contains('show')) toast("You are on the newest build"); },4000);
+}
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2300);}
 function show(s){
   document.querySelectorAll('.screen').forEach(e=>e.classList.remove('active'));
@@ -33973,10 +34023,36 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
   // ---- Service worker (optional). A SW must live at a real URL (blob SWs are blocked),
   // so we only register if a companion sw.js sits next to this file. The app installs and
   // runs fully offline-capable without it; the SW just adds explicit offline caching.
+  /* v35.7 — AND it tells you when a new build has landed. An installed PWA re-checks sw.js on
+     the browser's own schedule, which can be hours, so the app kept running an old shell long
+     after a new one was uploaded. We ask explicitly: on load, whenever the app comes back to the
+     foreground (at most every 5 minutes), and hourly while it sits open.
+     The signal is the service worker updating. sw.js carries CACHE_VERSION, which is bumped on
+     every build, so a new build always means a byte-different sw.js and a real SW update. That
+     is why nothing here needs a version number of its own to compare against — a third thing to
+     remember to bump would eventually be forgotten and would then either cry wolf forever or
+     stay silent forever.
+     `controller` tells a first install apart from an update: on a first install there is no
+     controller yet and there is nothing to tell anyone about. */
   if('serviceWorker' in navigator && location.protocol==='https:'){
     window.addEventListener('load',()=>{
-      navigator.serviceWorker.register('sw.js').catch(()=>{/* no sw.js present — fine */});
+      navigator.serviceWorker.register('sw.js').then(reg=>{
+        _swReg=reg;
+        // a worker already parked and waiting = an update downloaded before this page loaded
+        if(reg.waiting && navigator.serviceWorker.controller) updShow();
+        reg.addEventListener('updatefound',()=>{
+          const w=reg.installing; if(!w)return;
+          w.addEventListener('statechange',()=>{
+            if(w.state==='installed' && navigator.serviceWorker.controller) updShow();
+          });
+        });
+        setInterval(()=>swCheck(true),60*60*1000);
+      }).catch(()=>{/* no sw.js present — fine */});
+      // sw.js calls skipWaiting, so the new worker takes over at once and this fires. The PAGE is
+      // still the old build until it reloads, which is exactly what the bar is for.
+      navigator.serviceWorker.addEventListener('controllerchange',()=>updShow());
     });
+    document.addEventListener('visibilitychange',()=>{ if(!document.hidden) swCheck(false); });
   }
 
   // ---- Ask the browser to mark our storage as persistent (won't be evicted under pressure).

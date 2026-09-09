@@ -936,7 +936,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v35.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400" id="buildStamp">v35.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1278,7 +1278,8 @@
             </div>
             <div class="row">
               <div><label>STT language</label><input type="text" id="setCallSttLang" value="tr"></div>
-              <div><label>TTS model (Inworld)</label><input type="text" id="setCallTtsModel" value="inworld-tts-2"></div>
+              <div><label>TTS model (Inworld)</label><input type="text" id="setCallTtsModel" value="inworld-tts-2">
+                <div class="desc">Keep this on <b>inworld-tts-2</b>. The delivery directions the characters write are only performed by that model — <code>inworld-tts-2-flash</code> ignores them silently (it still plays the sounds like [laugh]), so speech goes flat with no error to tell you why.</div></div>
             </div>
             <div class="row">
               <div><label>TTS language (BCP-47)</label><input type="text" id="setCallTtsLang" value="tr-TR"></div>
@@ -6751,7 +6752,7 @@ function revealCps(){ const v=+state.revealCps; return (v>=8&&v<=80)?v:REVEAL_CP
 function _dispText(t){
   if(!(state.narrMode||state.autoSpeak)) return t;
   return String(t||"")
-    .replace(/\[\/?[^\[\]\n]{1,32}\]/g,"")
+    .replace(/\[\/?[^\[\]\n]{1,80}\]/g,"")
     .replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,"")
     .replace(/[ \t]{2,}/g," ")
     .replace(/"[ \t]+/g,'" ').replace(/[ \t]+"/g,' "')
@@ -8220,24 +8221,36 @@ function _pickLastFrame(outputs,videoUrl,raw){
 
 // Strip narration/asterisks/markdown so the TTS reads the SPOKEN line, not stage directions.
 // Roleplay replies mix *actions* with dialogue; we voice the words, drop the rest.
-// v35.2 \u2014 delivery-tag markup ([pause], <whisper>\u2026</whisper>) is ALWAYS stripped. It
-// existed for xAI, which rendered it expressively; Inworld reads it aloud as literal words. The
-// parameter is kept because call sites still pass it explicitly.
+/* v35.4 \u2014 [BRACKETED TAGS NOW SURVIVE, ON PURPOSE. inworld-tts-2 performs them: a direction
+   steers the delivery and a recognized sound name plays that sound. They are what the
+   voice_delivery / heat_delivery blocks ask the model to write, so stripping them here would
+   throw away the entire feature. They are removed from the BUBBLE instead (_dispText), which is
+   the pairing that makes it work \u2014 the player reads clean words, the engine gets the direction.
+   Not every bracket is a direction, though, and Inworld treats anything it does not recognize as
+   a SOUND as an instruction. So a bracket is kept only if it looks like one: plain English words,
+   nothing else. "[Scene: the kitchen]", "[OOC: ...]", "[3s]" and "[/whisper]" are structural
+   leftovers that would otherwise be read as coaching, and they go.
+   Angle-bracket markup was xAI's alone and is always dropped.
+   `stripTags:true` still removes every bracket, for callers that want bare words. */
 function ttsCleanText(s,stripTags){
-  if(stripTags===undefined)stripTags=true;
   let t=String(s||"");
   t=t.replace(/\*\*([^*]+)\*\*/g,"$1");         // **bold** → keep the words, drop markers
   t=t.replace(/\*[^*]+\*/g,"");                 // *action* asides → drop entirely
   t=t.replace(/\*/g,"");                         // any stray asterisks
-  if(stripTags){
-    t=t.replace(/\[\/?[^\[\]\n]{1,32}\]/g,"");    // [pause]/[laugh]… instant tags
-    t=t.replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,""); // <whisper>…</whisper> wrapping tags
-  }
+  t=t.replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,"");   // <whisper>… — xAI's, never Inworld's
+  t=stripTags ? t.replace(/\[[^\[\]\n]{1,80}\]/g,"") : ttsKeepSteering(t);
   t=t.replace(/\([^)]*\)/g,"");                 // (parentheticals)
-  // md noise — ">" only when tags are stripped too, or <wrapping> tags would lose their bracket
-  t=t.replace(stripTags?/[_`#>~]/g:/[_`#~]/g,"");
+  t=t.replace(/[_`#>~]/g,"");                    // md noise
   t=t.replace(/\s+/g," ").trim();
   return t.slice(0,15000);                       // model hard cap
+}
+/* Drop the brackets that are not plausible Inworld directions, keep the ones that are. A real one
+   reads as ordinary English \u2014 "[reset]", "[laugh]", "[say quietly with a low tone and deliberate
+   pauses]" \u2014 so letters, spaces and light punctuation pass and everything else does not. */
+function ttsKeepSteering(t){
+  return String(t||"").replace(/\[([^\[\]\n]{1,80})\]/g,function(whole,inner){
+    return /^[a-zA-Z][a-zA-Z ,'-]*$/.test(inner) ? whole : "";
+  });
 }
 /* ===== VOICE SAMPLE — the actor's own moaning track for a clip ==========================
    Two steps, and they are deliberately separate so the script can be read and edited before a
@@ -8704,7 +8717,7 @@ async function _pumpDub(){
         if(a.text&&relay){
           _alog("pump.revoice-inworld","bytes unavailable → relay pcm, voice="+(((a.who&&a.who.voiceId)||state.callVoice||"default")));
           const v=(a.who&&a.who.voiceId&&a.who.voiceId.trim())||state.callVoice||"";
-          const f32=await _inworldFetchPcm(ttsCleanText(a.text,true),v).catch(()=>null);
+          const f32=await _inworldFetchPcm(ttsCleanText(a.text),v).catch(()=>null);
           if(f32&&gateOn()){ await _playPcmAwait(f32,false); played=true; }
         }
         if(!played){
@@ -8742,7 +8755,7 @@ function autoSpeakMsg(m,p){
     // Both segments start synthesizing IMMEDIATELY and in parallel; the queue only sequences
     // PLAYBACK — narrator first, then the character — so the hand-off has no synthesis gap.
     const nv=(state.narrVoice&&state.narrVoice.trim())||state.callVoice||"";
-    if(narr){ _alog("speak.enqueue",`narr · ${narr.length}ch`); _enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr,true),nv).then(f32=>({f32})).catch(()=>null)}); }
+    if(narr){ _alog("speak.enqueue",`narr · ${narr.length}ch`); _enqueueDub({kind:'narr',fx:true,prep:_inworldFetchPcm(ttsCleanText(narr),nv).then(f32=>({f32})).catch(()=>null)}); }
     if(dial){ _alog("speak.enqueue",`dial · ${(who&&who.name)||"?"} · ${dial.length}ch`); _enqueueDub({kind:'dial',prep:_dialPrep(dial,who),m}); }
     return;
   }
@@ -17588,7 +17601,7 @@ const REPLY_BLOCKS={
   feelings_now:{label:"⚠️ What you feel right now",kind:"dyn",desc:"The live emotional charge this character carries into THIS reply, written as a state they are in rather than a list of axis labels, plus the fast read's playable note on how it should visibly land. True for one turn and then it decays — so it sits at the very end, right above the guidance, instead of beside their bio."},
   response_guidance:{label:"Response guidance",kind:"dyn",desc:"Who you are, who you are replying to, and what the turn has to do."},
   final_guardrails:{label:"Final guardrails",kind:"dyn",desc:"Voice-only-yourself, single-turn, pacing, consistency, and the no-fabricated-past rules."},
-  spoken_delivery:{label:"Voice format reset",kind:"dyn",desc:"Only while recent replies still carry delivery markup left over from an older voice session: the reset that orders the model to drop it. Empty otherwise."}
+  spoken_delivery:{label:"Spoken delivery",kind:"dyn",desc:"While replies are being read aloud: how to write the [bracketed directions] the voice engine performs. A normal turn and a heat-of-the-moment beat get their own separate wording. When voicing is off it turns into the reset that tells the model to drop markup left over from an older voice session, and is empty once clean replies push those out of view."}
 };
 const PAYLOAD_DEFS={
   solo:{
@@ -18308,7 +18321,7 @@ function epSend(key,systemText,parts){
     feelings:["feel_header","feel_lasting","feel_lasting_alt","stranger"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_consistent_stranger","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"],
-    spoken_delivery:["voice_format_reset"]
+    spoken_delivery:["voice_delivery","heat_delivery","voice_format_reset"]
   };
   const SCOPE={rumors:"chat",watching_now:"chat",already_said:"chat",latest_arcs:"chat",world:"universe",your_bio:"chat",relationships:"chat",scenario:"chat",others_present:"chat",response_target:"chat",player:"chat",feelings:"chat",feelings_now:"chat",distant_memories:"chat",recent_memories:"chat",last_line:"chat",speaking_style:"chat",scene_now:"chat",privacy:"chat",trackers:"chat",promises:"chat",calendar:"chat",quests:"chat"};
   // All three payloads share ONE block map now, so a single pass covers them.
@@ -18478,6 +18491,70 @@ const BLOCK_TPL_DEFAULTS={
   // history still carries voice markup the model would otherwise imitate.
   voice_format_reset:`## FORMAT RESET — THE VOICE SESSION IS OVER
 Recent replies were written for a voice session: [bracketed delivery tags] inside quotes and/or a narration-block-then-dialogue-only shape. That session has ENDED. Ignore that formatting in the history — it is stale. Write normally per the format rules: NO bracketed delivery tags anywhere, narration woven naturally with dialogue.`,
+  /* v35.4 — SPOKEN DELIVERY, rewritten for Inworld TTS-2 steering. inworld-tts-2 reads a
+     [bracketed direction] as real direction: it takes effect where it is written and stays in
+     force until another tag or [reset] changes it. So the coaching is back, in Inworld's own
+     grammar rather than xAI's. The tags never reach the screen (_dispText strips them) and they
+     DO reach the synthesiser (ttsCleanText keeps them) — that pairing is the whole contract.
+     NOTE: steering needs the `inworld-tts-2` model. `inworld-tts-2-flash` ignores instruction
+     tags (it still plays the [laugh]/[sigh] sounds). Set in Settings › Voice Calls › TTS model.
+     TWO SEPARATE BLOCKS, and deliberately so: a normal turn is one or two spoken lines that can
+     each carry their own direction, while a heat beat is six or more short lines where tagging
+     every one produces uneven, jittery speech. They are edited independently — changing one does
+     nothing to the other. */
+  voice_delivery:`## SPOKEN DELIVERY — THIS REPLY IS READ ALOUD
+Everything you put in "double quotes" is sent to a voice engine that reads a [bracketed direction] as actual direction, the way a stage direction works in a script. Write the direction INSIDE the quotes, at the front of the line it applies to. The player never sees it — it is stripped from the screen and only the words remain.
+
+### A TAG STAYS IN FORCE UNTIL YOU CHANGE IT
+One direction at the front of a line covers that line and every line after it. Write a new one only where the delivery genuinely turns, and write [reset] where it should go back to normal. Do not put a tag on every sentence — constant re-tagging gives the engine less to work with and the voice comes out uneven. Most replies need one, at the top.
+
+### WRITE A FULL DIRECTION, NOT ONE WORD
+A bare [sad] gives the engine a single dimension. Layer the mood, the pitch, the pace and the manner into one plain-English direction and it performs instead of reading:
+"[say quietly with a low tone and deliberate pauses] I didn't think you'd actually come."
+"[speak fast and bright barely finishing one thought before starting the next] Wait — wait, you're serious?"
+"[say flatly with no pitch variation] It's fine. Really. I'm fine."
+"[speak as if barely holding something back forcing the words out level] I heard you the first time."
+Keep what is inside the brackets lowercase, plain English, no punctuation — and always English, even when the spoken line itself is in another language.
+
+### SOUNDS ARE A DIFFERENT THING FROM DIRECTIONS
+[laugh] [chuckle] [sigh] [gasp] [breathe] [scoff] [snort] [clear throat] [cough] [swallow] [sniff] [yawn] make one real sound at exactly the point you place them and change nothing about the delivery. Drop them inline, where the sound actually happens: "I told him and he just [laugh] didn't believe a word of it."
+
+### EMPHASIS
+Capitalise the word that carries the stress: "I told you NOT to." A syllable works too: "abso-LUTE-ly". Never use asterisks to emphasise — asterisks are narration in this story and are cut out before the voice ever sees them.
+
+### THE RULES THAT BREAK IT
+- The direction must match the words. [say sadly] on a delighted line makes the voice worse, not better.
+- Never put opposites in one tag — hushed and very loud together produce noise.
+- Tags belong inside the quotes and nowhere else: never in narration, never on a line of their own, never inside an action.
+- Do not describe the delivery in the prose as well as tagging it. The tag already does that job.`,
+  heat_delivery:`## SPOKEN DELIVERY — HEAT OF THE MOMENT, READ ALOUD
+Everything in "double quotes" is read aloud by a voice engine that treats a [bracketed direction] as real direction. It is written inside the quotes at the front of a line, it never appears on screen, and it holds until another tag or [reset] changes it.
+
+### THIS BEAT IS MANY SHORT LINES — SET THE REGISTER ONCE
+That is the whole difference here. A tag at the front of the FIRST spoken line of this beat carries through every line after it, and that is what you want: one continuous performance rather than a stack of separately-directed fragments. Tagging each short line is the failure here — the voice resets on every one and the run comes out jittery and flat.
+Write a second direction only on a genuine turn: composure actually breaking, a drop to almost nothing, a sudden stop, the moment it hardens. That is at most one or two more in the whole beat.
+
+### THE DIRECTION IS THE STATE THIS BEAT IS IN
+Layer breath, pitch, pace and control into one plain-English direction:
+"[speak breathlessly with the words running together and the voice going higher] don't — don't stop, don't you dare stop"
+"[say low and unsteady with the breath catching between words] I can't think when you do that."
+"[speak quietly and ragged as if there is nothing left to hold it together] please."
+"[say it hard and level with the breath forced flat] Look at me. Look at me when I say it."
+Lowercase inside the brackets, plain English, no punctuation, and English even when the line is in another language.
+
+### BREATH IS DONE WITH SOUNDS, NOT WITH WORDS
+[gasp] [pant] [breathe] [moan] [groan] [whimper] [sigh] [swallow] [huff] [shudder] each make one real sound exactly where you place them and change nothing about the delivery. Put them where the breath actually falls, inside the line: "I — [gasp] — I'm not going anywhere."
+Do not write breathing as text. "haah" and "mmh" get read out as syllables; [gasp] and [moan] are the sound itself.
+
+### EMPHASIS
+Capitals carry the stress: "I said DON'T." Never asterisks — they are narration here and get cut before the voice sees them.
+
+### THE RULES THAT BREAK IT
+- One register per stretch. Do not re-tag line after line.
+- The direction must match what is being said.
+- Never opposites in one tag.
+- Inside the quotes only — never in narration, never on its own line, never in an action.
+- Never describe the delivery in the prose as well. The tag is doing it.`,
   /* v27.1 — HEAT OF THE MOMENT gets its OWN payload, not an override bolted onto the normal one.
      Appending "write an extended, multi-beat, dialogue-rich continuation" underneath the standing
      "one reply · one beat · at most one narration · narration→speech→thoughts template" rules gave
@@ -19168,7 +19245,7 @@ function sceneChangeNotice(chat,selfId){
 function _recentVoiceMarkup(chat){
   try{
     const rec=(chat.messages||[]).filter(m=>m.role==='assistant'&&!m.sysError&&!m.dayMarker&&m.content).slice(-3);
-    return rec.some(m=>/"[^"\n]*\[[^\]\n]{2,28}\][^"\n]*"/.test(m.content));
+    return rec.some(m=>/"[^"\n]*\[[^\]\n]{2,80}\][^"\n]*"/.test(m.content));
   }catch(e){ return false; }
 }
 function buildTailBlocks(opts){
@@ -19592,12 +19669,22 @@ function buildTailBlocks(opts){
   // v28.6 — a text message is typed, never spoken: the xAI delivery-tag coaching must never reach
   // it (that is where <whisper>/<emphasis> in texts came from). The voice-format RESET still applies,
   // because the transcript it reads may carry that markup from a recent voice session.
-  /* v35.2 \u2014 the delivery-tag COACHING went with xAI: Inworld reads [pause] and <whisper>
-     aloud as words, so asking for them would put literal markup in every spoken line. What
-     remains is the RESET, telling the model to drop markup still visible in a transcript from an
-     older voice session. The block id is unchanged \u2014 saved layouts and templates hold it by
-     string, and renaming or dropping it would orphan them. */
-  if(chat && _recentVoiceMarkup(chat)) B.spoken_delivery=blkTpl("voice_format_reset");
+  /* v35.4 \u2014 the coaching is back, in Inworld TTS-2's own grammar. inworld-tts-2 interprets a
+     [bracketed direction], so while replies are being spoken the model is asked to write them;
+     they are stripped from the bubble (_dispText) and kept for synthesis (ttsCleanText).
+     HEAT GETS ITS OWN BLOCK. A heat beat is six or more short spoken lines and per-line tagging
+     makes the voice jitter, so heat_delivery teaches "set the register once" while voice_delivery
+     teaches per-line direction. They are independent fragments: editing one leaves the other
+     exactly as it was.
+     A TEXT MESSAGE IS TYPED, NEVER SPOKEN \u2014 no delivery block reaches it (that is where the
+     stray markup in texts came from). The RESET still can, because the transcript it reads may
+     carry tags from a voice session that has since ended.
+     The block id is unchanged \u2014 saved layouts and templates hold it by string. */
+  {
+    const _voicing=!!(state.autoSpeak||state.narrMode);
+    if(_voicing && !_text) B.spoken_delivery=blkTpl(_heat?"heat_delivery":"voice_delivery");
+    else if(chat && _recentVoiceMarkup(chat)) B.spoken_delivery=blkTpl("voice_format_reset");
+  }
 
   return B;
 }

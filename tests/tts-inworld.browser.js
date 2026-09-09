@@ -35,29 +35,13 @@ const {chromium}=require('playwright');
       try{ const f=new Float32Array(24000*60); const u=_pcmToWavDataUri(f,24000); return u.length>1000000; }
       catch(e){ return "threw: "+e.message; } })===true);
 
-  console.log("\n[delivery tags are always stripped now]");
-  ok("tags removed with no argument", await pg.evaluate(()=>
-      ttsCleanText('"[pause] Hello <whisper>there</whisper>"').indexOf("[pause]")===-1));
+  console.log("\n[xAI's angle markup is always dropped]");
+  ok("angle tags removed", await pg.evaluate(()=>
+      ttsCleanText('"Hello <whisper>there</whisper>"').indexOf("whisper")===-1));
   ok("and the words survive", await pg.evaluate(()=>
-      /Hello/.test(ttsCleanText('"[pause] Hello <whisper>there</whisper>"'))));
-
-  console.log("\n[the payload block kept its id but lost the coaching]");
-  ok("spoken_delivery still in REPLY_ORDER", await pg.evaluate(()=>REPLY_ORDER.indexOf("spoken_delivery")>-1));
-  ok("coaching fragment gone", await pg.evaluate(()=>!BLOCK_TPL_DEFAULTS.spoken_delivery));
-  ok("reset fragment kept", await pg.evaluate(()=>!!BLOCK_TPL_DEFAULTS.voice_format_reset));
-  ok("no delivery coaching in a live payload", await pg.evaluate(()=>{
-      const uni=state.universes[0];
-      const p={id:"p_x",name:"Nil",universeId:uni.id,instructions:"x",personality:"x",backstory:"x",style:"x",goals:"x",look:{}};
-      state.personas.push(p);
-      const chat=curChat(); chat.presentIds=[p.id]; state.user="Kemal";
-      state.autoSpeak=true; state.narrMode=false;
-      const inj={recent:[],diary:[],longterm:[]};
-      const B=Object.assign({},
-        buildCharPromptBlocks(p,[],inj,state.user,{chat,targetName:state.user,targetId:"__user__"}),
-        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,targetId:"__user__",multi:false,injected:inj}));
-      state.autoSpeak=false;
-      const all=Object.values(B).join("\n");
-      return all.indexOf("SPOKEN DELIVERY")===-1 && all.indexOf("delivery tag")===-1; }));
+      /Hello/.test(ttsCleanText('"Hello <whisper>there</whisper>"'))));
+  ok("stripTags:true still strips every bracket", await pg.evaluate(()=>
+      ttsCleanText('"[say quietly] Hello [laugh]"',true).indexOf("[")===-1));
 
   console.log("\n[settings still save]");
   ok("saveSettings does not throw with the removed inputs", await pg.evaluate(()=>{

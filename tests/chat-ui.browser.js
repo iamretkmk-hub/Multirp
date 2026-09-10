@@ -31,6 +31,16 @@ const {chromium}=require('playwright');
     const pg=await ctx.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
     await setup(pg);
 
+    console.log("\n[portrait — the composer gives the text field its width back]");
+    ok("the round buttons are smaller than the old 44px", await pg.evaluate(()=>{
+        // the first .iconBtn in the bar is the landscape-only Menu button (display:none here)
+        const b=document.getElementById('modesBtn').getBoundingClientRect();
+        return (b.width<44 && b.width>=34) ? true : "button is "+Math.round(b.width)+"px"; }));
+    ok("the text field takes most of the bar", await pg.evaluate(()=>{
+        const bar=document.querySelector('.inputBar').getBoundingClientRect();
+        const ta=document.getElementById('chatInput').getBoundingClientRect();
+        return ta.width/bar.width>0.68 ? true : "field is "+Math.round(100*ta.width/bar.width)+"% of the bar"; }));
+
     console.log("\n[portrait — the story owns the screen]");
     ok("the bottom tabs are gone on the chat screen", await pg.evaluate(()=>
         getComputedStyle(document.querySelector('nav')).display==="none"));
@@ -103,14 +113,30 @@ const {chromium}=require('playwright');
         await new Promise(r=>setTimeout(r,60));
         const c=d.getBoundingClientRect();
         return (c.width<a.width-20 && c.height<a.height-10) ? true : "was "+Math.round(a.width)+"x"+Math.round(a.height)+" now "+Math.round(c.width)+"x"+Math.round(c.height); }));
-    ok("it cannot be dragged off the screen", await pg.evaluate(async()=>{
+    ok("it can be carried up over the chat header, to the top of the screen", await pg.evaluate(async()=>{
+        // the travel limit is the phone screen, not the transcript's box: dragging up used to
+        // stop at the header with the character's name in it.
+        const d=document.getElementById('sceneDock');
+        const hdr=document.querySelector('#screen-chat > header');
+        const h=document.getElementById('sceneDockHandle');
+        const ev=(t,x,y)=>h.dispatchEvent(new PointerEvent(t,{clientX:x,clientY:y,bubbles:true,pointerId:4}));
+        ev('pointerdown',100,400); ev('pointermove',100,-9000); ev('pointerup',100,-9000);
+        await new Promise(r=>setTimeout(r,60));
+        const c=d.getBoundingClientRect();
+        const hb=hdr?hdr.getBoundingClientRect().bottom:0;
+        return (c.top<2 && c.top<hb) ? true : "stopped at "+Math.round(c.top)+", header ends "+Math.round(hb); }));
+    ok("it paints above the header rather than under it", await pg.evaluate(()=>{
+        const d=+getComputedStyle(document.getElementById('sceneDock')).zIndex||0;
+        const h=+getComputedStyle(document.querySelector('#screen-chat > header')).zIndex||0;
+        return d>h ? true : "dock z"+d+" header z"+h; }));
+    ok("it still cannot be dragged off the screen", await pg.evaluate(async()=>{
         const d=document.getElementById('sceneDock');
         const h=document.getElementById('sceneDockHandle');
         const ev=(t,x,y)=>h.dispatchEvent(new PointerEvent(t,{clientX:x,clientY:y,bubbles:true,pointerId:3}));
         ev('pointerdown',100,300); ev('pointermove',9000,9000); ev('pointerup',9000,9000);
         await new Promise(r=>setTimeout(r,60));
-        const c=d.getBoundingClientRect(), H=document.getElementById('chatBody').getBoundingClientRect();
-        return (c.right<=H.right+1 && c.bottom<=H.bottom+1 && c.left>=H.left-1)
+        const c=d.getBoundingClientRect();
+        return (c.right<=innerWidth+1 && c.bottom<=innerHeight+1 && c.left>=-1 && c.top>=-1)
           ? true : "escaped to "+Math.round(c.left)+","+Math.round(c.top); }));
     ok("no page errors", errs.length===0?true:errs.join(" | "));
     await ctx.close();

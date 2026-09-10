@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1521,6 +1521,13 @@
             <label class="switchLbl"><input type="checkbox" id="setNarrRetryOn"><span class="sl"></span></label></div>
           <div><label>…at this many *narrated spans* or more</label><input type="number" id="setNarrMaxSpans" min="1" max="12" step="1" value="3"></div>
           <div class="desc"><b>Costs a second model call on every reply that trips it.</b> It enforces the narration limit written in your Response Format Rules — so if you rewrite that prompt to allow more narration, either raise this number to match or leave the switch off, otherwise every single turn is generated twice. Off by default. The repeat detector (a character re-saying a line) is separate and always on; it fires rarely. Debug logs every time this one spends a call.</div>
+          <div><label>How much of the relationship sheet each reply carries</label>
+            <select id="setRelScope">
+              <option value="present">Summary + the people actually here (recommended)</option>
+              <option value="brief">…plus a one-line tie for everyone absent</option>
+              <option value="everyone">A full paragraph for every tie (expensive)</option>
+            </select></div>
+          <div class="desc">The block opens with the character's own summary of who everyone is to them — that line always goes, and it is what keeps an absent wife or daughter from being played as a stranger. Below it, a full paragraph per person. "Every tie" spends roughly 700 extra tokens per reply on people who are not in the room and cannot be spoken to. A character with no summary line automatically gets the one-line ties instead, so a bond is never silently dropped.</div>
           <div><label>Finished plans a character remembers</label><input type="number" id="setCalDoneN" min="0" max="10" step="1" value="3"></div>
           <div class="desc">The last N calendar entries this character was actually part of, with how each one went, sent with every reply and every text. Covers meetings with you, group meetings, and plans that ran offstage without you — a finished plan used to leave their head entirely the moment it completed. 0 turns the block off.</div>
           <div class="kvline"><span>Strip narration from old messages</span>
@@ -2413,7 +2420,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
-  narrRetryOn:"sm_narrretryon",narrMaxSpans:"sm_narrmaxspans",calDoneN:"sm_caldonen",
+  narrRetryOn:"sm_narrretryon",narrMaxSpans:"sm_narrmaxspans",calDoneN:"sm_caldonen",relScope:"sm_relscope",
   // Quality-of-life features
   recapOn:"sm_recapon",
   // Relationships + freeform trackers
@@ -5534,6 +5541,7 @@ function loadState(){
     narrRetryOn:store.get(K.narrRetryOn,false),
     narrMaxSpans:store.get(K.narrMaxSpans,3),
     calDoneN:store.get(K.calDoneN,3),
+    relScope:store.raw(K.relScope,"present"),
     narrPrivacy:store.get(K.narrPrivacy,true),
     stripKeepFull:+store.raw(K.stripKeepFull,6),
     histTurns:+store.raw(K.histTurns,20),
@@ -16380,9 +16388,21 @@ function relSheetBlock(persona){
    man she is married to. The person whose absence is the whole pressure of a scene is exactly the
    person the trim erased. It costs roughly 700 tokens on a nine-person cast; that is the price of
    a character remembering their own marriage. */
+/* v37.4 — HOW MUCH OF THE SHEET.
+   "everyone"  — a full paragraph for every tie. The conscience needs this: a brake with no name on
+                 it does not hold, and the person it would cost you is usually not in the room.
+   "present"   — the summary paragraph, then a full paragraph for the player and for whoever is
+                 actually here. Nobody else appears: the summary at the top already says who they
+                 are ("Duygu is my wife… Nil is my daughter…"), so the ties are not lost, and a live
+                 two-person scene stops spending ~700 tokens on paragraphs about five people who
+                 cannot be spoken to. This is the reply payload's default.
+   "brief"     — as "present", plus a one-line tie list for the absent. The fallback when a
+                 character has NO summary paragraph, because then dropping them really would lose
+                 the bond and their own daughter becomes a stranger. */
 function relSheetBlockFull(persona,opts){
   if(!persona)return "";
   const everyone=!!(opts&&opts.everyone);
+  const scope=(opts&&opts.scope)||(everyone?"everyone":"brief");
   /* (!) THREE DIFFERENT SOURCES, THREE DIFFERENT VOICES. The author's social-graph note is written
      in the first person ("Hakan is my oldest friend"); the discovered facts are third-person
      statements about other people; the structured sheet is third-person prose about the character
@@ -16428,9 +16448,10 @@ function relSheetBlockFull(persona,opts){
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
       if(!tie&&!rel)continue;
-      if(id!=="__user__" && !hereSet.has(id) && !everyone){
-        // No tie recorded → a trimmed clause of the prose, so the line still says who they are.
-        far.push(`${who} — ${tie||briefDesc(rel,70)}`);
+      if(id!=="__user__" && !hereSet.has(id) && scope!=="everyone"){
+        // "present": the summary paragraph above already introduces them — say nothing here.
+        // "brief": a trimmed clause, so the line still says who they are.
+        if(scope!=="present") far.push(`${who} — ${tie||briefDesc(rel,70)}`);
         continue;
       }
       // (!) the presence marker closes OUTSIDE the name bracket — inside it produced "]]" and read
@@ -19881,7 +19902,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   // relationships — this character's FULL sheet (their own knowledge — family, history, rivalries
   // hold whether or not those people are present; otherwise they treat their own mother as a
   // stranger), with [here now] marking who is actually nearby.
-  {const sheet=relSheetBlockFull(p,{everyone:true});
+  /* v37.4 — the SCOPE is a setting, defaulting to "present". Injecting a full paragraph for every
+     tie was too much on screen and in the bill; the summary line at the top of this block is what
+     carries the people who are not here. If a character has no summary line to carry them, the
+     scope falls back to "brief" so an absent daughter is still named rather than silently dropped. */
+  {const _wantScope=state.relScope||"present";
+   const _hasSummary=!!String((p&&p.socialGraph)||"").trim();
+   const _scope=(_wantScope==="present"&&!_hasSummary)?"brief":_wantScope;
+   const sheet=relSheetBlockFull(p,{scope:_scope});
    if(sheet)B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`;}
 
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
@@ -34360,6 +34388,7 @@ function syncSettingsUI(){
   document.getElementById('setNarrRetryOn').checked=!!state.narrRetryOn;
   document.getElementById('setNarrMaxSpans').value=state.narrMaxSpans;
   document.getElementById('setCalDoneN').value=state.calDoneN;
+  document.getElementById('setRelScope').value=state.relScope||"present";
   {const e=document.getElementById('setNarrPrivacy'); if(e)e.value=narrPrivacyMode();}
   document.getElementById('setStripKeepFull').value=state.stripKeepFull;
   {const h=document.getElementById('setHistTurns'); if(h)h.value=state.histTurns;}
@@ -34561,6 +34590,7 @@ function saveSettings(notify){
   state.narrRetryOn=document.getElementById('setNarrRetryOn').checked;
   state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||3));
   {const v=+document.getElementById('setCalDoneN').value; state.calDoneN=Math.max(0,Math.min(10,isNaN(v)?3:v));}
+  {const v=document.getElementById('setRelScope').value; state.relScope=["present","brief","everyone"].indexOf(v)>=0?v:"present";}
   {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'spoken';}
   state.stripKeepFull=Math.max(2,+document.getElementById('setStripKeepFull').value||6);
   {const h=document.getElementById('setHistTurns'); if(h)state.histTurns=Math.max(2,Math.min(200,+h.value||20));}
@@ -34615,7 +34645,7 @@ function saveSettings(notify){
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
   store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.setRaw(K.imgEveryTurns,state.imgEveryTurns);store.setRaw(K.imgSeed,state.imgSeed||"");store.setRaw(K.gossipDecay,state.gossipDecay);store.setRaw(K.gossipCooldown,state.gossipCooldown);store.setRaw(K.gossipMaxLive,state.gossipMaxLive);store.setRaw(K.rumorJudge,state.rumorJudge);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
-  store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
+  store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.relScope,state.relScope||"present");store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
   store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.set(K.goalsCuratorOn,state.goalsCuratorOn);store.setRaw(K.goalsCurator,state.goalsCurator);store.setRaw(K.goalsMax,state.goalsMax);store.set(K.promiseOn,state.promiseOn);store.setRaw(K.promisePrompt,state.promisePrompt);store.setRaw(K.calReconcile,state.calReconcile);store.setRaw(K.attendEstimate,state.attendanceEstimate);store.setRaw(K.attendPersuade,state.attendancePersuade);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);

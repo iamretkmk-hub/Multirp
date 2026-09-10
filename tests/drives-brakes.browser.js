@@ -49,11 +49,26 @@ const {chromium}=require('playwright');
   ok("whoever is here is still marked here", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d");
       return relSheetBlockFull(D,{everyone:true}).indexOf("[here now]")>-1; }));
-  ok("the reply payload carries the absent spouse", await pg.evaluate(()=>{
+  /* v37.4 — the reply payload no longer sends a paragraph for someone who is not in the room; the
+     character's own summary line at the top of the block is what carries them. The CONSCIENCE is
+     the opposite case and is asserted below: a brake with no name on it does not hold, and the
+     person it would cost you is usually the one who is absent. */
+  ok("the reply payload does NOT spend a paragraph on the absent spouse", await pg.evaluate(()=>{
+      const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
+      D.socialGraph="Hakan is my husband. Emre is my anchor.";
+      state.relScope="present";
+      const B=buildCharPromptBlocks(D,[],{recent:[],diary:[],longterm:[]},state.user,
+        {chat,targetName:"Emre",targetId:"p_e"});
+      return String(B.relationships||"").indexOf("HUSBAND_PROSE_MARKER")<0
+        ? true : "absent paragraph still in the reply payload"; }));
+  ok("but the summary line still says who he is", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       const B=buildCharPromptBlocks(D,[],{recent:[],diary:[],longterm:[]},state.user,
         {chat,targetName:"Emre",targetId:"p_e"});
-      return String(B.relationships||"").indexOf("HUSBAND_PROSE_MARKER")>-1; }));
+      return /Hakan is my husband/.test(String(B.relationships||"")); }));
+  ok("and the conscience still gets him in full", await pg.evaluate(()=>{
+      const D=state.personas.find(x=>x.id==="p_d");
+      return relSheetBlockFull(D,{everyone:true}).indexOf("HUSBAND_PROSE_MARKER")>-1; }));
   ok("the trimmed form is still available for callers that want it", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d");
       const trimmed=relSheetBlockFull(D);

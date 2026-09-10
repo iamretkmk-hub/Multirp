@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1521,6 +1521,8 @@
             <label class="switchLbl"><input type="checkbox" id="setNarrRetryOn"><span class="sl"></span></label></div>
           <div><label>…at this many *narrated spans* or more</label><input type="number" id="setNarrMaxSpans" min="1" max="12" step="1" value="3"></div>
           <div class="desc"><b>Costs a second model call on every reply that trips it.</b> It enforces the narration limit written in your Response Format Rules — so if you rewrite that prompt to allow more narration, either raise this number to match or leave the switch off, otherwise every single turn is generated twice. Off by default. The repeat detector (a character re-saying a line) is separate and always on; it fires rarely. Debug logs every time this one spends a call.</div>
+          <div><label>Finished plans a character remembers</label><input type="number" id="setCalDoneN" min="0" max="10" step="1" value="3"></div>
+          <div class="desc">The last N calendar entries this character was actually part of, with how each one went, sent with every reply and every text. Covers meetings with you, group meetings, and plans that ran offstage without you — a finished plan used to leave their head entirely the moment it completed. 0 turns the block off.</div>
           <div class="kvline"><span>Strip narration from old messages</span>
             <label class="switchLbl"><input type="checkbox" id="setStripNarr"><span class="sl"></span></label></div>
           <div><label>Keep this many recent messages full</label><input type="number" id="setStripKeepFull" min="2" step="1" value="6"></div>
@@ -2411,7 +2413,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   storyLang:"sm_storylang",
   // History compaction (tiered narration stripping)
   stripNarr:"sm_stripnarr",stripKeepFull:"sm_stripkeepfull",histTurns:"sm_histturns",narrPrivacy:"sm_narrprivacy",
-  narrRetryOn:"sm_narrretryon",narrMaxSpans:"sm_narrmaxspans",
+  narrRetryOn:"sm_narrretryon",narrMaxSpans:"sm_narrmaxspans",calDoneN:"sm_caldonen",
   // Quality-of-life features
   recapOn:"sm_recapon",
   // Relationships + freeform trackers
@@ -3909,7 +3911,16 @@ For each NEW meeting return an object:
 - "where": where they meet. Keep possessive phrasing EXACTLY as said — "my place", "your place", "your room", "my house" — the app resolves whose home that is; otherwise give the named place (empty if unclear). "subArea": a specific spot inside it, or empty.
 - "certainty": "certain" or "likely".
 
-Return ONLY JSON in this shape: {"new":[...]} — the array may be empty. (A bare JSON array is also accepted.)`;
+# TASKS — SOMETHING {{user}} ASKS A CHARACTER TO GO AND DO
+Separately from meetings, watch for {{user}} ASKING OR TELLING A CHARACTER TO DO SOMETHING that happens away from this scene: "go and talk to Hakan about the money", "ask your mother whether she is coming", "pick the kids up tomorrow", "find out what he wants and tell me". This is not a meeting — nobody agreed to be somewhere together — but it IS a thing that will happen offstage and have a result.
+Emit one ONLY when all of these hold:
+- {{user}} actually asked for it in this exchange, of a named character who is in the roster.
+- It is a concrete action with a recognisable ending, not a mood or an attitude ("be nicer to her" is not a task).
+- The character did not flatly refuse. A reluctant yes still counts; a clear "no" does not.
+Unlike a meeting, a task does NOT need a stated day — if none was given, leave "dayOffset" null and it is treated as "as soon as they can".
+For each task return: {"title": short label in the imperative ("Talk to Hakan about the money"), "who": the EXACT name of the character asked (and any other character the task is ABOUT, comma-separated, that one second), "assignee": the EXACT name of the character who was asked, "about": ONE sentence — what {{user}} actually wants out of it, in their words, "dayOffset": whole days from today or null, "period": Morning/Midday/Afternoon/Evening/Night or null, "where": a place if one was named, else empty}.
+
+Return ONLY JSON in this shape: {"new":[...], "tasks":[...]} — both arrays may be empty. (A bare JSON array is also accepted and is read as "new".)`;
 // (the "why" field lands on the entry as `detail` — surfaced in the calendar UI, the character's
 // own payload, the day-end reconciler, and the offstage executor, so a plan's purpose survives
 // from the moment it is made to the moment it plays out.)
@@ -5522,6 +5533,7 @@ function loadState(){
        they now choose here; nobody keeps paying for it silently. */
     narrRetryOn:store.get(K.narrRetryOn,false),
     narrMaxSpans:store.get(K.narrMaxSpans,3),
+    calDoneN:store.get(K.calDoneN,3),
     narrPrivacy:store.get(K.narrPrivacy,true),
     stripKeepFull:+store.raw(K.stripKeepFull,6),
     histTurns:+store.raw(K.histTurns,20),
@@ -11506,6 +11518,44 @@ async function runCalendarEngine(chat){
     // whole (a correctly-detected meeting silently never registered).
     const arr=Array.isArray(parsed)?parsed
       :((parsed&&(["new","meetings","plans","events"].map(k=>parsed[k]).find(v=>Array.isArray(v))))||[]);
+    /* v37.3 — ASSIGNED TASKS. "Duygu, go and talk to Hakan about the money" is not a meeting —
+       nobody agreed to be anywhere together — but it is a thing that will happen away from the
+       scene and come back with a result. Recorded as a plan the assignee carries out offstage, so
+       the existing executor plays it and writes its outcome, and that outcome then reaches every
+       participant's payload through calendar_done. That is the loop: you ask, it happens without
+       you, and the people involved remember how it went. */
+    try{
+      const tasks=(parsed&&Array.isArray(parsed.tasks))?parsed.tasks:[];
+      for(const t of tasks.slice(0,3)){
+        if(!t||!t.title)continue;
+        const _su=x=>String(x||"").replace(/\{\{\s*user\s*\}\}/gi,state.user);
+        const title=_su(String(t.title).trim()); if(title.length<3)continue;
+        const cast=(state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x));
+        const findC=n=>{const k=String(n||"").trim().toLowerCase();
+                        return k?cast.find(c=>c.name.toLowerCase()===k)||cast.find(c=>c.name.toLowerCase().indexOf(k)===0):null;};
+        const assignee=findC(t.assignee)||findC(String(t.who||"").split(/\s*,\s*/)[0]);
+        if(!assignee)continue;                       // no real character was asked → not a task
+        const others=String(t.who||"").split(/\s*,\s*/).map(x=>findC(x)).filter(Boolean);
+        const group=[assignee].concat(others.filter(c=>c.id!==assignee.id));
+        let day=(t.dayOffset!=null&&Number.isFinite(Number(t.dayOffset)))?today+Number(t.dayOffset):today;
+        let period=(t.period&&PERIODS.indexOf(t.period)>=0)?t.period:null;
+        let locationId=null,where="";
+        if(t.where&&String(t.where).trim()){
+          const u=universeById(chat.universeId);
+          const loc=u?_ensureLocationByName(u,String(t.where).trim()):null;
+          if(loc){ locationId=loc.id; where=loc.name; }
+        }
+        addCalendarEntry(chat,{kind:"meeting",source:"directive",
+          title,day,period,
+          who:group.map(c=>c.name).join(", "),
+          executor:assignee.name,executorId:assignee.id,
+          charIds:group.map(c=>c.id),charId:group[0].id,charId2:group[1]?group[1].id:null,
+          withUser:false,certainty:"certain",probability:null,
+          detail:_su(String(t.about||"").trim()).slice(0,300),
+          origin:`${state.user} asked ${assignee.name} to do this`,
+          where,locationId,character:group.map(c=>c.name).join(", ")});
+      }
+    }catch(_){}
     if(!Array.isArray(arr)||!arr.length)return;
     const cal=chatCalendar(chat);
     const subUser=s=>String(s||"").replace(/\{\{\s*user\s*\}\}/gi, state.user);
@@ -11876,14 +11926,8 @@ function calendarContextLine(chat,selfName,selfId,opts){
   // substring is the fallback for plans saved before ids existed. Names collide, get renamed and get
   // typed with different casing — an id does not, which is what makes a plan reliably "theirs".
   if(selfName||selfId){
-    const sn=String(selfName||"").toLowerCase();
-    cal=cal.filter(e=>{
-      if(selfId&&(e.charId===selfId||e.charId2===selfId||e.executorId===selfId))return true;
-      if(selfId&&(e.charId||e.charId2))return false;   // id-tagged plan that isn't theirs
-      const who=(e.who||"").toLowerCase();
-      if(!who.trim())return true;                 // general / player-owned plan
-      return sn?who.includes(sn):true;            // this character is named in it
-    });
+    // v37.3 — one participant test for the whole calendar, and it understands a group.
+    cal=cal.filter(e=>planHasChar(e,selfId,selfName));
     if(!cal.length)return "";
   }
   const locOf=e=>(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
@@ -11910,12 +11954,7 @@ function calendarContextLine(chat,selfName,selfId,opts){
      the reader is named in it — so rendering `who` verbatim told Emre he had a meeting "with Duygu,
      Emre". You are never someone you are meeting. Strip the reader, and when nobody else is left
      say nothing rather than "with". */
-  const _others=e=>{
-    const names=String(e.who||"").split(/\s*,\s*/).map(x=>x.trim()).filter(Boolean);
-    const meL=String(selfName||"").toLowerCase();
-    const out=names.filter(n=>n.toLowerCase()!==meL);
-    return out.length?out.join(", "):"";
-  };
+  const _others=e=>{ const out=planOtherNames(e,selfName); return out.length?out.join(", "):""; };
   /* (!) A meeting whose hour has come reads "X is the one coming; you are expected to be there" —
      which is wrong, and visibly so, when X is standing in front of you. The payload was telling a
      character to wait for someone already in the room. When the counterpart is present and the
@@ -11959,6 +11998,44 @@ function calendarContextLine(chat,selfName,selfId,opts){
   // swallowed by whatever came before it. The directors keep the inline, self-describing form.
   if(opts&&opts.bare)return parts.join("\n");
   return "MEETINGS (you are aware of and remember these; reference them naturally and speak per whether each is firmly agreed or only loosely floated; hold whoever missed an unkept meeting accountable): "+parts.join(" · ");
+}
+
+/* v37.3 — WHAT ALREADY HAPPENED. The calendar was write-only as far as a character was concerned:
+   it told them what is coming and what was missed, and the moment something actually HAPPENED the
+   entry went `done` and left their head entirely. So a character could spend an evening with the
+   player's wife on Tuesday — the offstage executor wrote a full result for it — and on Wednesday
+   have no idea it took place, because a finished plan reached nobody's payload.
+   This is the other half: the last few things this character was actually part of, with how each
+   one went. Both the plans the player was in and the ones that happened offstage without them,
+   because to the character there is no difference — they were there for both. */
+function calendarDoneLine(chat,selfName,selfId,opts){
+  const c=chat||curChat(); if(!c)return "";
+  const today=c.gameDay||1;
+  /* (!) `+state.calDoneN||3` would read a deliberate 0 as "unset" and hand back three — the one
+     value whose whole point is to send nothing. Test for null, not for falsiness. */
+  const _cfg=(state.calDoneN==null||state.calDoneN==="")?3:+state.calDoneN;
+  const n=Math.max(0,Math.min(10,(opts&&opts.limit!=null)?+opts.limit:(isNaN(_cfg)?3:_cfg)));
+  if(!n)return "";
+  let done=chatCalendar(c).filter(e=>e&&e.done&&(e.kind||"meeting")!=="standing");
+  // it has to have actually happened: a plan marked done with no result and a "missed" outcome is
+  // the ABSENCE of an event, and calendarContextLine already carries those as UNKEPT.
+  done=done.filter(e=>e.result||e.outcome==="done"||e.outcome==null);
+  done=done.filter(e=>e.outcome!=="missed"&&e.outcome!=="cancelled");
+  if(selfName||selfId) done=done.filter(e=>planHasChar(e,selfId,selfName));
+  if(!done.length)return "";
+  // newest last-completed first; fall back to the plan's own day when nothing recorded completion
+  const when=e=>(e.completedDay!=null?e.completedDay:(e.day!=null?e.day:0));
+  done.sort((a,b)=>when(b)-when(a));
+  const lines=done.slice(0,n).map(e=>{
+    const d=when(e);
+    const ago=d>=today?"today":(d===today-1?"yesterday":(d>0?`Day ${d}`:"a while back"));
+    const others=planOtherNames(e,selfName);
+    const place=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
+    return `- ${e.title}${others.length?` — with ${others.join(", ")}`:""} (${ago}${e.period?`, ${e.period}`:""}${place?`, ${place}`:""})`
+         + (e.result?`\n  How it went: ${String(e.result).trim()}`:"");
+  });
+  if(opts&&opts.bare)return lines.join("\n");
+  return `${blkTpl("calendar_done_header")}\n${lines.join("\n")}`;
 }
 
 /* ===== PROMISES & STANDING COMMITMENTS (v30.3) ====================================================
@@ -12244,15 +12321,75 @@ function openCalendar(){
     :`<div class="desc">No meetings yet. Concrete dated meetings you and characters agree to (in scene or over text) are tracked automatically; you can also add one.</div>`;
   const m=document.createElement('div'); m.id="calModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_calClose()">×</button>
-   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Meetings — Day ${today}, ${esc(chatPeriod(chat))}</h3>
+   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Calendar — Day ${today}, ${esc(chatPeriod(chat))}</h3>
    ${rows}
+   ${_calDoneSection(chat)}
    ${_calWorldSection(chat)}
    ${_calPromiseSection(chat)}
    ${_calQuestsSection(chat)}
+   ${_calBrewingSection(chat)}
+   ${_calOffstageSection(chat)}
    <button class="btn small" style="margin-top:10px" onclick="addCalManual()">＋ Add plan <span class="desc" style="display:inline;font-weight:400">(with me · between characters · solo task)</span></button>
    <button class="btn sec small" style="margin-top:6px" onclick="_calClose()">Close</button></div>`;
   m.addEventListener('click',e=>{if(e.target===m)_calClose();});
   document.body.appendChild(m);
+}
+/* v37.3 — WHAT ALREADY HAPPENED, on screen as well as in the payload. The calendar showed what is
+   coming and, in World plans, a two-day tail of finished offstage ones. Everything else that
+   completed simply vanished — including every meeting the player was actually at. This is the
+   record: the last ten things that happened, with their outcome, whoever they involved. */
+function _calDoneSection(chat){
+  const today=chat.gameDay||1;
+  const done=chatCalendar(chat).filter(e=>e&&e.done&&(e.kind||"meeting")!=="standing"
+                                        && e.outcome!=="cancelled")
+    .sort((a,b)=>((b.completedDay!=null?b.completedDay:b.day||0)-(a.completedDay!=null?a.completedDay:a.day||0)))
+    .slice(0,10);
+  if(!done.length)return "";
+  const row=e=>{
+    const d=(e.completedDay!=null?e.completedDay:e.day);
+    const missed=(e.outcome==="missed");
+    const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
+    const meta=[d!=null?`Day ${d}`:"",e.period?esc(e.period):"",esc(e.who||""),
+                locName?icon("pin")+" "+esc(locName):"",
+                e.source==="directive"?"you asked for this":""].filter(Boolean).join(" · ");
+    return `<div class="card" style="padding:8px;opacity:${missed?.65:1}">
+      <div class="qtxt"><b>${esc(e.title)}</b>
+        <div class="desc">${meta}</div>
+        ${missed?`<div class="desc" style="color:#E8A33D">didn't happen</div>`
+                :(e.result?`<div class="desc" style="color:var(--good);opacity:.85">${icon("check")} ${esc(e.result)}</div>`:"")}</div></div>`;
+  };
+  const n=Math.max(0,+state.calDoneN||0);
+  return `<h3 style="margin-top:14px">${icon("check")} What already happened
+      <span class="desc" style="display:inline;font-weight:400">(the newest ${n||"—"} of these reach each participant's payload)</span></h3>
+    ${done.map(row).join("")}`;
+}
+/* v37.3 — everything ELSE that is going on, on the same screen. These are read-only views of live
+   engine state that had no home in the UI outside the Debug screen: what characters are quietly
+   nursing, and what the world did while the player was not looking. */
+function _calBrewingSection(chat){
+  const all=(Array.isArray(chat.intents)?chat.intents:[]).filter(i=>i&&i.status!=="spent");
+  if(!all.length)return "";
+  all.sort((a,b)=>(b.strength||0)-(a.strength||0));
+  const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment"};
+  const row=i=>`<div class="card" style="padding:8px">
+      <div class="qtxt"><b>${esc(i.holderName||"someone")}${i.targetName?` → ${esc(i.targetName)}`:""}</b>
+        <div class="desc">${esc(i.kind||"motive")} · ${esc(statusLbl[i.status]||i.status||"")}${i.day!=null?` · since Day ${i.day}`:""}</div>
+        ${i.aim?`<div class="desc" style="opacity:.8">${esc(String(i.aim).slice(0,200))}</div>`:""}
+        ${i.trigger?`<div class="desc" style="opacity:.6">from: ${esc(String(i.trigger).slice(0,160))}</div>`:""}</div></div>`;
+  return `<h3 style="margin-top:14px">${icon("globe")} Brewing
+      <span class="desc" style="display:inline;font-weight:400">(private motives, schemes and suspicions — nobody has said these out loud)</span></h3>
+    ${all.slice(0,12).map(row).join("")}`;
+}
+function _calOffstageSection(chat){
+  const log=Array.isArray(chat&&chat.worldLog)?chat.worldLog.slice(-8).reverse():[];
+  if(!log.length)return "";
+  const row=e=>`<div class="card" style="padding:8px">
+      <div class="qtxt"><b>${esc(e.headline||String(e.event||"").slice(0,80))}</b>
+        <div class="desc">Day ${e.day}${e.period?", "+esc(e.period):""}${e.place?" · "+esc(e.place):""}${e.who?" · "+esc(e.who):""}</div>
+        ${e.event&&e.headline?`<div class="desc" style="opacity:.8">${esc(String(e.event).slice(0,220))}</div>`:""}</div></div>`;
+  return `<h3 style="margin-top:14px">${icon("news")} The living universe
+      <span class="desc" style="display:inline;font-weight:400">(what happened while you were elsewhere — you do not know these in scene)</span></h3>
+    ${log.map(row).join("")}`;
 }
 /* v30.3 — COMMITMENTS section of the meetings modal. The two belong on the same screen: one is what
    people agreed to DO at a time, the other is what they agreed to be true from now on. Read-only
@@ -12431,6 +12568,15 @@ function addCalManual(editId){
       <label style="margin-top:8px">Second character <span class="desc" style="font-weight:400">— the two are equals; neither "hosts" the meeting</span></label>
       <select id="caChar2" style="${inpCss}">${charOpts}</select>
     </div>
+    <!-- v37.3 — a meeting is not always two people. Tick anyone else who is part of it; they are
+         equal participants, they all carry it in their payload, and the offstage executor plays
+         it out with all of them. -->
+    <div id="caMoreWrap">
+      <label style="margin-top:8px">Anyone else in this meeting? <span class="desc" style="font-weight:400">— tick everyone who is part of it</span></label>
+      <div id="caMore" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+        ${cast.map(c=>`<label class="pill" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;padding:5px 9px"><input type="checkbox" data-more="${esc(c.id)}"> ${esc(c.name)}</label>`).join("")||`<span class="desc">(no other characters)</span>`}
+      </div>
+    </div>
     <div id="caExecWrap">
       <label style="margin-top:8px">Who does the travelling? <span class="desc" style="font-weight:400">— whoever is named here is the one the world makes act</span></label>
       <select id="caExec" style="${inpCss}"><option value="char">…</option><option value="user">…</option></select>
@@ -12462,6 +12608,16 @@ function addCalManual(editId){
     if(c1)charSel.value=c1.id; 
     const c2=(ex0&&ex0.charId2&&cast.find(c=>c.id===ex0.charId2))||byName(parts0[1]);
     if(c2)char2Sel.value=c2.id;
+    // extras = everyone on the plan who is not already one of the two named selects
+    if(ex0){
+      const primary=new Set([c1&&c1.id,c2&&c2.id].filter(Boolean));
+      const all=(typeof planCharIds==="function")?planCharIds(ex0):[];
+      const byNameIds=parts0.map(byName).filter(Boolean).map(c=>c.id);
+      new Set(all.concat(byNameIds)).forEach(id=>{
+        if(primary.has(id))return;
+        const cb=m.querySelector(`#caMore input[data-more="${id}"]`); if(cb)cb.checked=true;
+      });
+    }
   }
   const execSel=m.querySelector('#caExec'); execSel.value=(ex0&&ex0.executor==="user")?"user":"char";
   // "Who does the travelling?" spells out the actual names, so it is never ambiguous which side moves.
@@ -12485,6 +12641,7 @@ function addCalManual(editId){
   const refreshType=()=>{
     const t=typeSel.value;
     m.querySelector('#caChar2Wrap').style.display=(t==="chars")?"":"none";
+    m.querySelector('#caMoreWrap').style.display=(t==="solo")?"none":"";
     m.querySelector('#caExecWrap').style.display=(t==="user")?"":"none";
     m.querySelector('#caActorWrap').style.display=(t==="user")?"none":"";
     m.querySelector('#caCertWrap').style.display=(t==="user")?"":"none";
@@ -12521,6 +12678,17 @@ function saveCalManual(){
   // side that has to act, executorId — so the engines can match the actor exactly instead of
   // substring-matching a typed name.
   const persona=id=>(state.personas||[]).find(x=>x&&x.id===id)||null;
+  /* v37.3 — everyone else ticked in the group list. They are equal participants: they go into
+     charIds, into the `who` label, and therefore into every payload scoped by planHasChar. */
+  const extras=[...document.querySelectorAll('#caMore input[data-more]')]
+    .filter(cb=>cb.checked).map(cb=>persona(cb.dataset.more)).filter(Boolean);
+  /* charId/charId2 keep holding the first two, so a build that predates charIds still reads a
+     sensible pair out of this save instead of nothing. */
+  const _group=(list)=>{
+    const seen=new Set(), out=[];
+    list.concat(extras).forEach(c=>{ if(c&&!seen.has(c.id)){ seen.add(c.id); out.push(c); } });
+    return out;
+  };
   let fields;
   if(type==="chars"||type==="solo"){
     // EQUAL participants — but ONE of them still carries it out, and that one is named.
@@ -12528,16 +12696,19 @@ function saveCalManual(){
     if(!p1||(type==="chars"&&!p2)){ toast(type==="chars"?"Pick both characters":"Pick the character"); return; }
     if(type==="chars"&&p1.id===p2.id){ toast("The two characters must be different"); return; }
     const actor=persona(gv('caActor'))||p1;
-    const who=type==="chars"?`${p1.name}, ${p2.name}`:p1.name;
+    const g=type==="solo"?[p1]:_group([p1,p2].filter(Boolean));
+    const who=g.map(c=>c.name).join(", ");
     fields={title,day,period,who,executor:actor.name,executorId:actor.id,withUser:false,
             certainty:"certain",probability:null,
             detail:gv('caWhy').slice(0,300),
             where,locationId,character:who,charName:who,
-            charId:p1.id,charId2:p2?p2.id:null};
+            charIds:g.map(c=>c.id),
+            charId:g[0]?g[0].id:null,charId2:g[1]?g[1].id:null};
   }else{
     const pc=persona(gv('caChar'));
     if(!pc){ toast("Pick the character you're meeting"); return; }
-    const who=pc.name;
+    const g=_group([pc]);
+    const who=g.map(c=>c.name).join(", ");
     const iGo=(gv('caExec')==="user");
     const executor=iGo?"user":pc.name;        // whoever travels is the executor
     const executorId=iGo?null:pc.id;
@@ -12546,7 +12717,9 @@ function saveCalManual(){
     if(certainty==="likely"){ const pn=parseInt(gv('caProb'),10); probability=isNaN(pn)?50:Math.max(0,Math.min(100,pn)); }
     fields={title,day,period,who,executor,executorId,withUser:true,certainty,probability,
             detail:gv('caWhy').slice(0,300),
-            where,locationId,character:who,charName:who,charId:pc.id,charId2:null};
+            where,locationId,character:who,charName:who,
+            charIds:g.map(c=>c.id),
+            charId:g[0]?g[0].id:null,charId2:g[1]?g[1].id:null};
   }
   if(editId){
     const e=chatCalendar(chat).find(x=>x.id===editId);
@@ -12746,7 +12919,13 @@ async function _fireArrival(chat,subId,item){
     }
   }catch(e){}
 }
-function toggleCalDone(id){ const chat=curChat(); const e=chatCalendar(chat).find(x=>x.id===id); if(e){e.done=!e.done;persistChats();openCalendar();updateCalendarBadge();} }
+function toggleCalDone(id){ const chat=curChat(); const e=chatCalendar(chat).find(x=>x.id===id);
+  if(e){ e.done=!e.done;
+    // v37.3 — stamp WHEN. "What already happened" orders by completion day, and an entry ticked
+    // by hand had none, so it sorted as day 0 and sank below everything.
+    if(e.done){ if(e.completedDay==null)e.completedDay=chat.gameDay||1; }
+    else { e.completedDay=null; e.outcome=null; }
+    persistChats();openCalendar();updateCalendarBadge(); } }
 function delCalEntry(id){ const chat=curChat(); chat.calendar=chatCalendar(chat).filter(x=>x.id!==id); persistChats(); openCalendar(); updateCalendarBadge(); }
 // Manually trigger a plan: travel to its location now (resolving one if needed) and mark it done.
 async function attendPlan(id){
@@ -18165,7 +18344,7 @@ const REPLY_ORDER=["task","world","format",
   "distant_memories","recent_memories","situation",
   "speaking_style","latest_arcs",
   "__history__",
-  "watching_now","last_line","already_said","rumors","scene_now","privacy","trackers","promises","calendar","quests","private_intent",
+  "watching_now","last_line","already_said","rumors","scene_now","privacy","trackers","promises","calendar","calendar_done","quests","private_intent",
   "feelings_now","drives","response_guidance","final_guardrails","spoken_delivery"];
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
@@ -18192,6 +18371,7 @@ const REPLY_BLOCKS={
   trackers:{label:"Your trackers",kind:"dyn",desc:"The conditions that are true of this character right now — story-wide trackers, anything of theirs that has become publicly visible, and their own private ones. Split out of the scene block in v30.3."},
   promises:{label:"Your word (promises & commitments)",kind:"dyn",desc:"Open-ended commitments with no date on them: what this character swore and is bound by, what was sworn to them, and anything broken, kept or released in the last couple of days. Extracted from play by the promises engine."},
   calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
+  calendar_done:{label:"What already happened",kind:"dyn",desc:"The last few calendar entries this character was actually part of, with the recorded outcome of each — meetings with the player, group meetings, and plans that ran offstage without them. A finished plan used to leave a character's head entirely the moment it completed; this is what stops them forgetting an evening they spent. How many is set in Settings → Roleplay."},
   quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text) — so the people a quest is about actually know their part of it."},
   watching_now:{label:"What is on screen (video cue)",kind:"dyn",desc:"The description attached to the video mark that just played, as the thing this turn is answering. Only present on a turn a video cue fired."},
   private_intent:{label:"Private intent coloring",kind:"dyn",desc:"A one-turn instruction when this character holds a live scheme/warmth toward someone PRESENT. (A standing aim toward someone absent rides in the bio, under the goals.)"},
@@ -18912,7 +19092,7 @@ function epSend(key,systemText,parts){
     privacy:["privacy_header","privacy_text","scene_present","scene_present_others","scene_alone","scene_apart","scene_nearby","scene_privacy","scene_area_privacy","scene_area_quieter"],
     trackers:["trackers_header"],
     promises:["promise_header","promise_yours","promise_owed","promise_ended"],
-    calendar:["calendar_header"],
+    calendar:["calendar_header"],calendar_done:["calendar_done_header"],
     watching_now:["watching_now"],
     private_intent:["intent_warm","intent_hostile","intent_side"],
     latest_arcs:["mem_latest_header","mem_latest_instr","query_lang"],
@@ -19290,6 +19470,7 @@ What a text has that a room does not: it is WRITTEN DOWN. It stays on two phones
   scene_area_privacy:`How exposed the area you are standing in is: {{label}}.{{quieter}}`,
   scene_area_quieter:` If you need to say something that must not carry, {{names}} is quieter — you can suggest moving there.`,
   trackers_header:`# YOUR TRACKERS — CONDITIONS THAT ARE TRUE OF YOU RIGHT NOW\nThese are facts about your body, your circumstances or your standing, not moods. They shape what you can do, what you are worried about, and what is at stake for you in this scene. Act from them; never read one out, and never name a number.`,
+  calendar_done_header:`# WHAT ALREADY HAPPENED — things you were part of, and how they went\nThese are done. You lived them, so you know how each one turned out and you carry whatever it left you with. Refer to one the way a person refers to last night — in passing, only if this moment brings it up. Never list them, never recap one, and never announce that you remember it.`,
   calendar_header:`# MEETINGS — PLANS WITH A TIME ON THEM\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.`,
   /* v30.3 — the commitment ledger, in the character's own voice. The rule at the top is the load-
      bearing part: a promise that gets recited is not a promise, it is a receipt. */
@@ -20124,6 +20305,11 @@ function buildTailBlocks(opts){
 
     {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true}):"";
      if(cl)B.calendar=`${blkTpl("calendar_header")}\n${cl}`;}
+    /* v37.3 — and what already happened. Emitted here, in buildTailBlocks, which is the shared
+       builder for EVERY reply path — so the spoken reply, the multi-character turn, the gamemaster
+       reaction, heat and the phone text all get it from one place, as the user asked. */
+    try{ const cd=calendarDoneLine(chat,selfName,selfId);
+         if(cd)B.calendar_done=cd; }catch(e){}
     // quests — per-character awareness of the active quests this character is named in (key
     // figure, listed cast, or named in the quest text). Same scoping idea as the calendar line.
     try{ const qc=(typeof questContextFor==="function")?questContextFor(chat,selfName,selfId):""; if(qc)B.quests=qc; }catch(e){}
@@ -27296,6 +27482,43 @@ function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
    feelings through applied relationship deltas. Gossip may then spread those memories naturally.
    Gates: state.pulseOn, state.pulseMax events/day (calendar execution always runs — a due plan is
    a commitment), one pair attempt per day (pulseTried), never anyone currently in the scene. */
+/* ===== v37.3 — WHO IS IN A PLAN ==========================================================
+   A plan used to hold at most two tagged characters (charId, charId2) plus a free-text `who`.
+   That is enough for "you and Duygu" and nothing else — a dinner with three people could only be
+   expressed as a comma string, which every id-based check then failed to match, so a group meeting
+   reached only whichever one person happened to be tagged.
+   `charIds` is the real list. charId/charId2 are still read (and still written, so an older build
+   reading this save still sees the first two), and the free-text `who` remains the human label. */
+function planCharIds(e){
+  if(!e)return [];
+  const out=[];
+  const add=x=>{ if(x&&out.indexOf(x)<0)out.push(x); };
+  if(Array.isArray(e.charIds))e.charIds.forEach(add);
+  add(e.charId); add(e.charId2);
+  if(e.executorId&&e.executorId!=="user")add(e.executorId);
+  return out;
+}
+/* Is this character party to the plan? Ids first (renames and casing cannot break an id), the
+   free-text name as the fallback for plans written before ids existed. */
+function planHasChar(e,selfId,selfName){
+  if(!e)return false;
+  const ids=planCharIds(e);
+  if(selfId&&ids.indexOf(selfId)>=0)return true;
+  if(selfId&&ids.length)return false;              // id-tagged plan that is not theirs
+  const who=String(e.who||"").toLowerCase();
+  if(!who.trim())return true;                      // general / player-owned plan
+  return selfName?who.includes(String(selfName).toLowerCase()):true;
+}
+/* The plan's participants as names, minus whoever is reading it. Splits on commas AND the
+   conjunctions a group title actually uses, so "Duygu, Nil ve Hakan" is three people. */
+function planOtherNames(e,selfName){
+  const raw=String((e&&e.who)||"").split(/\s*(?:,|&|\bve\b|\band\b|\bile\b)\s*/i)
+    .map(x=>x.trim()).filter(Boolean);
+  const meL=String(selfName||"").toLowerCase();
+  const out=[];
+  raw.forEach(n=>{ if(n.toLowerCase()!==meL && out.indexOf(n)<0)out.push(n); });
+  return out;
+}
 function _planIncludesUser(e){
   // A meeting explicitly flagged char↔char (two NPCs, no player) resolves OFFSTAGE via the world-pulse
   // calendar executor — never through the player-facing resolver. Check this before the executor test.
@@ -34136,6 +34359,7 @@ function syncSettingsUI(){
   document.getElementById('setStripNarr').checked=state.stripNarr;
   document.getElementById('setNarrRetryOn').checked=!!state.narrRetryOn;
   document.getElementById('setNarrMaxSpans').value=state.narrMaxSpans;
+  document.getElementById('setCalDoneN').value=state.calDoneN;
   {const e=document.getElementById('setNarrPrivacy'); if(e)e.value=narrPrivacyMode();}
   document.getElementById('setStripKeepFull').value=state.stripKeepFull;
   {const h=document.getElementById('setHistTurns'); if(h)h.value=state.histTurns;}
@@ -34336,6 +34560,7 @@ function saveSettings(notify){
   state.stripNarr=document.getElementById('setStripNarr').checked;
   state.narrRetryOn=document.getElementById('setNarrRetryOn').checked;
   state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||3));
+  {const v=+document.getElementById('setCalDoneN').value; state.calDoneN=Math.max(0,Math.min(10,isNaN(v)?3:v));}
   {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'spoken';}
   state.stripKeepFull=Math.max(2,+document.getElementById('setStripKeepFull').value||6);
   {const h=document.getElementById('setHistTurns'); if(h)state.histTurns=Math.max(2,Math.min(200,+h.value||20));}
@@ -34390,7 +34615,7 @@ function saveSettings(notify){
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
   store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.setRaw(K.imgEveryTurns,state.imgEveryTurns);store.setRaw(K.imgSeed,state.imgSeed||"");store.setRaw(K.gossipDecay,state.gossipDecay);store.setRaw(K.gossipCooldown,state.gossipCooldown);store.setRaw(K.gossipMaxLive,state.gossipMaxLive);store.setRaw(K.rumorJudge,state.rumorJudge);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
-  store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
+  store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
   store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.set(K.goalsCuratorOn,state.goalsCuratorOn);store.setRaw(K.goalsCurator,state.goalsCurator);store.setRaw(K.goalsMax,state.goalsMax);store.set(K.promiseOn,state.promiseOn);store.setRaw(K.promisePrompt,state.promisePrompt);store.setRaw(K.calReconcile,state.calReconcile);store.setRaw(K.attendEstimate,state.attendanceEstimate);store.setRaw(K.attendPersuade,state.attendancePersuade);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);

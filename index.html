@@ -534,6 +534,12 @@
   .galVidCell .gvDl{position:absolute;top:6px;right:36px;width:26px;height:26px;border-radius:50%;border:none;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;padding:0;}
   .galVidCell .gvCue{position:absolute;bottom:6px;right:6px;min-width:26px;height:26px;padding:0 7px;border-radius:13px;border:none;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2;font-size:12px;font-weight:600;line-height:1;}
   .galVidCell .gvCue.has{background:var(--accent,#6b8afd);color:#fff;}
+  .vcClock{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;
+    font-variant-numeric:tabular-nums;font-size:13px;font-weight:600;}
+  .vcClockSep,.vcClockDim{opacity:.55;font-weight:400;}
+  .vcClock .vcClockBtn{width:auto;margin:0;padding:5px 9px;font-size:12px;font-weight:500;}
+  .vcClock .vcClockBtn:first-of-type{margin-left:auto;}
+  .vcRow .vcAt{flex:none;width:38px;height:34px;padding:0;margin:0;font-size:11px;font-weight:600;letter-spacing:.02em;}
   .vcRow{display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;}
   .vcRow .vcT{width:74px;flex:none;}
   .vcRow .vcX{flex:none;width:30px;height:34px;border:none;background:transparent;color:var(--muted,#999);cursor:pointer;font-size:18px;line-height:1;}
@@ -957,7 +963,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v36.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v36.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2187,16 +2193,31 @@
 
 <!-- VIDEO CUES — timestamped descriptions of what a clip shows -->
 <div class="modal" id="vidCueModal">
-  <button class="x" onclick="closeModal('vidCueModal')">&times;</button>
+  <button class="x" onclick="vidCueStop();closeModal('vidCueModal')">&times;</button>
   <div class="scSheet">
     <h3 style="margin:0 0 4px">What happens in this clip</h3>
     <div class="desc" style="margin-bottom:10px">A time and what is on screen at that time. While this clip plays over the story, crossing a mark hands that description to whoever is in the scene and they react to it. These belong to the <b>clip</b>, so a clip used in several scenes is described once.</div>
+    <!-- v36.5 — the clip itself, ONLY here. Scrub to the moment, then stamp it into a row. The
+         scene dock and the in-chat clips are deliberately untouched: their players are for
+         watching, and a scrub bar over the story is exactly the disturbance we do not want. -->
+    <div id="vidCuePlayerWrap" style="margin-bottom:10px">
+      <video id="vidCuePlayer" controls playsinline preload="metadata"
+        style="width:100%;max-height:44vh;display:block;border-radius:12px;background:#000"></video>
+      <div class="vcClock">
+        <span id="vidCueNow">0.0s</span>
+        <span class="vcClockSep">/</span>
+        <span id="vidCueLen" class="vcClockDim">—</span>
+        <button type="button" class="btn sec small vcClockBtn" onclick="vidCueNudge(-1)" title="Back one second">−1s</button>
+        <button type="button" class="btn sec small vcClockBtn" onclick="vidCueNudge(1)" title="Forward one second">+1s</button>
+        <button type="button" class="btn sec small vcClockBtn" onclick="addVidCueRow(vidCueTime(),'')" title="Add a mark at this moment">+ Mark here</button>
+      </div>
+    </div>
     <div id="vidCueRows"></div>
     <button class="btn sec small" type="button" style="width:auto;margin-top:8px" onclick="addVidCueRow()">+ Add a mark</button>
     <div class="desc" id="vidCueWarn" style="margin-top:10px"></div>
     <div class="row" style="margin-top:14px">
       <button class="btn" type="button" style="flex:1" onclick="saveVidCues()">Save</button>
-      <button class="btn sec" type="button" style="flex:1" onclick="closeModal('vidCueModal')">Cancel</button>
+      <button class="btn sec" type="button" style="flex:1" onclick="vidCueStop();closeModal('vidCueModal')">Cancel</button>
     </div>
   </div>
 </div>
@@ -25955,13 +25976,43 @@ function openVidCues(videoId){
   (cues.length?cues:[{t:0,text:""}]).forEach(function(c){ addVidCueRow(c.t,c.text); });
   {const w=document.getElementById('vidCueWarn'); if(w)w.textContent="";}
   openModal('vidCueModal');
-  // Read the real duration so a mark past the end can be called out — one that never plays is the
-  // kind of thing you only discover by watching the whole clip and seeing nothing happen.
+  /* The duration used to come from a throwaway probe element. It comes from the visible player
+     now — same number, and the clip is on screen where it is actually useful. */
   try{
-    const probe=document.createElement('video');
-    probe.preload="metadata"; probe.muted=true; probe.src=httpsMedia(v.url);
-    probe.onloadedmetadata=function(){ _vidCueDur=+probe.duration||0; _vidCueCheck(); try{probe.removeAttribute('src');}catch(_){} };
+    const pl=document.getElementById('vidCuePlayer');
+    if(pl){
+      pl.src=httpsMedia(v.url);
+      pl.currentTime=0;
+      pl.onloadedmetadata=function(){
+        _vidCueDur=+pl.duration||0;
+        const L=document.getElementById('vidCueLen');
+        if(L)L.textContent=(Math.round(_vidCueDur*10)/10)+"s";
+        _vidCueCheck();
+      };
+      pl.ontimeupdate=pl.onseeked=function(){
+        const N=document.getElementById('vidCueNow');
+        if(N)N.textContent=(Math.round((+pl.currentTime||0)*10)/10)+"s";
+      };
+    }
   }catch(e){}
+}
+/* The playhead, rounded the way a mark is stored (whole seconds). */
+function vidCueTime(){
+  const pl=document.getElementById('vidCuePlayer');
+  return pl?Math.max(0,Math.round(+pl.currentTime||0)):0;
+}
+function vidCueSeek(t){
+  const pl=document.getElementById('vidCuePlayer'); if(!pl)return;
+  try{ pl.currentTime=Math.max(0,Math.min(+t||0,(+pl.duration||1e9))); pl.pause(); }catch(e){}
+}
+function vidCueNudge(d){
+  const pl=document.getElementById('vidCuePlayer'); if(!pl)return;
+  vidCueSeek((+pl.currentTime||0)+d);
+}
+/* Stop the clip when the sheet closes, or it keeps playing behind the gallery. */
+function vidCueStop(){
+  const pl=document.getElementById('vidCuePlayer'); if(!pl)return;
+  try{ pl.pause(); pl.removeAttribute('src'); pl.load(); }catch(e){}
 }
 function addVidCueRow(t,text){
   const rows=document.getElementById('vidCueRows'); if(!rows)return;
@@ -25973,11 +26024,21 @@ function addVidCueRow(t,text){
   tx.className="fld"; tx.style.cssText="flex:1;min-height:52px";
   tx.placeholder="What is on screen at this moment — as the people in the room would see it";
   tx.value=text||"";
+  // Stamp this row from where the playhead is — the reason the player is here at all.
+  const at=document.createElement('button');
+  at.type="button"; at.className="btn sec small vcAt"; at.title="Set this mark to where the clip is now";
+  at.textContent="set";
+  at.onclick=function(){ ti.value=String(vidCueTime()); _vidCueCheck(); };
+  // ...and jump the clip to a mark, to see what is actually on screen there.
+  const go=document.createElement('button');
+  go.type="button"; go.className="btn sec small vcAt"; go.title="Jump the clip to this mark";
+  go.textContent="go";
+  go.onclick=function(){ vidCueSeek(+ti.value||0); };
   const x=document.createElement('button');
   x.type="button"; x.className="vcX"; x.title="Remove this mark"; x.textContent="\u00d7";
   x.onclick=function(){ row.remove(); _vidCueCheck(); };
   ti.oninput=_vidCueCheck;
-  row.appendChild(ti); row.appendChild(tx); row.appendChild(x);
+  row.appendChild(ti); row.appendChild(at); row.appendChild(go); row.appendChild(tx); row.appendChild(x);
   rows.appendChild(row);
 }
 function _readVidCueRows(){
@@ -26013,8 +26074,9 @@ function _vidCueCheck(){
   w.innerHTML=notes.length?notes.map(function(n){return "\u26a0\ufe0f "+esc(n);}).join("<br>"):"";
 }
 function saveVidCues(){
-  if(!_vidCueEditId)return closeModal('vidCueModal');
+  if(!_vidCueEditId){ vidCueStop(); return closeModal('vidCueModal'); }
   setVidCues(_vidCueEditId,_readVidCueRows());
+  vidCueStop();
   closeModal('vidCueModal');
   try{ renderGallery(); }catch(e){}
   toast("Saved");

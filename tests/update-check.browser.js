@@ -34,11 +34,15 @@ const {chromium}=require('playwright');
       return !!el && (el.getAttribute('onclick')||"").indexOf("updCheckNow")>-1; }));
   ok("updCheckNow is reachable from global scope (not trapped in the boot block)",
      await pg.evaluate(()=>typeof window.updCheckNow==="function" && typeof window.swCheck==="function"));
-  ok("with no worker registered it says so instead of throwing", await pg.evaluate(()=>{
-      const seen=[]; const real=window.toast; window.toast=m=>seen.push(String(m));
-      try{ updCheckNow(); }catch(e){ window.toast=real; return "threw: "+e.message; }
-      window.toast=real;
-      return seen.length===1 && /reload the page/i.test(seen[0]); }));
+  ok("it works with no worker registered — the check no longer depends on one", await pg.evaluate(async()=>{
+      // v36.6: updCheckNow compares build stamps over plain fetch, so a missing service worker
+      // (http, file://, first load) must not stop it or make it throw.
+      const seen=[]; const rt=window.toast; window.toast=m=>seen.push(String(m));
+      const rf=window.fetch; window.fetch=()=>Promise.resolve({ok:true,status:206,
+        text:()=>Promise.resolve('<div id="buildStamp">'+runningBuild()+'</div>')});
+      try{ await updCheckNow(); }catch(e){ window.toast=rt; window.fetch=rf; return "threw: "+e.message; }
+      window.toast=rt; window.fetch=rf;
+      return seen.some(m=>/newest build/.test(m)) ? true : JSON.stringify(seen); }));
   ok("swCheck reports false when there is no registration", await pg.evaluate(()=>swCheck(true)===false));
 
   console.log("\n[the throttle]");
@@ -106,6 +110,49 @@ const {chromium}=require('playwright');
       const r=document.getElementById('updBar').getBoundingClientRect();
       updDismiss(); _updDismissed=false;
       return (r.left>=0 && r.right<=412) ? true : "left "+r.left+" right "+r.right; }));
+
+  console.log("\n[the check actually compares builds]");
+  ok("it reads the stamp out of served html", await pg.evaluate(()=>
+      _stampOf('<div id="buildStamp" title="x" onclick="y()">v36.9</div>')==="v36.9"));
+  ok("and returns nothing when there is no stamp", await pg.evaluate(()=>
+      _stampOf("<html>no stamp here</html>")===""));
+  ok("it knows what this page is running", await pg.evaluate(()=>
+      /^v\d+\.\d+$/.test(runningBuild())));
+  ok("same build => it says so, naming the version", await pg.evaluate(async()=>{
+      const seen=[]; const rt=window.toast; window.toast=m=>seen.push(String(m));
+      const rf=window.fetch; window.fetch=()=>Promise.resolve({ok:true,status:206,
+        text:()=>Promise.resolve('<div id="buildStamp">'+runningBuild()+'</div>')});
+      await updCheckNow();
+      window.toast=rt; window.fetch=rf;
+      const bar=document.getElementById('updBar').classList.contains('show');
+      return !bar && seen.some(m=>/newest build/.test(m)&&m.indexOf(runningBuild())>-1)
+        ? true : JSON.stringify(seen)+" bar="+bar; }));
+  ok("a NEWER build raises the bar and names it", await pg.evaluate(async()=>{
+      _updDismissed=false; document.getElementById('updBar').classList.remove('show');
+      const rt=window.toast; window.toast=()=>{};
+      const rf=window.fetch; window.fetch=()=>Promise.resolve({ok:true,status:206,
+        text:()=>Promise.resolve('<div id="buildStamp">v99.9</div>')});
+      await updCheckNow();
+      window.toast=rt; window.fetch=rf;
+      const b=document.getElementById('updBar');
+      const shown=b.classList.contains('show');
+      const named=b.querySelector('.updTxt').textContent.indexOf("v99.9")>-1;
+      updDismiss(); _updDismissed=false;
+      return shown && named ? true : "shown="+shown+" named="+named; }));
+  ok("an unreachable server never claims you are current", await pg.evaluate(async()=>{
+      const seen=[]; const rt=window.toast; window.toast=m=>seen.push(String(m));
+      const rf=window.fetch; window.fetch=()=>Promise.reject(new Error("offline"));
+      await updCheckNow();
+      window.toast=rt; window.fetch=rf;
+      return !seen.some(m=>/newest build/.test(m)) && seen.some(m=>/Couldn't reach|only be checked/.test(m))
+        ? true : JSON.stringify(seen); }));
+  ok("a non-ok response is not parsed as a build", await pg.evaluate(async()=>{
+      const rf=window.fetch; window.fetch=()=>Promise.resolve({ok:false,status:404,
+        text:()=>Promise.resolve("<div id=\"buildStamp\">v1.0</div>")});
+      const v=await serverBuild(); window.fetch=rf;
+      return v===""; }));
+  ok("the worker is registered with updateViaCache off", await pg.evaluate(()=>
+      document.documentElement.innerHTML.indexOf("updateViaCache:'none'")>-1));
 
   console.log("\n[nothing else moved]");
   ok("the stamp still reads the build", await pg.evaluate(()=>

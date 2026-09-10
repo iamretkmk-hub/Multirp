@@ -957,7 +957,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v36.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v36.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3180,6 +3180,32 @@ PEOPLE WHO MIGHT JOIN (and how they relate to the holder and the target):
 // reconciliation. The flavour comes from the holder's nature, the target, and how drama works in
 // THIS world — never from a hardcoded scenario. Returns a one-step plan (the engine grows it to
 // multi-step later); for now the model picks the single best way to make their move.
+const DEFAULT_MEMRECONCILE=`# ROLE
+A stretch of one character's day has just ended. While it ran, several separate memories were written for them — one per beat the tracker closed. Read them and rewrite them as the character would actually hold them once the moment is over.
+
+A person does not keep six numbered entries about one afternoon. They keep ONE thing that happened, with the parts that mattered. That is what you are making.
+
+# OUTPUT
+Return ONLY this JSON:
+{"memories":[{"content":"…","importance":0.5,"emotion":"…","people":["…"],"tags":["…"],"location":"…"}]}
+
+USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely unrelated things — a fight with her daughter and a phone call about work are two memories, not one. Never more than three. Two things that happened in the same room between the same people are ONE memory however long they took.
+
+# WRITING THE CONTENT
+- First person, past tense, the character's own voice — the same way the fragments are written.
+- Keep what a person would keep: what happened, what it cost, what they decided, what they are still carrying. What they said only if the saying of it was the event.
+- Drop the beat-by-beat. If the fragments walk through a sequence step by step, compress it to what it amounted to.
+- Do NOT quote lines of dialogue back. A memory of a conversation is what it did to you, not a transcript of it. This matters: quoted lines get re-said.
+- Keep every concrete fact the fragments establish — who was there, where, what was agreed, what was refused, anything that would contradict a later scene if lost.
+- Resolve contradictions in favour of the LATER fragment; the fragments are in order and the last one saw the most.
+- Never invent anything that is not in the fragments.
+- Length: what it deserves. A quiet hour is a sentence. Something that changed a relationship is a short paragraph.
+
+# THE OTHER FIELDS
+- importance: the highest of the fragments', raised a little if the whole is bigger than its parts.
+- emotion: the one that best fits the whole stretch.
+- people / tags: the union of the fragments', deduplicated.
+- location: where most of it happened.`;
 const DEFAULT_PSYCHE=`# ROLE
 You are the part of a character's mind that never speaks. You are given everything true about them at this instant, including private numbers nobody else sees. You turn it into TWO short passages: what is pushing them toward what they want, and what is holding them back.
 
@@ -9755,6 +9781,8 @@ const PROMPT_REGISTRY=[
    hint:"At End Day, decides if a character now privately wants something — warm (courtship/loyalty/protection) or hostile (grievance/rivalry/scheme) — reasoning from how the relationship moved. Returns valence. Use {{char}}, {{nature}}, {{day_memories}}, {{relationships}}, {{roster}}, {{user}}."},
   {key:"intentTick", label:"Intent tick (fester & recruit)", def:()=>DEFAULT_INTENT_TICK, json:true,
    hint:"Each End Day, develops a live intent: hardens/fades, recruits allies, signals readiness. Use {{holder}}, {{nature}}, {{kind}}, {{target}}, {{aim}}, {{trigger}}, {{strength}}, {{allies}}, {{candidates}}."},
+  {key:"memReconcile", label:"Memory reconciler (end of each part of the day)", def:()=>DEFAULT_MEMRECONCILE, json:true,
+   hint:"When a part of the day ends (morning to midday, and so on), the several memories written during it are read together and rewritten as the one thing the character would actually keep — or a few, if they cover unrelated topics. Runs per character, in the background, and never on a day roll (the diary covers that)."},
   {key:"psychePrompt", label:"Drives & brakes (id / superego writer)", def:()=>DEFAULT_PSYCHE, json:true,
    hint:"Reads the private relationship numbers, the character's ties, their vows, the trackers and where they are, and writes TWO prose passages for the reply payload: what pushes them toward what they want, and what holds them back. The numbers never reach the story payload — only the prose does. It never decides the outcome; the character does."},
   {key:"contemplate", label:"Contemplation (strategy planner)", def:()=>DEFAULT_CONTEMPLATE, json:true,
@@ -10009,11 +10037,15 @@ function chatPeriod(chat){ return PERIODS[chatPeriodIndex(chat)]; }
 // Advance time by N periods, rolling into new days. Returns {dayChanged}.
 function advanceTime(chat,periods){
   const c=chat||curChat(); if(!c)return{dayChanged:false};
+  // (!) read BEFORE anything moves: the while-loops below roll gameDay, so capturing the previous
+  // day afterwards would compare the new day with itself and fire the reconcile on a day end.
+  const _prevPeriod=PERIODS[chatPeriodIndex(c)], _prevDay=c.gameDay;
   let idx=chatPeriodIndex(c)+(periods||0);
   let dayChanged=false;
   while(idx>=PERIODS.length){ idx-=PERIODS.length; c.gameDay=(c.gameDay||1)+1; dayChanged=true; }
   while(idx<0){ idx+=PERIODS.length; c.gameDay=Math.max(1,(c.gameDay||1)-1); }
   c.period=PERIODS[idx]; c.timeOfDay=c.period;
+  try{ onPeriodChanged(c,_prevDay,_prevPeriod); }catch(e){}
   return {dayChanged};
 }
 function sceneStateLine(chat){
@@ -18356,6 +18388,7 @@ epDefine("charQuestText","Char quest (text)","charQuestText",[{name:"data",label
 epDefine("chronicler","Universe chronicle \u00b7 day","chronicler",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("condensePrompt","Long-term condense (2 call sites share this)","condensePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("confrontJudge","Confrontation judge","confrontJudge",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("memReconcile","Memory reconciler (part of the day)","memReconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("psychePrompt","Drives & brakes (id / superego)","psychePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("contemplate","Contemplate","contemplate",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("daySummaryPrompt","Diary","daySummaryPrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
@@ -20786,7 +20819,9 @@ function saveSceneState(){
   const chat=curChat(); if(!chat){closeModal('sceneStateModal');return;}
   const day=Math.max(1,parseInt(document.getElementById('ssDay').value,10)||1);
   chat.gameDay=day;
-  if(_ssPeriod){ chat.period=_ssPeriod; chat.timeOfDay=_ssPeriod; }
+  if(_ssPeriod){ const _pd=chat.gameDay,_pp=chatPeriod(chat);
+    chat.period=_ssPeriod; chat.timeOfDay=_ssPeriod;
+    try{ onPeriodChanged(chat,_pd,_pp); }catch(e){} }
   const sel=document.getElementById('ssLocSelect').value;
   const txt=document.getElementById('ssLocText').value.trim();
   const newLoc=txt||sel||"";
@@ -30930,9 +30965,15 @@ async function forceGamemaster(){
 // Build one memory per participant of a closed arc and push the keepers. Shared by every commit path
 // (live close, travel, day-end). `dayStamp` lets the day-end flush stamp memories on the JUST-ENDED
 // day (gameDay already advanced) so the intent former's gameDay filter still sees them.
-async function commitMemoryArc(chat, startIdx, endIdx, dayStamp){
+async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp){
   if(!state.mem||!state.key) return;
   const day = (typeof dayStamp==="number") ? dayStamp : curGameDay();
+  /* v36.4 — a memory now records WHICH PART OF THE DAY it belongs to, not just the day. Without it
+     there is no way to tell a memory of the scene you are still standing in from a memory of this
+     morning, and the retriever was handing a character a summary of the conversation they were
+     mid-way through — which it then re-said, because the summary quotes its own lines. */
+  const period = (typeof periodStamp==="string" && periodStamp) ? periodStamp
+                : (()=>{ try{ return chatPeriod(chat); }catch(e){ return ""; } })();
   const cast=curCast().slice();
   presentCast(chat).forEach(p=>{if(p&&p.temp&&!cast.some(c=>c.id===p.id))cast.push(p);});
   // Span of messages belonging to this arc.
@@ -30987,7 +31028,7 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp){
         importance,
         tags:Array.isArray(j.tags)?j.tags.map(t=>String(t).toLowerCase()):[],
         type:isBystander?"OBSERVATION":(j.type||"EXPERIENCE"),
-        ownerId:p.id, character:p.name, date:Date.now(), gameDay:day, source:"auto",
+        ownerId:p.id, character:p.name, date:Date.now(), gameDay:day, gamePeriod:period, source:"auto",
         universeId:(chat&&chat.universeId)||state.curUniverse||null, chatId:(chat&&chat.id)||state.curChat||null
       };
       if(isBystander){ if(j.gist)mem.gist=String(j.gist).trim(); mem.charge=charge; mem.observerOnly=true; }
@@ -31001,16 +31042,92 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp){
   if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active')) renderMemory();
 }
 
+
+/* ===== v36.4 — RECONCILE A PART OF THE DAY ======================================================
+   The arc tracker writes a memory each time it judges a thread closed, which during a long scene
+   means several fragments of one continuous thing — each one a step-by-step retelling that quotes
+   the character's own lines. Excluding the current period from retrieval stops those reaching the
+   payload while the scene runs, but they are still in the bank, and tomorrow the character
+   remembers this afternoon as six numbered entries instead of one thing that happened.
+   So when a part of the day ends, the fragments from it are read together and rewritten as the one
+   memory a person would actually hold — or a few, if they cover unrelated topics.
+   NOT on a day roll: the diary already consolidates a whole day, and doing both would summarise a
+   summary. Background and best-effort — nothing the player does waits on it, and a failure leaves
+   the originals exactly as they were. */
+function memsOfPeriod(ownerId,day,period){
+  if(!period)return [];
+  return (state.memory||[]).filter(m=>m&&m.ownerId===ownerId&&m.gameDay===day&&m.gamePeriod===period
+    && m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED" && !m.observerOnly);
+}
+let _reconcileBusy={};
+async function reconcilePeriodFor(p,day,period){
+  if(!p||!state.mem||!state.key)return;
+  const key=p.id+"|"+day+"|"+period;
+  if(_reconcileBusy[key])return;
+  const frag=memsOfPeriod(p.id,day,period);
+  if(frag.length<2)return;               // one memory of a stretch is already the reconciled form
+  _reconcileBusy[key]=1;
+  try{
+    const listed=frag.map((m,i)=>`FRAGMENT ${i+1} (${m.location||"somewhere"}, importance ${(+m.importance||0).toFixed(2)}, ${m.emotion||"neutral"}):\n${memText(m)}`).join("\n\n");
+    const out=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
+      {data:`These are ${p.name}'s memories from one part of one day, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}`}),
+      state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
+    const j=parseJSON(out);
+    const made=(j&&Array.isArray(j.memories))?j.memories.filter(x=>x&&String(x.content||"").trim()):[];
+    if(!made.length)return;              // nothing usable — leave the originals untouched
+    const union=k=>[...new Set(frag.flatMap(m=>Array.isArray(m[k])?m[k]:[]))];
+    const topImp=Math.max(...frag.map(m=>+m.importance||0));
+    const built=made.slice(0,3).map(x=>({
+      id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
+      content:String(x.content).trim(),
+      location:x.location||frag[0].location||"",
+      people:Array.isArray(x.people)&&x.people.length?x.people.map(String):union("people"),
+      emotion:x.emotion||frag[frag.length-1].emotion||"neutral",
+      feelings:"",
+      importance:Math.max(topImp,(typeof x.importance==="number")?x.importance:0),
+      tags:Array.isArray(x.tags)&&x.tags.length?x.tags.map(t=>String(t).toLowerCase()):union("tags"),
+      type:"EXPERIENCE",
+      ownerId:p.id, character:p.name, date:Date.now(), gameDay:day, gamePeriod:period,
+      source:"reconciled", reconciledFrom:frag.length,
+      universeId:frag[0].universeId||null, chatId:frag[0].chatId||null
+    }));
+    // Swap only once the replacements exist, so a failure anywhere above cannot lose a memory.
+    const drop=new Set(frag.map(m=>m.id));
+    state.memory=(state.memory||[]).filter(m=>!drop.has(m.id)).concat(built);
+    persistMemory();
+    if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory();
+  }catch(e){ console.warn("[memory] reconcile failed for",p&&p.name,":",e&&e.message||e); }
+  finally{ delete _reconcileBusy[key]; }
+}
+/* Called wherever the clock moves. `prev` is the part of the day that just ended. */
+function onPeriodChanged(chat,prevDay,prevPeriod){
+  try{
+    if(!chat||!prevPeriod)return;
+    if((chat.gameDay||1)!==prevDay)return;      // a day rolled — the diary owns that, not this
+    if(chatPeriod(chat)===prevPeriod)return;    // nothing actually moved
+    (async()=>{
+      // Anything still open belongs to the part of the day that just ended, so close it there first.
+      try{ await flushMemoryArc(chat,prevDay,prevPeriod); }catch(e){}
+      const who=[]; const seen=new Set();
+      (state.memory||[]).forEach(m=>{ if(m&&m.gameDay===prevDay&&m.gamePeriod===prevPeriod&&m.ownerId&&!seen.has(m.ownerId)){ seen.add(m.ownerId); who.push(m.ownerId); } });
+      for(const id of who){
+        const p=state.personas.find(x=>x&&x.id===id);
+        if(p) await reconcilePeriodFor(p,prevDay,prevPeriod);
+      }
+    })();
+  }catch(e){}
+}
+
 // Close whatever arc is currently open on this chat (if any), committing it, then clear the tracker.
 // Used by travel (characters left behind) and day-end. `dayStamp` optional (day-end).
-async function flushMemoryArc(chat, dayStamp){
+async function flushMemoryArc(chat, dayStamp, periodStamp){
   const ev=chat&&chat.memEvent;
   if(!ev||!ev.open) return;
   const start=ev.startIdx||0;
   chat.memEvent=null;                       // clear FIRST so re-entrancy can't double-commit
   chat.memDoneIdx=chat.messages.length-1;   // the next arc must not re-cover this committed span
   markChatDirty(chat);
-  await commitMemoryArc(chat, start, chat.messages.length-1, dayStamp);
+  await commitMemoryArc(chat, start, chat.messages.length-1, dayStamp, periodStamp);
 }
 
 const MEM_ARC_CAP=40;   // safety valve: an arc that never cleanly closes commits at this many messages.
@@ -31069,12 +31186,12 @@ async function maybeBuildMemory(chat){
     chat.memEvent={ startIdx:newStart, open:true, paused:false, summary };
     chat.memDoneIdx=Math.max(oldStart,newStart-1);
     markChatDirty(chat);
-    await commitMemoryArc(chat, oldStart, Math.max(oldStart,newStart-1));
+    await commitMemoryArc(chat, oldStart, Math.max(oldStart,newStart-1), undefined, chatPeriod(chat));
     return;
   }
   if(progress==="finished"){
     chat.memEvent=null; chat.memDoneIdx=arcEnd; markChatDirty(chat);
-    await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
+    await commitMemoryArc(chat, ev.startIdx||0, arcEnd, undefined, chatPeriod(chat));
     return;
   }
   if(progress!=="paused" && spanLen>=MEM_ARC_CAP){
@@ -31082,7 +31199,7 @@ async function maybeBuildMemory(chat){
     chat.memEvent={ startIdx:arcEnd, open:true, paused:false, summary:"" };
     chat.memDoneIdx=arcEnd;
     markChatDirty(chat);
-    await commitMemoryArc(chat, ev.startIdx||0, arcEnd);
+    await commitMemoryArc(chat, ev.startIdx||0, arcEnd, undefined, chatPeriod(chat));
     return;
   }
   // ongoing or paused → keep accumulating; just persist the tracker state.
@@ -31461,7 +31578,20 @@ async function retrieveMemories(userText,chat,ownerId){
   //  DISTANT = the character's DIARY entries from PRIOR days — their long-term memory of what came
   //            before (diaries are written from the day's memories; older ones are period-consolidated).
   // Raw memories still drive relationships/gossip/intents; only the payload view changed.
-  const ownAll = ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories();
+  /* v36.4 — THE NOW IS NOT A MEMORY. A memory stamped with this same day AND this same part of the
+     day is, by definition, about the scene the character is standing in — the transcript already
+     carries it, in full, in their own words. Injecting it as well hands them a summary of the
+     conversation they are mid-way through, and because that summary quotes their own lines back at
+     them ("I tell him today is turning"), they say them again. That is where the repetition came
+     from, and no wording in the prompt can out-argue a document that says these are things you did
+     BEFORE this conversation.
+     A memory with no period recorded predates this change and is never excluded — dropping every
+     old memory would be a far worse bug than the one being fixed. */
+  const _nowPeriod=(()=>{ try{ return chatPeriod(chat); }catch(e){ return ""; } })();
+  const _nowDay=(chat&&chat.gameDay)||curGameDay();
+  const _isNow=m=>!!(m && m.gamePeriod && m.gameDay===_nowDay && m.gamePeriod===_nowPeriod);
+  const ownAll = (ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories())
+                 .filter(m=>!_isNow(m));
   // WORKING tier = the character's raw arc-tracker memories, searched semantically over the WHOLE bank
   // (the "previous system" — not restricted to today). LONG-TERM tier = their diaries + condensed
   // LONGTERM/CONSOLIDATED memories. Both tiers are ranked against the query below.

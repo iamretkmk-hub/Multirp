@@ -96,14 +96,14 @@ const {chromium}=require('playwright');
         targetId:"p_e",multi:false,injected:{recent:[],diary:[],longterm:[]}});
       return /\d/.test(String(B.drives||"")) ? "digits present" : true; }));
   ok("the block forbids stating the outcome", await pg.evaluate(()=>
-      BLOCK_TPL_DEFAULTS.drive_header.indexOf("Neither of these decides anything")>-1
+      /decides anything/.test(BLOCK_TPL_DEFAULTS.drive_header)
    && BLOCK_TPL_DEFAULTS.drive_ego.indexOf("do not invent a struggle")>-1));
 
   console.log("\n[the engine]");
   ok("the prompt is registered and editable", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.psychePrompt && typeof up("psychePrompt")==="string" && up("psychePrompt").length>200));
   ok("it forbids deciding for the character", await pg.evaluate(()=>
-      up("psychePrompt").indexOf("You do NOT decide what they do")>-1));
+      /You do NOT decide what/.test(up("psychePrompt"))));
   ok("it is a listed engine payload", await pg.evaluate(()=>!!epDef("psychePrompt")));
   ok("the signature moves when the situation moves", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();

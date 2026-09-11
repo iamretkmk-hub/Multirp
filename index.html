@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2646,6 +2646,7 @@ function handleImportFile(input){
   reader.readAsText(file);
 }
 
+
 const DEFAULT_REWRITE=`# SYSTEM ROLE
 
 Your role is to fill the [brackets] given in an image prompt template according to the latest roleplay exchange. 
@@ -2808,6 +2809,218 @@ Match the sounds to the character described below — their build, their tempera
    inside (a kiss, an embrace, every penetration and oral position, sleeping or sitting together,
    a closeness POV) casts the player, so their picture goes with the request and the image is of
    the two of THEM. An establishing shot casts nobody. */
+/* ===== v38.5 — THE PROMPTS THAT WERE NOT PROMPTS =========================================
+   Eighteen background engines had their system prompt written as a template literal inside the
+   function that sends it. They were not in PROMPT_REGISTRY, so they had no storage key, no
+   per-universe override, no box in Settings, no export, and no "Write with AI" — the editor's
+   honest answer when you pressed Edit was "this engine's prompt is written in code". In an app
+   whose premise is that every prompt is yours, eighteen of them were not.
+   Three of the eighteen turned out to be mis-declared rather than missing (they already ran on
+   vidPrompt and textProactivePrompt); the rest are here. Each is an ordinary registry prompt now,
+   with {{placeholders}} where the call site used to interpolate — the same contract every other
+   prompt in the file has. The wording is unchanged, including one long-standing typo left exactly
+   as it was (x_arrival's doubled comma) so this release changes what is editable, not what is
+   sent. Fix it in its box; that is the point.
+   Everything below is wired by the loops under loadState — one entry here gives a prompt its
+   storage key, its registry record, its state default and its save line. */
+const X_ENGINE_PROMPTS={
+  x_appearance_generator:{label:"Appearance generator",json:true,
+    hint:"Turns a character card + world into the structured appearance JSON the image generator uses. Runs from the character editor's “Generate appearance”.",
+    def:`You write the visual appearance of a roleplay character as STRUCTURED JSON for an image generator. Given the character's card and world, output ONLY this JSON object — no markdown, no commentary:
+{
+  "subject": "EXACTLY ONE of: Man, Woman, Girl, Boy. (Girl/Boy only if they read as under ~20.) This is how the image generator is told which reference picture belongs to which person in the frame — it must be one of those four words and nothing else.",
+  "face_map": "ONE real, well-known celebrity whose look fits this character (e.g. 'Ana de Armas', 'Henry Cavill'). This is the recognizable face anchor. Match age, build, vibe, and the world. Choose variety — don't default everyone to the same few names. If truly no celebrity fits, use \"\".",
+  "hair": "hair only: colour, length, style",
+  "face": "non-celebrity face details only: eyes, freckles, jawline, marks. NEVER repeat the celebrity name here.",
+  "body": "physique/build only",
+  "wardrobe": "2-3 outfits this character habitually favours, each WITH colours, drawn from their personality, station and this world — e.g. 'daytime: cream silk blouse, high-waist navy trousers; evenings: deep burgundy wrap dress, gold jewelry; at home: oversized grey knit'. This is their WARDROBE (what they own and pick from), NOT one scene's outfit."
+}
+ALL fields in ENGLISH regardless of the card's language. Keep each field to its own category. Be concrete and image-promptable.`},
+
+  x_look_split:{label:"Appearance splitter",json:true,
+    hint:"One-off migration: turns an old freeform appearance string into the structured fields.",
+    def:`Split a character's freeform appearance string into STRUCTURED JSON for an image generator. Output ONLY: {"face_map":"the celebrity name if one is present, else \\"\\"","hair":"hair only","face":"non-celebrity face details only (never repeat the celebrity name)","body":"physique/build only"}. English only. If a field isn't present in the input, use "".`},
+
+  x_scene_recap:{label:"Scene recap (“Previously…”)",json:false,
+    hint:"The one-line banner shown when you come back to a chat after a while.",
+    def:`You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands.`},
+
+  x_meeting_no_show_beat:{label:"Meeting no-show beat",json:false,
+    hint:"The narrator sentence when someone never turned up to a meeting you waited for.",
+    def:`You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.`},
+
+  x_day_transition_narration:{label:"Day transition narration",json:false,
+    hint:"Closes out a day and eases into the next one.",
+    def:`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.`},
+
+  x_reveal_npc:{label:"Latent character reveal",json:true,
+    hint:"Fleshes out a sketched-in background character the first time they actually appear.",
+    def:`You flesh out a roleplay character from a short sketch, consistent with the world. Return ONLY JSON: {"personality":"2-4 sentences","look":"English visual appearance for image generation (hair, build, face, clothing)","backstory":"1-3 sentences","style":"how they speak","goals":"what they want"}.`},
+
+  x_quest_reconcile:{label:"Quest reconciler (world quests)",json:true,
+    hint:"At day's end, reads the day's memories and decides what moved on each active quest. Note the output language is named in the text — change it there if your story is not in Turkish.",
+    def:`You judge the day's progress on the ACTIVE quests of a roleplay, using ONLY the memories as evidence. Each quest below states its FULL objective, its own character(s), and the memories THOSE characters formed today — each memory is listed under the name of the character who holds it. A memory shows how the quest proceeded through that character's eyes; never attribute one character's memory to another.
+
+For each quest decide:
+- "done": true ONLY if the memories clearly show the quest's objective was achieved today. Never on a hunch; if unsure it stays pending.
+- otherwise, if the memories show something relevant to the quest happened (a step taken toward it, a lead found, a setback, a complication, the quest's subject acted on or discussed), report it as "progress". Report progress whenever the day's memories genuinely touch the quest's subject — partial movement counts.
+
+OUTPUT FORMAT — return ONLY a JSON array. No prose, no explanation, no markdown fences.
+- One entry per quest that changed today; a quest with no relevant memories gets NO entry.
+- If nothing moved on any quest, return exactly: []
+- Entry shape: {"id":"<the quest id, without the # prefix>","done":true|false,"result":"<only when done: ONE past-tense TURKISH sentence of what happened>","progress":"<only when not done but it moved: ONE past-tense TURKISH sentence of how>"}
+Example of a valid reply:
+[{"id":"q_abc123","done":false,"progress":"Aysu babasının çekmecesindeki mektubu buldu ama kimseye göstermedi."}]`},
+
+  x_char_quest_reconcile:{label:"Quest reconciler (asks made of you)",json:true,
+    hint:"At day's end, decides what happened to the personal favours characters asked of {{user}}.",
+    def:`You judge the day's progress on characters' PERSONAL quests that involve the player ({{user}}), using ONLY the memories as evidence. Each quest below has been ASKED of the player (in person or by text). For each quest decide:
+- "done": true ONLY if the memories clearly show the ask was fulfilled / the pursuit succeeded today.
+- "failed": true ONLY if the memories clearly show the player REFUSED definitively or the pursuit is now lost.
+- "answered": true if the player meaningfully ENGAGED with the ask today (agreed, bargained, asked questions, said later) — even without finishing it.
+- otherwise, if something relevant happened, report it as "progress".
+Never on a hunch; if unsure it stays pending.
+Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if none:
+[{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense ENGLISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense ENGLISH sentence>"}]`},
+
+x_arrival:{label:"Arrival narration",json:false,
+    hint:"The narrator beat when you arrive somewhere an event or a character is waiting. {{place}} is where you have arrived, {{situation}} what is waiting there, {{also}} who else is present, {{lang}} the story language.",
+    def:`You are the GAMEMASTER narrator. {{user}} has just arrived at {{place}}, {{situation}}.{{also}} Write ONE short, vivid {{lang}} narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls {{user}} into it.`},
+
+  x_arrival_line:{label:"Arrival — the character's first line",json:false,
+    hint:"What the character waiting there says as you walk in. {{sheet}} is their own character sheet, {{extra}} their feelings and memories, {{about}} what you came about, {{also}} who else is present.",
+    def:`You are {{char}}.
+{{sheet}}{{extra}}
+
+You are at {{place}}. {{user}} has just arrived{{about}}.{{also}} Open the moment — greet {{user}} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in {{lang}}, 1-3 sentences (a brief action is fine). Do not narrate for {{user}} or speak for the others.`},
+
+  x_bg_task:{label:"Offstage task outcome",json:true,
+    hint:"What happened while a character worked on something away from you. {{outcome}} is SUCCEEDED or FAILED; {{fail_note}} is added only on a failure.",
+    def:`You narrate a brief OFFSTAGE outcome in a roleplay, in {{lang}}. {{char}} spent time — away from {{user}} — working on this on their own: "{{task}}". It {{outcome}}. Write ONE short, vivid third-person beat (1-2 sentences){{fail_note}}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`},
+
+  x_schedule_generator:{label:"Daily schedule generator",json:true,
+    hint:"Decides where a character tends to be through the day. {{home_note}} names their home when they have one.",
+    def:`You build a believable daily schedule for a roleplay character across 5 periods: Morning, Midday, Afternoon, Evening, Night.
+
+For EACH period, distribute 100 points across the available locations to represent how likely this character is to be at each one during that period. You don't have to use every location, and the points per period don't have to sum to exactly 100 — leftover means "somewhere else / not around". Make it reflect who they are (a workaholic is at work midday, home at night; a socialite is out in the evening; a homebody mostly home).{{home_note}}
+
+Return ONLY strict JSON mapping each period to {locationName: points}:
+{"Morning":{"Name":40,...},"Midday":{...},"Afternoon":{...},"Evening":{...},"Night":{...}}
+Use EXACT location names from the list. No commentary.`},
+
+  /* The place builder runs three different jobs and had three different prompts welded into one
+     function. Three prompts, so each can be changed without touching the others. */
+  x_location_homes:{label:"Place builder · homes",json:true,
+    hint:"Houses the cast, grouping anyone who would logically live together. {{cast}} is the characters and their ties, {{world}} the setting plus the places that already exist, {{count}} how many characters are being housed.",
+    def:`You assign HOME locations for a roleplay world. Read the characters and their ties, then group everyone who would LOGICALLY LIVE TOGETHER — a family under one roof, a married or cohabiting couple, a shared household, roommates, a lord and their live-in household — and give each such group ONE shared home. A character with no one to live with gets their own home. EVERY character below must end up assigned to exactly one home.
+
+CHARACTERS TO HOUSE:
+{{cast}}
+
+{{world}}
+
+Each home object:
+- "name": the household's home name, fitting the world and distinct from existing places.
+- "residents": a JSON array of the EXACT character names who live in this home — ONE name for someone who lives alone, or SEVERAL for a shared household.
+- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details (style, setting, mood). No backstory.
+- "sublocations": 2-4 areas inside; the FIRST is the arrival point (e.g. "Front Door", "Foyer"), then rooms (Living Room, Bedroom, Kitchen…).
+
+Return ONLY a JSON array of home objects — ONE PER HOUSEHOLD, so FEWER than {{count}} when people share. Every one of the {{count}} characters must appear in exactly one home's "residents" list. No commentary.`},
+
+  x_location_quest:{label:"Place builder · the places a quest needs",json:true,
+    hint:"Builds the specific places the story's quests happen in. {{places}} is the list of required names and sub-areas.",
+    def:`You build the specific PLACES the story's quests take place in. Create ONE for EACH place below, in the SAME order, as a JSON array, fitting THIS world.
+
+{{world}}
+
+PLACES (keep each "name" EXACTLY as written):
+{{places}}
+
+Each place object:
+- "name": the EXACT place name from the list above.
+- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details. No backstory.
+- "sublocations": 2-4 areas; the FIRST is the arrival point; INCLUDE every required sub-area listed for that place.
+
+Return ONLY a JSON array of {{count}} object(s). No commentary.`},
+
+  x_location_pois:{label:"Place builder · public places",json:true,
+    hint:"Invents five public places the cast can gather in, once everyone is housed.",
+    def:`You design POINTS OF INTEREST for a roleplay world — public places the cast gathers, works and clashes (a market, a club, a temple, a workplace, a landmark). Create exactly 5, as a JSON array, all fitting THIS world.
+
+{{world}}
+
+Each place object:
+- "name": fitting the world, distinct.
+- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details. No backstory.
+- "sublocations": 2-4 areas; the FIRST is the arrival point (Entrance/Lobby/Gate…). No residents.
+
+Return ONLY a JSON array of 5 objects. No commentary.`},
+
+  x_location_request:{label:"Place builder · your steering request",json:false,
+    hint:"Appended to whichever place-builder job is running when you type something into the popup.",
+    def:`USER'S REQUEST — prioritize creating the places they describe (adapt them to fit the world, keep the exact JSON shape, never recreate an existing place):
+{{request}}`},
+
+  x_call_role:{label:"Voice call — who you are in it",json:false,
+    hint:"Opens the live voice-call payload: that this is a real spoken conversation in person, not a phone call or a text.",
+    def:`You are {{char}}, talking WITH {{user}} in person — the two of you are together, having a real-time spoken conversation. This is NOT a phone call and NOT text; you are physically present with each other and talking out loud. Stay fully in character. Never break character, never mention being an AI, never narrate actions or use stage directions — just speak, the way a real person speaks aloud.`},
+
+  x_call_delivery:{label:"Voice call — how you speak",json:false,
+    hint:"The spoken-delivery contract for a live call: sentence length, the story language, and the [bracketed] cues the voice actor performs.",
+    def:`# HOW YOU SPEAK (this is a live spoken conversation)
+Speak naturally and warmly in short spoken sentences. Reply in perfect, natural, everyday {{lang}} — the story's selected language (this overrides any other language instruction). Keep replies to 1–3 sentences so the conversation flows.
+
+VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you direct with bracketed cues:
+1. Begin EACH sentence with its OWN bracketed delivery instruction in ENGLISH describing HOW to say that sentence, e.g. [say warmly] then the sentence, then [say with a teasing grin] before the next one. Each sentence gets its own tone so the emotion can shift naturally across the reply. The bracket directs the voice and is never spoken aloud.
+2. The bracket goes at the very START of each sentence, before its first word.
+3. You MAY also drop inline non-verbals where they occur: [laugh] [sigh] [breathe] [clear throat] [cough] [yawn].
+4. To stress a key word, CAPITALIZE it. Use sparingly.
+5. Keep delivery BRISK, but place pauses where a real speaker would: a comma for a small breath, an em-dash — for a beat before something important, and "…" for a thoughtful or hesitant pause. Use them deliberately and sparingly, where the MEANING calls for a pause — not randomly. Otherwise favor short sentences.`},
+
+  x_call_fallback:{label:"Voice call — fallback persona",json:false,
+    hint:"Used only when a call starts without a character's own prompt built yet.",
+    def:`You are a friend talking with the user. Reply briefly in their language.`},
+
+  x_prompt_reviser:{label:"Prompt reviser (image / video)",json:false,
+    hint:"Behind the “revise this prompt” box in the playground and in image→video.",
+    def:`You revise prompts for image/video generation models. Apply the user's requested changes to the prompt while keeping everything else intact. Keep the comma-separated visual style, keep it in English, and return ONLY the revised prompt text — no quotes, no commentary.`},
+
+  x_chronicle_condense:{label:"Chronicle condenser",json:false,
+    hint:"Compresses a world's older day-by-day chronicle entries into one era paragraph.",
+    def:`You condense a roleplay universe's day-by-day chronicle into a durable era summary — the way history compresses into "what that period was about". Merge the dated entries into ONE tight paragraph (3-6 sentences) preserving: who did what to whom, bonds formed and broken, discoveries, outcomes of quests and schemes, and anything still unresolved. Keep every load-bearing name. Drop routine. Write in the same language as the entries. Return ONLY the paragraph, no commentary.`},
+
+  x_rolling_recap:{label:"Rolling recap",json:false,
+    hint:"The running summary a long chat carries so a character stays consistent about what was said.",
+    def:`You write a tight running recap of a roleplay/conversation so a character can stay perfectly consistent about who did and said what. Summarize ONLY the new exchange below. Output, in the SAME language as the conversation:
+1) ONE short third-person narrative paragraph (2-3 sentences) of what happened.
+2) Then 2-5 short fact bullets capturing what MUST stay consistent: decisions made, plans/promises (with time/place if any), what each person now BELIEVES or FEELS, and anything left unresolved. Write beliefs as "X believes/feels …".
+Be factual and compact. No quotes, no flourish, no preamble. Do not repeat the earlier recap.`},
+
+  x_stt_repair:{label:"Voice call — transcript repair",json:false,
+    hint:"Repairs what the speech-to-text engine mis-heard during a live call, using the known names of your world.",
+    def:`You repair speech-to-text (STT) errors in ONE spoken line from a live voice conversation. The line was auto-transcribed and often contains mis-heard words: similar-SOUNDING wrong words, mangled proper nouns (names/places), and broken Turkish. Your ONLY job is to recover what the user most likely actually said, using the conversation context and the list of known names.
+
+Rules:
+- Keep the SAME language and the user's own wording and meaning. You are NOT rephrasing or improving — only repairing mis-transcription.
+- Be willing to fix words that SOUND like a known name or a context word but came out garbled (e.g. a place/character from the list rendered as nonsense). Map garbled sounds to the correct known name when the phonetics and context clearly fit.
+- Do NOT answer, reply, translate, add, or remove meaning. Do NOT add punctuation-heavy rewrites.
+- If the line already makes sense, return it UNCHANGED.
+- Output ONLY the corrected line, nothing else.`},
+
+  x_tracker_ask:{label:"Tracker judge — the question",json:true,
+    hint:"The instruction sent with every tracker evaluation. {{tracker}} is the tracker's own definition, {{name}} its name and {{owner}} whose it is. The system prompt above it is the editable “Tracker prompt”.",
+    def:`{{tracker}}
+
+Based ONLY on the recent exchange above, decide how "{{name}}" for {{owner}} should change. Return ONLY strict JSON: {"delta": <number, 0 if no change>, "triggered": <true|false>}. Most turns produce delta 0 — only move it on a clear in-scene reason.`},
+
+  x_write_prompt_with_ai:{label:"Write-with-AI (the prompt writer)",json:false,
+    hint:"The meta-prompt behind every “Write with AI” button — it writes your other prompts. {{json_rule}} and {{ph_rule}} are added by the app when the prompt being written returns JSON or carries placeholders.",
+    def:`You are a prompt engineer. You write a single, complete SYSTEM PROMPT that will be given to another AI model.
+Write the full prompt text only — no preamble, no explanation, no surrounding quotes or code fences. The prompt should be clear, well-structured, and directly usable.{{json_rule}}{{ph_rule}}`}
+};
+/* v38.5 — a storage key for each engine prompt that used to live in code. Same shape as the
+   hand-written ones above ("sm_" + the key, lowercased), generated so the two lists cannot drift. */
+Object.keys(X_ENGINE_PROMPTS).forEach(k=>{ K[k]="sm_"+k.toLowerCase(); });
 const DEFAULT_RULE_CAST={
   r_portrait:"solo", r_gym:"solo",
   r_establishing:"none",
@@ -5658,6 +5871,16 @@ function loadState(){
     videos:[],
     scenes:[]   // v27: user-curated video SCENES (ordered playlists of gallery clips, per character)
   };
+  // v38.5 — and the engine prompts that used to be template literals in code. One loop, so a
+  // prompt cannot end up with a registry entry but no storage key (which is what "not editable"
+  // actually looked like).
+  Object.keys(X_ENGINE_PROMPTS).forEach(k=>{ state[k]=store.raw(K[k],X_ENGINE_PROMPTS[k].def); });
+  /* And any registry prompt the hand-written list above missed — memReconcile and psychePrompt had
+     no state value at all, so `up()` could only ever return their shipped default. */
+  PROMPT_REGISTRY.forEach(r=>{
+    if(typeof state[r.key]==="string") return;
+    state[r.key]=store.raw(K[r.key], r.def?r.def():"");
+  });
   // (Full image/video history is hydrated asynchronously from IndexedDB in init via
   //  hydrateMedia(); store.get above only recovers any legacy localStorage images so the
   //  first launch after upgrading isn't momentarily empty before hydration completes.)
@@ -10183,7 +10406,28 @@ const PROMPT_REGISTRY=[
   {key:"presencePrompt", label:"Presence tracker", def:()=>DEFAULT_PRESENCE_TRACKER, json:true,
    hint:"Detects entrances/exits. Returns JSON {exit, enter}. Use {{user}}."},
 ];
+/* v38.5 — the engine prompts that used to live in code join the registry on the same terms as
+   every other prompt: a key, a label, a hint, a JSON flag and a default. Generated from the one
+   table rather than hand-written eighteen times, so a new one cannot arrive half-wired. */
+Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
+  const d=X_ENGINE_PROMPTS[k];
+  PROMPT_REGISTRY.push({key:k,label:d.label,json:!!d.json,hint:d.hint||"",def:()=>X_ENGINE_PROMPTS[k].def});
+});
 const PROMPT_BY_KEY=Object.fromEntries(PROMPT_REGISTRY.map(p=>[p.key,p]));
+/* (!) v38.5 — A PROMPT WITH NO STORAGE KEY IS NOT EDITABLE, IT ONLY LOOKS EDITABLE.
+   promptEditSave does `const Kk=K[key]; if(Kk)store.setRaw(Kk,val)` and then says "Global prompt
+   saved" either way — so a registry prompt that never got a K entry accepted your edit, applied it
+   for the session, toasted success, and lost it on the next reload. Four were in that state, among
+   them psychePrompt, which writes DRIVES & BRAKES. Every registry prompt gets a key here, so the
+   gap cannot open again — including for prompts added later.
+   Two of the four already had a key under an OLDER name; they are aliased rather than renamed, so
+   an edit made before this build is still found. */
+const PROMPT_KEY_ALIASES={attendanceEstimate:"attendEstimate",attendancePersuade:"attendPersuade"};
+PROMPT_REGISTRY.forEach(r=>{
+  if(K[r.key]) return;
+  const legacy=PROMPT_KEY_ALIASES[r.key];
+  K[r.key]=(legacy&&K[legacy])||("sm_"+r.key.toLowerCase());
+});
 // Resolve a prompt: per-universe override (if the active universe set one) → global
 // state value → hard-coded default. This is the ONLY read path for prompts.
 function up(key,uid){
@@ -11891,7 +12135,7 @@ async function narrateMeetingOutcome(chat,e,p){
     if(state.key){
       const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
       const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
-      const out=await chatCompletion(epSend("x_meeting_no_show_beat","You are the narrator of a roleplay. Reply with ONE sentence only, no quotation marks.\n\n"+langDirective(),{data:ask}),
+      const out=await chatCompletion(epSend("x_meeting_no_show_beat",up("x_meeting_no_show_beat")+"\n\n"+langDirective(),{data:ask}),
         state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
       line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
     }
@@ -12879,7 +13123,7 @@ async function revealLatentNpc(chat,p){
   try{
     if(state.key && ((String(p.personality||"").length<40) || !lookProse(p.look))){
       const uni=universeById(chat.universeId);
-      const sys=`You flesh out a roleplay character from a short sketch, consistent with the world. Return ONLY JSON: {"personality":"2-4 sentences","look":"English visual appearance for image generation (hair, build, face, clothing)","backstory":"1-3 sentences","style":"how they speak","goals":"what they want"}.`;
+      const sys=up("x_reveal_npc");
       const usr=`WORLD: ${uni?uni.name:""} — ${(uni&&uni.setting||"").slice(0,700)}\n\nSKETCH:\nName: ${p.name}\n${p.instructions?"Role/hook: "+p.instructions+"\n":""}${p.personality?"Notes: "+p.personality:""}`;
       const out=await chatCompletion(epSend("x_reveal_npc",sys,{data:usr}),state.bioModel,{temp:fnTemp("mem",0.8),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Reveal NPC — "+p.name});
       const j=parseJSON(out);
@@ -12947,7 +13191,16 @@ async function _fireArrival(chat,subId,item){
     // sequentially (two round-trips); they are dispatched CONCURRENTLY and posted in order once both
     // return, so the NPC speaks after a single round-trip. The character line is grounded in their
     // authored tie to the player (see quest NPC bios) so they don't open as a stranger.
-    const narrSys=`You are the GAMEMASTER narrator. ${state.user} has just arrived at ${sub?sub.name:""}${loc?", "+loc.name:""}, ${item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`}.${(item.title&&p)?` ${p.name} is here.`:""} Write ONE short, vivid ${storyLangName().toUpperCase()} narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls ${state.user} into it.`;
+    /* (!) {{place}} has always been "<sub>, <loc>" and {{situation}} has always begun with its own
+       comma, so this line renders "arrived at Entrance, Emre's Home, , where this awaits: …". The
+       doubled comma is preserved exactly: this release makes the prompt editable, it does not
+       quietly rewrite what your stories have been running on. Fix it in its box. */
+    const narrSys=fillTpl(up("x_arrival"),{
+      user:state.user,
+      place:`${sub?sub.name:""}${loc?", "+loc.name:""}`,
+      situation:(item.title?`, where this awaits: "${item.title}"`:` and ${p?p.name:"someone"} is here`),
+      also:((item.title&&p)?` ${p.name} is here.`:""),
+      lang:storyLangName().toUpperCase()});
     // v23.4 — skipNarration: the quest play button already narrated the journey AS the quest's
     // opening beat (purpose-aware travelTo); a second scene-setting here would double-narrate.
     const narrP=item.skipNarration?Promise.resolve(""):chatCompletion(epSend("x_arrival",narrSys,{}),rpModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",220),dbg:"Arrival — "+item.title}).catch(()=>"");
@@ -12996,7 +13249,15 @@ async function _fireArrival(chat,subId,item){
         // character, so it must hand them the second-person sheet; without the flag charBioBlock
         // returns the bystander wording ("How they act", "Their usual clothing") to the very
         // character it belongs to.
-        const csys=`You are ${p.name}.\n${charBioBlock(p,{self:true,noWho:true})}${X.length?`\n\n${X.join("\n\n")}`:""}\n\nYou are at ${sub?sub.name:""}${loc?", "+loc.name:""}. ${state.user} has just arrived${item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`}.${others.length?` Also here with you: ${others.join(", ")}.`:""} Open the moment — greet ${state.user} and draw them into the matter, either as the person it concerns or as someone leading them to it, consistent with how you already know or regard them. Speak IN CHARACTER, in ${storyLangName().toUpperCase()}, 1-3 sentences (a brief action is fine). Do not narrate for ${state.user} or speak for the others.`;
+        const csys=fillTpl(up("x_arrival_line"),{
+          char:p.name,
+          sheet:charBioBlock(p,{self:true,noWho:true}),
+          extra:(X.length?`\n\n${X.join("\n\n")}`:""),
+          place:`${sub?sub.name:""}${loc?", "+loc.name:""}`,
+          user:state.user,
+          about:(item.title?` about this: "${item.title}"${item.desc?` — ${String(item.desc).slice(0,400)}`:""}`:` and has sought you out`),
+          also:(others.length?` Also here with you: ${others.join(", ")}.`:""),
+          lang:storyLangName().toUpperCase()});
         return chatCompletion(epSend("x_arrival_line",csys,{}),rpModel(),{temp:fnTemp("rp",0.85),max:fnTok("rp",320),dbg:"Arrival line — "+p.name});
       })().catch(()=>"");
     }
@@ -14214,7 +14475,7 @@ async function runTrackerEngine(chat){
       `Behaviour: ${behaviorNote}\nUpdate method: ${mode}${mode==="trigger_then_day"?" (the app moves this value — report the event and leave delta at 0)":" (you judge the delta)"}.`;
     if(t.desc&&t.desc.trim())def+=`\nWhat it means: ${t.desc.trim()}`;
     if(t.triggerPhrase)def+=`\nTRIGGER PHRASE (report triggered:true only if this clearly happened): "${t.triggerPhrase}"`;
-    const ask=`${def}\n\nBased ONLY on the recent exchange above, decide how "${t.name}" for ${ownerName} should change. Return ONLY strict JSON: {"delta": <number, 0 if no change>, "triggered": <true|false>}. Most turns produce delta 0 — only move it on a clear in-scene reason.`;
+    const ask=fillTpl(up("x_tracker_ask"),{tracker:def,name:t.name,owner:ownerName});
     try{
       const msgs=[{role:"system",content:sys}];
       exchange.forEach(m=>msgs.push(m));
@@ -15473,8 +15734,7 @@ async function runWriteAi(){
     const phRule=placeholders.length
       ? `\n\nThe app substitutes these placeholders at runtime — keep them verbatim where appropriate: ${placeholders.join(", ")}.`
       : "";
-    const sys=`You are a prompt engineer. You write a single, complete SYSTEM PROMPT that will be given to another AI model.
-Write the full prompt text only — no preamble, no explanation, no surrounding quotes or code fences. The prompt should be clear, well-structured, and directly usable.${jsonRule}${phRule}`;
+    const sys=fillTpl(up("x_write_prompt_with_ai"),{json_rule:jsonRule,ph_rule:phRule});
     const usr=`PURPOSE OF THIS PROMPT (what the function does):\n${reg.label} — ${reg.hint||""}\n\nREFERENCE PROMPT (current/default version — match its output format and any JSON schema; improve or replace the rest per the request):\n"""\n${tpl}\n"""\n\nUSER'S REQUEST (what they want this prompt to do):\n${brief}\n\nWrite the new system prompt now.`;
     const out=await chatCompletion(epSend("x_write_prompt_with_ai",sys,{data:usr}),
       state.bioModel||state.model,
@@ -16307,13 +16567,7 @@ async function generateSchedule(persona,routineText,forUniverse){
   const home=homeLoc?homeLoc.id:null;
   const homeName=homeLoc?homeLoc.name:"";
   const locList=locs.map(l=>`- ${l.name}${l.type==='home'?' (a home)':''}${l.residents&&l.residents.includes(persona.id)?' [THIS CHARACTER LIVES HERE]':''}`).join("\n");
-  const sys=`You build a believable daily schedule for a roleplay character across 5 periods: Morning, Midday, Afternoon, Evening, Night.
-
-For EACH period, distribute 100 points across the available locations to represent how likely this character is to be at each one during that period. You don't have to use every location, and the points per period don't have to sum to exactly 100 — leftover means "somewhere else / not around". Make it reflect who they are (a workaholic is at work midday, home at night; a socialite is out in the evening; a homebody mostly home).${homeName?` Their home is "${homeName}".`:""}
-
-Return ONLY strict JSON mapping each period to {locationName: points}:
-{"Morning":{"Name":40,...},"Midday":{...},"Afternoon":{...},"Evening":{...},"Night":{...}}
-Use EXACT location names from the list. No commentary.`;
+  const sys=fillTpl(up("x_schedule_generator"),{home_note:(homeName?` Their home is "${homeName}".`:"")});
   let out;
   try{
     out=await chatCompletion(epSend("x_schedule_generator",sys,{card:`Character: ${persona.name}\nPersonality: ${persona.personality||""}\nRoutine: ${routineText||persona.routine||"(infer from personality)"}`,locations:locList}),state.bioModel,{temp:fnTemp("mem",0.4),max:fnTok("mem",500),dbg:"Schedule generator · "+persona.name});
@@ -16742,26 +16996,23 @@ async function generateLocations(uni,liveLocs,userInstr){
     // couple, a household, roommates) from who lives alone.
     const tieOf=c=>{ const sg=(c.socialGraph||c.socialGraphAuto||"").trim(); const bs=(c.backstory||"").trim();
       return [sg&&`ties: ${sg.slice(0,180)}`, bs&&`background: ${bs.slice(0,110)}`].filter(Boolean).join(" | "); };
-    sys=`You assign HOME locations for a roleplay world. Read the characters and their ties, then group everyone who would LOGICALLY LIVE TOGETHER — a family under one roof, a married or cohabiting couple, a shared household, roommates, a lord and their live-in household — and give each such group ONE shared home. A character with no one to live with gets their own home. EVERY character below must end up assigned to exactly one home.\n\n`
-      +`CHARACTERS TO HOUSE:\n${batchChars.map((c,i)=>`${i+1}. ${c.name}${c.personality?` — ${(c.personality||"").slice(0,80)}`:""}${tieOf(c)?` (${tieOf(c)})`:""}`).join("\n")}\n\n`
-      +`${world}${haveLine}\n\n`
-      +`Each home object:\n- "name": the household's home name, fitting the world and distinct from existing places.\n- "residents": a JSON array of the EXACT character names who live in this home — ONE name for someone who lives alone, or SEVERAL for a shared household.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details (style, setting, mood). No backstory.\n- "sublocations": 2-4 areas inside; the FIRST is the arrival point (e.g. "Front Door", "Foyer"), then rooms (Living Room, Bedroom, Kitchen…).\n\nReturn ONLY a JSON array of home objects — ONE PER HOUSEHOLD, so FEWER than ${batchChars.length} when people share. Every one of the ${batchChars.length} characters must appear in exactly one home's "residents" list. No commentary.`;
+    sys=fillTpl(up("x_location_homes"),{
+      cast:batchChars.map((c,i)=>`${i+1}. ${c.name}${c.personality?` — ${(c.personality||"").slice(0,80)}`:""}${tieOf(c)?` (${tieOf(c)})`:""}`).join("\n"),
+      world:world+haveLine, count:String(batchChars.length)});
   }else if(mode==='quest'){
     expected=questLocNames.length;
-    sys=`You build the specific PLACES the story's quests take place in. Create ONE for EACH place below, in the SAME order, as a JSON array, fitting THIS world.\n\n`
-      +`${world}${haveLine}\n\n`
-      +`PLACES (keep each "name" EXACTLY as written):\n${questLocNames.map((nm,i)=>{const info=questLocMap[nm];return `${i+1}. ${nm}${info.subs.size?` — include these sub-areas: ${[...info.subs].join(", ")}`:""}`;}).join("\n")}\n\n`
-      +`Each place object:\n- "name": the EXACT place name from the list above.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details. No backstory.\n- "sublocations": 2-4 areas; the FIRST is the arrival point; INCLUDE every required sub-area listed for that place.\n\nReturn ONLY a JSON array of ${expected} object(s). No commentary.`;
+    sys=fillTpl(up("x_location_quest"),{
+      world:world+haveLine,
+      places:questLocNames.map((nm,i)=>{const info=questLocMap[nm];return `${i+1}. ${nm}${info.subs.size?` — include these sub-areas: ${[...info.subs].join(", ")}`:""}`;}).join("\n"),
+      count:String(expected)});
   }else{
     expected=5;
-    sys=`You design POINTS OF INTEREST for a roleplay world — public places the cast gathers, works and clashes (a market, a club, a temple, a workplace, a landmark). Create exactly 5, as a JSON array, all fitting THIS world.\n\n`
-      +`${world}${haveLine}\n\n`
-      +`Each place object:\n- "name": fitting the world, distinct.\n- "description": a SHORT visual description for IMAGE GENERATION — ONE sentence, under ~20 words, concrete visual details. No backstory.\n- "sublocations": 2-4 areas; the FIRST is the arrival point (Entrance/Lobby/Gate…). No residents.\n\nReturn ONLY a JSON array of 5 objects. No commentary.`;
+    sys=fillTpl(up("x_location_pois"),{world:world+haveLine});
   }
   // User's steering request from the popup — folded in as a strong preference, still honoring the
   // world and the never-recreate rule above.
   if(userInstr&&userInstr.trim()){
-    sys+=`\n\nUSER'S REQUEST — prioritize creating the places they describe (adapt them to fit the world, keep the exact JSON shape, never recreate an existing place):\n${userInstr.trim()}`;
+    sys+="\n\n"+fillTpl(up("x_location_request"),{request:userInstr.trim()});
   }
   let out;
   try{
@@ -17395,16 +17646,7 @@ async function generateAppearance(){
       lookProse(readLookEditor())&&`Current appearance notes: ${lookProse(readLookEditor())}`
     ].filter(Boolean).join("\n");
     const world=uni?`WORLD: ${uni.name||""}\n${(uni.setting||"").slice(0,800)}`:"";
-    const sys=`You write the visual appearance of a roleplay character as STRUCTURED JSON for an image generator. Given the character's card and world, output ONLY this JSON object — no markdown, no commentary:
-{
-  "subject": "EXACTLY ONE of: Man, Woman, Girl, Boy. (Girl/Boy only if they read as under ~20.) This is how the image generator is told which reference picture belongs to which person in the frame — it must be one of those four words and nothing else.",
-  "face_map": "ONE real, well-known celebrity whose look fits this character (e.g. 'Ana de Armas', 'Henry Cavill'). This is the recognizable face anchor. Match age, build, vibe, and the world. Choose variety — don't default everyone to the same few names. If truly no celebrity fits, use \"\".",
-  "hair": "hair only: colour, length, style",
-  "face": "non-celebrity face details only: eyes, freckles, jawline, marks. NEVER repeat the celebrity name here.",
-  "body": "physique/build only",
-  "wardrobe": "2-3 outfits this character habitually favours, each WITH colours, drawn from their personality, station and this world — e.g. 'daytime: cream silk blouse, high-waist navy trousers; evenings: deep burgundy wrap dress, gold jewelry; at home: oversized grey knit'. This is their WARDROBE (what they own and pick from), NOT one scene's outfit."
-}
-ALL fields in ENGLISH regardless of the card's language. Keep each field to its own category. Be concrete and image-promptable.`;
+    const sys=up("x_appearance_generator");
     const instrBlock=(instr&&instr.trim())?("USER'S REQUEST (follow this closely, still valid JSON):\n"+instr.trim()):"";
     const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{temp:fnTemp("mem",0.8),max:fnTok("mem",650),dbg:"Appearance generator"});
     const j=parseJSON(out);
@@ -17986,7 +18228,7 @@ async function _migrateLookSplitOnce(){
     const targets=(state.personas||[]).filter(p=>p&&p.look&&typeof p.look==="object"&&!lookHasParts(p.look)&&(p.look.raw||"").trim());
     let done=0;
     for(const p of targets){
-      const sys=`Split a character's freeform appearance string into STRUCTURED JSON for an image generator. Output ONLY: {"face_map":"the celebrity name if one is present, else \\"\\"","hair":"hair only","face":"non-celebrity face details only (never repeat the celebrity name)","body":"physique/build only"}. English only. If a field isn't present in the input, use "".`;
+      const sys=up("x_look_split");
       try{
         const out=await chatCompletion(epSend("x_look_split",sys,{look:p.look.raw}),authoringModel(),{temp:fnTemp("mem",0.2),max:fnTok("mem",300),dbg:"Look split · "+(p.name||p.id)});
         const j=parseJSON(out);
@@ -19372,17 +19614,17 @@ epDefine("x_arrival_line","Arrival line \u2014","x_arrival_line",[{name:"ask",la
 epDefine("x_bg_task","BG task \u2014","x_bg_task",[{name:"ask",label:"The instruction that closes the message",fixed:"Narrate it."}]);
 epDefine("x_char_quest_reconcile","Char quest reconcile","x_char_quest_reconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_day_transition_narration","Day transition narration","x_day_transition_narration",[{name:"scene",label:"The scene so far",sep:"The scene so far (Day {{day}}):\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Write the day-ending transition into Day {{next_day}}."}]);
-epDefine("x_location_generator","Location generator (","x_location_generator",[{name:"ask",label:"The instruction that closes the message",fixed:"Generate the JSON array now."}]);
+epDefine("x_location_generator","Place builder (homes, quest places, public places)","x_location_homes",[{name:"ask",label:"The instruction that closes the message",fixed:"Generate the JSON array now."}]);
 epDefine("x_look_split","Look split","x_look_split",[{name:"look",label:"The appearance text being split",sep:"Appearance: "}]);
 epDefine("x_meeting_no_show_beat","Meeting no-show beat","x_meeting_no_show_beat",[{name:"data",label:"Everything this engine sends about your story"}]);
-epDefine("x_playground_video_prompt_writ","Playground video prompt writer","x_playground_video_prompt_writ",[{name:"clip",label:"How long the clip must last"},{name:"scene",label:"The still the motion is written for",sep:"Still scene:\n"}]);
-epDefine("x_proactive_text","Proactive text \u2014","x_proactive_text",[{name:"data",label:"Everything this engine sends about your story"}]);
+epDefine("x_playground_video_prompt_writ","Playground video prompt writer","vidPrompt",[{name:"clip",label:"How long the clip must last"},{name:"scene",label:"The still the motion is written for",sep:"Still scene:\n"}]);
+epDefine("x_proactive_text","Proactive text \u2014","textProactivePrompt",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_quest_reconcile","Quest reconcile","x_quest_reconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_reveal_npc","Reveal NPC \u2014","x_reveal_npc",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_scene_recap","Scene recap","x_scene_recap",[{name:"convo",label:"The scene so far",sep:"Scene so far:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Write the one-line recap."}]);
 epDefine("x_schedule_generator","Schedule generator","x_schedule_generator",[{name:"card",label:"The character, their personality and routine"},{name:"locations",label:"Where they could be",sep:"Locations:\n"}]);
-epDefine("x_video_motion_prompt_writer","Video motion prompt writer","x_video_motion_prompt_writer",[{name:"clip",label:"How long the clip must last"},{name:"scene",label:"The still the motion is written for",sep:"Still scene:\n"}]);
-epDefine("x_voice_sample_script_writer","Voice sample script writer","x_voice_sample_script_writer",[{name:"clip",label:"How long the clip must last"},{name:"actor",label:"Who is making the sounds",sep:"THE CHARACTER MAKING THESE SOUNDS:\n"}]);
+epDefine("x_video_motion_prompt_writer","Video motion prompt writer","vidPrompt",[{name:"clip",label:"How long the clip must last"},{name:"scene",label:"The still the motion is written for",sep:"Still scene:\n"}]);
+epDefine("x_voice_sample_script_writer","Voice sample script writer","moanPrompt",[{name:"clip",label:"How long the clip must last"},{name:"actor",label:"Who is making the sounds",sep:"THE CHARACTER MAKING THESE SOUNDS:\n"}]);
 epDefine("x_write_prompt_with_ai","Write prompt with AI","x_write_prompt_with_ai",[{name:"data",label:"Everything this engine sends about your story"}]);
 /* ---- Engine part registries. Order + separators here reproduce the concatenation each call site
    used to build inline; tests/engine-parity.test.js holds every entry to that. ---- */
@@ -19590,6 +19832,32 @@ function epSend(key,systemText,parts,vars){
    to the right entry here (plus the store.setRaw persist line in saveSettings). If you
    forget, _enginePayloadCoverage surfaces it under an auto "Other prompts" payload — but map
    it properly. promptKey strings must match PROMPT_REGISTRY keys exactly. */
+/* v38.5 — the engine prompts that used to live in code get real homes here rather than being
+   swept into "Other prompts" by _enginePayloadCoverage. Grouped by the job they belong to. */
+const X_PROMPT_CARDS=[
+  {key:"world_builder",label:"World builder",desc:"The jobs that furnish a world: where people live, where the story happens, and who a sketched-in character turns out to be.",
+   keys:["x_location_homes","x_location_quest","x_location_pois","x_location_request","x_reveal_npc","x_schedule_generator"]},
+  {key:"appearance",label:"Appearance",desc:"How a character looks, as structured fields the image generator can use.",
+   keys:["x_appearance_generator","x_look_split"]},
+  {key:"beats",label:"Narrator beats",desc:"The short narrator lines the app writes on its own: arrivals, a day ending, a meeting nobody came to, an errand run offstage, the recap when you come back.",
+   keys:["x_arrival","x_arrival_line","x_day_transition_narration","x_meeting_no_show_beat","x_bg_task","x_scene_recap"]},
+  {key:"day_end_quests",label:"End of day — what moved",desc:"At day's end, reads the day's memories and decides what happened to each quest and to each favour asked of you.",
+   keys:["x_quest_reconcile","x_char_quest_reconcile"]},
+  {key:"meta",label:"The prompt writer",desc:"The prompt behind every “Write with AI” button — the one that writes your other prompts.",
+   keys:["x_write_prompt_with_ai"]},
+  /* These three had a key and a default but no card, so _enginePayloadCoverage swept them into an
+     "Other prompts" bucket. psychePrompt in particular is the one that writes DRIVES & BRAKES. */
+  {key:"inner_life",label:"Inner life",desc:"What pulls a character and what holds them back, and how a stretch of the day settles into memory.",
+   keys:["psychePrompt","memReconcile"]},
+  {key:"voice_sample",label:"Voice sample",desc:"Writes the tagged vocal track the “Create sample” button renders in the character's own voice.",
+   keys:["moanPrompt"]},
+  /* The last of the prompts that lived in code: four helpers that never went through epSend at all,
+     so the engine audit could not even see them. */
+  {key:"helpers",label:"Helpers",desc:"The small jobs the app runs around a scene: revising an image prompt, compressing an old chronicle, keeping a rolling recap, repairing what a voice call mis-heard, and asking a tracker which way it moved.",
+   keys:["x_prompt_reviser","x_chronicle_condense","x_rolling_recap","x_stt_repair","x_tracker_ask"]},
+  {key:"voice_call",label:"Voice call",desc:"The live spoken conversation: who the character is in it, how they speak it, what the transcript repair fixes, and the stand-in persona when a call starts with nothing built.",
+   keys:["x_call_role","x_call_delivery","x_stt_repair","x_call_fallback"]}
+];
 const ENGINE_PAYLOAD_DEFS=[
   {key:"turn_router",label:"Turn Router (who speaks)",desc:"Decides who replies to the player (router 1) and whether another character chains in (router 2). Both return JSON the app parses — keep the schemas intact.",blocks:[
     {kind:"prompt",promptKey:"routerPlayer"},{kind:"prompt",promptKey:"routerChar"},
@@ -19695,6 +19963,8 @@ const ENGINE_PAYLOAD_DEFS=[
 ];
 /* Safety net: any registry prompt not mapped above (and not a reply-payload prompt) is still
    surfaced — it lands in an auto-generated "Other prompts" payload so nothing becomes uneditable. */
+X_PROMPT_CARDS.forEach(c=>ENGINE_PAYLOAD_DEFS.push({key:c.key,label:c.label,desc:c.desc,
+  blocks:c.keys.map(k=>({kind:"prompt",promptKey:k}))}));
 (function _enginePayloadCoverage(){
   const covered=new Set(["baseInstruction","formatRules"]);
   Object.values(PAYLOAD_DEFS).forEach(d=>Object.values(d.blocks).forEach(b=>{if(b&&b.promptKey)covered.add(b.promptKey);}));
@@ -21392,7 +21662,7 @@ async function maybeShowRecap(chat){
   bn.innerHTML=`<div class="recap"><span class="recapTag">Previously…</span> <span class="desc">recapping…</span></div>`;
   try{
     const convo=msgs.slice(-16).map(m=>`${m.role==='user'?state.user:(m.speaker||'Narrator')}: ${m.content}`).join("\n");
-    const out=await chatCompletion(epSend("x_scene_recap","You write a single-sentence 'Previously on…' recap of where an ongoing roleplay scene left off. Present tense, vivid, under 40 words, no quotes, no character dialogue — just the situation as it stands.\n\n"+langDirective(),{convo}),state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
+    const out=await chatCompletion(epSend("x_scene_recap",up("x_scene_recap")+"\n\n"+langDirective(),{convo}),state.memModel,{temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
     const txt=(out||"").trim().replace(/^["']|["']$/g,"");
     if(txt){
       bn.innerHTML=`<div class="recap"><span class="recapTag">Previously…</span> ${esc(txt)} <button class="recapX" onclick="document.getElementById('recapBanner').classList.add('hide')"><svg class="ic"><use href="#i-x"/></svg></button></div>`;
@@ -26442,7 +26712,7 @@ async function pgWritePrompt(){
 // Shared "revise this prompt" helper (playground image + image→video).
 async function _aiEditPrompt(cur,req,dbg){
   const out=await chatCompletion([
-    {role:"system",content:`You revise prompts for image/video generation models. Apply the user's requested changes to the prompt while keeping everything else intact. Keep the comma-separated visual style, keep it in English, and return ONLY the revised prompt text — no quotes, no commentary.`},
+    {role:"system",content:up("x_prompt_reviser")},
     {role:"user",content:`CURRENT PROMPT:\n${cur}\n\nREQUESTED CHANGES:\n${req}`}
   ],state.rewriter,{temp:fnTemp("rewriter",0.5),max:fnTok("rewriter",260),dbg:dbg||"Prompt editor"});
   return out.trim().replace(/^["']|["']$/g,"");
@@ -27691,7 +27961,7 @@ async function endDay(){
     try{
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
-      const nsys=`You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning.\n\n`+langDirective();
+      const nsys=up("x_day_transition_narration")+"\n\n"+langDirective();
       const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{temp:0.8,max:160,dbg:"Day transition narration"});
       if(nout&&nout.trim())narration=nout.trim().replace(/^["']|["']$/g,"");
     }catch(e){/* keep default */}
@@ -29737,7 +30007,7 @@ async function condenseChronicle(uni){
     if(ch.length<=56||!state.key)return;
     const old=ch.slice(0,ch.length-28);
     const from=old[0].day, to=old[old.length-1].day;
-    const sys=`You condense a roleplay universe's day-by-day chronicle into a durable era summary — the way history compresses into "what that period was about". Merge the dated entries into ONE tight paragraph (3-6 sentences) preserving: who did what to whom, bonds formed and broken, discoveries, outcomes of quests and schemes, and anything still unresolved. Keep every load-bearing name. Drop routine. Write in the same language as the entries. Return ONLY the paragraph, no commentary.`;
+    const sys=up("x_chronicle_condense");
     const usr=`Days ${from}-${to}:\n`+old.map(e=>`- Day ${e.day}: ${e.text}`).join("\n");
     const out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],state.memModel,
       {temp:fnTemp("mem",0.3),max:fnTok("mem",420),dbg:`Chronicle condense · days ${from}-${to}`});
@@ -30139,18 +30409,7 @@ async function reconcileQuestsForDay(chat,day,uni){
     if(!anyMems){ _qlog("reconcile",`day ${day}: no quest-cast memories formed — skipped (${active.length} active)`); return; }
     // v22.9 — the reconciler now ALSO writes the quest memory: quests that moved without finishing
     // get a one-sentence progress note (fed to the next-quest designer and shown in the quest views).
-    const sys=`You judge the day's progress on the ACTIVE quests of a roleplay, using ONLY the memories as evidence. Each quest below states its FULL objective, its own character(s), and the memories THOSE characters formed today — each memory is listed under the name of the character who holds it. A memory shows how the quest proceeded through that character's eyes; never attribute one character's memory to another.
-
-For each quest decide:
-- "done": true ONLY if the memories clearly show the quest's objective was achieved today. Never on a hunch; if unsure it stays pending.
-- otherwise, if the memories show something relevant to the quest happened (a step taken toward it, a lead found, a setback, a complication, the quest's subject acted on or discussed), report it as "progress". Report progress whenever the day's memories genuinely touch the quest's subject — partial movement counts.
-
-OUTPUT FORMAT — return ONLY a JSON array. No prose, no explanation, no markdown fences.
-- One entry per quest that changed today; a quest with no relevant memories gets NO entry.
-- If nothing moved on any quest, return exactly: []
-- Entry shape: {"id":"<the quest id, without the # prefix>","done":true|false,"result":"<only when done: ONE past-tense TURKISH sentence of what happened>","progress":"<only when not done but it moved: ONE past-tense TURKISH sentence of how>"}
-Example of a valid reply:
-[{"id":"q_abc123","done":false,"progress":"Aysu babasının çekmecesindeki mektubu buldu ama kimseye göstermedi."}]`;
+    const sys=up("x_quest_reconcile");
     const usr=`Day ${day} just ended.\n\nACTIVE QUESTS — each with its own character(s) and THEIR memories from today:\n\n${sections.join("\n\n")}\n\nReturn the JSON array now (or [] if no quest changed).`;
     const out=await chatCompletion(epSend("x_quest_reconcile",sys+"\n\n"+engineLangDirective(),{data:usr}),state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",520),frequency_penalty:0,presence_penalty:0,dbg:"Quest reconcile"});
     const arr=parseJSON(out);
@@ -30689,7 +30948,11 @@ async function runBackgroundTasks(chat,day,uni){
       if(ran>=cap)break;
       e._bgResolved=day;
       const success=rollDice("1d6")>=3;   // ~66% succeed, ~33% fail — a real chance to fail
-      const sys=`You narrate a brief OFFSTAGE outcome in a roleplay, in ${storyLangName().toUpperCase()}. ${doer.name} spent time — away from ${state.user} — working on this on their own: "${String(e.title||"").slice(0,120)}". It ${success?"SUCCEEDED":"FAILED"}. Write ONE short, vivid third-person beat (1-2 sentences)${success?"":" showing what went wrong"}, plus a 3-6 word headline. Return ONLY JSON: {"headline":"...","event":"..."}.`;
+      const sys=fillTpl(up("x_bg_task"),{
+        lang:storyLangName().toUpperCase(), char:doer.name, user:state.user,
+        task:String(e.title||"").slice(0,120),
+        outcome:(success?"SUCCEEDED":"FAILED"),
+        fail_note:(success?"":" showing what went wrong")});
       let j=null;
       try{
         const out=await chatCompletion(epSend("x_bg_task",sys,{}),state.bioModel,{temp:fnTemp("mem",0.85),max:fnTok("mem",260),frequency_penalty:0,presence_penalty:0,dbg:"BG task — "+e.title});
@@ -31351,14 +31614,7 @@ async function reconcileCharQuestsForDay(chat,day,uni){
     }
     if(!mems.length)return;
     const qList=active.map(q=>`#${q.id} ${q.holderName}'s pursuit "${q.title}": ${String(q.desc||"").slice(0,140)} | asked of ${state.user}: ${String(q.ask||"").slice(0,120)}`).join("\n");
-    const sys=`You judge the day's progress on characters' PERSONAL quests that involve the player (${state.user}), using ONLY the memories as evidence. Each quest below has been ASKED of the player (in person or by text). For each quest decide:
-- "done": true ONLY if the memories clearly show the ask was fulfilled / the pursuit succeeded today.
-- "failed": true ONLY if the memories clearly show the player REFUSED definitively or the pursuit is now lost.
-- "answered": true if the player meaningfully ENGAGED with the ask today (agreed, bargained, asked questions, said later) — even without finishing it.
-- otherwise, if something relevant happened, report it as "progress".
-Never on a hunch; if unsure it stays pending.
-Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if none:
-[{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense ENGLISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense ENGLISH sentence>"}]`;
+    const sys=fillTpl(up("x_char_quest_reconcile"),{user:state.user});
     const usr=`Day ${day} just ended.\n\nMEMORIES FORMED TODAY (all characters — scenes and phone texts):\n${mems.join("\n")}\n\nDELIVERED CHARACTER QUESTS (asks made of ${state.user}):\n${qList}\n\nReturn the JSON array.`;
     const out=await chatCompletion(epSend("x_char_quest_reconcile",sys+"\n\n"+engineLangDirective(),{data:usr}),
       state.memModel,{temp:fnTemp("mem",0.2),max:fnTok("mem",480),frequency_penalty:0,presence_penalty:0,dbg:"Char quest reconcile"});
@@ -34654,7 +34910,10 @@ function epEditPrompt(key){
   const card=(typeof ENGINE_PAYLOAD_DEFS!=="undefined"?ENGINE_PAYLOAD_DEFS:[])
     .find(function(c){ return (c.blocks||[]).some(function(b){ return b.promptKey===d.promptKey; }); });
   const det=card?document.querySelector('details[data-eplq="'+card.key+'"]'):null;
-  if(!det){ toast("This engine's prompt is written in code — replace it in the template with your own text"); return; }
+  /* Every engine's prompt is a registry prompt with a card since v38.5, so this cannot be reached
+     from the engine list. It stays as a guard for a card that fails to render, and says the thing
+     that would actually be true then. */
+  if(!det){ toast("Could not open that prompt's card — it is in Settings → Payloads under its own engine"); return; }
   _ptOpenAncestors(det); det.open=true;
   try{ renderEnginePayloadEditor(card.key); }catch(e){}
   _ptFlash(det);
@@ -35363,6 +35622,10 @@ function saveSettings(notify){
   store.setRaw(K.offstageEvent,state.offstageEvent);store.setRaw(K.calExec,state.calExec);store.setRaw(K.goalPursuit,state.goalPursuit);store.set(K.goalPursuitOn,state.goalPursuitOn!==false);store.setRaw(K.charQuestGen,state.charQuestGen);store.setRaw(K.charQuestStep,state.charQuestStep);store.setRaw(K.charQuestText,state.charQuestText);store.set(K.charQuestsOn,state.charQuestsOn!==false);store.setRaw(K.latentNpc,state.latentNpc);store.setRaw(K.trackerGen,state.trackerGen);
   store.setRaw(K.memModel,state.memModel);store.setRaw(K.memBuild,state.memBuild);store.setRaw(K.memEval,state.memEval);store.setRaw(K.memMinImp,String(state.memMinImp));store.setRaw(K.gistBuild,state.gistBuild);store.setRaw(K.poiGossip,state.poiGossip);store.setRaw(K.queryGen,state.queryGen);store.setRaw(K.ranker,state.ranker);
   store.set(K.condenseOn,state.condenseOn);store.setRaw(K.condenseThreshold,state.condenseThreshold);store.setRaw(K.condenseKeep,state.condenseKeep);store.setRaw(K.condenseBatch,state.condenseBatch);store.setRaw(K.condensePrompt,state.condensePrompt);store.setRaw(K.diaryCondenseKeep,state.diaryCondenseKeep);store.setRaw(K.diaryCondenseBatch,state.diaryCondenseBatch);store.setRaw(K.memRecentCount,state.memRecentCount);store.setRaw(K.memDistantCount,state.memDistantCount);store.setRaw(K.memIntimateFrac,String(state.memIntimateFrac));store.setRaw(K.memPerTypeCap,String(state.memPerTypeCap));store.setRaw(K.memMaxBeforeCondense,String(state.memMaxBeforeCondense));store.setRaw(K.memCondenseStart,String(state.memCondenseStart));store.setRaw(K.embedOn,state.embedOn?"1":"");store.setRaw(K.embedKey,state.embedKey||"");store.setRaw(K.embedUrl,state.embedUrl||"");store.setRaw(K.embedModel,state.embedModel||"");store.setRaw(K.memWSem,String(state.memWSem));store.setRaw(K.memWPpl,String(state.memWPpl));store.setRaw(K.memWLoc,String(state.memWLoc));store.setRaw(K.memWRec,String(state.memWRec));store.setRaw(K.memWEmo,String(state.memWEmo));store.setRaw(K.memWImp,String(state.memWImp));store.setRaw(K.memLongtermCount,String(state.memLongtermCount));store.set(K.gossipOn,state.gossipOn);store.setRaw(K.gossipThreshold,state.gossipThreshold);store.setRaw(K.gossipMaxPerDay,state.gossipMaxPerDay);store.setRaw(K.gossipModel,state.gossipModel||"");store.setRaw(K.gossipPrompt,state.gossipPrompt);store.setRaw(K.imgEveryTurns,state.imgEveryTurns);store.setRaw(K.imgSeed,state.imgSeed||"");store.setRaw(K.gossipDecay,state.gossipDecay);store.setRaw(K.gossipCooldown,state.gossipCooldown);store.setRaw(K.gossipMaxLive,state.gossipMaxLive);store.setRaw(K.rumorJudge,state.rumorJudge);store.set(K.confrontOn,state.confrontOn);store.setRaw(K.confrontJudge,state.confrontJudge);store.setRaw(K.overtureJudge,state.overtureJudge);store.set(K.intentOn,state.intentOn);store.setRaw(K.intentMax,state.intentMax);store.setRaw(K.intentForm,state.intentForm);store.setRaw(K.intentTick,state.intentTick);store.setRaw(K.contemplate,state.contemplate);
+  /* v38.5 — every registry prompt is written back, not just the ones somebody remembered to add a
+     line for. The hand-written store.setRaw calls below are left alone (they write the same value)
+     so the diff stays readable; this loop is what makes the guarantee hold for all of them. */
+  PROMPT_REGISTRY.forEach(r=>{ if(typeof state[r.key]==="string"&&K[r.key]) store.setRaw(K[r.key],state[r.key]); });
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.relScope,state.relScope||"present");store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
@@ -36259,10 +36522,7 @@ async function summBuildChapter(st, turns, names){
     const who=m=>m.role==='user'?(names.user||'User'):(m.speaker||names.other||'Them');
     const convo=slice.map(m=>`${who(m)}: ${m.content}`).join("\n");
     const prior=st.chapters.length?("Earlier recap:\n"+st.chapters.map(c=>c.text).join("\n\n")+"\n\n"):"";
-    const sys=`You write a tight running recap of a roleplay/conversation so a character can stay perfectly consistent about who did and said what. Summarize ONLY the new exchange below. Output, in the SAME language as the conversation:
-1) ONE short third-person narrative paragraph (2-3 sentences) of what happened.
-2) Then 2-5 short fact bullets capturing what MUST stay consistent: decisions made, plans/promises (with time/place if any), what each person now BELIEVES or FEELS, and anything left unresolved. Write beliefs as "X believes/feels …".
-Be factual and compact. No quotes, no flourish, no preamble. Do not repeat the earlier recap.`;
+    const sys=up("x_rolling_recap");
     const usr=`${prior}NEW EXCHANGE to summarize:\n${convo}\n\nRecap of this new exchange:`;
     const out=await chatCompletion([{role:'system',content:sys},{role:'user',content:usr}],
       state.recapModel||state.memModel||state.callModel||"deepseek/deepseek-v4-flash",
@@ -36286,7 +36546,7 @@ async function vcOnUserTurn(userText){
   const dbg={ user:userText, t0:performance.now(), ttft:null, chunks:[], reply:'', model:(state.callModel||"deepseek/deepseek-v4-pro") };
   if(vc.debug){ if(!vc.debug.sysLogged){ vc.debug.sys=vc._sysPrompt; vc.debug.sysLogged=true; } vc.debug.turns.push(dbg); }
   const chunker=vcMakeChunker(seg=>{ if(myTurn===vc.turnSeq){ dbg.chunks.push({text:seg, at:Math.round(performance.now()-dbg.t0)}); vcTtsSend(seg); } });
-  const sys=vc._sysPrompt||"You are a friend talking with the user. Reply briefly in their language.";
+  const sys=vc._sysPrompt||up("x_call_fallback");
   const recap=summRenderChapters(vc.summary);
   const sysFull=recap?(sys+"\n\n"+recap):sys;
   const messages=[{role:'system',content:sysFull}, ...vcHistory.slice(-30)];
@@ -36428,14 +36688,7 @@ async function vcFixStt(text){
     if(!state.key||!text||text.length<3) return text;
     const ctx=vcHistory.slice(-6).map(m=>`${m.role==='user'?(state.user||'User'):(vc.callee&&vc.callee.name||'Them')}: ${m.content}`).join("\n");
     const glossary=vcNameGlossary();
-    const sys=`You repair speech-to-text (STT) errors in ONE spoken line from a live voice conversation. The line was auto-transcribed and often contains mis-heard words: similar-SOUNDING wrong words, mangled proper nouns (names/places), and broken Turkish. Your ONLY job is to recover what the user most likely actually said, using the conversation context and the list of known names.
-
-Rules:
-- Keep the SAME language and the user's own wording and meaning. You are NOT rephrasing or improving — only repairing mis-transcription.
-- Be willing to fix words that SOUND like a known name or a context word but came out garbled (e.g. a place/character from the list rendered as nonsense). Map garbled sounds to the correct known name when the phonetics and context clearly fit.
-- Do NOT answer, reply, translate, add, or remove meaning. Do NOT add punctuation-heavy rewrites.
-- If the line already makes sense, return it UNCHANGED.
-- Output ONLY the corrected line, nothing else.`;
+    const sys=up("x_stt_repair");
     const usr=`KNOWN NAMES in this world (fix garbled words toward these when they fit by sound + context):\n${glossary||'(none)'}\n\nConversation so far:\n${ctx||'(start of conversation)'}\n\nRaw STT transcript of what the user just said:\n"${text}"\n\nCorrected line:`;
     const out=await chatCompletion([{role:'system',content:sys},{role:'user',content:usr}],
       state.sttFixModel||state.callModel||"deepseek/deepseek-v4-flash",{temp:0.1,max:120,dbg:"Call STT fix"});
@@ -36605,7 +36858,7 @@ async function endVoiceCall(){
 /* ---- payload: face-to-face call instructions for a callee ---- */
 function buildCallInstructions(callee, chat){
   const uni=curUniverseObj(); const blocks=[];
-  blocks.push(`You are ${callee.name}, talking WITH ${state.user} in person — the two of you are together, having a real-time spoken conversation. This is NOT a phone call and NOT text; you are physically present with each other and talking out loud. Stay fully in character. Never break character, never mention being an AI, never narrate actions or use stage directions — just speak, the way a real person speaks aloud.`);
+  blocks.push(fillTpl(up("x_call_role"),{char:callee.name,user:state.user}));
   if(uni&&uni.setting&&uni.setting.trim()) blocks.push(`# WORLD\n${uni.setting.trim()}`);
   blocks.push(`# YOU\n<character_you_play>\n${charBioBlock(callee,{self:true})}\n</character_you_play>`);
   {const sheet=relSheetBlockFull(callee); if(sheet) blocks.push(`# ${callee.name}'s RELATIONSHIPS (who the people in your life are to you)\n${sheet}`);}
@@ -36614,15 +36867,7 @@ function buildCallInstructions(callee, chat){
     const mems=memoriesOf(callee.id).filter(m=>m.type==="DIARY").sort((a,b)=>(b.gameDay||0)-(a.gameDay||0)||(b.date||0)-(a.date||0)).slice(0,4);
     if(mems.length){ const lines=mems.map(m=>`- ${(typeof memInjectText==='function'?memInjectText(m):(m.content||''))}`).filter(Boolean); if(lines.length) blocks.push(`# YOUR RECENT DIARY (background — shapes how you act; do NOT recite)\n${lines.join("\n")}`); }
   }catch(e){}
-  blocks.push(`# HOW YOU SPEAK (this is a live spoken conversation)
-Speak naturally and warmly in short spoken sentences. Reply in perfect, natural, everyday ${storyLangName()} — the story's selected language (this overrides any other language instruction). Keep replies to 1–3 sentences so the conversation flows.
-
-VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you direct with bracketed cues:
-1. Begin EACH sentence with its OWN bracketed delivery instruction in ENGLISH describing HOW to say that sentence, e.g. [say warmly] then the sentence, then [say with a teasing grin] before the next one. Each sentence gets its own tone so the emotion can shift naturally across the reply. The bracket directs the voice and is never spoken aloud.
-2. The bracket goes at the very START of each sentence, before its first word.
-3. You MAY also drop inline non-verbals where they occur: [laugh] [sigh] [breathe] [clear throat] [cough] [yawn].
-4. To stress a key word, CAPITALIZE it. Use sparingly.
-5. Keep delivery BRISK, but place pauses where a real speaker would: a comma for a small breath, an em-dash — for a beat before something important, and "…" for a thoughtful or hesitant pause. Use them deliberately and sparingly, where the MEANING calls for a pause — not randomly. Otherwise favor short sentences.`);
+  blocks.push(fillTpl(up("x_call_delivery"),{lang:storyLangName()}));
   return blocks.join("\n\n");
 }
 

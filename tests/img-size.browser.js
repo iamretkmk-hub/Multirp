@@ -26,7 +26,10 @@ const {chromium}=require('playwright');
   ok("a value outside the range is refused, not clamped silently into nonsense", await pg.evaluate(()=>{
       state.imgW=60; state.imgH=1152;
       const v=curImgWH(); state.imgW=896;
-      return (v[0]>=384) ? true : "accepted "+v[0]; }));
+      return (v[0]>=IMG_DIM_MIN) ? true : "accepted "+v[0]; }));
+  ok("720 is a reachable height — the step no longer skips it", await pg.evaluate(()=>{
+      state.imgH=720; const v=curImgWH()[1]; state.imgH=1152;
+      return v===720 ? true : "720 became "+v; }));
   ok("an install that never set them keeps the size it had", await pg.evaluate(()=>{
       const w=state.imgW,h=state.imgH;
       state.imgW=null; state.imgH=null; state.ratio="9:16";
@@ -63,8 +66,13 @@ const {chromium}=require('playwright');
       return (+document.getElementById('setImgW').value===1024
            && +document.getElementById('setImgH').value===576)
         ? true : document.getElementById('setImgW').value+"x"+document.getElementById('setImgH').value; }));
-  ok("the value label reads in pixels", await pg.evaluate(()=>
-      /1024 px/.test(document.getElementById('imgWVal').textContent)));
+  ok("the typed box shows the same number as the slider", await pg.evaluate(()=>
+      +document.getElementById('setImgWNum').value===1024
+   && +document.getElementById('setImgHNum').value===576));
+  ok("the slider steps in 8s, so every valid size is reachable", await pg.evaluate(()=>
+      +document.getElementById('setImgH').step===8
+   && +document.getElementById('setImgH').min<=IMG_DIM_MIN
+   && +document.getElementById('setImgH').max>=IMG_DIM_MAX));
   ok("tapping a preset writes both numbers", await pg.evaluate(()=>{
       state.imgW=768; state.imgH=768; syncSettingsUI();
       const btns=[...document.querySelectorAll('#ratioSeg button,#ratioSeg .segBtn,#ratioSeg *')]
@@ -79,6 +87,34 @@ const {chromium}=require('playwright');
       const el=document.getElementById('setImgW');
       el.value="1216"; el.oninput();
       return state.imgW===1216 && curImgSize()==="1216x"+state.imgH ? true : curImgSize(); }));
+  ok("and mirrors into the typed box", await pg.evaluate(()=>
+      +document.getElementById('setImgWNum').value===1216));
+
+  console.log("\n[typing an exact value]");
+  ok("typing 720 into the height box sets 720", await pg.evaluate(()=>{
+      const n=document.getElementById('setImgHNum');
+      n.value="720"; n.oninput(); n.onchange();
+      return state.imgH===720 && curImgWH()[1]===720 ? true : "got "+state.imgH; }));
+  ok("and the slider follows it", await pg.evaluate(()=>
+      +document.getElementById('setImgH').value===720));
+  ok("an off-8 typed value is snapped when you leave the box", await pg.evaluate(()=>{
+      const n=document.getElementById('setImgHNum');
+      n.value="715"; n.oninput(); n.onchange();
+      return state.imgH===712 ? true : "715 became "+state.imgH; }));
+  ok("a value above the range is brought back inside it", await pg.evaluate(()=>{
+      const n=document.getElementById('setImgHNum');
+      n.value="9000"; n.oninput(); n.onchange();
+      return state.imgH===IMG_DIM_MAX ? true : "9000 became "+state.imgH; }));
+  ok("emptying the box does not leave a broken size", await pg.evaluate(()=>{
+      const n=document.getElementById('setImgHNum');
+      n.value=""; n.oninput(); n.onchange();
+      const v=curImgWH()[1];
+      return (v>=IMG_DIM_MIN&&v<=IMG_DIM_MAX) ? true : "size became "+v; }));
+  ok("Enter commits without needing to leave the field", await pg.evaluate(()=>{
+      const n=document.getElementById('setImgHNum');
+      n.value="1080"; n.oninput();
+      n.onkeydown({key:"Enter",preventDefault(){}});
+      return state.imgH===1080 ? true : "got "+state.imgH; }));
   ok("it survives a save", await pg.evaluate(()=>{
       state.imgW=1216; state.imgH=832; saveSettings();
       return store.get(K.imgW,0)===1216 && store.get(K.imgH,0)===832

@@ -11,7 +11,7 @@ const {chromium}=require('playwright');
 (async()=>{
   const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
-  const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,900));} };
+  const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,1400));} };
   const pg=await (await b.newContext()).newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
@@ -46,7 +46,7 @@ const {chromium}=require('playwright');
     const p=(state.personas||[]).find(x=>x.id==="p_q");
     const q=(state.personas||[]).find(x=>x.id==="p_r");
     const chat=curChat();
-    const injected={recent:[],diary:[],longterm:[]};
+    const injected=(window.__pl_inj||{recent:[],diary:[],longterm:[]});
     const textMode=(k==="text");
     const tOpts={chat,targetName:state.user,targetId:"__user__",textMode};
     if(k==="heat") chat._heatBeat={total:"3",n:"1"};
@@ -67,7 +67,11 @@ const {chromium}=require('playwright');
     try{ tpl=ptBuildMessages(k,blocks,hist,{chat,npc:p,targetName:state.user},mk); }
     catch(e){ threw=String(e&&e.message||e); }
     finally{ state.payloadTplOn=was; if(k==="heat")delete chat._heatBeat; }
-    return {classic:JSON.stringify(classic,null,1), tpl:tpl?JSON.stringify(tpl,null,1):null, threw};
+    const A=JSON.stringify(classic,null,1), Bx=tpl?JSON.stringify(tpl,null,1):null;
+    let where=null;
+    if(Bx&&A!==Bx){ let i=0; while(i<A.length&&i<Bx.length&&A[i]===Bx[i])i++;
+      where={at:i,classic:A.slice(Math.max(0,i-160),i+260),tpl:Bx.slice(Math.max(0,i-160),i+260)}; }
+    return {classic:A, tpl:Bx, threw, where};
   },kind);
 
   console.log("\n[the shipped engine, not a copy of it]");
@@ -76,7 +80,7 @@ const {chromium}=require('playwright');
     ok(kind+": the template path actually ran", r.tpl!==null && !r.threw
       ? true : "fell back to the classic path"+(r.threw?" — threw: "+r.threw:" (returned null)"));
     ok(kind+": and produced byte-identical output", r.tpl===r.classic
-      ? true : "MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,400)+"\n--- template ---\n"+String(r.tpl).slice(0,400));
+      ? true : "MISMATCH at "+(r.where&&r.where.at)+"\n--- classic ---\n"+(r.where&&r.where.classic)+"\n--- template ---\n"+(r.where&&r.where.tpl));
   }
 
   /* v38.1 — THE EMPTY SCENE PROVES ALMOST NOTHING. The fixture above has no drives, nobody absent,
@@ -101,6 +105,20 @@ const {chromium}=require('playwright');
       {mid:"q2",role:"user",content:"Where is Deniz tonight?",present:["p_q","p_r"]}];
     chat._psyche={p_q:{toward:"She wants to be told she was missed.",
                        against:"Saying it first would cost her the only ground she has."}};
+    // memories, promises and play notes — so RECENT/DISTANT MEMORIES, PROMISES, HOW YOU SPEAK and
+    // YOU ALREADY SAID THIS all render for real instead of resolving empty and proving nothing.
+    state.mem=true;
+    window.__pl_inj={diary:[],
+      recent:[{id:"m1",text:"She waited an hour at the tram stop.",emotion:"tense",day:3,location:"The port"},
+              {id:"m2",text:"He paid for the coffee without looking up.",day:3}],
+      longterm:[{id:"m9",text:"They stopped speaking the winter their father died.",day:1,location:"The old flat"}]};
+    chat.promises=[
+      {id:"pr1",status:"open",holderId:"p_q",holderName:"Ayse",toId:"__user__",toName:"Kemal",
+       promise:"never to bring it up in front of his mother",ask:"because it would start the whole thing again",day:2},
+      {id:"pr2",status:"open",holderId:"__user__",holderName:"Kemal",toId:"p_q",toName:"Ayse",
+       promise:"to come to the hearing",weight:"soft",day:2},
+      {id:"pr3",status:"broken",holderId:"p_q",holderName:"Ayse",toId:"__user__",toName:"Kemal",
+       promise:"to call on Sunday",statusDay:3,day:1,note:"she did not"}];
     markChatDirty(chat);
     const t=ptDefaultTemplate("solo");
     return {tplHasDrives:/PULLING AT YOU/.test(t)&&/\{\{call\/\/drive_toward\}\}/.test(t)};
@@ -112,12 +130,12 @@ const {chromium}=require('playwright');
   for(const kind of ["solo","multi","gm","text","heat"]){
     const r=await compare(kind);
     ok(kind+": still byte-identical", r.tpl===r.classic && !r.threw
-      ? true : (r.threw?("threw: "+r.threw):"MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,900)+"\n--- template ---\n"+String(r.tpl).slice(0,900)));
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH at "+(r.where&&r.where.at)+"\n--- classic ---\n"+(r.where&&r.where.classic)+"\n--- template ---\n"+(r.where&&r.where.tpl)));
   }
   ok("and those fragments really did fire", await pg.evaluate(()=>{
       const p=(state.personas||[]).find(x=>x.id==="p_q");
       const q=(state.personas||[]).find(x=>x.id==="p_r");
-      const chat=curChat(); const injected={recent:[],diary:[],longterm:[]};
+      const chat=curChat(); const injected=(window.__pl_inj||{recent:[],diary:[],longterm:[]});
       const B=Object.assign({},
         buildCharPromptBlocks(p,[q],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
         buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
@@ -127,6 +145,13 @@ const {chromium}=require('playwright');
       if(!(B._rg&&B._rg.guidance_absence)) miss.push("absence note");
       if(!(B._rt&&B._rt.target_header&&B._rt.target_bg)) miss.push("target fragments");
       if(!(B.drives&&B.drives.indexOf("PULLING AT YOU")>-1)) miss.push("drives block");
+      if(!(B._mem&&B._mem.mem_recent_entries&&B._mem.mem_distant_entries)) miss.push("memories");
+      if(!(B._pr&&B._pr.promise_yours&&B._pr.promise_owed&&B._pr.promise_ended)) miss.push("promises");
+      if(!(B._as&&B._as.already_said_lines)) miss.push("already said");
+      if(!(B._ss&&B._ss.style_body&&B._ss.style_notes)) miss.push("speaking style");
+      if(!(B._ll&&B._ll.last_line_body)) miss.push("last line");
+      if(!(B._yb&&B._yb.bio_intro&&B._yb.bio_body)) miss.push("bio");
+      if(!(B._op&&B._op.others_list&&B._op.others_footer)) miss.push("others present");
       return miss.length?("never fired: "+miss.join(", ")):true; }));
 
   /* And the OTHER half of WHO YOU ARE RESPONDING TO: when the character spoke last and nothing
@@ -143,12 +168,12 @@ const {chromium}=require('playwright');
   for(const kind of ["solo","heat"]){
     const r=await compare(kind);
     ok(kind+": still byte-identical", r.tpl===r.classic && !r.threw
-      ? true : (r.threw?("threw: "+r.threw):"MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,900)+"\n--- template ---\n"+String(r.tpl).slice(0,900)));
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH at "+(r.where&&r.where.at)+"\n--- classic ---\n"+(r.where&&r.where.classic)+"\n--- template ---\n"+(r.where&&r.where.tpl)));
   }
   ok("the carry-on wording is what fired", await pg.evaluate(()=>{
       const p=(state.personas||[]).find(x=>x.id==="p_q");
       const q=(state.personas||[]).find(x=>x.id==="p_r");
-      const chat=curChat(); const injected={recent:[],diary:[],longterm:[]};
+      const chat=curChat(); const injected=(window.__pl_inj||{recent:[],diary:[],longterm:[]});
       const B=Object.assign({},
         buildCharPromptBlocks(p,[q],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
         buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,

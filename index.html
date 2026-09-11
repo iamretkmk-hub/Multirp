@@ -12240,7 +12240,7 @@ function _prRender(pr,viewerId){
 /* The block for ONE character's reply payload: what they are bound by, what they are owed, and any
    commitment that has just ended (broken word is the loudest thing in a room). Never a script — the
    rule is stated once, at the top, that these are lived by rather than announced. */
-function promiseContextFor(chat,selfId,selfName){
+function promiseContextFor(chat,selfId,selfName,outParts){
   try{
     if(state.promiseOn===false||!chat||!selfId)return "";
     const all=chatPromises(chat); if(!all.length)return "";
@@ -12251,14 +12251,19 @@ function promiseContextFor(chat,selfId,selfName){
     const ended=all.filter(pr=>pr.status!=="open"&&(pr.holderId===selfId||pr.toId===selfId)
                               &&(day-(pr.statusDay||pr.day||0))<=3);
     if(!mine.length&&!owed.length&&!ended.length)return "";
+    /* v38.1 — outParts, when handed one, collects each section under its own prompt name so the
+       payload template can call them individually (the heading above them is template prose). */
+    const op=outParts||{};
     const parts=[blkTpl("promise_header")];
-    if(mine.length) parts.push(blkTpl("promise_yours")+"\n"+mine.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n"));
-    if(owed.length) parts.push(fillTpl(blkTpl("promise_owed"),{self:selfName||"you"})+"\n"+owed.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n"));
-    if(ended.length)parts.push(blkTpl("promise_ended")+"\n"+ended.slice(-4).map(pr=>{
+    if(mine.length){ op.promise_yours=blkTpl("promise_yours")+"\n"+mine.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n");
+                     parts.push(op.promise_yours); }
+    if(owed.length){ op.promise_owed=fillTpl(blkTpl("promise_owed"),{self:selfName||"you"})+"\n"+owed.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n");
+                     parts.push(op.promise_owed); }
+    if(ended.length){op.promise_ended=blkTpl("promise_ended")+"\n"+ended.slice(-4).map(pr=>{
       const verb=pr.status==="broken"?"BROKEN":(pr.status==="released"?"let go of":"kept");
       const who=pr.holderId===selfId?"you":pr.holderName;
       return `- ${verb}: ${who} — ${pr.promise}${pr.note?` (${pr.note})`:""}`;
-    }).join("\n"));
+    }).join("\n");    parts.push(op.promise_ended); }
     return parts.join("\n\n");
   }catch(e){ return ""; }
 }
@@ -17873,12 +17878,19 @@ function memoryBlocks(injectedMemories,which){
   const _where=m=>{ const l=String(m.location||"").trim(); return (l && l.toLowerCase()!==_hereNow)?` [${l}]`:""; };
   const fmt=(m,i)=>{const d=_memWhen(m);return `Memory ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
   const out=[];
-  if((which==="recent"||which==="all") && recent.length)
-    out.push(blkTpl("mem_recent_header")+"\n"+blkTpl("mem_recent_instr")+"\n\n"+recent.map(fmt).join("\n"));
+  // v38.1 — outParts, when handed one, collects the numbered entries on their own (no heading, no
+  // instruction) so the payload template can print those two as its own prose and call just this.
+  const op=arguments.length>2&&arguments[2]?arguments[2]:{};
+  if((which==="recent"||which==="all") && recent.length){
+    op.mem_recent_entries=recent.map(fmt).join("\n");
+    out.push(blkTpl("mem_recent_header")+"\n"+blkTpl("mem_recent_instr")+"\n\n"+op.mem_recent_entries);
+  }
   // v26 — the DIARY tier is no longer injected anywhere: diaries are the player's artifact, not
   // payload material. `diary` stays parsed above so retrieval callers don't have to change shape.
-  if((which==="longterm"||which==="distant"||which==="all") && longterm.length)
-    out.push(blkTpl("mem_distant_header")+"\n"+blkTpl("mem_distant_instr")+"\n\n"+longterm.map(fmt).join("\n"));
+  if((which==="longterm"||which==="distant"||which==="all") && longterm.length){
+    op.mem_distant_entries=longterm.map(fmt).join("\n");
+    out.push(blkTpl("mem_distant_header")+"\n"+blkTpl("mem_distant_instr")+"\n\n"+op.mem_distant_entries);
+  }
   return out;
 }
 // The recency tier as its own block, rendered by the same numbered format.
@@ -18918,6 +18930,15 @@ const RT_ORDER=["target_header","cont_target_header","heat_target_header",
 const RG_ORDER=["heat_guidance","guidance_open","guidance_target","guidance_close",
   "guidance_continue","guidance_reply","guidance_absence"];
 const DRIVE_FRAGS=["drive_toward","drive_against"];
+/* v38.1 — step 3: the blocks whose prose is WOVEN through their data rather than sitting on top of
+   it. Same treatment, one fragment per named part, the fixed prose printed by the template. */
+const YB_ORDER=["bio_intro","bio_body"];
+const OP_ORDER=["others_list","others_footer"];
+const SS_ORDER=["style_body","style_notes"];
+const LL_ORDER=["last_line_header","heat_self_header","last_line_body","last_line_footer","heat_self_footer"];
+const AS_ORDER=["already_said_continues","already_said_lines","already_said_stalled"];
+const PR_ORDER=["promise_yours","promise_owed","promise_ended"];
+const MEM_FRAGS=["mem_recent_entries","mem_distant_entries"];
 /* Every rail name, and the order each mode lays them in. The guardrails block picks a different
    SET and a different ORDER per channel — a text has no beat rule, heat has its own length and
    ending rules, an ordinary turn finishes on rail_form — which is exactly why each payload kind
@@ -18935,15 +18956,22 @@ const RAIL_ORDER_SPOKEN=["rail_indirect","rail_oblique","rail_oblique_once","rai
 const RAIL_KEYS=[...new Set([].concat(RAIL_ORDER_TEXT,RAIL_ORDER_HEAT,RAIL_ORDER_SPOKEN,
   ["rail_single_solo"]))];
 /* Every name a producer may hand over on one of those maps, and the maps themselves. */
-const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS))];
-const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives"];
+const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS,
+  YB_ORDER,OP_ORDER,SS_ORDER,LL_ORDER,AS_ORDER,PR_ORDER,MEM_FRAGS))];
+const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives","_yb","_op","_ss","_ll","_as","_pr","_mem"];
 /* Which whole block each map splits, and where to put it if the map never arrived (see ptSources).
    `head`/`tail` name the fragments the template prints as its own prose, so they can be taken off
    the rescued block rather than shipped a second time. */
 const PT_FRAG_FALLBACK={
   _rt:{block:"response_target",carry:"target_header"},
   _rg:{block:"response_guidance",carry:"heat_guidance"},
-  _drives:{block:"drives",carry:"drive_toward",head:"drive_header",tail:"drive_ego"}
+  _drives:{block:"drives",carry:"drive_toward",head:"drive_header",tail:"drive_ego"},
+  _yb:{block:"your_bio",carry:"bio_intro",head:"bio_header"},
+  _op:{block:"others_present",carry:"others_list",head:"others_header"},
+  _ss:{block:"speaking_style",carry:"style_body",head:"style_header"},
+  _ll:{block:"last_line",carry:"last_line_header"},
+  _as:{block:"already_said",carry:"already_said_lines",head:"already_said_header"},
+  _pr:{block:"promises",carry:"promise_yours",head:"promise_header"}
 };
 function railOrderFor(kind){
   return kind==="text"?RAIL_ORDER_TEXT:kind==="heat"?RAIL_ORDER_HEAT:RAIL_ORDER_SPOKEN;
@@ -18952,6 +18980,13 @@ function ptHeadText(id){
   const k=PT_INLINE_HEAD[id]; if(!k)return "";
   const t=blkTpl(k);
   return (typeof t==="string"&&t.trim())?t.trim():"";
+}
+/* One fragment's shipped wording as a template LINE — trimmed, with the newline that separates it
+   from what follows. Empty if the user has blanked that fragment, in which case nothing is printed
+   and the line it would have occupied simply is not there. */
+function _ptProse(key){
+  const t=(blkTpl(key)||"").trim();
+  return t?t+"\n":"";
 }
 /* One piece as the template should show it: its prose, then the call that fills the live part, in
    ONE paragraph so an empty piece takes its heading with it. */
@@ -18986,6 +19021,29 @@ function ptPieceTemplate(id,kind){
       +"{{call//drive_toward}}\n{{gap}}\n{{call//drive_against}}"
       +(de?"\n{{gap}}\n"+de:"");
   }
+  /* v38.1 — step 3, the woven blocks. Each is its fixed prose, written out, around calls that
+     return only the live part. All one paragraph per block, with {{gap}} where the block lays a
+     blank line, so a block whose calls all come back empty still disappears whole. */
+  if(id==="your_bio")
+    return _ptProse("bio_header")+"{{call//bio_intro}}\n{{call//bio_body}}";
+  if(id==="others_present")
+    return _ptProse("others_header")+"{{call//others_list}}\n{{call//others_footer}}";
+  if(id==="speaking_style")
+    return _ptProse("style_header")+"{{call//style_body}}\n{{call//style_notes}}";
+  if(id==="last_line")
+    return "{{call//last_line_header}}\n{{call//heat_self_header}}\n{{call//last_line_body}}\n"
+      +"{{gap}}\n{{call//last_line_footer}}\n{{call//heat_self_footer}}";
+  if(id==="already_said")
+    return _ptProse("already_said_header")+_ptProse("already_said_instr")
+      +"{{gap}}\n{{call//already_said_continues}}\n{{gap}}\n{{call//already_said_lines}}"
+      +"\n{{gap}}\n{{call//already_said_stalled}}";
+  if(id==="promises")
+    return _ptProse("promise_header")+"{{gap}}\n"
+      +"{{call//promise_yours}}\n{{gap}}\n{{call//promise_owed}}\n{{gap}}\n{{call//promise_ended}}";
+  if(id==="recent_memories")
+    return _ptProse("mem_recent_header")+_ptProse("mem_recent_instr")+"{{gap}}\n{{call//mem_recent_entries}}";
+  if(id==="distant_memories")
+    return _ptProse("mem_distant_header")+_ptProse("mem_distant_instr")+"{{gap}}\n{{call//mem_distant_entries}}";
   const head=ptHeadText(id);
   return head ? head+"\n{{call//"+id+"}}" : "{{call//"+id+"//full}}";
 }
@@ -19364,7 +19422,8 @@ function epSend(key,systemText,parts){
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
-    already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled"],
+    already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled",
+      "already_said_verbatim","already_said_shortened","already_said_which_above","already_said_which_older","already_said_which_plain"],
     rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_carrier_header","rumor_carrier_instr"],
     speaking_style:["style_header","style_notes"],
     scene_now:["scene_header","scene_intro","scene_intro_text","scene_day","scene_loc","scene_loc_text","scene_loc_sub","scene_here_yours","scene_here_host","scene_subareas","scene_changed_header","scene_changed_loc","scene_changed_day","scene_changed_period","scene_changed_arrived","scene_changed_left"],
@@ -19819,6 +19878,14 @@ This applies to your ACTIONS exactly as much as to your words. If you already gr
      asked a third time, and the rail told her she was being stonewalled. Handing a character a
      grievance they have not earned is worse than saying nothing. It names the repetition, which is
      what was actually detected, and lets both endings play. */
+  /* v38.1 — what each quoted line IS. The first is reproduced word for word because it is the one
+     that must not be said again; the others are trimmed, because their job is to show the SHAPE the
+     model is about to repeat, not to be re-read. {{which}} is filled from the three lines below. */
+  already_said_verbatim:`(your last line, word for word) {{line}}`,
+  already_said_shortened:`({{which}}, shortened — you are being shown its shape, not asked to re-read it) {{line}}`,
+  already_said_which_above:`the line before the one quoted above`,
+  already_said_which_older:`and the one before that`,
+  already_said_which_plain:`the line before that`,
   already_said_stalled:`⚠️ YOU HAVE MADE THIS SAME MOVE SEVERAL TURNS RUNNING. Whatever you keep reaching for — an answer, a promise, reassurance, a yes — you have now reached for it more than once, and reaching again is spent. That is true whether they refused you or gave you exactly what you asked for: asking a third time for something already given is not devotion, it reads as not having heard them.
 Do one of these instead, whichever fits you: let it go and sit in the silence; take what they gave and let it be enough, visibly; say the larger thing you have been circling, plainly, and wear the risk; go short and turn away; or change the subject and carry it with you. The one thing you may NOT do is put it to them again in new words.`,
   /* v30.5 — this block used to say "your latest dialogue summaries that are now out of the context
@@ -20164,8 +20231,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   // your_bio — the identity sheet. The private aim ("what you quietly want") rides with the goals;
   // the speaking style is held back for the post-dialogue block, where the line actually gets written.
   const _intent=intentParts(chat,p.id);
-  B.your_bio=`${blkTpl("bio_header")}\n${fillTpl(blkTpl("bio_intro"),{char:p.name,user:state.user})}\n`+
-             charBioBlock(p,{self:true,noWho:true,styleTail:true,quietWant:_intent.quietWant});
+  const _yb={bio_intro:fillTpl(blkTpl("bio_intro"),{char:p.name,user:state.user}),
+             bio_body:charBioBlock(p,{self:true,noWho:true,styleTail:true,quietWant:_intent.quietWant})};
+  B.your_bio=`${blkTpl("bio_header")}\n${_yb.bio_intro}\n`+_yb.bio_body;
+  B._yb=_yb;
 
   // relationships — this character's FULL sheet (their own knowledge — family, history, rivalries
   // hold whether or not those people are present; otherwise they treat their own mother as a
@@ -20183,10 +20252,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
 
   if(others&&others.length){
-    let ob=blkTpl("others_header");
-    others.forEach(o=>{ob+=`\n- ${o.name}${o.personality?`: ${briefDesc(o.personality,110)}`:""}`;});
-    ob+=`\n${fillTpl(blkTpl("others_footer"),{user:state.user,char:p.name})}`;
-    B.others_present=ob;
+    const _op={others_list:others.map(o=>`- ${o.name}${o.personality?`: ${briefDesc(o.personality,110)}`:""}`).join("\n"),
+               others_footer:fillTpl(blkTpl("others_footer"),{user:state.user,char:p.name})};
+    B.others_present=`${blkTpl("others_header")}\n${_op.others_list}\n${_op.others_footer}`;
+    B._op=_op;
   }
 
   // ===== WHO YOU ARE RESPONDING TO — the player OR another character, whoever it actually is. =====
@@ -20241,8 +20310,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   {const f=feelingsBlock(chat,p.id,targetId,targetName); if(f.text)B.feelings=f.text;}
 
   // ===== WHAT YOU REMEMBER — distant first, then recent (freshest closest to the dialogue). =====
-  {const dm=memoryBlocks(injectedMemories,"longterm"); if(dm.length)B.distant_memories=dm.join("\n\n");}
-  {const rm=memoryBlocks(injectedMemories,"recent");   if(rm.length)B.recent_memories=rm.join("\n\n");}
+  {const _mo={}; const dm=memoryBlocks(injectedMemories,"longterm",_mo);
+   if(dm.length){ B.distant_memories=dm.join("\n\n"); B._mem=Object.assign(B._mem||{},_mo); }}
+  {const _mo={}; const rm=memoryBlocks(injectedMemories,"recent",_mo);
+   if(rm.length){ B.recent_memories=rm.join("\n\n"); B._mem=Object.assign(B._mem||{},_mo); }}
   {const la=latestArcsBlock(p&&p.id,injectedMemories); if(la)B.latest_arcs=la;}
 
   // situation — entrance/exit note only (the generic "voice only your turn" rules live in the
@@ -20426,34 +20497,53 @@ function buildTailBlocks(opts){
     const all=ownRecentLines(chat,selfP,_cont?3:2);
     const mine=_cont?all.slice(1):all;
     if(mine.length){
-      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
-      if(_cont)t+=`${blkTpl("already_said_continues")}\n\n`;
-      t+=mine.map((x,i)=>(i===0&&!_cont)
-              ? `(your last line, word for word) ${x}`
-              : `(${_cont?(i===0?"the line before the one quoted above":"and the one before that"):"the line before that"}, shortened — you are being shown its shape, not asked to re-read it) ${briefDesc(x,320)}`
+      /* v38.1 — the two parentheticals used to be hard-coded English welded into the data line, so
+         the only instructions in this block that tell the model what it is looking at were the only
+         ones nobody could read, translate or change. They are fragments now, same wording. */
+      const _as={};
+      if(_cont)_as.already_said_continues=blkTpl("already_said_continues");
+      _as.already_said_lines=mine.map((x,i)=>(i===0&&!_cont)
+              ? fillTpl(blkTpl("already_said_verbatim"),{line:x})
+              : fillTpl(blkTpl("already_said_shortened"),{
+                  which:blkTpl(_cont?(i===0?"already_said_which_above":"already_said_which_older"):"already_said_which_plain"),
+                  line:briefDesc(x,320)})
              ).join("\n\n");
-      if(exchangeIsStalled(chat,selfP)) t+=`\n\n${blkTpl("already_said_stalled")}`;
+      if(exchangeIsStalled(chat,selfP)) _as.already_said_stalled=blkTpl("already_said_stalled");
+      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
+      if(_cont)t+=`${_as.already_said_continues}\n\n`;
+      t+=_as.already_said_lines;
+      if(_as.already_said_stalled) t+=`\n\n${_as.already_said_stalled}`;
       B.already_said=t;
+      B._as=_as;
     }
   }
     // v27.4/v27.9 — when this turn continues the character's OWN last line, that is the line to
     // highlight. Otherwise it's the freshest line actually aimed at them.
     const hs=selfContinueLine(chat,selfP,_tm);
-    if(hs) B.last_line=`${blkTpl("heat_self_header")}\n${hs.name}: ${hs.text}\n\n${blkTpl("heat_self_footer")}`;
+    const _mkLL=(line,hk,fk)=>{
+      const _l={}; _l[hk]=blkTpl(hk); _l.last_line_body=`${line.name}: ${line.text}`; _l[fk]=blkTpl(fk);
+      B._ll=_l;
+      B.last_line=`${_l[hk]}\n${_l.last_line_body}\n\n${_l[fk]}`;
+    };
+    if(hs) _mkLL(hs,"heat_self_header","heat_self_footer");
     else { const ll=lastDialogueLine(chat,selfP,_tm);
-           if(ll)B.last_line=`${blkTpl("last_line_header")}\n${ll.name}: ${ll.text}\n\n${blkTpl("last_line_footer")}`; }
+           if(ll)_mkLL(ll,"last_line_header","last_line_footer"); }
   }
 
   // (2) HOW YOU SPEAK — the character's voice, delivered at the point the line gets written rather
   //     than buried thousands of tokens up in the bio.
   if(selfP&&selfP.style&&String(selfP.style).trim()){
-    B.speaking_style=`${blkTpl("style_header")}\n${subUser(selfP.style).trim()}`;
+    const _ss={style_body:subUser(selfP.style).trim()};
+    B._ss=_ss;
+    B.speaking_style=`${blkTpl("style_header")}\n${_ss.style_body}`;
     // v28.3 — the play notes describe HOW to act this character (the loaded pause, the question
     // left hanging) and were buried mid-bio, thousands of tokens from generation, outweighed by the
     // fact blocks. Repeat them here, beside the voice, where they can actually govern the line.
     const _pn=selfP.instructions||"";   // the character sheet's <play_notes>
-    if(_pn&&String(_pn).trim())
-      B.speaking_style+=`\n${fillTpl(blkTpl("style_notes"),{notes:subUser(String(_pn).trim())})}`;
+    if(_pn&&String(_pn).trim()){
+      _ss.style_notes=fillTpl(blkTpl("style_notes"),{notes:subUser(String(_pn).trim())});
+      B.speaking_style+=`\n${_ss.style_notes}`;
+    }
   }
 
   /* (3) SCENE RIGHT NOW — closest to generation so the model can't drift on where the character is,
@@ -20616,7 +20706,8 @@ function buildTailBlocks(opts){
     try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)B.trackers=`${blkTpl("trackers_header")}\n${tc}`; }catch(e){}
 
     // PROMISES — the open-ended words this character gave, and the ones given to them.
-    try{ const pr=promiseContextFor(chat,selfId,selfName); if(pr)B.promises=pr; }catch(e){}
+    try{ const _po={}; const pr=promiseContextFor(chat,selfId,selfName,_po);
+         if(pr){ B.promises=pr; B._pr=_po; } }catch(e){}
 
     {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true}):"";
      if(cl)B.calendar=`${blkTpl("calendar_header")}\n${cl}`;}
@@ -34030,11 +34121,17 @@ function ptCatalog(){
   /* v38.1 — and the same for every fragment of WHO YOU ARE RESPONDING TO, RESPONSE GUIDANCE and
      DRIVES & BRAKES. One entry per real prompt name, so the editor's (i) button, its search and
      its red warnings all work on them exactly as they do on a whole block. */
-  const _fragGroup=k=>
-    k.indexOf("rail_")===0 ? "Guardrail"
-    : RG_ORDER.indexOf(k)>=0 ? "Response guidance"
-    : DRIVE_FRAGS.indexOf(k)>=0 ? "Drives & brakes"
-    : "Who you are responding to";
+  const _fragIn=(arr,label)=>({arr,label});
+  const _fragGroups=[_fragIn(RAIL_KEYS,"Guardrail"),_fragIn(RG_ORDER,"Response guidance"),
+    _fragIn(DRIVE_FRAGS,"Drives & brakes"),_fragIn(RT_ORDER,"Who you are responding to"),
+    _fragIn(YB_ORDER,"Who you are"),_fragIn(OP_ORDER,"Others present"),
+    _fragIn(SS_ORDER,"How you speak"),_fragIn(LL_ORDER,"The line you are answering"),
+    _fragIn(AS_ORDER,"What you already said"),_fragIn(PR_ORDER,"Promises"),
+    _fragIn(MEM_FRAGS,"Memories")];
+  const _fragGroup=k=>{
+    for(const g of _fragGroups) if(g.arr.indexOf(k)>=0) return g.label;
+    return "Payload piece";
+  };
   PT_FRAG_KEYS.forEach(k=>{
     const t=String(BLOCK_TPL_DEFAULTS[k]||"").replace(/\s+/g," ").trim();
     out.push({name:k,label:_fragGroup(k)+" · "+k.replace(/^rail_/,"").replace(/_/g," "),

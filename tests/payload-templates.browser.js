@@ -131,16 +131,18 @@ const {chromium}=require('playwright');
 
   console.log("\n[bare vs full pieces]");
   ok("bare and //full are both valid names", await pg.evaluate(()=>{
-      const k=ptKnownNames(); return k["recent_memories"]&&k["recent_memories//full"]; }));
+      const k=ptKnownNames(); return k["trackers"]&&k["trackers//full"]; }));
   ok("default template uses //full", await pg.evaluate(()=>ptDefaultTemplate("solo").includes("//full}}")));
   ok("erase button swaps them all to bare", await pg.evaluate(()=>{
       ptSetTemplate("solo",null); ptStripHeaders("solo");
       const t=ptTemplate("solo"); ptSetTemplate("solo",null);
-      return t.indexOf("//full}}")===-1 && t.indexOf("{{call//your_bio}}")>-1; }));
+      // v38.1 — your_bio is called by fragment now (bio_intro/bio_body), so it is no longer a
+      // //full piece at all. trackers still is, and is what this button exists for.
+      return t.indexOf("//full}}")===-1 && t.indexOf("{{call//trackers}}")>-1; }));
   ok("put-them-back restores //full", await pg.evaluate(()=>{
       ptSetTemplate("solo",null); ptStripHeaders("solo"); ptRestoreHeaders("solo");
       const t=ptTemplate("solo"); ptSetTemplate("solo",null);
-      return t.indexOf("{{call//your_bio//full}}")>-1 && t.indexOf("{{call//dialogue_history}}")>-1; }));
+      return t.indexOf("{{call//trackers//full}}")>-1 && t.indexOf("{{call//dialogue_history}}")>-1; }));
 
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));

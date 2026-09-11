@@ -50,8 +50,12 @@ const {chromium}=require('playwright');
     const was=state.payloadTplOn; state.payloadTplOn=true;
     const tpl=ptBuildMessages("solo",blocks,hist,{chat,npc:p,targetName:state.user},mk);
 
-    // now the STRIPPED version
-    ptSetTemplate("solo",ptTemplate("solo").replace(/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*\/\/\s*full\s*\}\}/g,"{{call//$1}}"));
+    /* v38.1 — the STRIPPED version, produced by the button itself rather than by a copy of what
+       the button used to do. It used to swap //full for bare; the headings do not ride inside the
+       pieces any more, so it deletes the template's own prose lines instead. Driving the real
+       function is the point: a test that reimplements the thing it is testing passes while the
+       thing is broken (see tests/parity-live.browser.js). */
+    ptStripHeaders("solo");
     const stripped=ptBuildMessages("solo",mk(),hist,{chat,npc:p,targetName:state.user},mk);
     ptSetTemplate("solo",null);
     state.payloadTplOn=was;
@@ -70,7 +74,7 @@ const {chromium}=require('playwright');
   console.log("\n[2] default template === classic payload, on a real scene]");
   ok("byte-identical", R.same, "classic "+R.classicLen+" chars vs template "+R.tplLen);
 
-  console.log("\n[3] erasing headings removes the app's wording but keeps the data]");
+  console.log("\n[3] erasing the app's wording keeps the data]");
   const hadHdr=/WHO YOU ARE|RELEVANT MEMORIES|YOUR RELATIONSHIPS|SCENE RIGHT NOW/i.test(R.tplHead);
   ok("default DOES carry app headings", hadHdr, R.tplHead.slice(0,200));
   ok("stripped drops app headings", !/# WHO YOU ARE|# SCENE RIGHT NOW/i.test(R.strippedHead), R.strippedHead.slice(0,300));

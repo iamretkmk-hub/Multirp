@@ -26,6 +26,9 @@ const {chromium}=require('playwright');
   ok("and every shipped default is reachable from some block", await pg.evaluate(()=>{
       const claimed=new Set();
       Object.keys(REPLY_BLOCKS).forEach(id=>(REPLY_BLOCKS[id].tpls||[]).forEach(t=>claimed.add(t)));
+      // v38.1 — a few fragments belong to a CALLABLE rather than to an ordered block (text_timing
+      // is called by name in the text template but is not one of the blocks). Declared, not lost.
+      Object.keys(REPLY_EXTRA_TPLS).forEach(k=>REPLY_EXTRA_TPLS[k].forEach(t=>claimed.add(t)));
       const orphan=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!claimed.has(k));
       return orphan.length?("orphaned defaults: "+orphan.join(", ")):true; }));
 

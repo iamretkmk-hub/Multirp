@@ -42,18 +42,22 @@ const {chromium}=require('playwright');
     markChatDirty(chat);
   });
 
-  const compare=kind=>pg.evaluate(k=>{
+  const compare=(kind,opt)=>pg.evaluate(a=>{
+    const k=a.k, o=a.opt||{};
     const p=(state.personas||[]).find(x=>x.id==="p_q");
     const q=(state.personas||[]).find(x=>x.id==="p_r");
     const chat=curChat();
     const injected=(window.__pl_inj||{recent:[],diary:[],longterm:[]});
     const textMode=(k==="text");
-    const tOpts={chat,targetName:state.user,targetId:"__user__",textMode};
+    // v38.1 — the target may be the OTHER CHARACTER, which is the only way the player's own card
+    // (and the "responding to another character" wording) ever renders.
+    const tId=o.target==="char"?q.id:"__user__", tNm=o.target==="char"?q.name:state.user;
+    const tOpts={chat,targetName:tNm,targetId:tId,textMode};
     if(k==="heat") chat._heatBeat={total:"3",n:"1"};
     const mk=()=>Object.assign({},
-      buildCharPromptBlocks(p,[q],injected,state.user,tOpts),
-      buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
-        targetId:"__user__",multi:(k==="multi"),injected,textMode}));
+      buildCharPromptBlocks(p,[q],injected,(o.addressed||state.user),tOpts),
+      buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:tNm,
+        targetId:tId,multi:(k==="multi"),injected,textMode}));
     const blocks=mk();
     const hist=[{role:"user",content:"I sat down."},{role:"assistant",content:'"You came back."'}];
     // classic assembly, exactly as the non-template path does it
@@ -64,7 +68,7 @@ const {chromium}=require('playwright');
     if(pl.tail)classic.push({role:"system",content:pl.tail});
     const was=state.payloadTplOn; state.payloadTplOn=true;
     let tpl=null,threw=null;
-    try{ tpl=ptBuildMessages(k,blocks,hist,{chat,npc:p,targetName:state.user},mk); }
+    try{ tpl=ptBuildMessages(k,blocks,hist,{chat,npc:p,targetName:tNm},mk); }
     catch(e){ threw=String(e&&e.message||e); }
     finally{ state.payloadTplOn=was; if(k==="heat")delete chat._heatBeat; }
     const A=JSON.stringify(classic,null,1), Bx=tpl?JSON.stringify(tpl,null,1):null;
@@ -72,7 +76,7 @@ const {chromium}=require('playwright');
     if(Bx&&A!==Bx){ let i=0; while(i<A.length&&i<Bx.length&&A[i]===Bx[i])i++;
       where={at:i,classic:A.slice(Math.max(0,i-160),i+260),tpl:Bx.slice(Math.max(0,i-160),i+260)}; }
     return {classic:A, tpl:Bx, threw, where};
-  },kind);
+  },{k:kind,opt:opt||null});
 
   console.log("\n[the shipped engine, not a copy of it]");
   for(const kind of ["solo","multi","gm","text","heat"]){
@@ -184,6 +188,78 @@ const {chromium}=require('playwright');
       if(!(B._rg&&B._rg.guidance_continue)) miss.push("carry-on guidance");
       return miss.length?miss.join(", "):true; }));
 
+  /* v38.1 — step 4: the eleven blocks that had never rendered in this fixture at all, which is
+     exactly why nobody had looked at them. Two turned out to be whole prompts written in code. */
+  await pg.evaluate(()=>{
+    const chat=curChat(); const uni=state.universes[0];
+    const p=(state.personas||[]).find(x=>x.id==="p_q");
+    // how she feels about Kemal — settled and live, with a tension the fast axes carry
+    const k=relDirKey(p.id,"__user__");
+    const o=relObj(chat,p.id,"__user__");
+    o.desc="She has never forgiven him and has never once said so.";
+    o.affection=10; o.trust=5; o.respect=20; o.familiarity=60;
+    o.st.desire=60; o.st.agitation=20;
+    o.stNote="Keep answering him, but stand further away than you want to.";
+    o.stNoteAt=chat.messages.length; o.stNoteDay=chat.gameDay;
+    chat.rel[k]=o;
+    // trackers, story threads, a private aim, a rumor she has a stake in, and voicing on
+    state.trackOn=true;
+    uni.gameData=uni.gameData||{};
+    uni.gameData.quests=[{id:"q1",title:"The missing ledger",desc:"Ayse knows more about it than she has said.",
+      charName:"Ayse",location:"The port",progress:[{day:3,text:"The clerk would not look at her."}]}];
+    // the private aim only colours a turn when its target is another CHARACTER who is present
+    chat.intents=[{id:"i1",holderId:p.id,targetId:"p_r",targetName:"Emre",valence:"warm",
+      kind:"reach",aim:"to get him to stay past closing",status:"open",strength:60}];
+    uni.trackers=[{id:"t1",name:"Trust",owner:"__story__",userVisibility:"public",
+      min:0,max:100,start:20,behavior:"free",method:"llm"}];
+    // one rumor she is the subject of, and one she has only heard
+    state.gossip=[{id:"g1",universeId:uni.id,stakeholderId:p.id,heat:0.8,status:"open",
+                   text:"that she was seen at the lawyer's office twice this week",carriers:[]},
+                  {id:"g2",universeId:uni.id,stakeholderId:"p_r",heat:0.6,status:"open",
+                   text:"that Emre has not paid the rent since spring",carriers:[{charId:p.id}]}];
+    state.memory=[{id:"a1",ownerId:p.id,universeId:uni.id,gameDay:3,date:Date.now()-2000,
+                   text:"She counted the till twice and said nothing about the gap."},
+                  {id:"a2",ownerId:p.id,universeId:uni.id,gameDay:4,date:Date.now()-1000,
+                   text:"He asked where she had been and she changed the subject."}];
+    state.autoSpeak=true;
+    chat.watchingNow={text:"the news, with the sound down",at:chat.messages.length};
+    markChatDirty(chat);
+  });
+  console.log("\n[the eleven that had never rendered]");
+  for(const kind of ["solo","multi","gm","text","heat"]){
+    const r=await compare(kind);
+    ok(kind+": still byte-identical", r.tpl===r.classic && !r.threw
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH at "+(r.where&&r.where.at)+"\n--- classic ---\n"+(r.where&&r.where.classic)+"\n--- template ---\n"+(r.where&&r.where.tpl)));
+  }
+  for(const v of [{target:"char"},{addressed:"arriving"},{addressed:"leaving"}]){
+    const r=await compare("solo",v);
+    ok("solo "+JSON.stringify(v)+": still byte-identical", r.tpl===r.classic && !r.threw
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH at "+(r.where&&r.where.at)+"\n--- classic ---\n"+(r.where&&r.where.classic)+"\n--- template ---\n"+(r.where&&r.where.tpl)));
+  }
+  ok("and the eleven really did render", await pg.evaluate(()=>{
+      const p=(state.personas||[]).find(x=>x.id==="p_q");
+      const q=(state.personas||[]).find(x=>x.id==="p_r");
+      const chat=curChat(); const injected=window.__pl_inj;
+      const mk=(addressed,tId,tNm)=>Object.assign({},
+        buildCharPromptBlocks(p,[q],injected,addressed,{chat,targetName:tNm,targetId:tId}),
+        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:tNm,targetId:tId,injected}));
+      const B=mk(state.user,"__user__",state.user);
+      const Bc=mk(state.user,q.id,q.name);          // aimed at the other character -> player card
+      const Ba=mk("arriving","__user__",state.user); // entering the scene
+      const miss=[];
+      if(!(Bc._pl&&Bc._pl.player_intro)) miss.push("player");
+      if(!(Ba._si&&Ba._si.situation_arriving)) miss.push("situation");
+      if(!(B._sd&&Object.keys(B._sd).length)) miss.push("spoken delivery");
+      if(!(B._pi&&Object.keys(B._pi).length)) miss.push("private intent");
+      if(!(B._fe&&B._fe.feel_header&&B._fe.feel_lasting)) miss.push("feelings");
+      if(!(B._fn&&B._fn.feel_now_header&&B._fn.feel_now_body)) miss.push("feelings now");
+      if(!(B._qu&&B._qu.quest_intro&&B._qu.quest_lines)) miss.push("quests");
+      if(!(B._la&&B._la.mem_latest_entries)) miss.push("latest arcs");
+      if(!(B.trackers)) miss.push("trackers");
+      if(!(B._ru&&B._ru.rumor_stake_header&&B._ru.rumor_stake_text&&B._ru.rumor_carrier_list)) miss.push("rumors");
+      if(!(B._wn&&B._wn.watching_now)) miss.push("watching now");
+      return miss.length?("never rendered: "+miss.join(", ")):true; }));
+
   console.log("\n[the pieces the template now spells out]");
   ok("the task heading is prose in the template, not a call", await pg.evaluate(()=>{
       const t=ptDefaultTemplate("solo");
@@ -203,6 +279,24 @@ const {chromium}=require('playwright');
   ok("a rail that did not fire is a known name, not a typo", await pg.evaluate(()=>{
       const s=ptSources({},null);
       return Object.prototype.hasOwnProperty.call(s,"rail_form") ? true : "rail_form unknown"; }));
+  /* v38.1 — and the end of the road for //full: with every piece split into named fragments, the
+     only two left are the user's OWN formatting prompt and the now-playing line, and the second is
+     only //full-shaped because it is one fragment with one fill. */
+  ok("nothing is called as an opaque //full lump any more", await pg.evaluate(()=>{
+      const left=[];
+      PT_KINDS.forEach(k=>{ const t=ptDefaultTemplate(k); let m;
+        const re=/\{\{call\/\/([a-zA-Z0-9_]+)\/\/full\}\}/g;
+        while((m=re.exec(t))) if(left.indexOf(m[1])<0) left.push(m[1]); });
+      return left.length?("still lumped: "+left.join(", ")):true; }));
+  ok("erasing the headings cannot delete a piece outright", await pg.evaluate(()=>{
+      // the bare form of every name the shipped template calls must be a real source, not a hole
+      const s=ptSources({},null); const missing=[];
+      PT_KINDS.forEach(k=>{ let m; const re=/\{\{call\/\/([a-zA-Z0-9_]+)(?:\/\/full)?\}\}/g;
+        const t=ptDefaultTemplate(k);
+        while((m=re.exec(t))){ const n=m[1];
+          if(n!=="dialogue_history"&&!Object.prototype.hasOwnProperty.call(s,n)&&missing.indexOf(n)<0)
+            missing.push(n); } });
+      return missing.length?("no bare source: "+missing.join(", ")):true; }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

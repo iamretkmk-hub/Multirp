@@ -20,7 +20,9 @@ const {chromium}=require('playwright');
   const d=await pg.evaluate(()=>ptDefaultTemplate("solo"));
   ok("solo default has [system]", d.includes("[system]"), d.slice(0,120));
   ok("solo default calls history", d.includes("{{call//dialogue_history}}"));
-  ok("text default carries timing note", await pg.evaluate(()=>ptDefaultTemplate("text").includes("{{call//text_timing//full}}")));
+  ok("text default carries timing note", await pg.evaluate(()=>{
+      const t=ptDefaultTemplate("text");
+      return t.includes("{{call//text_timing_days}}")&&t.includes("{{call//text_timing_yesterday}}"); }));
   ok("all 5 kinds generate", await pg.evaluate(()=>PT_KINDS.every(k=>ptDefaultTemplate(k).length>50)));
 
   /* v38.0 — BYTE PARITY MOVED TO tests/parity-live.browser.js, and it had to.
@@ -132,17 +134,25 @@ const {chromium}=require('playwright');
   console.log("\n[bare vs full pieces]");
   ok("bare and //full are both valid names", await pg.evaluate(()=>{
       const k=ptKnownNames(); return k["trackers"]&&k["trackers//full"]; }));
-  ok("default template uses //full", await pg.evaluate(()=>ptDefaultTemplate("solo").includes("//full}}")));
-  ok("erase button swaps them all to bare", await pg.evaluate(()=>{
-      ptSetTemplate("solo",null); ptStripHeaders("solo");
+  /* v38.1 — the shipped template calls nothing as //full any more: every piece is either named
+     fragments or a bare call with its heading written out above it as ordinary prose. */
+  ok("the shipped template calls nothing as a //full lump",
+     await pg.evaluate(()=>!ptDefaultTemplate("solo").includes("//full}}")));
+  ok("erase strips the app's prose and keeps every call", await pg.evaluate(()=>{
+      ptSetTemplate("solo",null);
+      const before=ptTemplate("solo");
+      ptStripHeaders("solo");
+      const after=ptTemplate("solo"); ptSetTemplate("solo",null);
+      const calls=t=>(t.match(/\{\{call\/\/[a-zA-Z0-9_]+(?:\/\/full)?\}\}/g)||[]).join("|");
+      if(calls(before)!==calls(after)) return "a call was lost";
+      if(after.length>=before.length) return "nothing was stripped";
+      if(!/\[system\]/.test(after)) return "the role markers went too";
+      if(/# TASK/.test(after)) return "the app's headings are still there";
+      return true; }));
+  ok("reset puts the app's wording back", await pg.evaluate(()=>{
+      ptSetTemplate("solo",null); ptStripHeaders("solo"); ptResetTpl("solo");
       const t=ptTemplate("solo"); ptSetTemplate("solo",null);
-      // v38.1 — your_bio is called by fragment now (bio_intro/bio_body), so it is no longer a
-      // //full piece at all. trackers still is, and is what this button exists for.
-      return t.indexOf("//full}}")===-1 && t.indexOf("{{call//trackers}}")>-1; }));
-  ok("put-them-back restores //full", await pg.evaluate(()=>{
-      ptSetTemplate("solo",null); ptStripHeaders("solo"); ptRestoreHeaders("solo");
-      const t=ptTemplate("solo"); ptSetTemplate("solo",null);
-      return t.indexOf("{{call//trackers//full}}")>-1 && t.indexOf("{{call//dialogue_history}}")>-1; }));
+      return /# TASK/.test(t) && t.indexOf("{{call//dialogue_history}}")>-1; }));
 
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));

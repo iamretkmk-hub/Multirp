@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.5</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.6</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2976,6 +2976,17 @@ VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you 
 3. You MAY also drop inline non-verbals where they occur: [laugh] [sigh] [breathe] [clear throat] [cough] [yawn].
 4. To stress a key word, CAPITALIZE it. Use sparingly.
 5. Keep delivery BRISK, but place pauses where a real speaker would: a comma for a small breath, an em-dash — for a beat before something important, and "…" for a thoughtful or hesitant pause. Use them deliberately and sparingly, where the MEANING calls for a pause — not randomly. Otherwise favor short sentences.`},
+
+  /* (!) v38.6 — this one is STORY TEXT, not an instruction: the player reads it in the chat. It was
+     hard-coded Turkish, so a story played in any other language got one Turkish line in the middle
+     of it, and nobody could change the wording. */
+  x_text_notice:{label:"“They are on their phone” beat",json:false,
+    hint:"The narrator line the people in the room see when {{user}} texts somebody. Never says who, never says what. The person being texted does not see it.",
+    def:`— {{user}} telefonuna eğilmiş, birine mesaj yazıyor —`},
+
+  x_membuild_text_note:{label:"Memory builder — the phone-thread note",json:false,
+    hint:"Added to the memory builder when the thing being remembered is a text conversation rather than a scene, so it is recorded as texting rather than as words spoken in a room.",
+    def:`This was a PHONE TEXT conversation between {{char}} and {{user}} — typed messages, not a scene spoken in person. Record it as {{char}}'s memory of texting with {{user}}.`},
 
   x_call_fallback:{label:"Voice call — fallback persona",json:false,
     hint:"Used only when a call starts without a character's own prompt built yet.",
@@ -6018,6 +6029,26 @@ function loadState(){
       store.setRaw("sm_promptscope_v2","done");
     }
   }catch(e){}
+  /* ---- Channel-label cleanup (v38.6, runs once) ----------------------------------------------
+     castHistory tags a text in the transcript as "(text message) …" so the model knows it was
+     typed rather than spoken. The model copied that tag into its own replies, nothing stripped it,
+     and it was saved into the message — so the tag got tagged again on the next turn. Real chats
+     carry lines like "(text message) (text message) Evdeler." The generator is fixed at the source
+     (stripChannelLabel); this removes what was already written down. */
+  try{
+    if(!store.raw("sm_textlabel_v1","")){
+      let fixed=0;
+      Object.values(state.chats||{}).forEach(c=>{
+        (c&&c.messages||[]).forEach(m=>{
+          if(!m||typeof m.content!=="string")return;
+          const t=stripChannelLabel(m.content);
+          if(t!==m.content){ m.content=t; fixed++; }
+        });
+      });
+      if(fixed)persistChats();
+      store.setRaw("sm_textlabel_v1","done");
+    }
+  }catch(e){}
   /* ---- Social-graph discoveries migration (v30.3, runs once) ---------------------------------
      socialGraphAuto was an APPEND-ONLY list of durable facts a character had learned, one line per
      day, hard-sliced at 140 characters and never revisited. In a long story it became the thing this
@@ -7571,9 +7602,20 @@ function clearPresentQueue(){
 }
 // Append a SINGLE message's bubble to the chat list if it isn't already shown, honoring the
 // follow-scroll rule (never yank the viewport unless the user is already at the bottom).
+/* v38.6 — A TEXT IS NOT A LINE IN THE ROOM. Phone texts used to be threaded into the story window
+   as .txtmsg bubbles "for continuity". Two things came of it. The obvious one: the scene you are
+   reading is interrupted by a conversation that is happening somewhere else, on a phone. The other
+   one is worse — with the thread on screen in the main window, a reply typed into the main input is
+   a ROOM line, spoken out loud to whoever is standing there, and it reads as an answer to the text.
+   That is the phone/room leak, from the reader's side rather than the payload's.
+   They live in their own window now. Nothing else changes: the transcript still holds them, the
+   payloads still read them (labelled), memories and the unread badge are untouched. This is the one
+   gate the chat list asks before drawing anything. */
+function chatShowsMsg(m){ return !(m&&m.textMsg); }
 function appendOneBubble(m){
   const list=document.getElementById('chatList');
   if(!list||!m)return;
+  if(!chatShowsMsg(m))return;                                 // texts belong to the text window
   if(_renderedChatId!==state.curChat){ renderChat(); if(typeof reflectModes==='function')reflectModes(); return; }
   if(list.querySelector('[data-mid="'+m.mid+'"]')) return;   // already on screen
   const _following=ChatScroll.isFollowing();
@@ -12269,9 +12311,27 @@ function calendarContextLine(chat,selfName,selfId,opts){
   const locOf=e=>(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
   // Certainty framing: a "certain" meeting is settled; a "likely" one is only loosely floated, so the
   // character speaks non-committally about it (numbers stay internal — never spoken aloud).
-  const certOf=e=>e.certainty==="likely"
-    ? ` — NOT firmly agreed (you have not committed${e.probability!=null?`, ~${e.probability}% inclined`:""}; be non-committal — "maybe", "we'll see", "I'll try")`
-    : ` — agreed`;
+  /* (!) v38.6 — WHOSE COMMITMENT IS IN DOUBT. This said "you have not committed … be
+     non-committal" to whoever was reading, so a character who had invited somebody over was told to
+     hedge about their own house — on the same line that told them "{{user}} is the one coming; you
+     are expected to be there". Two instructions, opposite directions, in one sentence. The doubt
+     belongs to whoever has to show up: say it in the second person only when that is the reader. */
+  const _uncertainParty=e=>{
+    const ex=String(e.executor||"").trim();
+    if(!ex)return "";
+    if((selfId&&e.executorId&&e.executorId===selfId)
+       || (selfName&&ex.toLowerCase()===String(selfName).toLowerCase())) return "you";
+    if(ex==="user"||ex.toLowerCase()===String(state.user||"").toLowerCase()) return String(state.user||"they");
+    return ex;
+  };
+  const certOf=e=>{
+    if(e.certainty!=="likely") return ` — agreed`;
+    const who=_uncertainParty(e);
+    const pct=e.probability!=null?`, ~${e.probability}% likely`:"";
+    if(who==="you"||!who)
+      return ` — NOT firmly agreed (you have not committed${e.probability!=null?`, ~${e.probability}% inclined`:""}; be non-committal — "maybe", "we'll see", "I'll try")`;
+    return ` — NOT firmly agreed: ${who} has not committed${pct}. Do not treat it as settled — they may not come, and you would not be surprised either way`;
+  };
   // v28 — WHO ACTS. A plan is useless to a character who can't tell whether they are the one who has
   // to show up. The executor is spelled out by name on every line, and phrased in the second person
   // when it is this character's own job, so "Emre comes to me" reaches Emre as "YOU are the one who
@@ -19840,7 +19900,7 @@ const X_PROMPT_CARDS=[
   {key:"appearance",label:"Appearance",desc:"How a character looks, as structured fields the image generator can use.",
    keys:["x_appearance_generator","x_look_split"]},
   {key:"beats",label:"Narrator beats",desc:"The short narrator lines the app writes on its own: arrivals, a day ending, a meeting nobody came to, an errand run offstage, the recap when you come back.",
-   keys:["x_arrival","x_arrival_line","x_day_transition_narration","x_meeting_no_show_beat","x_bg_task","x_scene_recap"]},
+   keys:["x_arrival","x_arrival_line","x_day_transition_narration","x_meeting_no_show_beat","x_bg_task","x_scene_recap","x_text_notice"]},
   {key:"day_end_quests",label:"End of day — what moved",desc:"At day's end, reads the day's memories and decides what happened to each quest and to each favour asked of you.",
    keys:["x_quest_reconcile","x_char_quest_reconcile"]},
   {key:"meta",label:"The prompt writer",desc:"The prompt behind every “Write with AI” button — the one that writes your other prompts.",
@@ -19848,7 +19908,7 @@ const X_PROMPT_CARDS=[
   /* These three had a key and a default but no card, so _enginePayloadCoverage swept them into an
      "Other prompts" bucket. psychePrompt in particular is the one that writes DRIVES & BRAKES. */
   {key:"inner_life",label:"Inner life",desc:"What pulls a character and what holds them back, and how a stretch of the day settles into memory.",
-   keys:["psychePrompt","memReconcile"]},
+   keys:["psychePrompt","memReconcile","x_membuild_text_note"]},
   {key:"voice_sample",label:"Voice sample",desc:"Writes the tagged vocal track the “Create sample” button renders in the character's own voice.",
    keys:["moanPrompt"]},
   /* The last of the prompts that lived in code: four helpers that never went through epSend at all,
@@ -22466,7 +22526,7 @@ function renderChat(){ return perf("renderChat",()=>{
     const ci=msgs.findIndex(m=>m.mid===chat.clearedBeforeMid);
     if(ci>=0) start=Math.max(start,ci+1);
   }
-  for(let i=start;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid(); if(_presentPendingMids.has(m.mid)) continue; const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid); }
+  for(let i=start;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid(); if(_presentPendingMids.has(m.mid)) continue; if(!chatShowsMsg(m)) continue; const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid); }
   _renderedCount=msgs.length-start;
   // A full rebuild happens on chat-open/switch/restart/arrival — land at the latest line. Do it
   // now, then again on the next frame and once more shortly after: freshly-built bubbles (avatars,
@@ -22521,6 +22581,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
   }
   let appended=0;
   for(let i=firstNew;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid();
+    if(!chatShowsMsg(m)) continue;                 // a text is read in the text window, not here
     if(_presentPendingMids.has(m.mid)) continue;   // committed to state but not yet its turn to show
     // The presentation queue owns any message still flagged _reveal (it was just pushed to state but
     // hasn't reached enqueuePresent yet, or is mid-roll). Rendering it here would paste it on screen
@@ -23409,6 +23470,8 @@ async function sendMessage(){
       toast("Empty reply — try raising Max tokens in Settings (reasoning models need headroom)");
       return;
     }
+    // v38.6 — a spoken line never carries the transcript's "(text message)" tag; see stripChannelLabel.
+    reply=stripChannelLabel(reply);
     const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
     stampStatus(chat,msg);chat.messages.push(msg);
     // BACKGROUND (does not wait on screen): persist, fire the image pipeline the instant text is
@@ -23548,10 +23611,26 @@ async function buildTextPayload(chat,p){
     {text_timing:_tn});
   return pl;
 }
+/* (!) v38.6 — THE CHANNEL LABEL IS NOT PART OF THE MESSAGE.
+   castHistory tags a text in the transcript as "(text message) …" so the model knows it was typed,
+   not spoken. The model then saw its own last four replies all beginning with those two words and
+   did the obvious thing: it started writing them. Nothing stripped them, so the label was SAVED
+   into the message — and castHistory tagged the saved copy again on the next turn, which is how a
+   real payload ended up carrying "(text message) (text message) Evdeler." and a reply that opened
+   with a label the character had supposedly typed into a phone.
+   Every generated line is stripped of the tags now, in both directions and however many of them
+   the model piled up, and _fixTextLabels below cleans the ones already written to disk. */
+const TEXT_LABEL_RX=/^\s*\((?:[^()]{0,40}?'s\s+)?text\s+message\)\s*/i;
+function stripChannelLabel(s){
+  let t=String(s==null?"":s);
+  for(let i=0;i<6;i++){ const n=t.replace(TEXT_LABEL_RX,""); if(n===t)break; t=n; }
+  return t;
+}
 // Strip anything that belongs to a spoken scene but never to a typed message.
 function _cleanTextReply(reply,name){
-  let s=String(reply||"").trim();
+  let s=stripChannelLabel(String(reply||"").trim());
   s=s.replace(new RegExp("^\\s*"+String(name||"").replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*:\\s*","i"),"");
+  s=stripChannelLabel(s);                       // "Hakan: (text message) …" puts the label second
   s=s.replace(/<\/?[a-z-]{2,24}>/gi,"");        // delivery/audio tags — never in a text
   s=s.replace(/\*[^*]*\*/g,"");                 // *narration*
   // Only when the WHOLE message is wrapped — otherwise this eats one half of a real quoted phrase.
@@ -23562,7 +23641,7 @@ async function sendTextMessage(chat,p,body){
   const out=_stampText(chat,{mid:newMid(),role:"user",content:body,textMsg:true,textWith:p.id,textWithName:p.name,present:[]});
   chat.messages.push(out); markChatDirty(chat); persistChats();
   renderTextThread(p.id);
-  try{ appendNewBubbles(); }catch(e){}   // also thread it into the main story window (marked as a text)
+  try{ updateTextBadges(); }catch(e){}   // v38.6 — the text window owns it; the story window does not show it
   _textTyping(p,true);
   try{
     // v28.6 — the SAME transcript the spoken reply reads (castHistory, honouring the Settings
@@ -23584,10 +23663,9 @@ async function sendTextMessage(chat,p,body){
     const msg=_stampText(chat,{mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:reply,textMsg:true,textWith:p.id,present:[],unread:(_openTextPid!==p.id),img:null,imgState:"idle",vidState:"idle",video:null});
     chat.messages.push(msg); markChatDirty(chat); persistChats();
     renderTextThread(p.id); updateTextBadges();
-    try{ appendNewBubbles(); }catch(e){}   // reply also appears inline in the main story window
     // v24.0 — autoSpeakMsg self-gates (autoSpeak OR narration mode) and voices the whole text body.
     try{ autoSpeakMsg(msg,p); }catch(e){}
-    _notePlayerTexting(chat);                     // others in the room notice he's texting (not who/what)
+    _notePlayerTexting(chat,p.id);                // others in the room notice he's texting (not who/what)
     try{ maybeTextInvite(chat,p,body,reply); }catch(e){}
     // Texts function like dialogue for the reasoning engines: scan the exchange for future plans
     // (calendar) and let it settle into the character's memory. Both are fire-and-forget.
@@ -23653,7 +23731,7 @@ async function _commitTextArc(chat,p,span){
   try{
     const convo=span.map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
-      `\n\nThis was a PHONE TEXT conversation between ${p.name} and ${state.user} — typed messages, not a scene spoken in person. Record it as ${p.name}'s memory of texting with ${state.user}.`+"\n\n"+engineLangDirective();
+      "\n\n"+fillTpl(up("x_membuild_text_note"),{char:p.name,user:state.user})+"\n\n"+engineLangDirective();
     const out=await chatCompletion(epSend("memBuild",sys,{convo},{who:p.name}),state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
     const j=parseJSON(out);
     if(!j||!j.content)return;
@@ -23675,15 +23753,22 @@ async function _commitTextArc(chat,p,span){
     }
   }catch(e){}
 }
-// Privacy: when the player texts while others are physically present, they SEE that he's on his phone
-// texting someone — never who, never what. Throttled so it isn't spammed every message.
-function _notePlayerTexting(chat){
-  const present=presentIds(chat); if(!present.length)return;
+/* Privacy: when the player texts while others are physically present, they SEE that he's on his
+   phone texting someone — never who, never what. Throttled so it isn't spammed every message.
+   (!) v38.6 — NOT THE PERSON ON THE OTHER END. This beat used to go to everyone in the room, and
+   the room includes the character being texted whenever they happen to be standing there. Their own
+   payload then carried "— Emre is bent over his phone, texting somebody —", four times over, about
+   the very message they were reading. They are the somebody; there is nothing here to tell them.
+   They are cut from the audience, and if nobody else is left the beat does not happen at all. */
+function _notePlayerTexting(chat,toId){
+  const present=presentIds(chat).filter(id=>id!==toId);
+  if(!present.length)return;                                       // only the person being texted was here
   const now=Date.now();
   if(chat._textSeenAt && (now-chat._textSeenAt)<8*60*1000)return;   // at most once per ~8 real minutes
   chat._textSeenAt=now;
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,present:present.slice(),
-    content:`— ${state.user} telefonuna eğilmiş, birine mesaj yazıyor —`,img:null,imgState:"idle",vidState:"idle",video:null});
+    textNotice:true, textWith:toId||null,
+    content:fillTpl(up("x_text_notice"),{user:state.user}),img:null,imgState:"idle",vidState:"idle",video:null});
   markChatDirty(chat); persistChats(); appendNewBubbles();
 }
 // A texted invitation ("gel", "come over") that the character accepts → log a CERTAIN meeting at the
@@ -23795,10 +23880,11 @@ function openTextInbox(){
 // Deliver a character-initiated text: lands as unread, notifies, and plants the sender's own memory
 // that they reached out (so it's real to them and can escalate if ignored).
 function deliverProactiveText(chat,p,message,why){
+  message=_cleanTextReply(message,p&&p.name);   // v38.6 — same cleaning as a replied text
   const msg=_stampText(chat,{mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:message,textMsg:true,textWith:p.id,present:[],unread:(_openTextPid!==p.id),img:null,imgState:"idle",vidState:"idle",video:null});
   chat.messages.push(msg); markChatDirty(chat); persistChats();
   renderTextThread(p.id); updateTextBadges();
-  try{ appendNewBubbles(); }catch(e){}   // proactive text also appears inline in the main story window
+  try{ updateTextBadges(); }catch(e){}   // v38.6 — the text window owns it; the story window does not show it
   try{ toast(`📱 ${p.name}: new message`); }catch(e){}
   try{ autoSpeakMsg(msg,p); }catch(e){}   // v24.0 — spoken responses read incoming texts aloud too
   try{
@@ -23808,7 +23894,10 @@ function deliverProactiveText(chat,p,message,why){
        model writes one. Memories are the engine's own record: English, always. It also carried no
        gamePeriod, so the same-day/same-period exclusion could not see it. */
     state.memory.push({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),ownerId:p.id,character:p.name,
-      content:`I texted ${state.user} first${why?` (${String(why).slice(0,60)})`:""}: "${String(message).slice(0,80)}"`,
+      // v38.6 — briefDesc, not slice: a hard cut at 60 characters left the character remembering
+      // "(evening plan feels loose, wants to make it concrete without )" — a sentence amputated
+      // mid-word, inside a memory that is then read back to them as a fact about their own day.
+      content:`I texted ${state.user} first${why?` (${briefDesc(why,60)})`:""}: "${briefDesc(message,80)}"`,
       type:"EXPERIENCE",emotion:"",importance:0.5,tags:["text"],date:Date.now(),gameDay:chat.gameDay||1,
       gamePeriod:_memPeriod(chat),
       source:"proactive_text",universeId:chat.universeId,chatId:chat.id});
@@ -24412,6 +24501,10 @@ function castHistory(chat,forP){
     if(m.narratorEvent&&m.travelBeat){
       return dayOf[idx]>=minDay && (!forP || idx>=arrivalCut);
     }
+    /* (!) v38.6 — "{{user}} is bent over his phone, texting somebody" is for the ROOM, and the
+       person on the other end of that phone is not the room. Beats written before this build still
+       carry them in `present`, so the reader is cut here too rather than only at the source. */
+    if(m.textNotice && forP && m.textWith===forP.id) return false;
     // OTHER narrator events (GM beats, environmental nudges): ambient to the CURRENT scene only — a
     // character shouldn't carry the whole day's worth of unrelated GM narration into a fresh scene.
     if(m.narratorEvent){ return idx>=arrivalCut; }
@@ -24829,7 +24922,7 @@ async function playCharacterTurn(chat,p,addressed){
     typing.remove();
     // strip a leading "Name:" prefix if the model added one (regex-safe)
     const prefix=p.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
-    const cleaned=reply.replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"").trim();
+    const cleaned=stripChannelLabel(stripChannelLabel(reply).replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"")).trim();
     // The model declined this content (not a token/length issue) — say so honestly and skip the
     // turn instead of pushing the refusal text as a bubble or blaming Max tokens.
     if(refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return false; }
@@ -32610,6 +32703,7 @@ async function playSingleReaction(chat,p,eventText){
     // v26.5 — the player spoke while this was generating: their turn already answers the beat, so
     // pushing this too would give ONE character two replies to the same moment.
     if(_seq!==_dirSeq)return;
+    reply=stripChannelLabel(reply);   // v38.6 — see stripChannelLabel
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null};
     stampStatus(chat,msg);chat.messages.push(msg);
     persistChats();appendNewBubbles();

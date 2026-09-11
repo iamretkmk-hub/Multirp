@@ -125,9 +125,11 @@ const {chromium}=require('playwright');
       renderEngineTemplates(); epValidate(k);
       const h=document.getElementById('epWarn_'+k).innerHTML;
       ptSetTemplate(epTplKey(k),null); return /stop working/i.test(h); }));
+  // v38.4 — gossipPrompt's user message is fixed prose now, so it is no longer an engine that
+  // simply echoes a `data` value. rewritePrompt still is, and is what this check needs.
   ok("toggling OFF => classic engine payload", await pg.evaluate(()=>{
       state.payloadTplOn=false;
-      const m=epSend("gossipPrompt","SYS",{data:"D"});
+      const m=epSend("rewritePrompt","SYS",{data:"D"});
       return m.length===2&&m[0].content==="SYS"&&m[1].content==="D"; }));
 
 

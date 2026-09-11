@@ -96,12 +96,12 @@ const {chromium}=require('playwright');
       return c===null ? true : JSON.stringify(c); }));
 
   console.log("\n[memories: the engine's record stays in one language]");
-  ok("the left-on-read writer records an English mood, not a Turkish one", await pg.evaluate(()=>{
-      // matched against the code, not a comment about it: the mood words are string literals
-      const src=String(reconcileTextsDay);
-      const turkish=/"kırgın|"öfkeli|"tedirgin/.test(src);
-      const english=/"hurt but curious"/.test(src)&&/"angry"/.test(src)&&/"uneasy"/.test(src);
-      return (!turkish&&english) ? true : "turkish="+turkish+" english="+english; }));
+  /* v38.7 — this used to check that the left-on-read writer recorded its mood in English rather
+     than Turkish. There is no left-on-read writer: a character is no longer told your silence was a
+     snub, so there is no mood to record. What is checked now is that it stayed gone. */
+  ok("nothing writes a memory of being left on read", await pg.evaluate(()=>
+      typeof reconcileTextsDay==="undefined" && (state.memory||[]).every(m=>m.source!=="text_noreply")
+        ? true : "the left-on-read pass is back"));
   ok("a proactive text plants an English memory with a period", await pg.evaluate(()=>{
       const before=(state.memory||[]).length;
       const chat=curChat();

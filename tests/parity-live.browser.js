@@ -79,6 +79,86 @@ const {chromium}=require('playwright');
       ? true : "MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,400)+"\n--- template ---\n"+String(r.tpl).slice(0,400));
   }
 
+  /* v38.1 — THE EMPTY SCENE PROVES ALMOST NOTHING. The fixture above has no drives, nobody absent,
+     no scene change and nobody who spoke last, so the conditional fragments of WHO YOU ARE
+     RESPONDING TO, RESPONSE GUIDANCE and DRIVES & BRAKES never fire — and a piece that never fires
+     is byte-identical for free. This second pass lights every one of them, so parity is being
+     asserted on the fragments that were actually moved into the template. */
+  const loaded=await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    const chat=curChat();
+    const p=(state.personas||[]).find(x=>x.id==="p_q");
+    // somebody real, active in this universe, who is NOT in the room — and then named out loud
+    state.personas.push({id:"p_s",name:"Deniz",universeId:uni.id,instructions:"Blunt.",
+      personality:"Loud.",backstory:"Never left.",look:{subject:"Man"}});
+    chat.location="The port"; chat.locationId=null;
+    state.userBio="A ledger clerk who counts other people's money.";
+    state.userLook="Thin, greying, always in the same coat.";
+    chat.messages=[
+      {mid:"q0",role:"user",content:"I sat down.",present:["p_q","p_r"]},
+      {mid:"q1",role:"assistant",speaker:"Ayse",speakerId:"p_q",content:'"You came back."',
+       present:["p_q","p_r"],status:{location:"The cafe",day:3,period:"Evening"}},
+      {mid:"q2",role:"user",content:"Where is Deniz tonight?",present:["p_q","p_r"]}];
+    chat._psyche={p_q:{toward:"She wants to be told she was missed.",
+                       against:"Saying it first would cost her the only ground she has."}};
+    markChatDirty(chat);
+    const t=ptDefaultTemplate("solo");
+    return {tplHasDrives:/PULLING AT YOU/.test(t)&&/\{\{call\/\/drive_toward\}\}/.test(t)};
+  });
+  ok("the drives heading and closing note are prose in the template",
+     loaded.tplHasDrives===true?true:"drives not unpacked");
+
+  console.log("\n[with drives, an absent name, and a scene that moved]");
+  for(const kind of ["solo","multi","gm","text","heat"]){
+    const r=await compare(kind);
+    ok(kind+": still byte-identical", r.tpl===r.classic && !r.threw
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,900)+"\n--- template ---\n"+String(r.tpl).slice(0,900)));
+  }
+  ok("and those fragments really did fire", await pg.evaluate(()=>{
+      const p=(state.personas||[]).find(x=>x.id==="p_q");
+      const q=(state.personas||[]).find(x=>x.id==="p_r");
+      const chat=curChat(); const injected={recent:[],diary:[],longterm:[]};
+      const B=Object.assign({},
+        buildCharPromptBlocks(p,[q],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
+        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
+          targetId:"__user__",injected}));
+      const miss=[];
+      if(!(B._drives&&B._drives.drive_toward&&B._drives.drive_against)) miss.push("drives");
+      if(!(B._rg&&B._rg.guidance_absence)) miss.push("absence note");
+      if(!(B._rt&&B._rt.target_header&&B._rt.target_bg)) miss.push("target fragments");
+      if(!(B.drives&&B.drives.indexOf("PULLING AT YOU")>-1)) miss.push("drives block");
+      return miss.length?("never fired: "+miss.join(", ")):true; }));
+
+  /* And the OTHER half of WHO YOU ARE RESPONDING TO: when the character spoke last and nothing
+     new is aimed at them, the block swaps to a different heading and a different opening, and the
+     guidance swaps its last line with it. Neither wording is reachable from the passes above. */
+  await pg.evaluate(()=>{
+    const chat=curChat();
+    chat.messages.push({mid:"q3",role:"assistant",speaker:"Ayse",speakerId:"p_q",
+      content:'"He is not here."',present:["p_q","p_r"],
+      status:{location:"The port",day:4,period:"Evening"}});
+    markChatDirty(chat);
+  });
+  console.log("\n[when the character spoke last]");
+  for(const kind of ["solo","heat"]){
+    const r=await compare(kind);
+    ok(kind+": still byte-identical", r.tpl===r.classic && !r.threw
+      ? true : (r.threw?("threw: "+r.threw):"MISMATCH\n--- classic ---\n"+String(r.classic).slice(0,900)+"\n--- template ---\n"+String(r.tpl).slice(0,900)));
+  }
+  ok("the carry-on wording is what fired", await pg.evaluate(()=>{
+      const p=(state.personas||[]).find(x=>x.id==="p_q");
+      const q=(state.personas||[]).find(x=>x.id==="p_r");
+      const chat=curChat(); const injected={recent:[],diary:[],longterm:[]};
+      const B=Object.assign({},
+        buildCharPromptBlocks(p,[q],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
+        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
+          targetId:"__user__",injected}));
+      const miss=[];
+      if(!(B._rt&&B._rt.cont_target_header&&B._rt.cont_target_self)) miss.push("carry-on target");
+      if(B._rt&&B._rt.target_header) miss.push("normal heading fired too");
+      if(!(B._rg&&B._rg.guidance_continue)) miss.push("carry-on guidance");
+      return miss.length?miss.join(", "):true; }));
+
   console.log("\n[the pieces the template now spells out]");
   ok("the task heading is prose in the template, not a call", await pg.evaluate(()=>{
       const t=ptDefaultTemplate("solo");

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -18692,8 +18692,8 @@ function ptSources(blocks,rawFn){
     s[id]=""; s[id+"//full"]="";
   });
   s.text_timing=""; s["text_timing//full"]="";
-  // seeded so a rail that did not fire this turn reads as "known but empty", not as a typo
-  RAIL_KEYS.forEach(k=>{ s[k]=""; s[k+"//full"]=""; });
+  // seeded so a fragment that did not fire this turn reads as "known but empty", not as a typo
+  PT_FRAG_KEYS.forEach(k=>{ s[k]=""; s[k+"//full"]=""; });
   s.language_rule=""; s["language_rule//full"]="";
   Object.keys(blocks||{}).forEach(k=>{
     if(k==="__history__"||k.charAt(0)==="_") return;  // history is structural; _keys are internal
@@ -18705,8 +18705,27 @@ function ptSources(blocks,rawFn){
      already deduped), and each becomes its own call. A rail this turn did not select, or that the
      dedupe folded away, is simply not here — so its line resolves empty and drops, which is what
      the lump did with it too. */
-  {const _r=(blocks&&blocks._rails)||null;
-   if(_r) Object.keys(_r).forEach(k=>{ s[k]=_r[k]; s[k+"//full"]=_r[k]; });}
+  /* v38.1 — and the same for WHO YOU ARE RESPONDING TO, RESPONSE GUIDANCE and DRIVES & BRAKES:
+     each hands over the fragments it actually picked this turn, already filled. */
+  PT_FRAG_MAPS.forEach(mk=>{
+    const _r=(blocks&&blocks[mk])||null;
+    if(_r&&Object.keys(_r).length){ Object.keys(_r).forEach(k=>{ s[k]=_r[k]; s[k+"//full"]=_r[k]; }); return; }
+    /* (!) v38.1 — A BLOCK HANDED OVER WITHOUT ITS FRAGMENT MAP MUST NOT VANISH. The template calls
+       these three by fragment now, so a caller that produced the block STRING but not the map — an
+       older saved payload, a partial rebuild, anything that assembles blocks by hand — would have
+       its text silently dropped on the floor, which is the one failure mode this whole conversion
+       must not introduce. Carry the block whole on its first fragment instead: it lands in exactly
+       the same place, just unsplit. Prose the template already prints itself is taken off the ends
+       first, so nothing is sent twice. */
+    const fb=PT_FRAG_FALLBACK[mk]; if(!fb) return;
+    let v=String((blocks&&blocks[fb.block])||"");
+    if(!v.trim()) return;
+    if(fb.head){ const h=(blkTpl(fb.head)||"").trim();
+                 if(h&&v.indexOf(h)===0) v=v.slice(h.length).replace(/^\n+/,""); }
+    if(fb.tail){ const t=(blkTpl(fb.tail)||"").trim();
+                 if(t&&t.length&&v.slice(-t.length)===t) v=v.slice(0,-t.length).replace(/\n+$/,""); }
+    if(v.trim()){ s[fb.carry]=v; s[fb.carry+"//full"]=v; }
+  });
   /* The formatting rules and the story-language rule are one block on the wire but two different
      decisions. Someone who has written their own format rules still needs the language rule, and
      should not have to take the app's rules to get it. */
@@ -18801,6 +18820,16 @@ function ptExpand(text,srcs,vars,report){
     let out=lines.join("\n").replace(PT_CALL,(mm,n,s)=>vals[s?(n+"//"+s):n]||"");
     out=out.replace(PT_VAR,(mm,k)=>{
       if(k==="call") return mm;
+      /* v38.1 — {{gap}} IS A BLANK LINE, NOT A MISSING VALUE. Several pieces are a fixed heading,
+         then conditional fragments, laid out with a BLANK line between each — DRIVES & BRAKES is
+         the plain case. Its heading and its closing note are fixed prose and belong in the
+         template; but a template blank line starts a new paragraph, and a paragraph made only of
+         prose is never dropped — so on a turn with no drives at all the heading and the closing
+         note would ship on their own, with nothing between them. {{gap}} is the blank line that
+         stays INSIDE the paragraph: the whole piece is one paragraph, so it still disappears as a
+         unit when none of its calls fill, and the run of newlines a dropped fragment leaves behind
+         is collapsed back to one blank line by the tidy pass below. */
+      if(k==="gap") return "";
       if(Object.prototype.hasOwnProperty.call(vars,k)){
         const v=String(vars[k]==null?"":vars[k]);
         /* v37.9 — A NAME THAT RESOLVES TO NOTHING IS A BUG, NOT A BLANK. A known token with an
@@ -18855,7 +18884,7 @@ function ptScan(tpl,known,allowedVars){
   PT_VAR.lastIndex=0;
   while((m=PT_VAR.exec(body))){
     const k=m[1];
-    if(k==="call") continue;
+    if(k==="call"||k==="gap") continue;   // {{gap}} is layout, not a value — never flag it
     if(!Object.prototype.hasOwnProperty.call(vars,k)&&unknownVar.indexOf(k)===-1) unknownVar.push(k);
   }
   return {used,unknownCall,unknownVar,hasHistory:/\{\{\s*call\s*\/\/\s*dialogue_history\s*\}\}/i.test(body)};
@@ -18875,8 +18904,20 @@ function ptScan(tpl,known,allowedVars){
    of quietly sending a sentence twice or losing it. */
 const PT_INLINE_HEAD={
   task:"task", world:"world_header", scenario:"scenario_header",
-  relationships:"rel_header", calendar:"calendar_header", calendar_done:"calendar_done_header"
+  relationships:"rel_header", calendar:"calendar_header", calendar_done:"calendar_done_header",
+  scene_now:"scene_header", privacy:"privacy_header"
 };
+/* v38.1 — the pieces that are not one heading over one blob, but a SET of named fragments of which
+   a turn picks a few. Each fragment is keyed under its own prompt name on an underscore map the
+   producer leaves behind (_rt, _rg, _drives — the same trick _rails already used), so the template
+   can list them by name, in order, and a fragment this turn did not pick resolves empty and its
+   line drops. Listing them here is what lets an unpicked name read as "known but empty" instead of
+   as a typo in the editor's red warnings. */
+const RT_ORDER=["target_header","cont_target_header","heat_target_header",
+  "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_look"];
+const RG_ORDER=["heat_guidance","guidance_open","guidance_target","guidance_close",
+  "guidance_continue","guidance_reply","guidance_absence"];
+const DRIVE_FRAGS=["drive_toward","drive_against"];
 /* Every rail name, and the order each mode lays them in. The guardrails block picks a different
    SET and a different ORDER per channel — a text has no beat rule, heat has its own length and
    ending rules, an ordinary turn finishes on rail_form — which is exactly why each payload kind
@@ -18893,6 +18934,17 @@ const RAIL_ORDER_SPOKEN=["rail_indirect","rail_oblique","rail_oblique_once","rai
   "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"];
 const RAIL_KEYS=[...new Set([].concat(RAIL_ORDER_TEXT,RAIL_ORDER_HEAT,RAIL_ORDER_SPOKEN,
   ["rail_single_solo"]))];
+/* Every name a producer may hand over on one of those maps, and the maps themselves. */
+const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS))];
+const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives"];
+/* Which whole block each map splits, and where to put it if the map never arrived (see ptSources).
+   `head`/`tail` name the fragments the template prints as its own prose, so they can be taken off
+   the rescued block rather than shipped a second time. */
+const PT_FRAG_FALLBACK={
+  _rt:{block:"response_target",carry:"target_header"},
+  _rg:{block:"response_guidance",carry:"heat_guidance"},
+  _drives:{block:"drives",carry:"drive_toward",head:"drive_header",tail:"drive_ego"}
+};
 function railOrderFor(kind){
   return kind==="text"?RAIL_ORDER_TEXT:kind==="heat"?RAIL_ORDER_HEAT:RAIL_ORDER_SPOKEN;
 }
@@ -18911,6 +18963,28 @@ function ptPieceTemplate(id,kind){
     const head=(blkTpl("rails_header")||"").trim();
     const rails=railOrderFor(kind).map(k=>"{{call//"+k+"}}").join("\n");
     return (head?head+"\n":"")+rails;
+  }
+  /* WHO YOU ARE RESPONDING TO. Three possible headings, four possible openings, then the target's
+     backstory and appearance — every one of them a real prompt name, listed in the order the block
+     lays them out. Exactly one heading and one opening fill on any given turn; the rest drop. */
+  if(id==="response_target") return RT_ORDER.map(k=>"{{call//"+k+"}}").join("\n");
+  /* RESPONSE GUIDANCE. Heat replaces the ordinary guidance wholesale, so its line sits above and
+     the two can never both fill. The ordinary guidance is three fragments welded together with no
+     space between them — hence three calls on ONE line — and the absence note is a paragraph of
+     its own, which is what the {{gap}} is holding open. */
+  if(id==="response_guidance")
+    return "{{call//heat_guidance}}\n"
+      +"{{call//guidance_open}}{{call//guidance_target}}{{call//guidance_close}}\n"
+      +"{{call//guidance_continue}}{{call//guidance_reply}}\n"
+      +"{{gap}}\n{{call//guidance_absence}}";
+  /* DRIVES & BRAKES. The heading and the closing note are fixed prose, so they are written out
+     here; the two passages are the live part. All one paragraph, so a turn with neither passage
+     drops the heading and the note with them. */
+  if(id==="drives"){
+    const dh=(blkTpl("drive_header")||"").trim(), de=(blkTpl("drive_ego")||"").trim();
+    return (dh?dh+"\n{{gap}}\n":"")
+      +"{{call//drive_toward}}\n{{gap}}\n{{call//drive_against}}"
+      +(de?"\n{{gap}}\n"+de:"");
   }
   const head=ptHeadText(id);
   return head ? head+"\n{{call//"+id+"}}" : "{{call//"+id+"//full}}";
@@ -19303,7 +19377,7 @@ function epSend(key,systemText,parts){
     latest_arcs:["mem_latest_header","mem_latest_instr","query_lang"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     drives:["drive_header","drive_toward","drive_against","drive_ego"],
-    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","heat_guidance"],
+    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","guidance_absence","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
     final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"],
@@ -19767,6 +19841,9 @@ Keep proper nouns exactly as they appear in the conversation — names of people
   guidance_target:`. It is aimed at {{target}}`,
   guidance_close:`. Move the moment forward — do something, change something, let something land — and leave {{who}} room to answer.`,
   // v30.4 — the sibling of guidance_reply for the turn that CONTINUES instead of answering.
+  /* v38.1 — the absent-addressee guard. Fires only when {{user}}'s last line NAMES somebody who
+     is not in the room: {{names}} is that person (or people), {{self}} the character replying. */
+  guidance_absence:`ABSENCE NOTE: {{user}}'s last line mentions {{names}}, who is NOT in the room. {{names}} cannot see, hear, or answer — do NOT speak, act, narrate, or reply AS {{names}}, and never put words in their mouth. Respond ONLY as {{self}}. If {{user}} was calling for {{names}} or expecting them to answer, react to their not being here; if he was only speaking ABOUT them, just take it as said and reply to the point he was making.`,
   guidance_continue:`Nothing new has been said to you: the highlighted line above is your OWN, and it is already answered. Do not reply to {{target}} again and do not restate what you just said — carry straight on from your own last line. Something has to MOVE this turn: do the thing you stopped short of, notice something, change the distance between you, or let the silence cost somebody something.`,
   guidance_reply:`React to the highlighted line above: that is what {{target}} just said or did. Answer it from your own side — never by repeating it back first. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
   // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
@@ -20125,15 +20202,30 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
     // own wording ({{user}} has gone quiet); any other second turn gets the neutral one.
     const _hSelf=!!selfContinueLine(chat,p,!!(opts&&opts.textMode));
     const _heatRun=!!(chat&&chat._heatBeat);
-    let tb=_hSelf
-      ? `${blkTpl(_heatRun?"heat_target_header":"cont_target_header")}\n`
-        // target defaults to the player: tName is empty only when a call site passed an id with no
-        // name, and an empty {{target}} would render "'s last line is already answered".
-        +fillTpl(blkTpl(_heatRun?"heat_target_self":"cont_target_self"),{user:state.user,target:tName||state.user,self:p.name})
-      : `${blkTpl("target_header")}\n`+fillTpl(blkTpl(isPlayer?"target_player":"target_char"),{target:tName});
-    if(bio) tb+=`\n${fillTpl(blkTpl("target_bg"),{bio:bio})}`;
-    if(look)tb+=`\n${fillTpl(blkTpl("target_look"),{look:look})}`;
-    B.response_target=tb;
+    /* v38.1 — WHO YOU ARE RESPONDING TO, FRAGMENT BY FRAGMENT. This block is one of three
+       headings followed by one of four openings, then the target's backstory and appearance —
+       seven possible pieces of which exactly four ever fire. Called as a lump there was no way to
+       see which wording a turn had picked, let alone drop the parts you do not want. Each piece
+       is keyed under its OWN prompt name, so the template lists them by name and the ones this
+       turn did not pick resolve empty and their lines drop. */
+    const _rt={}, _rtO=[];
+    const _rtPut=(k,v)=>{ _rt[k]=v; _rtO.push(k); };
+    if(_hSelf){
+      const _hk=_heatRun?"heat_target_header":"cont_target_header";
+      const _bk=_heatRun?"heat_target_self":"cont_target_self";
+      _rtPut(_hk,blkTpl(_hk));
+      // target defaults to the player: tName is empty only when a call site passed an id with no
+      // name, and an empty {{target}} would render "'s last line is already answered".
+      _rtPut(_bk,fillTpl(blkTpl(_bk),{user:state.user,target:tName||state.user,self:p.name}));
+    }else{
+      const _bk=isPlayer?"target_player":"target_char";
+      _rtPut("target_header",blkTpl("target_header"));
+      _rtPut(_bk,fillTpl(blkTpl(_bk),{target:tName}));
+    }
+    if(bio) _rtPut("target_bg",fillTpl(blkTpl("target_bg"),{bio:bio}));
+    if(look)_rtPut("target_look",fillTpl(blkTpl("target_look"),{look:look}));
+    B.response_target=_rtO.map(k=>_rt[k]).join("\n");
+    B._rt=_rt;
     // The player never drops out of the payload: when the reply is aimed at another character,
     // {{user}} still gets their own (shorter) card right after.
     if(!isPlayer){
@@ -20244,8 +20336,12 @@ function sceneChangeNotice(chat,selfId){
     }
     const gone=[...leave].map(nm).filter(Boolean);
     if(gone.length)lines.push(fillTpl(blkTpl("scene_changed_left"),{names:gone.join(", ")}));
-    if(!lines.length)return "";
-    return `${blkTpl("scene_changed_header")}\n`+lines.map(l=>`- ${l}`).join("\n");
+    /* v38.1 — a fragment the user has blanked (or one silenced while the payload is being read
+       for its DATA only) contributes nothing, and a nothing must not reach the model as a bare
+       "- ". Filter first, then decide whether there is a notice at all. */
+    const _ln=lines.filter(Boolean);
+    if(!_ln.length)return "";
+    return `${blkTpl("scene_changed_header")}\n`+_ln.map(l=>`- ${l}`).join("\n");
   }catch(e){ return ""; }
 }
 
@@ -20552,13 +20648,24 @@ function buildTailBlocks(opts){
   const _heat=!!(chat&&chat._heatBeat);
   const _heatTotal=_heat?Math.max(1,Math.min(10,parseInt(chat._heatBeat.total,10)||5)):0;
   const _heatN=_heat?Math.max(1,parseInt(chat._heatBeat.n,10)||1):0;
-  let g=_heat
-    ? fillTpl(blkTpl("heat_guidance"),{user:state.user,self:selfName,total:String(_heatTotal),n:String(_heatN),who:targetName||state.user,
-        more:fillTpl(blkTpl(_heatN<_heatTotal?"heat_more_yes":"heat_more_no"),{user:state.user})})
-    : fillTpl(blkTpl("guidance_open"),{self:selfName});
+  /* v38.1 — each sentence of the guidance under its own name. The ordinary guidance is three
+     fragments welded end to end ON ONE LINE (open + who it is aimed at + what the turn must do)
+     and then, on its own line, the reply-or-carry-on rule; heat replaces the lot with its own.
+     Keyed here so the template can show all of them and let the turn pick. */
+  const _rg={};
+  let g;
+  if(_heat){
+    _rg.heat_guidance=fillTpl(blkTpl("heat_guidance"),{user:state.user,self:selfName,total:String(_heatTotal),n:String(_heatN),who:targetName||state.user,
+      more:fillTpl(blkTpl(_heatN<_heatTotal?"heat_more_yes":"heat_more_no"),{user:state.user})});
+    g=_rg.heat_guidance;
+  }else{
+    _rg.guidance_open=fillTpl(blkTpl("guidance_open"),{self:selfName});
+    g=_rg.guidance_open;
+  }
   if(!_heat){
-  if(targetName) g+=fillTpl(blkTpl("guidance_target"),{target:targetName});
-  g+=fillTpl(blkTpl("guidance_close"),{who:targetName||state.user});
+  if(targetName){ _rg.guidance_target=fillTpl(blkTpl("guidance_target"),{target:targetName}); g+=_rg.guidance_target; }
+  _rg.guidance_close=fillTpl(blkTpl("guidance_close"),{who:targetName||state.user});
+  g+=_rg.guidance_close;
   /* v30.4 — THE GUIDANCE MUST AGREE WITH THE REST OF THE PAYLOAD. When this character spoke last
      and nothing new has been aimed at them, three blocks already say so: `response_target` ("YOU
      SPOKE LAST — THIS TURN CARRIES ON"), `last_line` (their own line, under CONTINUE STRAIGHT ON
@@ -20566,9 +20673,11 @@ function buildTailBlocks(opts){
      that is what {{target}} just said or did" — which is false (they already answered it) and which
      WINS, because it is the last instruction before generation. That is the payload arguing with
      itself, and the half that loses is the correct half. */
-  if(targetName) g+=`\n${selfContinueLine(chat,selfP,_tm)
-    ? fillTpl(blkTpl("guidance_continue"),{target:targetName,self:selfName})
-    : fillTpl(blkTpl("guidance_reply"),{target:targetName})}`;
+  if(targetName){
+    const _gk=selfContinueLine(chat,selfP,_tm)?"guidance_continue":"guidance_reply";
+    _rg[_gk]=fillTpl(blkTpl(_gk),{target:targetName,self:selfName});
+    g+=`\n${_rg[_gk]}`;
+  }
   }
   // ABSENT-ADDRESSEE GUARD. If {{user}}'s latest line names a character who is NOT in the room, the
   // responder must NOT answer as that person (the classic "you address Y, present X replies as Y" bug).
@@ -20589,12 +20698,17 @@ function buildTailBlocks(opts){
           return parts.length && parts.some(w=>toks.has(w)); });
         if(named.length){
           const nms=named.map(pp=>pp.name).join(", ");
-          g+=`\n\nABSENCE NOTE: ${state.user}'s last line mentions ${nms}, who is NOT in the room. ${nms} cannot see, hear, or answer — do NOT speak, act, narrate, or reply AS ${nms}, and never put words in their mouth. Respond ONLY as ${selfName}. If ${state.user} was calling for ${nms} or expecting them to answer, react to their not being here; if he was only speaking ABOUT them, just take it as said and reply to the point he was making.`;
+          /* v38.1 — this note used to be hard-coded English spliced straight into the guidance,
+             which made it the one rule in the payload nobody could read, translate or turn off.
+             It is an ordinary fragment now, with the same wording. */
+          _rg.guidance_absence=fillTpl(blkTpl("guidance_absence"),{user:state.user,names:nms,self:selfName});
+          g+=`\n\n${_rg.guidance_absence}`;
         }
       }
     }
   }catch(e){}
   B.response_guidance=g;
+  B._rg=_rg;
 
   // (6) FINAL GUARDRAILS — fires last, closest to generation. The consistency rules (hold your
   //     facts, push back on contradictions, never fabricate a past) used to be a wall of prose in
@@ -20616,11 +20730,15 @@ function buildTailBlocks(opts){
     psycheRefreshIfStale(chat,selfP,targetId,targetName);
     const _ps=psycheFor(chat,selfP);
     if(_ps.toward||_ps.against){
+      const _dm={};
       const _pp=[blkTpl("drive_header")];
-      if(_ps.toward) _pp.push(fillTpl(blkTpl("drive_toward"),{toward:_ps.toward}));
-      if(_ps.against)_pp.push(fillTpl(blkTpl("drive_against"),{against:_ps.against}));
+      if(_ps.toward){ _dm.drive_toward=fillTpl(blkTpl("drive_toward"),{toward:_ps.toward}); _pp.push(_dm.drive_toward); }
+      if(_ps.against){_dm.drive_against=fillTpl(blkTpl("drive_against"),{against:_ps.against}); _pp.push(_dm.drive_against); }
       _pp.push(blkTpl("drive_ego"));
       B.drives=_pp.filter(Boolean).join("\n\n");
+      // The two passages are the live part; the heading and the closing note are fixed prose and
+      // move into the template, with {{gap}} holding the blank lines the block is laid out with.
+      B._drives=_dm;
     }
   }catch(e){}
   // v26.7 — ONE placeholder map for every rail. Several were read with a bare blkTpl(), so a rail
@@ -33909,9 +34027,17 @@ function ptCatalog(){
   /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
      them or it flags its own default in red; and they are worth listing anyway — this is the list
      the editor shows, so a rule is something you can find, copy and move rather than guess at. */
-  RAIL_KEYS.forEach(k=>{
+  /* v38.1 — and the same for every fragment of WHO YOU ARE RESPONDING TO, RESPONSE GUIDANCE and
+     DRIVES & BRAKES. One entry per real prompt name, so the editor's (i) button, its search and
+     its red warnings all work on them exactly as they do on a whole block. */
+  const _fragGroup=k=>
+    k.indexOf("rail_")===0 ? "Guardrail"
+    : RG_ORDER.indexOf(k)>=0 ? "Response guidance"
+    : DRIVE_FRAGS.indexOf(k)>=0 ? "Drives & brakes"
+    : "Who you are responding to";
+  PT_FRAG_KEYS.forEach(k=>{
     const t=String(BLOCK_TPL_DEFAULTS[k]||"").replace(/\s+/g," ").trim();
-    out.push({name:k,label:"Guardrail · "+k.replace(/^rail_/,"").replace(/_/g," "),
+    out.push({name:k,label:_fragGroup(k)+" · "+k.replace(/^rail_/,"").replace(/_/g," "),
       desc:(t?t.slice(0,150)+(t.length>150?"…":""):"")
         +" — sent only on the turns it applies to; on any other turn it resolves empty and its line drops."});
   });

@@ -36,17 +36,27 @@ const {chromium}=require('playwright');
   console.log("\n[no data is lost on the way through a template]");
   const carried=await pg.evaluate(()=>{
     const head={task:"# TASK\nBe her.",world:"# WORLD\nA city.",your_bio:"# YOU\nAyse.",rumors:""};
-    const tail={scene_now:"# SCENE\nEvening.",response_guidance:"# GUIDE\nAnswer.",trackers:""};
+    /* v38.1 — response_target, response_guidance and drives are called by FRAGMENT now. Handed
+       over as whole strings with no fragment map (exactly what an older payload or a hand-built
+       block set looks like) they must still arrive, once, in the right place. */
+    const tail={scene_now:"# SCENE\nEvening.",response_guidance:"# GUIDE\nAnswer.",trackers:"",
+      drives:blkTpl("drive_header")+"\n\nShe wants it.\n\n"+blkTpl("drive_ego")};
+    head.response_target="# TARGET\nKemal.";
     const hist=[{role:"user",content:"hi"},{role:"assistant",content:"hey"}];
     const was=state.payloadTplOn; state.payloadTplOn=true;
     const t=ptBuildMessages("solo",Object.assign({},head,tail),hist,{});
     state.payloadTplOn=was;
     const all=(t||[]).map(m=>m.content||"").join("\n");
     return {got:!!t, all,
-      missing:["Be her.","A city.","Ayse.","Evening.","Answer."].filter(x=>all.indexOf(x)<0),
+      missing:["Be her.","A city.","Ayse.","Evening.","Answer.","Kemal.","She wants it."].filter(x=>all.indexOf(x)<0),
+      // and the prose the template prints itself must not also come back in with the rescued block
+      doubled:(all.split("THE TWO THINGS PULLING AT YOU").length-1)>1
+        ||(all.split("Do not narrate this weighing").length-1)>1,
       order:(t||[]).map(m=>m.role).join(",")};
   });
   ok("the template path produced messages", carried.got===true);
+  ok("a block handed over without its fragment map is not sent twice", carried.doubled===false,
+     "the template's own prose came back in with the rescued block");
   ok("every block the producer supplied is in there", carried.missing.length===0,
      "missing: "+carried.missing.join(", "));
   ok("the transcript still sits between the two system messages",

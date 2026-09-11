@@ -56,15 +56,32 @@ const {chromium}=require('playwright');
   ok("no truncated names or buttons", clip.truncated.length===0, JSON.stringify(clip.truncated));
   ok("no horizontal overflow", !clip.overflowX);
 
-  console.log("\n[edit jumps to the right place]");
+  /* v38.2 — edit no longer JUMPS anywhere for the app's own wording: the chunk boxes are gone and
+     a piece's sentences open beside its name, in the same list you just read the name in. The one
+     thing that still lives elsewhere is the user's OWN prompt, and the piece that carries it now
+     offers a way back to it rather than silently dropping half of itself. */
+  console.log("\n[edit opens the wording beside the name]");
   const e1=await pg.evaluate(()=>{
     ptEditPiece("your_bio");
-    const row=document.querySelector('#plqBody_solo .plqRow[data-b="your_bio"]');
-    return {found:!!row, open:!!(row&&row.closest('details[data-plq]')&&row.closest('details[data-plq]').open),
-            highlighted:!!(row&&row.style.outline)};
+    const host=document.getElementById('ptFrag_your_bio');
+    const boxes=host?[...host.querySelectorAll('textarea[data-btpl]')].map(t=>t.dataset.btpl):[];
+    const holdsText=boxes.length&&boxes.every(k=>{
+      const t=host.querySelector('textarea[data-btpl="'+k+'"]'); return t.value===blkTpl(k); });
+    ptEditPiece("your_bio");
+    return {count:boxes.length, holdsText:!!holdsText, closed:!document.getElementById('ptFrag_your_bio').innerHTML.trim()};
   });
-  ok("edit opens the block's row", e1.found&&e1.open, JSON.stringify(e1));
-  ok("and highlights it", e1.highlighted);
+  ok("edit opens this piece's own sentences", e1.count>0&&e1.holdsText, JSON.stringify(e1));
+  ok("and tapping edit again closes them", e1.closed);
+  const eOwn=await pg.evaluate(()=>{
+    ptEditPiece("task");
+    const host=document.getElementById('ptFrag_task');
+    const hasLink=!!(host&&/ptJumpToPrompt/.test(host.innerHTML));
+    const jumped=ptJumpToPrompt("task");
+    const row=document.querySelector('#plqBody_solo .plqRow[data-b="task"]');
+    return {hasLink,jumped:!!jumped,highlighted:!!(row&&row.style.outline)};
+  });
+  ok("a piece carrying your own prompt offers the way back to it", eOwn.hasLink, JSON.stringify(eOwn));
+  ok("and that route opens and highlights its row", eOwn.jumped&&eOwn.highlighted, JSON.stringify(eOwn));
   const e2=await pg.evaluate(()=>{ try{ ptEditPiece("dialogue_history"); ptEditPiece("scene"); return "ok"; }catch(x){ return "threw: "+x.message; } });
   ok("pieces with no wording degrade gracefully", e2==="ok", e2);
 

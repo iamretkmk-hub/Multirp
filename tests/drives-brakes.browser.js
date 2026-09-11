@@ -78,11 +78,15 @@ const {chromium}=require('playwright');
   ok("it is in the reply order, after the feeling", await pg.evaluate(()=>{
       const i=REPLY_ORDER.indexOf("drives"), f=REPLY_ORDER.indexOf("feelings_now");
       return i>-1 && i>f ? true : "drives="+i+" feelings_now="+f; }));
+  // v38.2 — the chunk boxes are gone; a piece's wording opens beside its name in the piece list.
   ok("its four fragments are all editable", await pg.evaluate(()=>{
-      show('settings'); renderPayloadList();
-      Object.keys(PAYLOAD_DEFS).forEach(k=>{ try{ renderPayloadEditor(k); }catch(e){} });
-      return ["drive_header","drive_toward","drive_against","drive_ego"]
-        .every(k=>!!document.querySelector('textarea[data-btpl="'+k+'"]')); }));
+      show('settings'); renderPayloadList(); renderPayloadTemplates();
+      ptEditPiece("drives");
+      const got=["drive_header","drive_toward","drive_against","drive_ego"]
+        .every(k=>{ const t=document.querySelector('textarea[data-btpl="'+k+'"]');
+                    return !!t && t.value===blkTpl(k); });
+      ptEditPiece("drives");
+      return got; }));
   ok("nothing is emitted before the engine has written", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       delete chat._psyche;

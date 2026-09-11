@@ -23,20 +23,34 @@ const {chromium}=require('playwright');
   ok("text default carries timing note", await pg.evaluate(()=>ptDefaultTemplate("text").includes("{{call//text_timing//full}}")));
   ok("all 5 kinds generate", await pg.evaluate(()=>PT_KINDS.every(k=>ptDefaultTemplate(k).length>50)));
 
-  console.log("\n[parity: default template === classic buildPayload]");
-  const parity=await pg.evaluate(()=>{
+  /* v38.0 — BYTE PARITY MOVED TO tests/parity-live.browser.js, and it had to.
+     This checked the template against buildPayload using STAND-IN block values ("# TASK\nBe her."),
+     which worked while every call was {{call//x//full}} and the template contributed no words of
+     its own. It cannot work now: a piece whose heading lives in the template takes that heading
+     from the real shipped fragment, so against a stand-in value the two sides legitimately differ
+     — the template says "# TASK\nYou are {{char}}…", the stand-in says "# TASK\nBe her.".
+     parity-live runs the same comparison with REAL blocks from a real scene, across all five
+     payload kinds, and also asserts the template path did not quietly fall back. What is worth
+     keeping here is the weaker but still useful property: with stand-in blocks, nothing the
+     producer supplied goes missing on the way through the template. */
+  console.log("\n[no data is lost on the way through a template]");
+  const carried=await pg.evaluate(()=>{
     const head={task:"# TASK\nBe her.",world:"# WORLD\nA city.",your_bio:"# YOU\nAyse.",rumors:""};
     const tail={scene_now:"# SCENE\nEvening.",response_guidance:"# GUIDE\nAnswer.",trackers:""};
     const hist=[{role:"user",content:"hi"},{role:"assistant",content:"hey"}];
-    const pl=buildPayload("solo",head,tail);
-    const classic=[]; if(pl.head)classic.push({role:"system",content:pl.head});
-    classic.push(...hist); if(pl.tail)classic.push({role:"system",content:pl.tail});
     const was=state.payloadTplOn; state.payloadTplOn=true;
     const t=ptBuildMessages("solo",Object.assign({},head,tail),hist,{});
     state.payloadTplOn=was;
-    return {same:JSON.stringify(classic)===JSON.stringify(t),classic,t};
+    const all=(t||[]).map(m=>m.content||"").join("\n");
+    return {got:!!t, all,
+      missing:["Be her.","A city.","Ayse.","Evening.","Answer."].filter(x=>all.indexOf(x)<0),
+      order:(t||[]).map(m=>m.role).join(",")};
   });
-  ok("byte-identical to classic", parity.same, JSON.stringify(parity.t));
+  ok("the template path produced messages", carried.got===true);
+  ok("every block the producer supplied is in there", carried.missing.length===0,
+     "missing: "+carried.missing.join(", "));
+  ok("the transcript still sits between the two system messages",
+     carried.order==="system,user,assistant,system", carried.order);
 
   console.log("\n[settings UI]");
   await pg.evaluate(()=>{ show('settings'); });

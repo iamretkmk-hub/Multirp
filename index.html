@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -18692,11 +18692,21 @@ function ptSources(blocks,rawFn){
     s[id]=""; s[id+"//full"]="";
   });
   s.text_timing=""; s["text_timing//full"]="";
+  // seeded so a rail that did not fire this turn reads as "known but empty", not as a typo
+  RAIL_KEYS.forEach(k=>{ s[k]=""; s[k+"//full"]=""; });
   s.language_rule=""; s["language_rule//full"]="";
   Object.keys(blocks||{}).forEach(k=>{
     if(k==="__history__"||k.charAt(0)==="_") return;  // history is structural; _keys are internal
     s[k+"//full"]=blocks[k];            // the app's own wording, headings and all
   });
+  /* v38.0 — EVERY GUARDRAIL BY NAME. final_guardrails is fourteen separate rules that the block
+     joins into one string; called as a lump there is no way to see them, move one, or take one
+     out. The producer leaves them keyed on _rails (already selected for this turn's mode and
+     already deduped), and each becomes its own call. A rail this turn did not select, or that the
+     dedupe folded away, is simply not here — so its line resolves empty and drops, which is what
+     the lump did with it too. */
+  {const _r=(blocks&&blocks._rails)||null;
+   if(_r) Object.keys(_r).forEach(k=>{ s[k]=_r[k]; s[k+"//full"]=_r[k]; });}
   /* The formatting rules and the story-language rule are one block on the wire but two different
      decisions. Someone who has written their own format rules still needs the language rule, and
      should not have to take the app's rules to get it. */
@@ -18718,8 +18728,25 @@ function ptSources(blocks,rawFn){
       const r=raws()[k];
       /* Some pieces ARE their prose (the scene lines, the guardrails) — stripping it leaves
          nothing. Handing back an empty piece there would quietly delete content, so fall back. */
-      if(r!=null&&String(r).trim()) return r;
-      return blocks[k]||"";
+      if(r==null||!String(r).trim()){
+        /* (!) v38.0 — BUT NOT WITH THE HEADING STILL ON IT. For a piece whose heading now lives in
+           the template, the fallback is the FULL value, heading and all — so the heading would be
+           sent twice, once from the template and once from the data under it. That happens whenever
+           the raw pass could not run (no producer handed over, or it threw), which is a state the
+           live payload can reach, not just a test. Take the heading off the front instead. */
+        const full=blocks[k]||"";
+        const head=ptHeadText(k);
+        if(head && full.indexOf(head)===0) return full.slice(head.length).replace(/^\n/,"");
+        return full;
+      }
+      /* (!) v38.0 — DROP THE SEPARATOR THE HEADING OWNED. A producer writes `header + "\n" + data`,
+         so with the heading silenced the bare value begins with the newline that belonged to the
+         heading. For a piece whose heading now lives in the template, that newline is emitted twice
+         — once by the template line break and once by the data — and the block gains a blank line
+         it never had. Exactly ONE is removed, which is exactly what the heading contributed: a
+         producer that used "\n\n" (the task line before the base instruction) keeps the second and
+         its paragraph break survives. */
+      return PT_INLINE_HEAD[k] ? String(r).replace(/^\n/,"") : r;
     };
   });
   if(_blocks._format_rules!=null) s.format=_blocks._format_rules;   // bare format: rules only
@@ -18836,13 +18863,65 @@ function ptScan(tpl,known,allowedVars){
 
 /* The default template for a payload kind, generated from that kind's CURRENT block order, so
    an unedited template reproduces buildPayload exactly. */
+/* ===== v38.0 — THE STATIC PROSE LIVES IN THE TEMPLATE =====================================
+   A payload used to be a list of {{call//x//full}}, every call returning the app's own wording AND
+   its live data welded together — so the words the model actually reads were nowhere on screen
+   except inside a chunk box. Where a piece's fixed text is a clean PREFIX to its data the two can
+   simply be separated: the prose becomes ordinary editable template text and the call returns data
+   only (the bare form, which already exists — blkTpl() is silenced in raw mode).
+   A piece is listed here only once it is verified that `full` === `that fragment` + `bare`. The
+   payload-parity check is what holds that: it compares the assembled template against the classic
+   builder byte for byte, so a piece whose prose is not really a clean prefix fails loudly instead
+   of quietly sending a sentence twice or losing it. */
+const PT_INLINE_HEAD={
+  task:"task", world:"world_header", scenario:"scenario_header",
+  relationships:"rel_header", calendar:"calendar_header", calendar_done:"calendar_done_header"
+};
+/* Every rail name, and the order each mode lays them in. The guardrails block picks a different
+   SET and a different ORDER per channel — a text has no beat rule, heat has its own length and
+   ending rules, an ordinary turn finishes on rail_form — which is exactly why each payload kind
+   gets its own template: one static list cannot express three orders, three lists can. A rail not
+   selected this turn resolves empty and its line drops. */
+const RAIL_ORDER_TEXT=["rail_text_channel","rail_text_len","rail_indirect","rail_oblique",
+  "rail_noecho","rail_norepeat","rail_voice","rail_consistent_known",
+  "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"];
+const RAIL_ORDER_HEAT=["rail_indirect","rail_noecho","rail_voice","rail_heat_len","rail_heat_narr",
+  "rail_norepeat","rail_heat_end","rail_consistent_known",
+  "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"];
+const RAIL_ORDER_SPOKEN=["rail_indirect","rail_oblique","rail_oblique_once","rail_beat",
+  "rail_noecho","rail_norepeat","rail_question","rail_voice","rail_consistent_known",
+  "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"];
+const RAIL_KEYS=[...new Set([].concat(RAIL_ORDER_TEXT,RAIL_ORDER_HEAT,RAIL_ORDER_SPOKEN,
+  ["rail_single_solo"]))];
+function railOrderFor(kind){
+  return kind==="text"?RAIL_ORDER_TEXT:kind==="heat"?RAIL_ORDER_HEAT:RAIL_ORDER_SPOKEN;
+}
+function ptHeadText(id){
+  const k=PT_INLINE_HEAD[id]; if(!k)return "";
+  const t=blkTpl(k);
+  return (typeof t==="string"&&t.trim())?t.trim():"";
+}
+/* One piece as the template should show it: its prose, then the call that fills the live part, in
+   ONE paragraph so an empty piece takes its heading with it. */
+function ptPieceTemplate(id,kind){
+  /* FINAL GUARDRAILS, unpacked. The heading is fixed text and belongs in the template; each rule
+     under it is conditional, so it stays a call — which is the point: fourteen named lines you can
+     see, reorder, delete or replace with your own sentence, instead of one opaque lump. */
+  if(id==="final_guardrails"){
+    const head=(blkTpl("rails_header")||"").trim();
+    const rails=railOrderFor(kind).map(k=>"{{call//"+k+"}}").join("\n");
+    return (head?head+"\n":"")+rails;
+  }
+  const head=ptHeadText(id);
+  return head ? head+"\n{{call//"+id+"}}" : "{{call//"+id+"//full}}";
+}
 function ptDefaultTemplate(kind){
   if(String(kind).indexOf("eng:")===0) return epDefaultTemplate(String(kind).slice(4));
   const order=payloadOrder(kind)||[];
   const head=[],tail=[]; let after=false;
   order.forEach(id=>{
     if(id==="__history__"){ after=true; return; }
-    (after?tail:head).push("{{call//"+id+"//full}}");
+    (after?tail:head).push(ptPieceTemplate(id,kind));
   });
   /* The text payload has one piece the others do not: how long the message sat unanswered. It is
      appended to the tail in buildTextPayload, so the default template must place it there too or
@@ -20598,7 +20677,12 @@ function buildTailBlocks(opts){
                 "rail_consistent_known",
                 "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"];
       })())
-    .map(k=>fillTpl(blkTpl(k),_rmap)).filter(Boolean);
+    /* v38.0 — carry the KEY alongside the text. Until now this mapped straight to strings and the
+       names were gone by the next line, so the whole block could only ever be called as one opaque
+       lump. Each rail is individually callable now ({{call//rail_voice}}), which is what lets the
+       template list them one per line — visible, reorderable, deletable — instead of hiding
+       fourteen rules behind {{call//final_guardrails//full}}. */
+    .map(k=>({k,t:fillTpl(blkTpl(k),_rmap)})).filter(x=>x.t);
   // v28.3 — drop a rail whose text is already carried by another rail. A customized fragment often
   // grows to contain the whole of a neighbouring default, and both then ship: the same rule, twice,
   // at double weight, in the highest-attention block of the payload.
@@ -20615,7 +20699,8 @@ function buildTailBlocks(opts){
      wins, which is why the merged one keeps its place and the four it swallowed fall away. */
   const _words=t=>String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/).filter(w=>w.length>3);
   const _seen=[], _seenW=[];
-  const railsOut=rails.filter(r=>{
+  const railsOut=rails.filter(x=>{
+    const r=x.t;
     const n=String(r).replace(/\s+/g," ").trim().toLowerCase();
     if(!n)return false;
     if(_seen.some(s=>s===n||(n.length>60&&s.includes(n))||(s.length>60&&n.includes(s))))return false;
@@ -20632,7 +20717,12 @@ function buildTailBlocks(opts){
     }))return false;
     _seen.push(n); _seenW.push(w); return true;
   });
-  B.final_guardrails=`${blkTpl("rails_header")}\n`+railsOut.map(r=>`- ${r}`).join("\n");
+  B.final_guardrails=`${blkTpl("rails_header")}\n`+railsOut.map(x=>`- ${x.t}`).join("\n");
+  /* The same rails, keyed, for a template that calls them one at a time. Underscore keys are
+     internal — ptSources skips them as block names and reads this map instead. A rail the dedupe
+     dropped is simply absent here, so a template calling it resolves empty and its line goes,
+     exactly as the lump did. */
+  B._rails={}; railsOut.forEach(x=>{ B._rails[x.k]=`- ${x.t}`; });
 
   // v24.3 — delivery-tag coaching for the xAI engine: while replies are being voiced through xAI
   // TTS, ask the model to write expressive delivery tags inside the dialogue quotes. The tags never
@@ -33816,6 +33906,15 @@ function ptCatalog(){
   });
   out.push({name:"language_rule",label:"The story-language rule (write in Turkish, etc.)",desc:"Normally rides inside the formatting rules. Call it on its own if you have written your own format rules but still want the language enforced."});
   out.push({name:"text_timing",label:"How long the text sat unanswered",desc:"Text payload only — how much game time passed before this reply."});
+  /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
+     them or it flags its own default in red; and they are worth listing anyway — this is the list
+     the editor shows, so a rule is something you can find, copy and move rather than guess at. */
+  RAIL_KEYS.forEach(k=>{
+    const t=String(BLOCK_TPL_DEFAULTS[k]||"").replace(/\s+/g," ").trim();
+    out.push({name:k,label:"Guardrail · "+k.replace(/^rail_/,"").replace(/_/g," "),
+      desc:(t?t.slice(0,150)+(t.length>150?"…":""):"")
+        +" — sent only on the turns it applies to; on any other turn it resolves empty and its line drops."});
+  });
   out.push({name:"dialogue_history",label:"THE TRANSCRIPT",desc:"The chat history itself. Put it on its own line; everything before it is sent before the conversation, everything after it comes after."});
   return out;
 }

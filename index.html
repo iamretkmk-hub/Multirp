@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4713,6 +4713,22 @@ function curImgWH(){
   return (IMG_WH[curImgRatioKey()]||[576,1024]).slice();
 }
 function curImgSize(){ const wh=curImgWH(); return wh[0]+"x"+wh[1]; }
+/* The FRAMES key closest to a given size, by aspect. The frame key is still how the rest of the
+   app talks about shape — a message stamps one so a video can match the still it grew from, and the
+   per-image picker highlights one — so a size set by the sliders needs a key that describes it.
+   Without this, that stamp fell back to state.ratio and claimed a shape the image did not have. */
+function frameKeyForWH(w,h){
+  w=+w||1; h=+h||1; const want=w/h;
+  let best=DEFAULT_FRAME, bestD=Infinity;
+  for(const f of FRAMES){
+    const wh=IMG_WH[f.key]; if(!wh)continue;
+    const d=Math.abs(Math.log((wh[0]/wh[1])/want));
+    if(d<bestD){ bestD=d; best=f.key; }
+  }
+  return best;
+}
+// The frame key the CURRENT settings describe — the sliders' own aspect, not a stored ratio key.
+function curFrameKey(){ const wh=curImgWH(); return frameKeyForWH(wh[0],wh[1]); }
 
 /* ---- roleplay starter characters ---- */
 const STARTERS=[
@@ -20808,7 +20824,7 @@ function renderImageRail(){
     ? `<span class="railTag pinned"><svg class="ic" style="width:12px;height:12px"><use href="#i-pin"/></svg> Pinned</span>`
     : `<span class="railTag">Latest</span>`;
   const pinLabel = pinned ? "Unpin" : "Pin";
-  const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:(state.ratio||DEFAULT_FRAME);
+  const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
   const frameBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Change frame & regenerate" onclick="pickFrame('${m.mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`:"";
   // v27: Video (+ Scene) live in one dropdown.
   const ddBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${m.mid}')">${icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`:"";
@@ -22265,7 +22281,7 @@ function sceneHTML(m){
     // v27: Video (+ Scene) live in one dropdown under the image.
     const ddBtn=`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${mid}')">${m.vidState==="error"?icon("warn"):icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`;
     const v=`${ddBtn} <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${mid}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${mid}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
-    const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:(state.ratio||DEFAULT_FRAME);
+    const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
     const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
     return `<div class="scene"><img src="${m.img}" referrerpolicy="no-referrer" onerror="imgFallback('${mid}',this)" onclick="viewSceneImage('${mid}')">
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${v}${frameBtn}${pinBtn}</div></div>`;
@@ -22337,7 +22353,7 @@ function refreshBubble(mid){
     tbtn.innerHTML=icon("speech");tbtn.title="Talking video — the character lip-syncs this line (Inworld voice + Kling)";tbtn.onclick=()=>dubAsVideo(mid);
     const ibtn=document.createElement('button');ibtn.className="btn sec small";
     ibtn.innerHTML='<svg class="ic"><use href="#i-info"/></svg>';ibtn.title="Show the generation prompt";ibtn.onclick=()=>showMediaPrompt(mid);
-    const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:(state.ratio||DEFAULT_FRAME);
+    const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
     const fbtn=document.createElement('button');fbtn.className="btn sec small";
     fbtn.innerHTML=icon("frame")+" "+esc(frameShort(_fr));fbtn.title="Change frame & regenerate this scene";fbtn.onclick=()=>pickFrame(mid);
     const _c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
@@ -24534,12 +24550,18 @@ async function illustrate(mid,replyText,force){
     // Stamp it on the message (so a regenerate keeps the frame and video can auto-match) and set the
     // transient override for the provider call only (cleared in finally).
     /* v37.5 — rule.ratio is gone from this chain. Your per-image pick still wins for that one
-       image; after that it is the width/height in Settings, never the scene type's own idea. */
-    const _frame=(msg.ratio && RATIOS[msg.ratio]) ? msg.ratio
-               : (state.ratio||DEFAULT_FRAME);
+       image; after that it is the width/height in Settings, never the scene type's own idea.
+       (!) v37.7 — AND THE OVERRIDE IS ONLY SET WHEN THERE IS ONE. This used to assign
+       _frameOverride unconditionally, falling back to state.ratio — so on every ordinary reply the
+       override was the global aspect KEY, curImgWH() preferred it, and the width/height sliders
+       were dead in the only path that matters. Picking 1:1 and dragging to 1024 still sent 768,
+       because 768 is what IMG_WH["1:1"] says. No pick, no override: the sliders decide. */
+    const _explicit=(msg.ratio && RATIOS[msg.ratio]) ? msg.ratio : null;
+    _frameOverride=_explicit;                      // null → curImgWH() reads the sliders
+    // Stamp the shape the image ACTUALLY comes out as, so a video can match the still it grew from.
+    const _frame=_explicit||curFrameKey();
     msg.ratio=_frame;
     let url;
-    _frameOverride=_frame;
     // v30 — the people in this frame, decided by the rule's cast: the speaker, plus the player
     // and/or whoever else is present. Built before the call so both branches below get it.
     const _pack=usesRefImage()
@@ -24596,7 +24618,7 @@ function reIllustrate(mid){const m=findMsg(mid);if(!m)return;illustrate(mid,m.co
 // scenes; this overrides only the tapped image.
 function pickFrame(mid){
   const m=findMsg(mid); if(!m) return;
-  const cur=(m.ratio&&RATIOS[m.ratio])?m.ratio:(state.ratio||DEFAULT_FRAME);
+  const cur=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
   let ov=document.getElementById('framePickModal');
   if(!ov){ ov=document.createElement('div'); ov.className="modal"; ov.id="framePickModal"; document.body.appendChild(ov); }
   const rows=FRAMES.map(f=>`<button class="btn sec" data-frame="${f.key}" style="justify-content:flex-start${f.key===cur?";border-color:var(--accent);color:var(--accent)":""}">${icon("frame")} ${esc(f.label)}${f.key===cur?" "+icon("check"):""}</button>`).join("");
@@ -25732,7 +25754,7 @@ function renderPlayground(){
   // 5) FRAME — aspect ratio (defaults to the pose's own ratio, else the global setting).
   box.appendChild(_pgLabelEl("Frame"));
   const fs=document.createElement('select');
-  const _defFrame=(state.ratio||DEFAULT_FRAME);   // v37.5 — the scene rule has no say
+  const _defFrame=curFrameKey();   // v37.7 — the shape the sliders describe, not a stored key
   const _curFrame=(_pg.frame&&RATIOS[_pg.frame])?_pg.frame:_defFrame;
   fs.innerHTML=Object.keys(RATIOS).map(k=>`<option value="${esc(k)}" ${k===_curFrame?"selected":""}>${esc(frameShort(k))}${k!==frameShort(k)?` (${esc(k)})`:""}</option>`).join("");
   fs.onchange=()=>{_pg.frame=fs.value;};
@@ -25937,10 +25959,10 @@ async function pgGenerate(){
     if(_styleTail && !finalPrompt.toLowerCase().includes(_styleTail.slice(0,18).toLowerCase()))
       finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_styleTail;
     const baseNeg="low quality, blurry, deformed, bad anatomy, extra limbs, watermark, text, signature";
-    const _frame=(_pg.frame&&RATIOS[_pg.frame])?_pg.frame
-               :(state.ratio||DEFAULT_FRAME);
+    const _explicit=(_pg.frame&&RATIOS[_pg.frame])?_pg.frame:null;
+    _frameOverride=_explicit;                      // v37.7 — as in illustrate(): no pick, no override
+    const _frame=_explicit||curFrameKey();
     let url;
-    _frameOverride=_frame;
     // v30 — pictures picked here win; with none, the rule's cast decides, exactly like a scene
     // in the story does.
     let _pack=null;

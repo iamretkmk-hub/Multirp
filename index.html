@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8016,9 +8016,30 @@ function _wh(size){
 /* Fit a requested size to what the model accepts. A fixed-enum model (wan) snaps to its nearest
    allowed pair, aspect weighted over area because a stretched face is the visible failure. A
    free-size model (qwen) keeps the aspect and scales into its 512-2048 range. */
+/* Some models reject a size that is technically well-formed: seedream refuses anything under
+   921,600 pixels ("image size must be at least 921600 pixels" — a real 400 from a real request at
+   768*768, which is 589,824). The app cannot know every model's floor, but it can stop sending a
+   request it has been told is invalid: scale UP to the floor, keeping the aspect the player chose. */
+const MODEL_MIN_AREA=[{re:/seedream/i, area:921600}];
+function modelMinArea(model){
+  const m=String(model||"");
+  for(const r of MODEL_MIN_AREA) if(r.re.test(m))return r.area;
+  return 0;
+}
+function fitSizeToModel(model,size){
+  const wh=_wh(size); const floor=modelMinArea(model);
+  if(!wh||!floor)return String(size||"").replace(/x/gi,"*");
+  let [w,h]=wh;
+  if(w*h<floor){
+    const k=Math.sqrt(floor/(w*h));
+    w=Math.ceil((w*k)/8)*8; h=Math.ceil((h*k)/8)*8;
+    while(w*h<floor){ w+=8; h=Math.ceil((h*(w/(w-8)))/8)*8; }   // rounding down must not undo it
+  }
+  return w+"*"+h;
+}
 function editModelSize(model,size){
   const spec=atlasEditSpec(model); const wh=_wh(size);
-  if(!spec)return String(size||"").replace(/x/gi,"*");
+  if(!spec)return fitSizeToModel(model,size);
   // A tier model (wan 2.7) takes a resolution band, not a pixel pair — the aspect comes from the
   // first reference image, so the app's frame can't be asked for here. Send the band and let the
   // references decide the shape.
@@ -8158,7 +8179,9 @@ async function atlasImage(prompt,negative,rule,opts){
   }
   const body={model,prompt};
   if(negative)body.negative_prompt=negative;
-  body.size=wanted;
+  // v37.8 — through the floor check: this path used to send the requested size verbatim, which is
+  // how a 768*768 request reached a model that refuses anything under 921,600 pixels.
+  body.size=fitSizeToModel(model,wanted);
   {const g=guidanceFor(model,body.negative_prompt,rule); if(g>0)body.guidance_scale=g;}
   return await atlasGenerate("image",body,label,null);
 }
@@ -24556,7 +24579,8 @@ async function illustrate(mid,replyText,force){
        override was the global aspect KEY, curImgWH() preferred it, and the width/height sliders
        were dead in the only path that matters. Picking 1:1 and dragging to 1024 still sent 768,
        because 768 is what IMG_WH["1:1"] says. No pick, no override: the sliders decide. */
-    const _explicit=(msg.ratio && RATIOS[msg.ratio]) ? msg.ratio : null;
+    // v37.8 — a stamp is not a choice; only msg.frameLock is (see pickFrame).
+    const _explicit=(msg.frameLock && msg.ratio && RATIOS[msg.ratio]) ? msg.ratio : null;
     _frameOverride=_explicit;                      // null → curImgWH() reads the sliders
     // Stamp the shape the image ACTUALLY comes out as, so a video can match the still it grew from.
     const _frame=_explicit||curFrameKey();
@@ -24632,7 +24656,12 @@ function pickFrame(mid){
     </div>`;
   ov.querySelectorAll('[data-frame]').forEach(b=>{
     b.onclick=()=>{ const k=b.getAttribute('data-frame'); closeModal('framePickModal'); if(!RATIOS[k])return;
-      m.ratio=k; markChatDirty(curChat()); persistChats(); illustrate(mid,m.content,true); };
+      /* v37.8 — frameLock marks this as a CHOICE. Every build before v37.7 stamped msg.ratio on
+         every image it made, so an existing chat is full of stamps that were never picked by
+         anybody — and v37.7, which honours msg.ratio as a per-image override, read all of them as
+         deliberate and kept ignoring the width/height sliders. A stamp records what an image came
+         out as; this flag records that you asked for it. Only the flag overrides. */
+      m.ratio=k; m.frameLock=true; markChatDirty(curChat()); persistChats(); illustrate(mid,m.content,true); };
   });
   openModal('framePickModal');
 }

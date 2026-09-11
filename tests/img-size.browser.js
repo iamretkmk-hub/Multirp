@@ -178,7 +178,9 @@ const {chromium}=require('playwright');
       return m.ratio==="2:3"||m.ratio==="3:4" ? true : "stamped "+m.ratio; }));
   ok("a per-image pick still overrides, for that image", await (async()=>{
       await pg.evaluate(()=>{ state.imgW=832; state.imgH=1216;
-        curChat().messages.find(x=>x.mid==="mi1").ratio="16:9"; });
+        const m=curChat().messages.find(x=>x.mid==="mi1");
+        m.ratio="16:9"; m.frameLock=true;   // v37.8 — a PICK, not just a stamp
+      });
       const v=await pg.evaluate(async()=>{
         window.__imgReq=[];
         const m=curChat().messages.find(x=>x.mid==="mi1");
@@ -189,6 +191,63 @@ const {chromium}=require('playwright');
       return v===await pg.evaluate(()=>IMG_WH["16:9"].join("x")) ? true : "sent "+v; })());
   ok("and the override is released afterwards", await pg.evaluate(()=>
       _frameOverride===null ? true : "left set to "+_frameOverride));
+
+  console.log("\n[a leftover stamp is not a choice]");
+  ok("an image stamped by an older build does NOT override the sliders", await (async()=>{
+      // every build before v37.7 wrote msg.ratio on every image it made, so an existing chat is
+      // full of stamps nobody picked. This is the exact reported case: 1:1 stamped, sliders 1024.
+      await pg.evaluate(()=>{ state.imgW=1024; state.imgH=1024; });
+      const v=await pg.evaluate(async()=>{
+        window.__imgReq=[];
+        const m=curChat().messages.find(x=>x.mid==="mi1");
+        m.img=null; m.imgState="idle"; m.ratio="1:1"; delete m.frameLock;   // a stamp, not a pick
+        try{ await illustrate("mi1",'"Merhaba."',true); }catch(e){}
+        const img=(window.__imgReq||[]).find(r=>r.body&&(r.body.width||r.body.height));
+        return img?(img.body.width+"x"+img.body.height):"(none)"; });
+      return v==="1024x1024" ? true : "sent "+v; })());
+  ok("but a frame you actually picked does", await (async()=>{
+      const v=await pg.evaluate(async()=>{
+        window.__imgReq=[];
+        const m=curChat().messages.find(x=>x.mid==="mi1");
+        m.img=null; m.imgState="idle"; m.ratio="1:1"; m.frameLock=true;    // a real pick
+        try{ await illustrate("mi1",'"Merhaba."',true); }catch(e){}
+        const img=(window.__imgReq||[]).find(r=>r.body&&(r.body.width||r.body.height));
+        return img?(img.body.width+"x"+img.body.height):"(none)"; });
+      return v===await pg.evaluate(()=>IMG_WH["1:1"].join("x")) ? true : "sent "+v; })());
+  ok("the picker sets the lock when you choose", await pg.evaluate(()=>
+      /frameLock=true/.test(String(pickFrame))));
+  ok("a locked message keeps showing what you locked", await pg.evaluate(()=>{
+      const m=curChat().messages.find(x=>x.mid==="mi1");
+      m.ratio="1:1"; m.frameLock=true;
+      state.imgW=1280; state.imgH=720;
+      const shown=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
+      delete m.frameLock; m.ratio=null;
+      return shown==="1:1"; }));
+
+  console.log("\n[a size the model will actually accept]");
+  ok("seedream refuses under 921,600 px, so we do not send it", await pg.evaluate(()=>{
+      const v=fitSizeToModel("bytedance/seedream-v4.7/edit","768x768");
+      const p=v.split("*");
+      return (p[0]*p[1])>=921600 ? true : v+" is "+(p[0]*p[1])+" px"; }));
+  ok("it scales UP rather than cropping the shape away", await pg.evaluate(()=>
+      fitSizeToModel("bytedance/seedream-v4.7/edit","768x768")==="960*960"));
+  ok("an aspect that is already big enough is left alone", await pg.evaluate(()=>
+      fitSizeToModel("bytedance/seedream-v4.7/edit","720x1280")==="720*1280"
+   && fitSizeToModel("bytedance/seedream-v4.7/edit","1024x1024")==="1024*1024"));
+  ok("a tall small size keeps its aspect on the way up", await pg.evaluate(()=>{
+      const v=fitSizeToModel("bytedance/seedream-v4.7/edit","512x910");
+      const p=v.split("*"), ar=p[0]/p[1];
+      return (p[0]*p[1]>=921600 && Math.abs(ar-(512/910))<0.03) ? true : v; }));
+  ok("every produced side is a multiple of 8", await pg.evaluate(()=>{
+      for(const s of ["768x768","512x910","600x600","900x400"]){
+        const p=fitSizeToModel("bytedance/seedream-v4.7/edit",s).split("*");
+        if(p[0]%8||p[1]%8) return s+" gave "+p.join("*");
+      }
+      return true; }));
+  ok("a model with no known floor is untouched", await pg.evaluate(()=>
+      fitSizeToModel("some/other-model","768x768")==="768*768"));
+  ok("the plain Atlas body goes through the floor", await pg.evaluate(()=>
+      /fitSizeToModel\(model,wanted\)/.test(String(atlasImage))));
 
   console.log("\n[the frame key describes the size, not a stored setting]");
   ok("a square size reads as 1:1", await pg.evaluate(()=>{

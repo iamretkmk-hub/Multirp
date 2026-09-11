@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v37.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -18635,6 +18635,7 @@ const PT_VALUES=[
   {name:"user",            scope:"any",   label:"Your name"},
   {name:"npc.name",        scope:"reply", label:"The character writing this turn"},
   {name:"char",            scope:"reply", label:"Same as npc.name"},
+  {name:"self",            scope:"reply", label:"Same as npc.name — the spelling the guardrail and guidance fragments use"},
   {name:"npc.id",          scope:"reply", label:"That character's internal id"},
   {name:"response.target", scope:"reply", label:"Who this turn is aimed at"},
   {name:"target",          scope:"reply", label:"Same as response.target"},
@@ -18653,8 +18654,10 @@ function ptVars(ctx,scope){
   let sub=""; try{ const l=chat&&chat.locationId?locById(chat.locationId):null;
                    const sb=l?subById(l,curSubId(chat)):null; sub=(sb&&sb.name)||""; }catch(e){}
   let lang=""; try{ lang=storyLangName()||""; }catch(e){}
+  // v37.9 — the reply names come from the one shared map (see replyNamePh), never a second copy.
+  const names=replyNamePh(npc,ctx.targetName);
   const all={
-    "user": state.user||"You",
+    "user": names.user||"You",
     "npc.name": npc?(npc.name||""):"",
     "npc.id": npc?(npc.id||""):"",
     "response.target": ctx.targetName||"",
@@ -18665,7 +18668,10 @@ function ptVars(ctx,scope){
     "universe": uni,
     "story_language": lang
   };
-  all["char"]=all["npc.name"]; all["target"]=all["response.target"]; all["day"]=all["current_day"];
+  all["char"]=names.char||all["npc.name"];
+  all["self"]=all["char"];
+  all["target"]=names.target||all["response.target"];
+  all["day"]=all["current_day"];
   if(scope!=="any") return all;
   const v={};
   PT_VALUES.forEach(d=>{ if(d.scope==="any") v[d.name]=all[d.name]; });
@@ -18735,6 +18741,8 @@ function ptResolve(srcs,name,sub,report){
   return "";
 }
 
+/* The tokens that name somebody. Empty is never right for one of these — see ptExpand. */
+const PT_NAME_VARS=["char","self","npc.name","user","target","response.target"];
 /* Expand one segment's text. Returns "" when everything in it dropped out. */
 function ptExpand(text,srcs,vars,report){
   const paras=String(text==null?"":text).split(/\n[ \t]*\n/);
@@ -18766,7 +18774,17 @@ function ptExpand(text,srcs,vars,report){
     let out=lines.join("\n").replace(PT_CALL,(mm,n,s)=>vals[s?(n+"//"+s):n]||"");
     out=out.replace(PT_VAR,(mm,k)=>{
       if(k==="call") return mm;
-      if(Object.prototype.hasOwnProperty.call(vars,k)) return String(vars[k]==null?"":vars[k]);
+      if(Object.prototype.hasOwnProperty.call(vars,k)){
+        const v=String(vars[k]==null?"":vars[k]);
+        /* v37.9 — A NAME THAT RESOLVES TO NOTHING IS A BUG, NOT A BLANK. A known token with an
+           empty value is the worst kind of failure here: the sentence still reads as a sentence,
+           so nothing looks wrong — "You are . Write 's next turn in this scene" goes to the model
+           exactly like that. It happens when a caller builds a payload without saying which
+           character it is for. Reported so it shows up in Debug instead of in the story. */
+        if(!v && report && PT_NAME_VARS.indexOf(k)>=0 && report.emptyVar.indexOf(k)===-1)
+          report.emptyVar.push(k);
+        return v;
+      }
       if(report&&report.unknownVar.indexOf(k)===-1) report.unknownVar.push(k);
       return mm;                                       // left visible on purpose
     });
@@ -18858,7 +18876,7 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
   if(!state.payloadTplOn) return null;
   let msgs=[];
   try{
-    const report={unknownCall:[],unknownVar:[]};
+    const report={unknownCall:[],unknownVar:[],emptyVar:[]};
     const srcs=ptSources(blocks,rawFn), vars=ptVars(ctx||{});
     const headSecs=new Set();
     let seenInstruction=false;
@@ -18877,11 +18895,13 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
       }
       if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
     });
-    if(report.unknownCall.length||report.unknownVar.length){
-      const e=dbg("Payload template — names that do not exist ("+kind+")","In-app",
+    if(report.unknownCall.length||report.unknownVar.length||report.emptyVar.length){
+      const e=dbg("Payload template — names that did not resolve ("+kind+")","In-app",
         "(template check — no network request)",
         {unknown_calls:report.unknownCall,unknown_values:report.unknownVar,
-         note:"Typed in Settings → Payloads but not recognised. Calls sent nothing; values were left as literal text."});
+         empty_names:report.emptyVar,
+         note:"Unknown names are typed in Settings → Payloads but not recognised — calls sent nothing, values were left as literal text."
+             +(report.emptyVar.length?" EMPTY NAMES are a different and worse fault: the token IS known, and it resolved to nothing, so the sentence went out with a hole where a person's name belongs (\"You are . Write 's next turn\"). It means whoever built this payload did not say which character it is for.":"")});
       dbgDone(e,"error",{fix:"Open Settings → Payloads → Payload templates. Unknown names are marked in red."});
     }
   }catch(err){
@@ -19131,7 +19151,7 @@ function epMessages(key,systemText,parts){
   const d=epDef(key); if(!d) return null;
   let msgs=[];
   try{
-    const report={unknownCall:[],unknownVar:[]};
+    const report={unknownCall:[],unknownVar:[],emptyVar:[]};
     const own=Object.assign({},parts||{});
     Object.keys(own).forEach(k=>{ own[k]=(own[k]==null?"":String(own[k])); });
     /* Library first, the engine's own pieces second — a call site that supplies `trackers` itself
@@ -19144,10 +19164,11 @@ function epMessages(key,systemText,parts){
       const body=ptExpand(pt.text,srcs,vars,report);
       if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
     });
-    if(report.unknownCall.length||report.unknownVar.length){
-      const e=dbg("Engine template — names that do not exist ("+key+")","In-app",
+    if(report.unknownCall.length||report.unknownVar.length||report.emptyVar.length){
+      const e=dbg("Engine template — names that did not resolve ("+key+")","In-app",
         "(template check — no network request)",
         {engine:d.label,unknown_calls:report.unknownCall,unknown_values:report.unknownVar,
+         empty_names:report.emptyVar,
          note:"Typed in Settings → Payloads but not recognised for this engine. Calls sent nothing."});
       dbgDone(e,"error",{fix:"Settings → Payloads → Engine payload templates → "+d.label});
     }
@@ -19908,10 +19929,17 @@ function feelingsBlock(chat,selfId,targetId,targetName){
 /* The placeholder vocabulary every reply-payload prompt and fragment is filled from. One map,
    so {{char}} means the same thing in the base instruction, the format rules and the task line.
    `self` is an alias for `char` because the guardrail fragments already spell it that way. */
-function _replyPh(p,opts,targetName){
-  const nm=(p&&p.name)||"";
+/* v37.9 — THE SAME MAP ON BOTH SIDES. These four names are filled by fillTpl when a fragment's
+   text lives in the builder, and by ptExpand when the same text lives in a payload template. They
+   were two separate lists: {{self}} existed only in the builder's, so the moment a fragment's
+   wording moved into the template — which is the whole direction this editor is going — {{self}}
+   stopped resolving and reached the model as empty. Both sides read this now, so a token cannot
+   mean one thing in a fragment and another in the template that replaces it. */
+function replyNamePh(npc,targetName){
+  const nm=(npc&&npc.name)||"";
   return {char:nm,self:nm,user:state.user||"",target:targetName||state.user||""};
 }
+function _replyPh(p,opts,targetName){ return replyNamePh(p,targetName); }
 function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   opts=opts||{};
   const chat=opts.chat||curChat();

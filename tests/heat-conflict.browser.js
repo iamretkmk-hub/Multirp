@@ -2,8 +2,9 @@
    Heat used to be "many short spoken lines, minimal narration" and nothing else, so a beat could be
    pure appetite with no one home. The beat now carries four things at once (desire, shame, fear,
    regret, none resolved), the character is explicitly still herself inside it, and the narration
-   ALTERNATES between her conscience and the plain mechanics — decided in code, because a model
-   generating one beat per call cannot remember which mode it used last.
+   ALTERNATES between the plain mechanics and her conscience — decided in code, because a model
+   generating one beat per call cannot remember which mode it used last. A run OPENS on the
+   mechanics: the reader sees what is happening before they are told what it costs.
    Run: node tests/heat-conflict.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -25,16 +26,16 @@ const {chromium}=require('playwright');
     c._heatBeat.narrN="3"; o.n3=heatNarrMode(c); c._heatBeat.narrN="4"; o.n4=heatNarrMode(c);
     o.seq=[1,2,3,4,5,6].map(n=>heatNarrMode({_heatBeat:{narrN:String(n)}}));
     o.noBeat=heatNarrMode({});                       // never throws with nothing set
-    o.blockA=heatNarrBlock({_heatBeat:{narrN:"1"}});
-    o.blockB=heatNarrBlock({_heatBeat:{narrN:"2"}});
-    o.shortA=heatNarrShort({_heatBeat:{narrN:"1"}});
-    o.shortB=heatNarrShort({_heatBeat:{narrN:"2"}});
+    o.blockA=heatNarrBlock({_heatBeat:{narrN:"2"}});   // the conscience beat
+    o.blockB=heatNarrBlock({_heatBeat:{narrN:"1"}});   // the mechanics beat (a run opens here)
+    o.shortA=heatNarrShort({_heatBeat:{narrN:"2"}});
+    o.shortB=heatNarrShort({_heatBeat:{narrN:"1"}});
     return o;
   });
-  ok("odd beats are the conscience", alt.n1==="superego" && alt.n3==="superego", JSON.stringify(alt.seq));
-  ok("even beats are the mechanics", alt.n2==="physical" && alt.n4==="physical", JSON.stringify(alt.seq));
-  ok("it really alternates over a run", alt.seq.join(",")==="superego,physical,superego,physical,superego,physical", alt.seq.join(","));
-  ok("no beat set still answers", alt.noBeat==="superego", alt.noBeat);
+  ok("a run opens on the mechanics", alt.n1==="physical" && alt.n3==="physical", JSON.stringify(alt.seq));
+  ok("the conscience lands second", alt.n2==="superego" && alt.n4==="superego", JSON.stringify(alt.seq));
+  ok("it really alternates over a run", alt.seq.join(",")==="physical,superego,physical,superego,physical,superego", alt.seq.join(","));
+  ok("no beat set still answers", alt.noBeat==="physical", alt.noBeat);
   ok("the two mode blocks differ", alt.blockA!==alt.blockB && alt.blockA.length>100 && alt.blockB.length>100);
   ok("the conscience block names the cost", /conscience/i.test(alt.blockA) && /cost/i.test(alt.blockA), alt.blockA.slice(0,90));
   ok("the physical block forbids feeling", /no feeling/i.test(alt.blockB), alt.blockB.slice(0,90));
@@ -48,7 +49,7 @@ const {chromium}=require('playwright');
       seen.push(heatNarrMode({_heatBeat:{narrN:String(chat.heatNarrN)}})); }
     return {seen, stored:chat.heatNarrN, persisted:!/^_/.test("heatNarrN")};
   });
-  ok("the counter alternates across separate beats", ctr.seen.join(",")==="superego,physical,superego,physical", ctr.seen.join(","));
+  ok("the counter alternates across separate beats", ctr.seen.join(",")==="physical,superego,physical,superego", ctr.seen.join(","));
   ok("and it is a persisted field, so a run of one keeps alternating", ctr.stored===4 && ctr.persisted===true, JSON.stringify(ctr));
 
   // ---- what the heat format and guidance now demand

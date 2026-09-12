@@ -1,6 +1,22 @@
 # 10 · Media Pipeline — Images, Video, Scenes, Speech
 
 
+
+## Video model (v39.7)
+
+`VIDEO_MODELS` offers **one** entry — `bytedance/seedance-2.0-mini/reference-to-video`, which is
+also `VIDEO_MODEL_DEFAULT`. `image-to-video` is no longer offered; it can still be typed into the
+custom id field and routes correctly (`vidFamily` matches on the id, `vidIsRefOnly` distinguishes
+the two endpoints).
+
+**(!) The boot migration must never match a bare vendor or family name.** It used to test
+`/…|seedance|…/` against the stored id, which fired on the app's OWN family: choosing the second
+shipped model, or typing `seedance-2.5-pro`, was silently reverted to the default on the next
+reload — the picker offered a choice that could not stick, and the comment promising a hand-typed
+id is "left alone" was false for the only vendor shipped. It now lists only genuinely retired ids
+plus the removed `seedance-2.0-mini/image-to-video`. Covered by `tests/video-model.browser.js`.
+
+
 ## Pictures during play — one choice, not a switch and a slider (v39.4)
 
 `state.imgMode` (`sm_imgmode`) is the single authority, read through `imgMode()`:

@@ -135,7 +135,7 @@ const {chromium}=require('playwright');
       // every {{name}} a default carries must be one the app knows how to fill
       const known=new Set(["user","char","self","target","place","situation","also","lang","sheet",
         "extra","about","task","outcome","fail_note","home_note","cast","world","count","places",
-        "request","json_rule","ph_rule","seconds","beats","tracker","name","owner"]);
+        "request","json_rule","ph_rule","seconds","beats","tracker","name","owner","gist"]);
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
         (String(X_ENGINE_PROMPTS[k].def).match(/\{\{(\w+)\}\}/g)||[]).forEach(t=>{

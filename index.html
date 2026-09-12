@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v38.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2983,6 +2983,14 @@ VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you 
 3. You MAY also drop inline non-verbals where they occur: [laugh] [sigh] [breathe] [clear throat] [cough] [yawn].
 4. To stress a key word, CAPITALIZE it. Use sparingly.
 5. Keep delivery BRISK, but place pauses where a real speaker would: a comma for a small breath, an em-dash — for a beat before something important, and "…" for a thoughtful or hesitant pause. Use them deliberately and sparingly, where the MEANING calls for a pause — not randomly. Otherwise favor short sentences.`},
+
+  /* v38.9 — what a PARTICIPANT of a rumoured evening remembers. Not the rumour itself: they were
+     there, the event is not news to them. What is news is that the place is repeating it — which is
+     also the thing that would make them raise it with {{user}}. {{gist}} is the shape the talk gives
+     it ("romantic/cosy", "a row", "secretive"), as judged by the location-gossip engine. */
+  x_rumor_about_you:{label:"A rumour about an evening you were part of",json:false,
+    hint:"Planted in a character who was THERE, instead of the circulating “people are saying…” line that goes to everyone else at that place. {{place}} is where, {{gist}} is the shape the talk is giving it.",
+    def:`Word is going round at {{place}} about the time I spent there ({{gist}}). I was there — what is new is not what happened, but that people are repeating it.`},
 
   /* (!) v38.6 — this one is STORY TEXT, not an instruction: the player reads it in the chat. It was
      hard-coded Turkish, so a story played in any other language got one Turkish line in the middle
@@ -11193,10 +11201,24 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     if(visitMsgs.length<2)return;       // nothing really happened here
     const fallbackName=(curCast()[0]&&curCast()[0].name)||"someone";
     const visit=visitMsgs.slice(-12).map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
-    // Who else was around (companions/ambient who were present during the visit) — used only to give
-    // the rumor a subject ("user and X"), NOT to decide ownership.
-    const presentNames=[...new Set(visitMsgs.filter(m=>m.role!=='user'&&m.speaker).map(m=>m.speaker))];
+    /* Who else was around during the visit — the rumor's subject list, and (below) the test for
+       whether the person receiving it was THERE.
+       (!) v38.9 — this used to be whoever SPOKE. Someone who sat through the evening without a line
+       was not counted, so the talk did not name them and, worse, they were treated as an outsider
+       hearing about it. Presence is what makes you a participant, not dialogue: the union of every
+       witness list in the visit, with the speakers folded in for older messages that carry no
+       present[]. */
+    const _visitIds=new Set();
+    visitMsgs.forEach(m=>{ if(Array.isArray(m.present)) m.present.forEach(id=>_visitIds.add(id)); });
+    const _rosterAll=(state.personas||[]);
+    const presentNames=[...new Set(
+      [...visitMsgs.filter(m=>m.role!=='user'&&m.speaker).map(m=>m.speaker),
+       ...[..._visitIds].map(id=>{ const c=_rosterAll.find(x=>x&&x.id===id); return c?c.name:""; })]
+      .filter(Boolean))];
     const others=presentNames.length?presentNames.join(", "):"(no one in particular)";
+    // Who the talk is ABOUT — the player plus whoever was with them. Stored on the memory so the
+    // people-weighting in retrieval, and the Memory screen, both know who this concerns.
+    const subjectPeople=[...new Set([state.user].concat(presentNames).filter(Boolean))];
     // OWNERSHIP (your design): the leak is owned by EVERY character TICKED at this location (its
     // `residents` list — the people who frequent it) — INCLUDING the gossiped character themselves if
     // they're ticked here. The place's social fabric hears "people are saying…", subject included.
@@ -11223,13 +11245,23 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     // OBSERVATION-typed so the existing End-Day gossip pipeline + intent former consume it unchanged.
     let planted=false;
     for(const owner of ticked){
-      // If THIS owner is the subject of the rumor, note it — a self-referential rumor ("people are
-      // saying YOU and …") is what can motivate them to raise it with the player. Flagged for the
-      // intent former; content stays the same circulating "people say…" line.
-      const aboutSelf = presentNames.some(n=>n.toLowerCase()===(owner.name||"").toLowerCase());
+      /* (!) v38.9 — YOU DO NOT LEARN FROM GOSSIP THAT YOU WERE THERE.
+         Every regular of the place got the identical circulating line — including the people the
+         rumor is ABOUT. So a character who spent the evening at the sea-side tea garden was handed
+         "People are saying Emre was at Sahil with Berker and Hakan" as something he had heard,
+         about himself, about an evening he had lived through. The `aboutSelf` flag has been written
+         since this shipped and read nowhere, so the wording never changed.
+         It changes now. A participant already knows what happened; what is NEWS to them is that the
+         place is repeating it — which is also the thing that would make them raise it with the
+         player. Different memory, different wording, same event. */
+      const aboutSelf = _visitIds.has(owner.id)
+                     || presentNames.some(n=>n.toLowerCase()===(owner.name||"").toLowerCase());
       const mem={
         id:"m_"+Date.now()+Math.random().toString(36).slice(2,6)+owner.id.slice(-3),
-        content:baseContent,
+        content:aboutSelf
+          ? fillTpl(up("x_rumor_about_you"),{place:loc||"there",gist:gist||"nothing in particular"})
+          : baseContent,
+        people:subjectPeople.slice(),
         location:loc, emotion,
         importance, tags:tagsBase.concat(aboutSelf?["about-self"]:[]),
         type:"OBSERVATION",               // SAME type the pipeline consumes
@@ -19920,6 +19952,8 @@ const X_PROMPT_CARDS=[
    keys:["x_appearance_generator","x_look_split"]},
   {key:"beats",label:"Narrator beats",desc:"The short narrator lines the app writes on its own: arrivals, a day ending, a meeting nobody came to, an errand run offstage, the recap when you come back.",
    keys:["x_arrival","x_arrival_line","x_day_transition_narration","x_meeting_no_show_beat","x_bg_task","x_scene_recap","x_text_notice"]},
+  {key:"talk",label:"What the place is saying",desc:"The rumour a public place starts when you spend time in it — and the different thing a character who was actually there remembers about it.",
+   keys:["poiGossip","x_rumor_about_you"]},
   {key:"day_end_quests",label:"End of day — what moved",desc:"At day's end, reads the day's memories and decides what happened to each quest and to each favour asked of you.",
    keys:["x_quest_reconcile","x_char_quest_reconcile"]},
   {key:"meta",label:"The prompt writer",desc:"The prompt behind every “Write with AI” button — the one that writes your other prompts.",
@@ -28160,8 +28194,19 @@ async function runGossipPropagation(chat,day,uni){
         if(!rid||rid==="__user__"||rid===witness.id)continue;   // must be a real NPC recipient
         const rp=roster.find(p=>p.id===rid); if(!rp)continue;
         if(!isActiveChar(rp))continue;   // a removed/dead character receives no new gossip
+        /* (!) v38.9 — AND NOT TO SOMEONE THE RUMOUR IS ABOUT. The witness was excluded and the
+           subject was not, so a character could be handed, as a suspicion to carry, a rumour whose
+           subject was themselves — an evening they had lived through, arriving as something they
+           had been told about somebody. Whether the talk has reached them is a different fact with
+           its own channel (see x_rumor_about_you); it is not this one. */
+        const about=(Array.isArray(g.about)?g.about:[]).map(idByName).filter(Boolean);
+        if(about.indexOf(rid)>=0)continue;
+        // Who the talk is ABOUT, by name — so retrieval's people-weighting and the Memory screen
+        // both know who this concerns instead of showing an empty row.
+        const aboutNames=(about.length?about:["__user__"]).map(nameById).filter(Boolean);
         // Plant the rumor as an open-suspicion memory in the recipient.
         const mem={
+          people:aboutNames,
           id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
           content:String(g.rumor).trim(),
           location:"", emotion:"suspicious",
@@ -28178,7 +28223,6 @@ async function runGossipPropagation(chat,day,uni){
           // room for it (a paraphrase of a live rumor just adds a carrier; a stakeholder already
           // drowning in suspicions takes no more), and only then does a memory get planted.
           const stakeId=(g.stakeholder?idByName(g.stakeholder):null)||rid;
-          const about=(Array.isArray(g.about)?g.about:[]).map(idByName).filter(Boolean);
           const led=recordGossip({
             text:mem.content, subject:about.length?about:["__user__"],
             stakeholderId:stakeId, carrierId:rid, from:witness.name,

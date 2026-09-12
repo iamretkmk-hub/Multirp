@@ -117,6 +117,36 @@ const {chromium}=require('playwright');
       !/text_noreply/.test(String(rememberMemory))&&state.memory.every(m=>m.source!=="text_noreply")
         ? true : "an ignored-text memory exists"));
 
+  /* v38.8 — lateness stays as INFORMATION for a reply that is already happening, and never becomes
+     a reason to start one. buildTextPayload doubles as the context for the proactive texter, so the
+     note went into the "does she text him now?" decision — the same left-on-read pressure v38.7
+     removed, arriving through the payload instead of through a score. */
+  console.log("\n[a late reply is information, not a prompt to write]");
+  await pg.evaluate(()=>{
+    const chat=curChat(); const p=(state.personas||[]).find(x=>x.id==="m_a");
+    chat.messages=(chat.messages||[]).filter(m=>!m.textMsg);
+    // she texted on day 1; it is day 4 and only now is it being answered
+    chat.messages.push({mid:"lt1",role:"assistant",speaker:"Ayse",speakerId:"m_a",
+      content:"Geliyor musun?",textMsg:true,textWith:"m_a",present:[],gday:1,ts:1});
+    state.textsOn=true;
+    markChatDirty(chat);
+  });
+  ok("the reply payload still says how long it sat", await pg.evaluate(async()=>{
+      const p=(state.personas||[]).find(x=>x.id==="m_a");
+      const pl=await buildTextPayload(curChat(),p);
+      return /days ago and they are only replying now/.test(String(pl.tail||""))
+          && /days ago/.test(String((pl.blocks||{}).text_timing||""))
+        ? true : "the note is missing from the reply payload"; }));
+  ok("the decision to text unprompted never sees it", await pg.evaluate(async()=>{
+      const p=(state.personas||[]).find(x=>x.id==="m_a");
+      const pl=await buildTextPayload(curChat(),p,{timing:false});
+      return !/only replying now/.test(String(pl.tail||""))
+          && !String((pl.blocks||{}).text_timing||"").trim()
+        ? true : "the note reached the proactive context"; }));
+  ok("and the proactive texter is the caller that asks for it that way", await pg.evaluate(()=>
+      /buildTextPayload\(chat,p,\{timing:false\}\)/.test(String(maybeProactiveText))
+        ? true : "maybeProactiveText still builds the payload with the note"));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

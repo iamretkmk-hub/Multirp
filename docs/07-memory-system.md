@@ -31,7 +31,9 @@ runLocationGossipLeak (POI leak)   observations → GOSSIP rumors            Jac
 4. `commitMemoryArc` builds **one memory per participant**, each scoped to what that character
    actually witnessed (their arrival cut within the arc + `witnessedBy(m,p)` on `present[]`):
    - **Participants** get `memBuild` → full structured memory (JSON: content, people, emotion,
-     feelings, importance, tags, type).
+     feelings, importance, tags, type). When the builder omits `people`, the arc's own speakers
+     fill it (`arcPeople`) — an empty `people` row costs the memory the presence boost in all
+     three rankers, so no writer may leave it blank.
    - **Bystanders** (present but not in the conversation) get `gistBuild` → a fuzzy outside
      impression (OBSERVATION with `gist`, `charge`, `observerOnly`) — they *see the shape*,
      never the words. Charged gists (≥0.5) are exempt from the importance floor because the
@@ -77,6 +79,11 @@ Query: `genQuery` (LLM semantic query from the current moment) prepended to the 
 **Weighted facet scoring** (weights `memW*` from Settings):
 `semantic` (query-embedding cosine, or lexical token overlap when embeddings are off/failed) ·
 `people` (memory involves someone present) · `location` (matches current place) · `recency`
+<!-- v39.0 — every writer fills `people` through the shared `memPeople(...)` resolver (ids,
+     "__user__", or plain names in any mixture → de-duplicated display names). Twelve writers
+     used to store it empty: no-show meetings, broken promises, trackers going public, proactive
+     texts, planted rumours, closed quests, confrontation and overture aftermaths, world-pulse
+     events, diaries, the long-term condenser, and arc memories the builder left unlabelled. -->
 (day-gap decay `1/(1+gap*0.15)`) · `emotion` (mood-congruent recall — the owner's dominant
 fast axis toward the player maps to congruent emotion enums) · `importance`.
 

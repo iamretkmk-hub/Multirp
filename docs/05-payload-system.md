@@ -331,6 +331,12 @@ Every fixed sentence lives in `BLOCK_TPL_DEFAULTS` as a **fragment**, consumed b
 via `fillTpl(blkTpl("key"), {vars})`, overridable in `state.blockTpls` (blank ⇒ default), and
 listed per block in `_attachBlockTpls`'s `T` map so the Settings editor exposes it.
 
+**Resets are undoable.** Every reset — the bulk "Reset N fragments you have rewritten" and the
+per-fragment one — photographs `state.blockTpls` into `K.blockTplsUndo` first (`_tplSnapshot`).
+`plqTplUndoReset` merges the snapshot back over fragments that are still at the shipped default,
+so anything rewritten *since* the reset survives the undo. It holds the state before the LAST
+reset only, and is spent once used.
+
 **(!) The fragment 3-leg rule** — healthy only when all three exist: (1) a default, (2) a
 producer calling `blkTpl()`, (3) a listing in `T`. The boot drift guard checks (1)↔(3) only —
 it **cannot** detect a producer that stopped calling `blkTpl`. Inline fixed text in a producer

@@ -68,15 +68,26 @@ const {chromium}=require('playwright');
       return calls.length===1; }));
 
   console.log("\n[the rest of image settings still works]");
-  ok("Illustrate every N still there", await pg.evaluate(()=>!!document.getElementById('setImgEveryTurns')));
+  /* v39.4 — the "illustrate every N replies" slider is retired; Pictures during play answers the
+     same question as one of three choices. The guarantee that matters here is unchanged: whatever
+     the setting says, it must not silently suppress a character. */
+  ok("Pictures during play is the control now", await pg.evaluate(()=>
+      !!document.getElementById('setImgMode') && !document.getElementById('setImgEveryTurns')));
   ok("saveSettings does not throw", await pg.evaluate(()=>{
       show('settings');
       try{ saveSettings(false); return true; }catch(e){ return "threw: "+e.message; } }));
-  ok("and it saves imgEveryTurns", await pg.evaluate(()=>{
+  ok("and it saves the mode", await pg.evaluate(()=>{
       show('settings');
-      document.getElementById('setImgEveryTurns').value="4";
+      document.getElementById('setImgMode').value="smart";
       saveSettings(false);
-      return String(state.imgEveryTurns)==="4" && String(localStorage.getItem("sm_imgeveryturns"))==="4"; }));
+      return state.imgMode==="smart" && localStorage.getItem("sm_imgmode")==="smart" && state.autoImg===true; }));
+  ok("and \u201cNo pictures\u201d really stops them", await pg.evaluate(()=>{
+      show('settings');
+      document.getElementById('setImgMode').value="off";
+      saveSettings(false);
+      const r=(imgMode()==="off" && autoImgActive()===false && state.autoImg===false);
+      document.getElementById('setImgMode').value="always"; saveSettings(false);
+      return r; }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

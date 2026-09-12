@@ -1,5 +1,38 @@
 # 10 · Media Pipeline — Images, Video, Scenes, Speech
 
+
+## Pictures during play — one choice, not a switch and a slider (v39.4)
+
+`state.imgMode` (`sm_imgmode`) is the single authority, read through `imgMode()`:
+
+| value | behaviour |
+|---|---|
+| `always` | every reply is illustrated |
+| `smart` | `decideVisual()` asks the **visual director** once per reply |
+| `off` | nothing is auto-drawn; each reply keeps its Generate button |
+
+Migrated on load from the old pair so nobody's visible behaviour changes: `autoImg ? "always" : "off"`.
+`state.autoImg` is kept in step in `saveSettings` because the debug env dump, the backup bundle and
+`_imgGate()` still ask that question as a boolean. `imgTurnDue()` and the "illustrate every N replies"
+slider are retired — "how often" was always a proxy for "is this beat worth a picture".
+
+**The visual director** (`visualDirector` prompt, `sm_visualdirector`, editable like any other) is
+given what the picture currently on screen shows, the last four lines, and the speaking character's
+video scenes — `scenesFor(speakerId, speakerName)`, the same per-character filter `routeSceneForBeat`
+uses, so one character's scenes can never play over another's. It answers:
+
+- `0` → keep the picture already on screen (talk, gestures, glances and tone never earn a frame);
+- `1` → `illustrate()` (a move, an arrival, clothing, a place, light, or a sexual act changing);
+- a **scene name** → `playSceneInChat()`, which docks the video AND raises Heat of the moment via
+  `_heatFollowScene(true)`; from the next beat `sceneModeActive()` sends `autoVisualize` into
+  `routeSceneForBeat`, the per-beat scene router.
+
+Every failure path draws rather than skips — a missing picture is worse than a spare one — and a
+malformed answer is logged with what the model actually said. `routeSceneForBeat` now also runs when
+`imgMode()==="smart"` even if the Smart-routing switch is off: that switch governs the model-RULE
+router (`pickRule`/`routerPrompt`), and turning it off must not freeze a docked scene.
+
+
 ## Auto-illustration flow (`illustrate(mid, replyText, force)`)
 
 Fires per assistant reply when auto-images are active (`autoImgActive` — toggle + the

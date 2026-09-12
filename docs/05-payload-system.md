@@ -331,6 +331,16 @@ Every fixed sentence lives in `BLOCK_TPL_DEFAULTS` as a **fragment**, consumed b
 via `fillTpl(blkTpl("key"), {vars})`, overridable in `state.blockTpls` (blank ⇒ default), and
 listed per block in `_attachBlockTpls`'s `T` map so the Settings editor exposes it.
 
+**(!) `{{gap}}` vs a blank line — the silent-prose-loss trap.** `ptExpand` drops a whole
+PARAGRAPH (`if(anyCall && !anyFilled) return;`) when it contains calls and every one of them
+resolves empty. `{{gap}}` is a blank line that deliberately does NOT end the paragraph, so a
+block's heading vanishes together with its content — which is why it exists. The cost is that
+hand-written prose placed next to `{{gap}}` joins that paragraph and dies with the call beside
+it. Measured: a user template whose `# TASK` section was joined to `{{call//world}}` by
+`{{gap}}` lost the task, the character's name line and its entire behaviour doctrine on every
+turn `world` was empty. **Rule: blank line between independent sections, `{{gap}}` only inside
+one conditional piece.** The editor now says so above every template box.
+
 **Resets are undoable.** Every reset — the bulk "Reset N fragments you have rewritten" and the
 per-fragment one — photographs `state.blockTpls` into `K.blockTplsUndo` first (`_tplSnapshot`).
 `plqTplUndoReset` merges the snapshot back over fragments that are still at the shipped default,

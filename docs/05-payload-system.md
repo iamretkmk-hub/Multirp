@@ -341,6 +341,18 @@ it. Measured: a user template whose `# TASK` section was joined to `{{call//worl
 turn `world` was empty. **Rule: blank line between independent sections, `{{gap}}` only inside
 one conditional piece.** The editor now says so above every template box.
 
+**Heat of the moment — the two narration modes (v39.5).** A heat beat alternates its single
+narration clause between the character's conscience (`heat_narr_superego`) and the plain mechanics
+of what the bodies are doing (`heat_narr_physical`). The alternation is decided in CODE, never asked
+of the model: every beat is a separate generation with no memory of the last one, so `runHeatBursts`
+bumps `chat.heatNarrN` (persisted — heat length is often 1, and the alternation has to survive a
+run boundary and a reload) and puts it on `_heatBeat`; `heatNarrMode()` reads its parity and
+`heatNarrBlock()` / `heatNarrShort()` feed `{{narr}}` in `heat_format` and `{{narr_short}}` in
+`rail_heat_narr`, so the two can never disagree about which mode the beat is in. `heat_guidance`
+requires desire, shame, fear and regret to be alive in the same beat with none resolved, and
+`rail_heat_intact` (last slot before generation) holds the character together: wanting it does not
+switch off judgement, and nobody dissolves.
+
 **Resets are undoable.** Every reset — the bulk "Reset N fragments you have rewritten" and the
 per-fragment one — photographs `state.blockTpls` into `K.blockTplsUndo` first (`_tplSnapshot`).
 `plqTplUndoReset` merges the snapshot back over fragments that are still at the shipped default,

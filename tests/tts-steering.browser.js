@@ -154,6 +154,74 @@ const {chromium}=require('playwright');
       return out==="Kemal is doing this to Nil."; }));
 
   console.log("\n[nothing else moved]");
+  /* (!) v41.5 — SOUND TAGS ARE VOICE DIRECTION, SO THEY NEED A VOICE. Heat asked for [moan] and
+     [gasp] on every beat regardless of whether replies were being spoken, and argued the ban on
+     ellipses from the voice ("read aloud as syllables"). With speech off nothing reads them and
+     _dispText does not strip them either — it only strips WHILE voicing is active — so the tags
+     the prompt demanded were printed into the bubble as literal text. Playing a video over the
+     story auto-enables heat, which is how it was hit without ever turning speech on.
+     spoken_delivery was already gated on voicing; the sound rules were not. */
+  console.log("\n[sound tags need a voice]");
+  const heat=await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    if(!state.personas.some(x=>x.id==="p_v"))
+      state.personas.push({id:"p_v",name:"Ayse",universeId:uni.id,instructions:"x",personality:"x",
+        backstory:"x",style:"x",goals:"x",look:{}});
+    const p=state.personas.find(x=>x.id==="p_v"); const chat=curChat();
+    chat.presentIds=["p_v"]; state.user="Kemal"; chat._heatBeat={total:"3",n:"1"};
+    const inj={recent:[],diary:[],longterm:[]};
+    const build=()=>{
+      const B=Object.assign({},
+        buildCharPromptBlocks(p,[],inj,state.user,{chat,targetName:state.user,targetId:"__user__"}),
+        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
+          targetId:"__user__",multi:false,injected:inj,textMode:false}));
+      return {fmt:String(B.format||""),rails:String(B.final_guardrails||""),
+              deliv:String(B.spoken_delivery||""),voicing:B._railFlags.voicing};
+    };
+    const was=[state.autoSpeak,state.narrMode];
+    state.autoSpeak=true;  state.narrMode=false; const on =build();
+    state.autoSpeak=false; state.narrMode=false; const off=build();
+    state.autoSpeak=was[0]; state.narrMode=was[1];
+    return {on,off};
+  });
+  const tag=/\[(?:moan|gasp|pant|whimper|groan|breathe|swallow|whine)\]/;
+  ok("the box gets a voicing flag that follows the setting",
+     heat.on.voicing===true && heat.off.voicing===false, JSON.stringify([heat.on.voicing,heat.off.voicing]));
+  ok("with speech ON the format still asks for sound tags", tag.test(heat.on.fmt));
+  ok("and the rail still calls the break a bracketed sound",
+     /One bracketed sound splits/.test(heat.on.rails), heat.on.rails.slice(0,80));
+  ok("with speech OFF no sound tag reaches the format", !tag.test(heat.off.fmt),
+     (heat.off.fmt.match(tag)||[""])[0]);
+  ok("and none reaches the rails either", !tag.test(heat.off.rails),
+     (heat.off.rails.match(tag)||[""])[0]);
+  /* Silent heat still has to break its lines somehow — banning sounds AND punctuation with no
+     replacement would leave the model nothing, which is how you get ellipses back. */
+  ok("silent heat is told to break in the words instead",
+     /THE BREAKS ARE IN THE WORDS/.test(heat.off.fmt) && /NO square brackets of any kind/.test(heat.off.rails),
+     heat.off.rails.slice(0,120));
+  ok("both versions still ban the ellipsis",
+     /never "\u2026"/i.test(heat.on.fmt) && /never "\u2026"/i.test(heat.off.fmt));
+  /* (!) Neither silent version may NAME the tags it forbids — printing [moan] in a prohibition puts
+     it in front of the model anyway, which is the thing being prevented. */
+  ok("the prohibition does not print the tags it forbids", await pg.evaluate(()=>{
+      const t=/\[(?:moan|gasp|pant|whimper|groan|breathe|swallow|whine)\]/;
+      return !t.test(BLOCK_TPL_DEFAULTS.heat_breaks_silent||"")
+          && !t.test(ptBoxSectionText("final_guardrails","rail_heat_silent")); }));
+  /* With speech off the delivery block is either absent or the RESET — which is the designed
+     fallback when the transcript still carries tags from a voice session that has ended. What it
+     must never be is the instructions for how to tag a spoken line. */
+  ok("the delivery block stays gated as it already was",
+     /SPOKEN DELIVERY/.test(heat.on.deliv)
+     && !/SPOKEN DELIVERY/.test(heat.off.deliv)
+     && (heat.off.deliv==="" || /FORMAT RESET/.test(heat.off.deliv)),
+     JSON.stringify([heat.on.deliv.slice(0,30),heat.off.deliv.slice(0,40)]));
+  ok("no {{breaks}} or {{narr}} survives unfilled",
+     !/\{\{breaks\}\}|\{\{narr\}\}/.test(heat.on.fmt+heat.off.fmt));
+  ok("both break fragments ship a default and are claimed by the format block", await pg.evaluate(()=>{
+      const t=(REPLY_BLOCKS.format||{}).tpls||[];
+      return ["heat_breaks_voiced","heat_breaks_silent"]
+        .every(n=>(n in BLOCK_TPL_DEFAULTS) && t.indexOf(n)>-1); }));
+
   ok("spoken_delivery still in REPLY_ORDER", await pg.evaluate(()=>REPLY_ORDER.indexOf("spoken_delivery")>-1));
   ok("saveSettings does not throw", await pg.evaluate(()=>{
       show('settings'); try{ saveSettings(false); return true; }catch(e){ return "threw: "+e.message; } }));

@@ -65,6 +65,12 @@ const {chromium}=require('playwright');
     const rail=n=>ptBoxSectionText("final_guardrails",n);
     return {
       fmt:blkTpl("heat_format"), guid:blkTpl("heat_guidance"),
+      /* v41.5 — the break rules moved out of heat_format into a {{breaks}} slot, because they
+         depend on whether anyone is listening: the bracketed sounds are voice direction, and with
+         speech off they were printed into the bubble as literal text. Same rules, one fragment
+         further down. That the slot is actually FILLED on a voiced heat turn is tts-steering's,
+         asserted there against the built payload rather than against a fragment. */
+      breaks:blkTpl("heat_breaks_voiced"),
       intact:rail("rail_heat_intact"), narrRail:rail("rail_heat_narr"), sound:rail("rail_heat_sound"),
       deliv:blkTpl("heat_delivery")
     };
@@ -72,7 +78,7 @@ const {chromium}=require('playwright');
   ok("the format says she knows what is happening", /YOU KNOW WHAT IS HAPPENING/.test(txt.fmt));
   ok("the format allows two channels and no narration",
      /TWO CHANNELS/.test(txt.fmt) && /THERE IS NO NARRATION/.test(txt.fmt) && /between \*asterisks\*/.test(txt.fmt));
-  ok("a trio is required, not optional", /AT LEAST ONE run of three/.test(txt.fmt), txt.fmt.slice(0,60));
+  ok("a trio is required, not optional", /AT LEAST ONE run of three/.test(txt.breaks), txt.breaks.slice(0,60));
   /* The old "NO internal-thought block" bullet survived from when heat had no thought channel, and
      flatly contradicted the thought this mode now requires. */
   ok("nothing in the format bans the thought it requires",
@@ -80,10 +86,10 @@ const {chromium}=require('playwright');
   ok("the punctuation ban also fires in the last slot",
      /Never "\u2026"/.test(txt.sound) && /at least one run of three/i.test(txt.sound), txt.sound.slice(0,90));
   ok("it forbids dots and dashes as gaps",
-     /NEVER "\u2026"/.test(txt.fmt) && /never "—"/.test(txt.fmt) && /read aloud as syllables/.test(txt.fmt));
-  ok("and names the ellipsis as the reflex to resist", /reflex to resist/i.test(txt.fmt));
+     /NEVER "\u2026"/.test(txt.breaks) && /never "—"/.test(txt.breaks) && /read aloud as syllables/.test(txt.breaks));
+  ok("and names the ellipsis as the reflex to resist", /reflex to resist/i.test(txt.breaks));
   ok("one sound breaks a sentence, three break between them",
-     /ONE sound splits a sentence/.test(txt.fmt) && /THREE in a row/.test(txt.fmt), txt.fmt.slice(0,60));
+     /ONE sound splits a sentence/.test(txt.breaks) && /THREE in a row/.test(txt.breaks), txt.breaks.slice(0,60));
   ok("the format carries a {{narr}} slot for the mode", txt.fmt.indexOf("{{narr}}")>=0);
   ok("guidance demands all four at once",
      /DESIRE/.test(txt.guid)&&/SHAME/.test(txt.guid)&&/FEAR/.test(txt.guid)&&/REGRET/.test(txt.guid), txt.guid.slice(0,80));

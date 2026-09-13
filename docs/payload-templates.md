@@ -13,6 +13,26 @@ Validated on build v39.3 — per template: 0 unknown calls, 0 duplicate calls, 0
 2 role markers, 1 history line, and every hand-written section survives an expansion in
 which every call resolves empty.
 
+## (!) `final_guardrails//full` after v41.1
+
+All five templates end on `{{call//final_guardrails//full}}`. That still does exactly what it did:
+`//full` is the block's whole string, and the block's whole string is now the rails **box** with its
+`{{if}}` conditions already resolved and its `[[markers]]` stripped — the same rules, in the same
+order, for the same turn.
+
+What changed is that you can now take it apart without touching the template's shape. Replace that
+one line with, say:
+
+```
+{{call//final_guardrails//rail_voice}}
+
+{{call//final_guardrails//rail_form}}
+```
+
+to send two rules and nothing else, or drop one rule out of the wall by deleting its
+`[[name]] … [[end]]` section in **Settings › Payloads › FINAL GUARDRAILS**. A section whose
+condition is false on this turn resolves empty and its line drops, exactly like any other call.
+
 ## (!) Why there are no `{{gap}}` lines
 
 `ptExpand` drops a whole **paragraph** — everything between two blank lines — when that

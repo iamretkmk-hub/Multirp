@@ -59,11 +59,16 @@ const {chromium}=require('playwright');
   ok("and it is a persisted field, so a run of one keeps alternating", ctr.stored===4 && ctr.persisted===true, JSON.stringify(ctr));
 
   // ---- what the heat format and guidance now demand
-  const txt=await pg.evaluate(()=>({
-    fmt:blkTpl("heat_format"), guid:blkTpl("heat_guidance"),
-    intact:blkTpl("rail_heat_intact"), narrRail:blkTpl("rail_heat_narr"), sound:blkTpl("rail_heat_sound"),
-    deliv:blkTpl("heat_delivery")
-  }));
+  /* v41.1 — the rails live as [[sections]] of the one final_guardrails box now, so their wording is
+     read out of the box by name instead of out of a fragment of their own. Same text, same names. */
+  const txt=await pg.evaluate(()=>{
+    const rail=n=>ptBoxSectionText("final_guardrails",n);
+    return {
+      fmt:blkTpl("heat_format"), guid:blkTpl("heat_guidance"),
+      intact:rail("rail_heat_intact"), narrRail:rail("rail_heat_narr"), sound:rail("rail_heat_sound"),
+      deliv:blkTpl("heat_delivery")
+    };
+  });
   ok("the format says she knows what is happening", /YOU KNOW WHAT IS HAPPENING/.test(txt.fmt));
   ok("the format allows two channels and no narration",
      /TWO CHANNELS/.test(txt.fmt) && /THERE IS NO NARRATION/.test(txt.fmt) && /between \*asterisks\*/.test(txt.fmt));
@@ -95,12 +100,17 @@ const {chromium}=require('playwright');
      REACHABLE and editable is the global guarantee every-fragment-editable.browser.js owns — this
      only checks that these five were declared and claimed, which is the leg a new fragment skips.) */
   const legs=await pg.evaluate(()=>{
-    const want=["heat_narr_superego","heat_narr_physical","heat_narr_superego_short","heat_narr_physical_short","rail_heat_intact","rail_heat_sound"];
+    const want=["heat_narr_superego","heat_narr_physical","heat_narr_superego_short","heat_narr_physical_short"];
+    // v41.1 — these two are sections of the final_guardrails box, so their leg is being IN the box
+    const wantSection=["rail_heat_intact","rail_heat_sound","rail_heat_narr","rail_heat_len","rail_heat_end"];
     const claimed=new Set();
     Object.keys(REPLY_BLOCKS).forEach(id=>(REPLY_BLOCKS[id].tpls||[]).forEach(t=>claimed.add(t)));
+    const secs=ptBoxSections("final_guardrails");
     return {missingDefault:want.filter(k=>!(k in BLOCK_TPL_DEFAULTS)),
-            unclaimed:want.filter(k=>!claimed.has(k))};
+            unclaimed:want.filter(k=>!claimed.has(k)),
+            missingSection:wantSection.filter(k=>secs.indexOf(k)<0)};
   });
+  ok("every heat rail is a section of the guardrail box", legs.missingSection.length===0, legs.missingSection.join(", "));
   ok("every new fragment has a shipped default", legs.missingDefault.length===0, legs.missingDefault.join(", "));
   ok("and every one is claimed by the block that emits it", legs.unclaimed.length===0, legs.unclaimed.join(", "));
 

@@ -267,15 +267,37 @@ const {chromium}=require('playwright');
         ? true : t.slice(0,200); }));
   ok("so is the relationships heading", await pg.evaluate(()=>
       /RELATIONSHIPS/.test(ptDefaultTemplate("solo"))));
+  /* v41.1 — the rails are ONE BOX cut into [[sections]] now, so the template calls each section
+     by name through its block. Still one rail per line, still every rail visible and movable —
+     the name it answers to is the only thing that changed. */
   ok("the guardrails are listed one rail per line", await pg.evaluate(()=>{
       const t=ptDefaultTemplate("solo");
-      return /\{\{call\/\/rail_voice\}\}/.test(t) && /\{\{call\/\/rail_form\}\}/.test(t)
-          && !/call\/\/final_guardrails/.test(t) ? true : "rails not unpacked"; }));
-  ok("each payload kind lays them in its own order", await pg.evaluate(()=>{
+      const n=(t.match(/\{\{call\/\/final_guardrails\/\/rail_[a-z_]+\}\}/g)||[]).length;
+      return /\{\{call\/\/final_guardrails\/\/rail_voice\}\}/.test(t)
+          && /\{\{call\/\/final_guardrails\/\/rail_form\}\}/.test(t)
+          && !/\{\{call\/\/final_guardrails\}\}/.test(t)
+          && !/call\/\/final_guardrails\/\/full/.test(t)
+          && n>=15 ? true : "rails not unpacked ("+n+" section calls)"; }));
+  /* v41.1 — and every kind gets the SAME list, because the box decides for itself which rails a
+     kind gets, with {{if render_mode = …}} around them. The template no longer holds three hand-
+     kept orders that can drift from the wording; what it must guarantee is that the condition is
+     obeyed — a text-only rail must not reach a heat payload, and the other way round. */
+  ok("every kind lists the same rails; the box's conditions decide", await pg.evaluate(()=>{
       const heat=ptDefaultTemplate("heat"), text=ptDefaultTemplate("text");
-      return /rail_heat_len/.test(heat) && !/rail_heat_len/.test(text)
-          && /rail_text_channel/.test(text) && !/rail_text_channel/.test(heat)
-        ? true : "orders did not differ"; }));
+      const rails=t=>(t.match(/final_guardrails\/\/(rail_[a-z_]+)/g)||[]).join(",");
+      return rails(heat)===rails(text) && /rail_heat_len/.test(heat) && /rail_text_channel/.test(text)
+        ? true : "the kinds no longer share one list"; }));
+  ok("a rail whose condition is false this turn does not render", await pg.evaluate(()=>{
+      const raw=blkTpl("rails_header");
+      const heat=ptRenderBox(raw,ptCondFlags({render_mode:"heat"}));
+      const text=ptRenderBox(raw,ptCondFlags({render_mode:"text"}));
+      const only=(box,name)=>{ const v=ptRenderSection(raw,name,ptCondFlags({render_mode:box})); return v!=null&&String(v).trim(); };
+      if(!only("heat","rail_heat_len")) return "heat lost its own rail";
+      if(only("text","rail_heat_len")) return "a heat rail reached the text payload";
+      if(!only("text","rail_text_channel")) return "text lost its own rail";
+      if(only("heat","rail_text_channel")) return "a text rail reached the heat payload";
+      if(/\[\[/.test(heat)||/\{\{if/.test(text)) return "markers survived into the output";
+      return true; }));
   ok("a rail that did not fire is a known name, not a typo", await pg.evaluate(()=>{
       const s=ptSources({},null);
       return Object.prototype.hasOwnProperty.call(s,"rail_form") ? true : "rail_form unknown"; }));

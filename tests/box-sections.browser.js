@@ -68,6 +68,79 @@ const {chromium}=require('playwright');
   ok("single-bracket sound tags pass through untouched", tts.single==="say [moan] and [gasp] here", tts.single);
   ok("double-bracket markers are stripped", tts.double==="kept", tts.double);
 
+  /* ---- v41.1 — THE SECTION AS A CALL. A box is only an improvement if the pieces inside it are
+     still reachable the way the fragments were: callable, listed, validated, and never reported as
+     a typo just because this turn's conditions left one out. */
+  console.log("\n[calling one section of a converted block]");
+  await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
+  await pg.waitForTimeout(900);
+  await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    if(!state.personas.some(x=>x.id==="p_box"))
+      state.personas.push({id:"p_box",name:"Ayse",universeId:uni.id,instructions:"Guarded.",
+        personality:"Wry.",backstory:"Left at 19.",style:"Short.",goals:"Find it.",look:{}});
+    const chat=curChat(); chat.presentIds=["p_box"]; state.user="Kemal";
+    show('settings'); try{ renderPayloadList(); renderPayloadTemplates(); }catch(e){}
+  });
+  await pg.waitForTimeout(400);
+  const call=await pg.evaluate(()=>{
+    const secs=ptBoxSections("final_guardrails");
+    const known=ptKnownNames();
+    const cat=ptCatalog().map(c=>c.name);
+    // a real turn's sources, so this is what a template would actually resolve against
+    const p=(state.personas||[]).find(x=>x.id==="p_box")||null;
+    let srcs=null;
+    if(p){
+      const chat=curChat();
+      const inj={recent:[],diary:[],longterm:[]};
+      const B=Object.assign({},
+        buildCharPromptBlocks(p,[],inj,state.user,{chat,targetName:state.user,targetId:"__user__"}),
+        buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
+          targetId:"__user__",multi:false,injected:inj,textMode:false}));
+      srcs=ptSources(B,null);
+    }
+    const rep={unknownCall:[],unknownVar:[],emptyVar:[]};
+    const one=srcs?ptResolve(srcs,"final_guardrails","rail_voice",rep):null;
+    const heatOnly=srcs?ptResolve(srcs,"final_guardrails","rail_heat_len",rep):null;
+    return {
+      secs, nSecs:secs.length,
+      inCatalog:secs.filter(n=>cat.indexOf("final_guardrails//"+n)<0),
+      unknown:secs.filter(n=>!known["final_guardrails//"+n]),
+      seeded:srcs?secs.filter(n=>!Object.prototype.hasOwnProperty.call(srcs,"final_guardrails//"+n)):["no persona"],
+      one:String(one||""), heatOnly:String(heatOnly||""), reported:rep.unknownCall,
+      flatStillWorks:srcs?String(ptResolve(srcs,"rail_voice",null,rep)||""):""
+    };
+  });
+  ok("the box has its sections", call.nSecs>=15, call.nSecs+" sections");
+  ok("every section is listed in the editor's catalog under its block",
+     call.inCatalog.length===0, call.inCatalog.join(", "));
+  ok("and the validator knows all of them", call.unknown.length===0, call.unknown.join(", "));
+  ok("every section is seeded in a real turn's sources",
+     Array.isArray(call.seeded)&&call.seeded.length===0, String(call.seeded));
+  ok("{{call//block//section}} returns that section's wording",
+     call.one.length>20 && !/\[\[/.test(call.one) && !/\{\{if/.test(call.one), call.one.slice(0,80));
+  ok("the flat name still resolves to the same text", call.flatStillWorks===call.one,
+     call.flatStillWorks.slice(0,60));
+  /* (!) THE WHOLE POINT OF SEEDING. A rail whose condition was false on a solo turn must read as
+     known-and-empty. Reported as unknown, every ordinary turn would log a dozen phantom typos. */
+  ok("a section this turn's conditions left out is empty, not a typo",
+     call.heatOnly==="" && call.reported.length===0, call.reported.join(", "));
+
+  console.log("\n[the editor]");
+  const ed=await pg.evaluate(()=>{
+    ptEditPiece("final_guardrails");
+    const ta=document.querySelector('textarea[data-btpl="rails_header"]');
+    const host=document.getElementById('ptFrag_final_guardrails');
+    const idx=host?host.textContent:"";
+    const style=ta?String(ta.getAttribute("style")||""):"";
+    ptEditPiece("final_guardrails");
+    return {open:!!ta, tall:/min-height/.test(style), idx:idx.indexOf("rail_noecho")>=0,
+            form:idx.indexOf("{{call//final_guardrails//name}}")>=0};
+  });
+  ok("the block opens one tall box, not a slot", ed.open && ed.tall, JSON.stringify(ed));
+  ok("with the section names printed above it", ed.idx===true);
+  ok("and the call form spelled out", ed.form===true);
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);
   await b.close();

@@ -96,7 +96,7 @@ an empty block renders nothing.
 | `private_intent` | One-turn coloring from a live scheme/warmth toward someone **present**. `{{kind}}` is the taxonomy label and `{{aim}}` the actual want, joined so one frames the other ("a courtship, and what you actually want out of it is this: …") rather than reading as two rival labels. When the intent's target is **not** the person the turn is aimed at, `intent_side` ranks it as a side-current so it can't take the turn over. |
 | `feelings_now` ⚠️🆕 | The **live** emotional charge carried into THIS reply, written as a state the character is in (`relMomentaryNarrative`) rather than a list of axis labels, plus the fast read's playable note. True for one turn, so it sits last — immediately above the guidance. |
 | `response_guidance` | Who you are, who you're replying to, what the turn has to do. |
-| `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. Ends on **`rail_form`** — see below. |
+| `final_guardrails` | Voice-only-yourself, single turn, pacing, consistency, **no-fabricated-past** rules (`rail_nofabricate`, `rail_unknown_past`), no-echo/no-repeat, plus text/heat length rails. Ends on **`rail_form`** — see below. **v41.1: one box, `[[sections]]` + `{{if}}`** — see "Blocks that are ONE BOX". |
 | `spoken_delivery` | xAI TTS delivery-tag coaching while voicing; otherwise the `voice_format_reset` while stale markup lingers. |
 
 ## v30.3 — one maintained want-list, and the two blocks that were walls
@@ -361,6 +361,96 @@ run boundary and a reload) and puts it on `_heatBeat`; `heatNarrMode()` reads it
 requires desire, shame, fear and regret to be alive in the same beat with none resolved, and
 `rail_heat_intact` (last slot before generation) holds the character together: wanting it does not
 switch off judgement, and nobody dissolves.
+
+## Blocks that are ONE BOX: `[[sections]]` and `{{if}}` (v41.1)
+
+Fragments solve the *editability* problem and create a *legibility* one. `final_guardrails` was 25
+of them: 25 labelled 70-pixel textareas, which on a phone is a list you scroll past rather than a
+prompt you read. The fix is not fewer rules — it is one box.
+
+A **converted block** keeps its whole wording in a single fragment key (`final_guardrails` →
+`rails_header`), cut up by markers inside the text:
+
+```
+[[rail_noecho]]
+Do not repeat back what they just said…
+[[end]]
+
+{{if render_mode = heat}}
+[[rail_heat_len]]
+Two to five lines…
+[[end]]
+{{endif}}
+```
+
+- `[[name]] … [[end]]` (or `[[/name]]`) names a **section**. Section names are the OLD fragment
+  names, so `{{call//rail_noecho}}` still resolves — nothing that referenced a rail broke.
+- `{{if flag}}`, `{{if flag = value}}`, `{{if not flag}}`, `and`/`or`, `{{else}}`, `{{endif}}` —
+  nesting allowed. Flags come from the producer (`B._railFlags`): `render_mode`
+  (solo/multi/gm/text/heat), `language`, `stalled`, `pending_ask`, `continuing`. Names and values
+  are compared lower-cased. An **unbalanced** `{{if}}` drops the markers and KEEPS the text — a
+  typo loses a condition, never a rule.
+- `{{comment}} … {{endcomment}}` is a note to yourself. It never ships.
+
+### The three functions, and why the order matters
+
+| | |
+|---|---|
+| `ptRenderBox(text, flags)` | conditions resolved, markers stripped, the whole block as sent |
+| `ptRenderSection(text, name, flags)` | **conditions first**, then the named section — `null` if it is not there |
+| `ptSectionNames(text)` | the names in the box, comments excluded |
+
+**(!) `ptRenderSection` resolves conditions BEFORE it looks for the section, on purpose.** A section
+written inside an `{{if render_mode = text}}` is not in the box on a heat turn, so calling it by
+name must come back empty rather than smuggling the other channel's wording out of its condition.
+
+### Calling one section
+
+Two forms, both live:
+
+- `{{call//rail_noecho}}` — the flat name, unchanged since v38.
+- `{{call//final_guardrails//rail_noecho}}` — through its block. This is the form the shipped
+  template uses and the one the editor lists, because it says where the wording lives.
+
+Both are fed by the same producer hand-off: `B._rails` carries the sections that actually fired,
+and `ptSources` keys each one twice — flat, and under its block via `PT_BOX_OF`. Every section the
+box declares is also **seeded empty**, so a rule whose condition was false this turn reads as
+"known and empty" instead of being reported as a typo.
+
+### What the block's producer does
+
+```js
+const _flags = ptCondFlags(_railFlags);
+const _raw   = blkTpl("rails_header");
+B.final_guardrails = fillTpl(ptRenderBox(_raw, _flags), _rmap);   // the wire
+B._rails = {};                                                     // and each part, by name
+ptSectionNames(_raw).forEach(n => { … ptRenderSection(_raw, n, _flags) … });
+```
+
+The box is the authority on ORDER now. `RAIL_ORDER_TEXT` / `_HEAT` / `_SPOKEN` used to be three
+hand-kept orders that each payload kind's template copied; they survive only as the registry of
+shipped names (`RAIL_KEYS`). `railOrderFor()` is gone. Because `ptSources` and `ptCatalog` read the
+section list off the box itself, **a section the user invents works with no code change**: it is
+callable, listed, seeded and editable the moment they type `[[my_rule]]`.
+
+### The editor
+
+`_ptFragBox` opens a converted block's box tall (`min-height: min(58vh, lines×19+40px)`) instead of
+in a 70px slot, and prints the section names above it with the call form, so the twenty-odd names
+inside are visible without hunting through the text.
+
+### Migration
+
+One-time, at boot: any of the 24 retired rail keys the user had rewritten is spliced into the
+matching section of their box (`ptSpliceSection`) and the retired key deleted — from
+`state.blockTpls` and from every universe's `blockTpls`. Nobody opens the new box and finds shipped
+wording where their own sentence used to be.
+
+**(!) Not every fragment a box mentions is a section of it.** `heat_narr_superego_short` and
+`heat_narr_physical_short` are what `{{narr_short}}` resolves to *inside* `[[rail_heat_narr]]`,
+chosen in code by the parity of `chat.heatNarrN`. They were briefly swept into the retired list and
+deleted, which left that rail shipping "…ONE thought between _underscores_ that is ." on every heat
+turn. They stay fragments of their own, claimed by `final_guardrails.tpls` alongside the box.
 
 **Resets are undoable.** Every reset — the bulk "Reset N fragments you have rewritten" and the
 per-fragment one — photographs `state.blockTpls` into `K.blockTplsUndo` first (`_tplSnapshot`).

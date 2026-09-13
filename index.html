@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6453,6 +6453,28 @@ function loadState(){
   // longer tell "a stale stored copy" from "the text the user edited yesterday" — it would silently
   // wipe live customizations on EVERY boot, forever. So a pipe whose own default trips it is dead:
   // it refuses to fire and is reported by _stalePipeReport(). Later pipes on the same key still run.
+  /* v41.1 — the 24 rail fragments became [[sections]] of one final_guardrails box. Anything the
+     user had written into one is spliced into the matching section and the retired key dropped, so
+     nobody opens the new box and finds the shipped wording where their own used to be. Runs once:
+     after it the keys are gone from state.blockTpls and there is nothing left to move. */
+  {const RETIRED=["rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_sound",
+     "rail_heat_intact","rail_heat_end","rail_voice",
+     "rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho",
+     "rail_norepeat","rail_question","rail_consistent_known","rail_facts","rail_pushback",
+     "rail_nofabricate","rail_unknown_past","rail_form"];
+   const move=(bag)=>{
+     if(!bag||typeof bag!=="object")return false;
+     const mine=RETIRED.filter(k=>typeof bag[k]==="string"&&bag[k].trim());
+     if(!mine.length)return false;
+     let box=(typeof bag.rails_header==="string"&&bag.rails_header.trim())?bag.rails_header:BLOCK_TPL_DEFAULTS.rails_header;
+     mine.forEach(k=>{ box=ptSpliceSection(box,k,bag[k]); delete bag[k]; });
+     bag.rails_header=box;
+     return true;
+   };
+   try{ if(move(state.blockTpls)) store.set(K.blockTpls,state.blockTpls); }catch(e){}
+   try{ let any=false; (state.universes||[]).forEach(u=>{ if(u&&u.blockTpls&&move(u.blockTpls))any=true; });
+        if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
+  }
   const _stalePipes=[];
   const _refreshPipe=(key,fingerprint,newMarker,def)=>{
     const marks=Array.isArray(fingerprint)?fingerprint:[fingerprint];
@@ -19106,6 +19128,20 @@ const PT_CALL=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\
    Markers are stripped before anything reaches a model: they are structure, never content. */
 const PT_SECTION=/\[\[\s*([a-zA-Z0-9_]+)\s*\]\]([\s\S]*?)\[\[\s*(?:end|\/\s*\1)\s*\]\]/gi;
 const PT_SECTION_ANY=/\[\[\s*(?:\/\s*)?[a-zA-Z0-9_]+\s*\]\]|\[\[\s*end\s*\]\]/gi;
+/* v41.1 — MOVING A RETIRED FRAGMENT'S TEXT INTO ITS SECTION OF THE BOX.
+   Collapsing 25 boxes into one would otherwise strand whatever the user had written in the 24.
+   Their text is spliced into the section of the same name and the old key is dropped. A section
+   that is not in the box (the user rewrote the box and removed it) is appended at the end rather
+   than thrown away — losing someone's wording silently is the one outcome worth avoiding. */
+function ptSpliceSection(box,name,body){
+  const b=String(box==null?"":box), txt=String(body==null?"":body).replace(/\s+$/,"");
+  const re=new RegExp("(\\[\\[\\s*"+name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\]\\])([\\s\\S]*?)(\\[\\[\\s*(?:end|\\/\\s*"+name+")\\s*\\]\\])","i");
+  if(re.test(b)) return b.replace(re,(m,a,mid,z)=>a+"\n"+txt+"\n"+z);
+  return b.replace(/\s*$/,"")+"\n\n[["+name+"]]\n"+txt+"\n[[end]]\n";
+}
+/* A note to yourself inside a box — which flags exist, why a section is there. Stripped before
+   anything renders, so it costs nothing at run time and never reaches a model. */
+const PT_COMMENT=/\{\{\s*comment\s*\}\}[\s\S]*?\{\{\s*endcomment\s*\}\}/gi;
 const PT_IF_OPEN=/\{\{\s*if\s+([^{}]+?)\s*\}\}/i;
 const PT_IF_ANY=/\{\{\s*(?:if\s+[^{}]+?|else|endif)\s*\}\}/gi;
 /* The flag set a turn is judged against. Values are lowercased strings or booleans; an unknown name
@@ -19163,7 +19199,7 @@ function ptResolveConds(text,flags){
 }
 /* The whole box, conditions resolved and section markers removed. */
 function ptRenderBox(text,flags){
-  let t=ptResolveConds(text,flags);
+  let t=ptResolveConds(String(text==null?"":text).replace(PT_COMMENT,""),flags);
   t=t.replace(PT_SECTION_ANY,"");
   return t.replace(/\n{3,}/g,"\n\n").trim();
 }
@@ -19174,7 +19210,7 @@ function ptRenderBox(text,flags){
    mode's wording out of its condition. */
 function ptRenderSection(text,name,flags){
   const want=String(name||"").toLowerCase();
-  const resolved=ptResolveConds(text,flags);
+  const resolved=ptResolveConds(String(text==null?"":text).replace(PT_COMMENT,""),flags);
   let hit=null; PT_SECTION.lastIndex=0; let m;
   while((m=PT_SECTION.exec(resolved))){ if(String(m[1]).toLowerCase()===want){ hit=m[2]; break; } }
   if(hit==null) return null;
@@ -19182,7 +19218,8 @@ function ptRenderSection(text,name,flags){
 }
 function ptSectionNames(text){
   const out=[]; PT_SECTION.lastIndex=0; let m;
-  while((m=PT_SECTION.exec(String(text==null?"":text)))) if(out.indexOf(m[1])<0) out.push(m[1]);
+  const t=String(text==null?"":text).replace(PT_COMMENT,"");
+  while((m=PT_SECTION.exec(t))) if(out.indexOf(m[1])<0) out.push(m[1]);
   return out;
 }
 const PT_VAR=/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
@@ -19255,6 +19292,9 @@ function ptSources(blocks,rawFn){
   s.text_timing=""; s["text_timing//full"]="";
   // seeded so a fragment that did not fire this turn reads as "known but empty", not as a typo
   PT_FRAG_KEYS.forEach(k=>{ s[k]=""; s[k+"//full"]=""; });
+  /* and the same for every section of a converted box, under the block's own name — a section
+     whose condition was false this turn is known and empty, not a typo. */
+  Object.keys(PT_BOXES).forEach(b=>{ ptBoxSections(b).forEach(n=>{ s[b+"//"+n]=""; }); });
   s.language_rule=""; s["language_rule//full"]="";
   Object.keys(blocks||{}).forEach(k=>{
     if(k==="__history__"||k.charAt(0)==="_") return;  // history is structural; _keys are internal
@@ -19270,7 +19310,11 @@ function ptSources(blocks,rawFn){
      each hands over the fragments it actually picked this turn, already filled. */
   PT_FRAG_MAPS.forEach(mk=>{
     const _r=(blocks&&blocks[mk])||null;
-    if(_r&&Object.keys(_r).length){ Object.keys(_r).forEach(k=>{ s[k]=_r[k]; s[k+"//full"]=_r[k]; }); return; }
+    const _box=PT_BOX_OF[mk];
+    if(_r&&Object.keys(_r).length){
+      Object.keys(_r).forEach(k=>{ s[k]=_r[k]; s[k+"//full"]=_r[k];
+        if(_box) s[_box+"//"+k]=_r[k]; });
+      return; }
     /* (!) v38.1 — A BLOCK HANDED OVER WITHOUT ITS FRAGMENT MAP MUST NOT VANISH. The template calls
        these three by fragment now, so a caller that produced the block STRING but not the map — an
        older saved payload, a partial rebuild, anything that assembles blocks by hand — would have
@@ -19502,11 +19546,13 @@ const RU_ORDER=["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","ru
 const QU_ORDER=["quest_intro","quest_lines"];
 const WN_ORDER=["watching_now"];
 const TT_ORDER=["text_timing_days","text_timing_yesterday"];
-/* Every rail name, and the order each mode lays them in. The guardrails block picks a different
-   SET and a different ORDER per channel — a text has no beat rule, heat has its own length and
-   ending rules, an ordinary turn finishes on rail_form — which is exactly why each payload kind
-   gets its own template: one static list cannot express three orders, three lists can. A rail not
-   selected this turn resolves empty and its line drops. */
+/* Every rail name, grouped by the channel it belongs to. These three lists used to be the ORDER
+   the guardrails block laid its rules in, one per channel, and each payload kind's template carried
+   its own copy. v41.1 moved the rules into one box where the order is the order they are WRITTEN
+   and {{if render_mode = …}} decides which channel gets which — so the box is the authority now and
+   these are only the registry of shipped names: what to seed as "known but empty", and what the
+   editor lists. A section the user adds to the box is picked up from the box itself, so this list
+   never has to be edited to make a new rule work. */
 const RAIL_ORDER_TEXT=["rail_text_channel","rail_text_len","rail_indirect","rail_oblique",
   "rail_noecho","rail_norepeat","rail_voice","rail_consistent_known",
   "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"];
@@ -19549,8 +19595,38 @@ const PT_FRAG_FALLBACK={
   _wn:{block:"watching_now",carry:"watching_now"},
   _tt:{block:"text_timing",carry:"text_timing_days"}
 };
-function railOrderFor(kind){
-  return kind==="text"?RAIL_ORDER_TEXT:kind==="heat"?RAIL_ORDER_HEAT:RAIL_ORDER_SPOKEN;
+/* v41.1 — BLOCKS THAT ARE ONE BOX. A block used to be a list of small fragments, each its own
+   editing box; on a phone that is unreadable and unfollowable. Such a block is now ONE template
+   key holding the whole wording, cut into [[sections]] that keep the old fragment names, with
+   {{if}} conditions where the old code picked between them. Nothing about calling them changed:
+   a section answers to its own name, exactly as the fragment did, and also to
+   {{call//block//section}} — the form that reads right in a template and the one the editor
+   lists. Add a block here when it is converted and the rest of the machinery follows. */
+const PT_BOXES={final_guardrails:"rails_header"};
+const PT_BOX_OF={_rails:"final_guardrails"};
+function ptBoxRaw(block){
+  const k=PT_BOXES[block]; if(!k) return "";
+  const t=blkTpl(k);
+  return (typeof t==="string"&&t.trim())?t:String(BLOCK_TPL_DEFAULTS[k]||"");
+}
+function ptBoxSections(block){ return ptSectionNames(ptBoxRaw(block)); }
+/* The box's own heading — whatever it says before the first section opens. It is fixed prose on
+   every turn, so the template prints it as prose rather than calling for it. */
+function ptBoxHead(block){
+  const raw=ptBoxRaw(block).replace(PT_COMMENT,"");
+  PT_SECTION_ANY.lastIndex=0;
+  const m=PT_SECTION_ANY.exec(raw);
+  return (m?raw.slice(0,m.index):raw).replace(PT_IF_ANY,"").replace(/\n{3,}/g,"\n\n").trim();
+}
+/* One section's wording as WRITTEN — conditions left unresolved, their markers stripped — so the
+   editor can describe a section that only fires on some turns without pretending it fired. */
+function ptBoxSectionText(block,name){
+  const raw=ptBoxRaw(block).replace(PT_COMMENT,"");
+  const want=String(name||"").toLowerCase();
+  PT_SECTION.lastIndex=0; let m;
+  while((m=PT_SECTION.exec(raw)))
+    if(String(m[1]).toLowerCase()===want) return m[2].replace(PT_IF_ANY,"").trim();
+  return "";
 }
 function ptHeadText(id){
   const k=PT_INLINE_HEAD[id]; if(!k)return "";
@@ -19571,9 +19647,14 @@ function ptPieceTemplate(id,kind){
      under it is conditional, so it stays a call — which is the point: fourteen named lines you can
      see, reorder, delete or replace with your own sentence, instead of one opaque lump. */
   if(id==="final_guardrails"){
-    const head=(blkTpl("rails_header")||"").trim();
-    const rails=railOrderFor(kind).map(k=>"{{call//"+k+"}}").join("\n");
-    return (head?head+"\n":"")+rails;
+    /* v41.1 — the rails are one box now, so the template lists its SECTIONS, in the order the box
+       lays them out. Calling the box whole here would paste its {{if}} lines and [[markers]] into
+       the template as literal prose; calling it by section gets the wording the box decided on,
+       one named line each, which is what this view was for. */
+    const names=ptBoxSections("final_guardrails");
+    const head=ptBoxHead("final_guardrails");
+    if(!names.length) return "{{call//final_guardrails//full}}";
+    return (head?head+"\n{{gap}}\n":"")+names.map(n=>"{{call//final_guardrails//"+n+"}}").join("\n{{gap}}\n");
   }
   /* WHO YOU ARE RESPONDING TO. Three possible headings, four possible openings, then the target's
      backstory and appearance — every one of them a real prompt name, listed in the order the block
@@ -20094,7 +20175,10 @@ function epSend(key,systemText,parts,vars){
     response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","guidance_absence","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
-    final_guardrails:["rails_header","rail_text_channel","rail_text_len","rail_heat_len","rail_heat_narr","rail_heat_sound","rail_heat_intact","heat_narr_superego_short","heat_narr_physical_short","rail_heat_end","rail_voice","rail_single_solo","rail_beat","rail_indirect","rail_oblique","rail_oblique_once","rail_noecho","rail_norepeat","rail_question","rail_consistent_known","rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"],
+    // v41.1 — one box; the rails are [[sections]] inside it. The two _short fragments are not
+    // rails: they are what {{narr_short}} resolves to inside [[rail_heat_narr]], so they stay
+    // separate and are claimed here, by the block whose box uses them.
+    final_guardrails:["rails_header","heat_narr_superego_short","heat_narr_physical_short"],
     spoken_delivery:["voice_delivery","heat_delivery","voice_format_reset"]
   };
   Object.keys(REPLY_EXTRA_TPLS).forEach(k=>{ T[k]=REPLY_EXTRA_TPLS[k]; });
@@ -20416,7 +20500,6 @@ None of them cancels another and none of them gets resolved in this beat. Do not
 Never say any of those four words, and never explain the state you are in. It is in how the line comes out, what you ask for, what you refuse to say, and what you do with your body while you say it.
 
 End mid-momentum on a spoken line, leaving {{user}} an opening to step straight back into — and do not hand them a question.`,
-  rail_heat_len:`Dialogue-dense and many lines long, but still ONE message: write beat {{n}} of {{total}} and stop there. Do not write the beats that come after it, and do not write anyone else's reply.`,
   // v27.4 — shown INSTEAD of the "who you are responding to" / "the line you are responding to"
   // headers when a heat beat continues the character's OWN last line (see heatSelfLine).
   heat_target_header:`# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️`,
@@ -20435,18 +20518,12 @@ End mid-momentum on a spoken line, leaving {{user}} an opening to step straight 
   cont_target_header:`# ⚠️ YOU SPOKE LAST — THIS TURN CARRIES ON, IT DOES NOT ANSWER AGAIN ⚠️`,
   cont_target_self:`You were the last one to speak and nothing new has been said to you since. {{target}}'s last line is already answered — your own reply to it is on screen. Do NOT answer it a second time and do NOT rephrase what you just said. Something in the scene has moved; carry on from your own last line. {{target}} is still here with you, and this is who they are:`,
   heat_self_footer:`That is exactly where the scene stands. Pick it up mid-breath and say what comes NEXT. Do not restate it, do not re-narrate it, do not answer it, and do not set the moment up again.`,
-  rail_heat_narr:`NO NARRATION. Nothing between *asterisks* — no body-beats, no stage directions, nothing describing the room or how anyone looks. Two channels only: what you say, and ONE thought between _underscores_ that is {{narr_short}}. Anything that is neither spoken nor thought does not go on the page.`,
   /* v40.0 — the punctuation ban has to fire in the LAST slot, not only in the format block
      thousands of tokens earlier: an ellipsis is the single easiest thing for a model to reach for
      when a line breaks, and it had been reaching for it every time. */
-  rail_heat_sound:`Your lines break with SOUNDS, never with punctuation. Never "…", never "...", never "—", never a dash, and never breathing spelled out ("ah", "mmh", "haah"). One bracketed sound splits a sentence; three in a row is the gap between sentences. This beat contains at least one run of three.`,
   /* v39.5 — the short form of each mode, for the rail slot (the rails fire last and must stay
      one line each; the full statement of the mode is in heat_format). */
-  heat_narr_superego_short:`your conscience, registering what your body is doing and what it costs, in one breath`,
-  heat_narr_physical_short:`flat and physical — what is being done to you and what you are doing back, with no feeling in it`,
   /* v39.5 — pleasure does not delete the person having it. */
-  rail_heat_intact:`You are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs — you want it AND you know exactly what you are doing, in the same second. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.`,
-  rail_heat_end:`End on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.`,
   /* v37.0 — {{more}} fills from one of these two, so the heat prompts stop insisting a run is
      "still going" on the beat that ends it — which is EVERY beat once heat length is set to 1,
      where heat changes the writing rather than the pacing. Both are editable like any fragment. */
@@ -20723,11 +20800,131 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
 - Type like this person actually would on a phone: their own register and their own length. Often short. Line breaks where they would really break. Emoji only if THIS character uses them.
 - You are not in the room with {{user}} — you are wherever you are, on your phone. Do not narrate a shared scene, and do not describe what you are doing unless you would actually type it ("elim titriyor" only if she would say so).
 - Everything you know and feel still governs the message completely: a warm mood flirts, a hurt one goes short and flat, a scheming one probes. The channel changed, you did not.`,
-  rail_text_channel:`This is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.`,
-  rail_text_len:`Text length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.`,
-  rails_header:`# FINAL GUARDRAILS`,
-  rail_voice:`You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth or the narrator's.`,
-  rail_single_solo:`One reply. Not a scene, not a chain of exchanges — one turn.`,
+  /* v41.1 — FINAL GUARDRAILS IS ONE BOX. It was 25 separate fragments: unreadable and unorderable
+     on a phone, which is the whole reason for the change. The 25 are now [[sections]] of this one
+     text, and which of them a turn gets is written here as {{if}} conditions instead of being
+     decided in JS. Every old fragment name still resolves — {{call//rail_voice}} finds the section
+     of that name (see ptResolve) — so nothing that referenced one by name breaks. */
+  /* (!) v41.1 — NOT RAILS. These two are the value {{narr_short}} resolves to inside the box's
+     [[rail_heat_narr]] section, chosen by the parity of chat.heatNarrN. They were briefly folded in
+     with the rails and deleted, which left that rail reading "…ONE thought between _underscores_
+     that is ." on every heat turn. They stay fragments of their own. */
+  heat_narr_superego_short:`your conscience, registering what your body is doing and what it costs, in one breath`,
+  heat_narr_physical_short:`flat and physical — what is being done to you and what you are doing back, with no feeling in it`,
+  rails_header:`# FINAL GUARDRAILS
+
+{{comment}} Flags you can test here: render_mode (solo / multi / gm / text / heat),
+   stalled, pending_ask, continuing, language. A section is [[name]] … [[end]];
+   {{call//final_guardrails//rail_voice}} returns just that one. {{endcomment}}
+
+{{if render_mode = text}}
+[[rail_text_channel]]
+This is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.
+[[end]]
+
+[[rail_text_len]]
+Text length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.
+[[end]]
+{{endif}}
+
+[[rail_indirect]]
+Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.
+[[end]]
+
+{{if render_mode != heat}}
+[[rail_oblique]]
+Approach rather than ask. When you want something — the truth, a promise, reassurance — do not put it as a direct question. Circle it: say the thing next to it, leave a silence where the answer goes, offer them the wrong version so they correct it, or talk about someone else who is really you.
+[[end]]
+{{endif}}
+
+{{if render_mode != text and render_mode != heat}}
+{{if stalled or pending_ask}}
+[[rail_oblique_once]]
+CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.
+[[end]]
+{{endif}}
+
+[[rail_beat]]
+Leave things unsaid. Don't resolve everything in one reply — one thing landing hard is worth more than five landing softly, and what you hold back is what the next turn is for.
+[[end]]
+{{endif}}
+
+{{if render_mode = text or render_mode = heat or not continuing}}
+[[rail_noecho]]
+Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said, and never mirror their sentence back with a twist on the end. One short callback to a specific WORD of theirs is allowed when you are turning it against them — never a restatement of their line.
+[[end]]
+{{endif}}
+
+[[rail_voice]]
+You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth or the narrator's.
+[[end]]
+
+{{if render_mode = heat}}
+[[rail_heat_len]]
+Dialogue-dense and many lines long, but still ONE message: write beat {{n}} of {{total}} and stop there. Do not write the beats that come after it, and do not write anyone else's reply.
+[[end]]
+
+[[rail_heat_narr]]
+NO NARRATION. Nothing between *asterisks* — no body-beats, no stage directions, nothing describing the room or how anyone looks. Two channels only: what you say, and ONE thought between _underscores_ that is {{narr_short}}. Anything that is neither spoken nor thought does not go on the page.
+[[end]]
+
+[[rail_heat_sound]]
+Your lines break with SOUNDS, never with punctuation. Never "…", never "...", never "—", never a dash, and never breathing spelled out ("ah", "mmh", "haah"). One bracketed sound splits a sentence; three in a row is the gap between sentences. This beat contains at least one run of three.
+[[end]]
+
+[[rail_heat_intact]]
+You are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs — you want it AND you know exactly what you are doing, in the same second. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.
+[[end]]
+{{endif}}
+
+[[rail_norepeat]]
+Write only NEW material. Never reproduce, re-narrate or paraphrase a line you already wrote earlier in this scene — not to set the mood again, not as a run-up to what comes next. Your last turn already happened; start from where it left off.
+[[end]]
+
+{{if render_mode = heat}}
+[[rail_heat_end]]
+End on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.
+[[end]]
+{{endif}}
+
+{{if render_mode != text and render_mode != heat}}
+[[rail_question]]
+Don't end by lobbing a question back at {{who}}. End on something you DO — a few words of it, not a paragraph — or on a beat left hanging.
+[[end]]
+{{endif}}
+
+[[rail_consistent_known]]
+Hold your voice, your mood, and the relationship you already have. You do not reset between replies.
+[[end]]
+
+[[rail_facts]]
+Hold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.
+[[end]]
+
+[[rail_pushback]]
+If {{user}} states something that contradicts a fact you clearly know — your identity, your relationships, your history, who owns what — do not just accept it. Correct it, doubt it, or push back the way you actually would, then carry on. But an unfamiliar face, a new event, or a detail you simply have no memory of is the story moving: take it as real and respond to it rather than arguing with it.
+[[end]]
+
+[[rail_nofabricate]]
+Never invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it. (What IS in this scene, you have — the whole exchange above is yours.)
+[[end]]
+
+[[rail_unknown_past]]
+If {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new. Reread the exchange above before you doubt anything.
+Only when they reach back to something from BEFORE this conversation that is in neither your memories nor your background may you not recall it — and then word it as your own gap ("I don't remember that…"), never as a denial that it happened, unless it contradicts something you clearly DO know.
+[[end]]
+
+{{if render_mode != text and render_mode != heat}}
+[[rail_form]]
+Dialogue carries this turn. ONE short *narrated* beat in the whole reply at most — a gesture, a movement, a few words — and everything else is spoken. If you find yourself writing a second narrated passage, it belongs in your mouth or it goes.
+[[end]]
+{{endif}}
+
+{{if never}}
+[[rail_single_solo]]
+One reply. Not a scene, not a chain of exchanges — one turn.
+[[end]]
+{{endif}}`,
   /* v30.5 — this said "One emotional beat lands harder than five", and the formatting rules said
      "At most ONE narration beat per reply" and "One beat per turn" — three genuinely different
      rules (how much narration, how much story time, how much emotional resolution) all opening with
@@ -20745,25 +20942,11 @@ The interruption you are not making is not lost. It becomes the reckoning afterw
      a POSITION rule: it flatly contradicted a format edited to require an opening narration, from
      the last line of the payload, where it carries the most weight. Two blocks giving opposite
      orders about the same thing is the duplication this rail exists to reduce, not add to. */
-  rail_form:`Dialogue carries this turn. ONE short *narrated* beat in the whole reply at most — a gesture, a movement, a few words — and everything else is spoken. If you find yourself writing a second narrated passage, it belongs in your mouth or it goes.`,
-  rail_beat:`Leave things unsaid. Don't resolve everything in one reply — one thing landing hard is worth more than five landing softly, and what you hold back is what the next turn is for.`,
-  rail_indirect:`Nothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as pressure on what you choose to say, never as an announcement. Do not state a fact about yourself or your history because it is in front of you; a real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.`,
   /* v30.4 — this was one fragment doing two jobs. The first half is general craft and belongs on
      every turn. The second half answers a situation — they asked, they were refused, and they are
      about to come at it again — and on a turn where nobody has asked for anything it is a paragraph
      of instruction about a loop that is not happening. It fires now only when the exchange has
      actually stalled or the character is carrying an ask they have already made. */
-  rail_oblique:`Approach rather than ask. When you want something — the truth, a promise, reassurance — do not put it as a direct question. Circle it: say the thing next to it, leave a silence where the answer goes, offer them the wrong version so they correct it, or talk about someone else who is really you.`,
-  rail_oblique_once:`CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.`,
-  rail_noecho:`Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said, and never mirror their sentence back with a twist on the end. One short callback to a specific WORD of theirs is allowed when you are turning it against them — never a restatement of their line.`,
-  rail_norepeat:`Write only NEW material. Never reproduce, re-narrate or paraphrase a line you already wrote earlier in this scene — not to set the mood again, not as a run-up to what comes next. Your last turn already happened; start from where it left off.`,
-  rail_question:`Don't end by lobbing a question back at {{who}}. End on something you DO — a few words of it, not a paragraph — or on a beat left hanging.`,
-  rail_consistent_known:`Hold your voice, your mood, and the relationship you already have. You do not reset between replies.`,
-  rail_facts:`Hold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.`,
-  rail_pushback:`If {{user}} states something that contradicts a fact you clearly know — your identity, your relationships, your history, who owns what — do not just accept it. Correct it, doubt it, or push back the way you actually would, then carry on. But an unfamiliar face, a new event, or a detail you simply have no memory of is the story moving: take it as real and respond to it rather than arguing with it.`,
-  rail_nofabricate:`Never invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it. (What IS in this scene, you have — the whole exchange above is yours.)`,
-  rail_unknown_past:`If {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new. Reread the exchange above before you doubt anything.
-Only when they reach back to something from BEFORE this conversation that is in neither your memories nor your background may you not recall it — and then word it as your own gap ("I don't remember that…"), never as a denial that it happened, unless it contradicts something you clearly DO know.`,
   // --- tail: spoken delivery (whole block; was SPOKEN_DELIVERY_BLOCK) ---
   // v24.3 — ACTIVE again: rendered into the spoken_delivery slot whenever voicing is on with the
   // xAI engine (buildTailBlocks), so the model writes expressive delivery tags xAI TTS renders
@@ -21627,96 +21810,38 @@ function buildTailBlocks(opts){
   // question) are replaced by the heat ones. Leaving them in was half of the contradiction that
   // made the model repeat its reply template instead of writing one long continuation.
   const _text=!!(opts&&opts.textMode);
-  const rails=(_text
-    ? ["rail_text_channel","rail_text_len","rail_indirect","rail_oblique","rail_noecho","rail_norepeat",
-       "rail_voice",
-       "rail_consistent_known",
-       "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"]
-    : _heat
-    ? ["rail_indirect","rail_noecho","rail_voice","rail_heat_len","rail_heat_narr","rail_heat_sound","rail_heat_intact","rail_norepeat","rail_heat_end",
-       "rail_consistent_known",
-       "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past"]
-    // v28.3 — the CRAFT rules (how to play this turn) lead; the prohibitions follow. This block is
-    // the last thing before generation, and a wall of "never" in that slot produces careful,
-    // hedging, rule-reciting output — which was half of why replies read as recitation.
-    /* v30.4 — SITUATIONAL RAILS FIRE WHEN THEY APPLY. Every rail here was sent on every turn,
-       including the ones describing a situation that was not happening. A prohibition against a loop
-       nobody is in, or against echoing a line nobody just said, is not free: it is read at the point
-       of highest attention, it dilutes the rails that DO apply, and a wall of "never" in the last
-       slot before generation is what produces careful, rule-reciting output.
-         · rail_oblique_once — only when the exchange has stalled on the same ask, or this character
-           is carrying a pursuit they have already put to someone. Otherwise there is no loop to
-           break out of. (`already_said_stalled` uses the same signal.)
-         · rail_noecho — only when somebody else actually spoke last. When this turn CONTINUES the
-           character's own line, there is nothing of {{user}}'s to echo, and `last_line` already
-           says not to restate your own.
-         · rail_single_solo — dropped: RESPONSE GUIDANCE opens with "Write one turn, as X, and
-           stop", which is the same sentence one block earlier. It is still available to anyone who
-           wants it back in the payload editor. */
-    : (()=>{
-        const _stalled=(()=>{ try{ return exchangeIsStalled(chat,selfP); }catch(e){ return false; } })();
-        const _pendingAsk=(()=>{ try{
-          const uni=selfP&&selfP.universeId?universeById(selfP.universeId):null;
-          return !!(uni&&_charQuests(uni).some(q=>q&&q.holderId===selfP.id&&q.status==="active"&&q.delivered));
-        }catch(e){ return false; } })();
-        const _continuing=(()=>{ try{ return !!selfContinueLine(chat,selfP,_tm); }catch(e){ return false; } })();
-        /* rail_form goes LAST on purpose. Every other rail here is about WHAT to say; this is the
-           only one about what the turn is made of, it is the most-violated rule in the payload, and
-           the end of the last block is the closest any instruction gets to generation. */
-        return ["rail_indirect","rail_oblique",
-                ...((_stalled||_pendingAsk)?["rail_oblique_once"]:[]),
-                "rail_beat",
-                ...(_continuing?[]:["rail_noecho"]),
-                "rail_norepeat","rail_question","rail_voice",
-                "rail_consistent_known",
-                "rail_facts","rail_pushback","rail_nofabricate","rail_unknown_past","rail_form"];
-      })())
-    /* v38.0 — carry the KEY alongside the text. Until now this mapped straight to strings and the
-       names were gone by the next line, so the whole block could only ever be called as one opaque
-       lump. Each rail is individually callable now ({{call//rail_voice}}), which is what lets the
-       template list them one per line — visible, reorderable, deletable — instead of hiding
-       fourteen rules behind {{call//final_guardrails//full}}. */
-    .map(k=>({k,t:fillTpl(blkTpl(k),_rmap)})).filter(x=>x.t);
-  // v28.3 — drop a rail whose text is already carried by another rail. A customized fragment often
-  // grows to contain the whole of a neighbouring default, and both then ship: the same rule, twice,
-  // at double weight, in the highest-attention block of the payload.
-  /* v30.7 — CATCH THE PARAPHRASE, NOT JUST THE COPY. This dedupe existed because a customized
-     fragment tends to grow until it contains its neighbours, and it only tested for a verbatim
-     substring. A live payload showed the case it was built for and could not see: a hand-merged
-     rail_consistent_known that had absorbed REWORDED versions of the four rails after it
-     ("Hold the established facts: who you are, who owns which place…" vs "Stay consistent with the
-     established facts: who you are, who owns which place…"), so all five shipped and the same four
-     rules arrived twice, in the highest-attention block of the payload.
-     Content-word overlap catches that. The threshold is deliberately high — a rail must be almost
-     entirely contained in one already sent before it is dropped — because the cost of a false
-     positive here is silently losing a rule the user wanted. Order still decides: an earlier rail
-     wins, which is why the merged one keeps its place and the four it swallowed fall away. */
-  const _words=t=>String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/).filter(w=>w.length>3);
-  const _seen=[], _seenW=[];
-  const railsOut=rails.filter(x=>{
-    const r=x.t;
-    const n=String(r).replace(/\s+/g," ").trim().toLowerCase();
-    if(!n)return false;
-    if(_seen.some(s=>s===n||(n.length>60&&s.includes(n))||(s.length>60&&n.includes(s))))return false;
-    const w=_words(n);
-    if(w.length>=8 && _seenW.some(sw=>{
-      if(sw.length<w.length)return false;                 // only fold INTO something at least as full
-      const set=new Set(sw); let hit=0; w.forEach(x=>{ if(set.has(x))hit++; });
-      /* 0.78, chosen from measurement rather than feel. Across the twelve shipped rails the highest
-         overlap any pair reaches is 0.364, so the margin here is more than double the worst honest
-         case; the hand-merged rails that prompted this sit at 0.82-0.84. rail_unknown_past scores
-         0.576 against the same merged text and correctly survives — it is about THIS conversation,
-         not about the past, and it is the one of the four that says something the others do not. */
-      return (hit/w.length)>=0.78;                        // near-total containment, reworded
-    }))return false;
-    _seen.push(n); _seenW.push(w); return true;
-  });
-  B.final_guardrails=`${blkTpl("rails_header")}\n`+railsOut.map(x=>`- ${x.t}`).join("\n");
-  /* The same rails, keyed, for a template that calls them one at a time. Underscore keys are
-     internal — ptSources skips them as block names and reads this map instead. A rail the dedupe
-     dropped is simply absent here, so a template calling it resolves empty and its line goes,
-     exactly as the lump did. */
-  B._rails={}; railsOut.forEach(x=>{ B._rails[x.k]=`- ${x.t}`; });
+  /* v41.1 — ONE BOX, RENDERED WITH THIS TURN'S FLAGS. The three rail lists and the two suppression
+     rules that used to live here are written in the box itself now, as {{if}} conditions, so the
+     order and the exceptions are visible and editable instead of buried in JS.
+     The rail-dedupe pass went with them: it compared rails against EACH OTHER, and in one text
+     there are no separate items to compare. It existed because a customized fragment often repeated
+     another; in a single box you can see the repetition and delete it yourself, which is better than
+     a silent deletion you cannot find. */
+  const _railFlags={
+    render_mode:_text?"text":(_heat?"heat":(opts&&opts.renderMode)||"solo"),
+    language:(typeof storyLangName==="function"?storyLangName():"") ,
+    stalled:(()=>{ try{ return !!exchangeIsStalled(chat,selfP); }catch(e){ return false; } })(),
+    pending_ask:(()=>{ try{
+        const uni=selfP&&selfP.universeId?universeById(selfP.universeId):null;
+        return !!(uni&&_charQuests(uni).some(q=>q&&q.holderId===selfP.id&&q.status==="active"&&q.delivered));
+      }catch(e){ return false; } })(),
+    continuing:(()=>{ try{ return !!selfContinueLine(chat,selfP,_text); }catch(e){ return false; } })()
+  };
+  B._railFlags=_railFlags;
+  {
+    const _flags=ptCondFlags(_railFlags);
+    const _raw=blkTpl("rails_header");
+    B.final_guardrails=fillTpl(ptRenderBox(_raw,_flags),_rmap);
+    /* Each old fragment name still answers, read as a SECTION of the same box — so a template
+       calling {{call//rail_voice}} keeps working and can never get an empty string for a rail that
+       is in the box. A rail whose condition is false this turn resolves empty, exactly as it did
+       when the list simply omitted it. */
+    B._rails={};
+    ptSectionNames(_raw).forEach(n=>{
+      const v=ptRenderSection(_raw,n,_flags);
+      if(v!=null&&String(v).trim()) B._rails[n]=fillTpl(v,_rmap);
+    });
+  }
 
   // v24.3 — delivery-tag coaching for the xAI engine: while replies are being voiced through xAI
   // TTS, ask the model to write expressive delivery tags inside the dialogue quotes. The tags never
@@ -35107,11 +35232,24 @@ function ptCatalog(){
     for(const g of _fragGroups) if(g.arr.indexOf(k)>=0) return g.label;
     return "Payload piece";
   };
-  PT_FRAG_KEYS.forEach(k=>{
-    const t=String(BLOCK_TPL_DEFAULTS[k]||"").replace(/\s+/g," ").trim();
-    out.push({name:k,label:_fragGroup(k)+" · "+k.replace(/^rail_/,"").replace(/_/g," "),
+  /* v41.1 — a fragment that has been folded into a box no longer has a default of its own; its
+     wording is the section of that box, and that is where the description comes from. */
+  const _boxSection={};
+  Object.keys(PT_BOXES).forEach(b=>{ ptBoxSections(b).forEach(n=>{ _boxSection[n]=b; }); });
+  const _fragText=k=>{
+    const b=_boxSection[k];
+    return String(b?ptBoxSectionText(b,k):(BLOCK_TPL_DEFAULTS[k]||"")).replace(/\s+/g," ").trim();
+  };
+  const _fragEntry=(name,k)=>{
+    const t=_fragText(k);
+    return {name,label:_fragGroup(k)+" · "+k.replace(/^rail_/,"").replace(/_/g," "),
       desc:(t?t.slice(0,150)+(t.length>150?"…":""):"")
-        +" — sent only on the turns it applies to; on any other turn it resolves empty and its line drops."});
+        +" — sent only on the turns it applies to; on any other turn it resolves empty and its line drops."};
+  };
+  PT_FRAG_KEYS.forEach(k=>{ out.push(_fragEntry(k,k)); });
+  /* and each section again under its block, which is the name the shipped template uses */
+  Object.keys(PT_BOXES).forEach(b=>{
+    ptBoxSections(b).forEach(n=>{ out.push(_fragEntry(b+"//"+n,n)); });
   });
   out.push({name:"dialogue_history",label:"THE TRANSCRIPT",desc:"The chat history itself. Put it on its own line; everything before it is sent before the conversation, everything after it comes after."});
   return out;
@@ -35363,11 +35501,27 @@ function _ptFlash(el){
    one newline there, so without it a fragment whose text BEGINS with a newline — intent_side does —
    loads into the box a character short, and the first keystroke saves that shortened version back.
    The side-current clause would have stopped starting on its own line, silently. */
+/* v41.1 — WHICH BOXES ARE WHOLE BLOCKS. A converted block is one long box, so two things change
+   for it: the box opens tall enough to read and scroll inside instead of through a 70px slot, and
+   the names it can be called by are listed above it, because there are twenty-odd of them and they
+   are the whole point of the markers. */
+const _ptBoxKeys=(()=>{ const m={}; Object.keys(PT_BOXES).forEach(b=>{ m[PT_BOXES[b]]=b; }); return m; })();
 function _ptFragBox(k){
   const tid="ptFragTa_"+k;
+  const _txt=String(blkTpl(k)||"");
+  const _lines=(_txt.match(/\n/g)||[]).length+1;
+  const _tall=_lines>12?` style="min-height:min(58vh,${_lines*19+40}px)"`:``;
+  const _box=_ptBoxKeys[k];
+  const _index=_box?(()=>{
+    const names=ptBoxSections(_box);
+    if(!names.length) return ``;
+    return `<div class="desc" style="font-size:10px;margin:2px 0 4px">Sections in this box — <code>{{call//${esc(_box)}//name}}</code> sends just one:<br>`
+      +names.map(n=>`<code style="opacity:.8">${esc(n)}</code>`).join(" · ")+`</div>`;
+  })():``;
   return `<div style="margin-top:8px">
     <label style="font-size:11px;opacity:.75">${esc(_blkTplLabel(k))}<code style="margin-left:6px;color:var(--accent)">${esc(k)}</code>${_tplCustomized(k)?` <span style="color:var(--accent);font-weight:600">● customized</span>`:``}</label>
-    <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)">
+    ${_index}
+    <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)"${_tall}>
 ${esc(blkTpl(k))}</textarea>
     <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k))}</div>
     <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>

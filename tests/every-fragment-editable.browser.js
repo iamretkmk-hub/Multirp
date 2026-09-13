@@ -50,12 +50,20 @@ const {chromium}=require('playwright');
         if(document.querySelector('textarea[data-btpl="'+k+'"]')) bad.push(k+" (stuck open)");
       });
       return bad.length?(bad.length+" with no editor: "+bad.slice(0,12).join(", ")):true; }));
-  ok("a block with no wording of its own lists the fragments it is made of", await pg.evaluate(()=>{
+  /* v41.1 — FINAL GUARDRAILS used to open twenty-five separate boxes, one per rule, which on a
+     phone is unreadable. It opens ONE box now, with the rules inside it as [[sections]] keeping
+     their old names. What has to stay true is that nothing was lost on the way: every rule is
+     still in there, still under the name that calls it. */
+  ok("a block folded into one box opens as one box, with every rule still in it", await pg.evaluate(()=>{
       ptEditPiece("final_guardrails");
       const host=document.getElementById('ptFrag_final_guardrails');
-      const n=host?host.querySelectorAll('textarea[data-btpl]').length:0;
+      const tas=host?host.querySelectorAll('textarea[data-btpl]'):[];
+      const names=tas.length?Array.from(tas).map(t=>t.getAttribute('data-btpl')):[];
       ptEditPiece("final_guardrails");
-      return n>=10?true:("only "+n+" fragments offered"); }));
+      if(names.length!==1||names[0]!=="rails_header") return "opened "+names.length+" boxes: "+names.join(", ");
+      const secs=ptBoxSections("final_guardrails");
+      const missing=RAIL_KEYS.filter(k=>secs.indexOf(k)<0);
+      return missing.length?("rules lost on the way in: "+missing.join(", ")):true; }));
   ok("and every shipped default is reachable from some block", await pg.evaluate(()=>{
       const claimed=new Set();
       Object.keys(REPLY_BLOCKS).forEach(id=>(REPLY_BLOCKS[id].tpls||[]).forEach(t=>claimed.add(t)));

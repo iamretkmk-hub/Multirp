@@ -1,5 +1,26 @@
 # 04 · Chat Engine — from keypress to reply
 
+
+## Heat of the moment — the reply IS beat 1 (v39.9)
+
+`state.heatN` is the number of messages a turn produces, not the number of EXTRA ones. Heat used to
+run entirely after a normal reply, so a turn was one standard-format reply plus `heatN` heat beats —
+with `heatN=1`, two messages, the first of them not in heat form at all.
+
+`heatBeginTurn(chat)` now stamps `chat._heatBeat={total,n:"1",narrN}` on the player-facing reply
+before it is generated, and `heatEndTurn` clears it in the `finally` of every path that generates
+one: the solo branch of `sendMessage`, the single-responder branch of `runMultiCharTurn`, and the
+FIRST responder of a genuine multi-character turn (`_mcOpened`). `runHeatBursts` then writes beats
+`2..N`.
+
+`chat._heatOpened` records that beat 1 was claimed. Heat switched on *mid-turn* leaves it unset, and
+the run correctly owns every beat from 1 — otherwise that turn would be one beat short.
+
+Note the reply keeps its normal "⚠️ THIS IS WHO YOU ARE RESPONDING TO" headers: the heat
+self-continuation wording (`heat_target_header` / `heat_target_self`, "nobody is waiting on an answer
+from you") is gated on `selfContinueLine`, which is false when the player has just spoken.
+
+
 ## Turn lifecycle (typed input)
 
 ```

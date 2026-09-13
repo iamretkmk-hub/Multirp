@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v39.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v39.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -23568,6 +23568,7 @@ async function sendMessage(){
     }
     // ===== SINGLE PRESENT CHARACTER: direct flow =====
     const solo=cast[0];
+    heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
     // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
@@ -24814,7 +24815,8 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     }
     if(cast.length<2){ // exactly one present → direct single reply
       const solo=cast[0];
-      await playCharacterTurn(chat,solo,state.user);
+      heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
+      try{ await playCharacterTurn(chat,solo,state.user); } finally{ heatEndTurn(chat); }
       maybeBuildMemory(chat);postTurn(chat);
       maybeHeatBursts(chat);   // v19.5
       return;
@@ -24850,9 +24852,12 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     // the "character responds to something they already answered" duplication, where the chain
     // ping-ponged A→B→A and A regenerated a near-identical line. They react on the player's NEXT msg.
     const spokenThisChain=new Set();
+    let _mcOpened=false;   // v39.9 — only the FIRST responder of the turn is heat beat 1
     for(const r of responders){
       if(!inSceneIds(chat).includes(r.id))continue;
-      const ok=await playCharacterTurn(chat,r,state.user);
+      if(!_mcOpened){ _mcOpened=true; heatBeginTurn(chat); }   // v39.9 — the first responder is beat 1
+      let ok=false;
+      try{ ok=await playCharacterTurn(chat,r,state.user); } finally{ heatEndTurn(chat); }
       if(ok){lastSpeaker=r;turns++;spokenThisChain.add(r.id);}
       const tr=await runPresenceTracker(chat);
       if(tr.lastBeat){lastSpeaker=tr.lastBeat;turns+=(tr.entered.length+tr.exited.length);}
@@ -24916,7 +24921,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
   }catch(err){
     chat.messages.push({mid:newMid(),role:"assistant",speaker:curPersona().name,content:(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
     persistChats();appendNewBubbles();
-  }finally{document.getElementById('sendBtn').disabled=false;}
+  }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
 }
 /* v19.5 — HEAT OF THE MOMENT. v27.4 — SEQUENTIAL: after the player's turn resolves the scene
    continues on its own as `heatN` SEPARATE messages, each generated only once the previous one has
@@ -24935,6 +24940,23 @@ async function runMultiCharTurn(chat,playerText,stimulus){
    picture mid-run.
    CANCELLATION: _heatSeq is bumped by any player turn (typed or spoken) AND by the heat toggle
    going off. Checked before every beat here and again after generation in playCharacterTurn. */
+/* v39.9 — WHEN HEAT IS ON, THE PLAYER'S REPLY IS BEAT 1 OF THE RUN.
+   Heat used to run entirely AFTER a normal reply, so a turn produced one STANDARD-format reply plus
+   heatN heat beats. With heatN set to 1 that is two messages, and the first of them — the one
+   actually answering the player — was not in heat form at all, which is the opposite of what the
+   setting says. The player-facing reply is now generated as beat 1 and runHeatBursts writes beats
+   2..N, so heatN is the true number of messages in the turn and every one of them takes the heat
+   path. `_heatOpened` records that beat 1 was claimed, so a run started by toggling heat on
+   mid-turn (where no reply was marked) still writes all N beats itself. */
+function heatBeginTurn(chat){
+  if(!state.heatOn||!chat||_heatBusy) return false;
+  const total=Math.max(1,Math.min(10,+state.heatN||5));
+  chat.heatNarrN=(+chat.heatNarrN||0)+1;
+  chat._heatBeat={total:String(total),n:"1",narrN:String(chat.heatNarrN)};
+  chat._heatOpened=true;
+  return true;
+}
+function heatEndTurn(chat){ if(chat) delete chat._heatBeat; }
 /* v39.5 — WHICH OF THE TWO NARRATION MODES THIS BEAT IS IN. Parity of the persisted counter
    runHeatBursts bumps per beat: a run OPENS on the mechanics and the conscience lands second, so
    the reader sees what is happening before they are told what it costs. Kept in one function so
@@ -24963,10 +24985,14 @@ function maybeHeatBursts(chat){
 async function runHeatBursts(chat){
   if(!state.heatOn||_heatBusy||!chat)return;
   const total=Math.max(1,Math.min(10,+state.heatN||5));   // v37.0 — 1 is legal: one heat-form reply
+  /* v39.9 — the player-facing reply was beat 1 (heatBeginTurn), so this run writes 2..N. When heat
+     was switched on mid-turn no reply was marked and the run owns every beat, starting at 1. */
+  const first=chat._heatOpened?1:0;
+  delete chat._heatOpened;
   const mySeq=_heatSeq;
   _heatBusy=true;
   try{
-    for(let i=0;i<total;i++){
+    for(let i=first;i<total;i++){
       // Re-checked before EVERY beat, not just once at the top: the player can type and the toggle
       // can go off at any point during a run that takes several generations.
       if(mySeq!==_heatSeq||!state.heatOn)break;

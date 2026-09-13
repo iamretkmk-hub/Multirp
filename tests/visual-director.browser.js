@@ -2,8 +2,10 @@
    The "every N replies" slider was a proxy for a question it could not ask. Pictures during play is
    one choice now — every reply / let the story decide / none — and in the middle setting a small
    director answers per beat: 0 keeps what is on screen, 1 draws, a scene name plays that character's
-   video scene (which docks it and raises Heat of the moment, after which the scene router takes the
-   following beats). Run: node tests/visual-director.browser.js */
+   Run: node tests/visual-director.browser.js
+   v39.8 — the director answers 0 or 1 and NOTHING else. Scene videos are started by hand and are
+   never chosen for you; routeSceneForBeat is gone. A scene playing over the story means no picture
+   is drawn at all, and the heat it raised comes back down on every path the scene stops. */
 const {chromium}=require('playwright');
 (async()=>{
   const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
@@ -72,14 +74,9 @@ const {chromium}=require('playwright');
 
     out.zero  = await run("0");
     out.one   = await run("1");
-    out.scene = await run("Bedroom");
-    out.caseInsensitive = await run("  bedroom  ");
+    out.scene = await run("Bedroom");          // a scene NAME is no longer an answer
     out.quoted = await run("`1`");
     out.garbage = await run("maybe a picture?");
-    // a scene belonging to somebody else must never be played
-    state.scenes[0].characterId="someone_else"; state.scenes[0].characterName="Deniz";
-    out.otherChar = await run("Bedroom");
-    state.scenes[0].characterId="v_a"; state.scenes[0].characterName="Ayla";
     // a failing director draws rather than skipping
     drew.length=0; played.length=0;
     window.chatCompletion=async()=>{ throw new Error("network"); };
@@ -90,20 +87,29 @@ const {chromium}=require('playwright');
   });
   ok("0 keeps the picture on screen", d.zero.drew.length===0 && d.zero.played.length===0, JSON.stringify(d.zero));
   ok("1 draws a new picture", d.one.drew[0]==="m3" && d.one.played.length===0, JSON.stringify(d.one));
-  ok("a scene name plays that scene and draws nothing", d.scene.played[0]==="scn_v1" && d.scene.drew.length===0, JSON.stringify(d.scene));
-  ok("the scene name is matched case- and space-insensitively", d.caseInsensitive.played[0]==="scn_v1", JSON.stringify(d.caseInsensitive));
+  ok("a scene name is no longer an answer — it draws instead of playing",
+     d.scene.played.length===0 && d.scene.drew[0]==="m3", JSON.stringify(d.scene));
   ok("backticks around the answer are stripped", d.quoted.drew[0]==="m3", JSON.stringify(d.quoted));
   ok("a malformed answer draws rather than skipping", d.garbage.drew[0]==="m3", JSON.stringify(d.garbage));
-  ok("another character's scene is never played", d.otherChar.played.length===0 && d.otherChar.drew[0]==="m3", JSON.stringify(d.otherChar));
   ok("a failed director draws rather than skipping", d.failed.drew[0]==="m3", JSON.stringify(d.failed));
 
-  // ---- a docked scene still routes in smart mode even with rule routing off
+  // ---- a scene playing over the story stops pictures entirely, and nothing is routed
   const r=await pg.evaluate(()=>{
-    state.routeOn=false; state.imgMode="smart";
+    state.imgMode="smart";
     const chat=curChat(); chat.sceneDockId="scn_v1";
-    return {sceneMode:sceneModeActive()};
+    const drew=[]; const real=window.illustrate; window.illustrate=(mid)=>drew.push(mid);
+    autoVisualize("m3","bilmem");
+    window.illustrate=real;
+    const out={sceneMode:sceneModeActive(), drew:drew.slice(), gate:_imgGate(), active:autoImgActive(),
+               routerGone:(typeof routeSceneForBeat==="undefined")};
+    chat.sceneDockId=null;
+    return out;
   });
   ok("a docked scene is scene mode", r.sceneMode===true);
+  ok("and nothing is drawn while it plays", r.drew.length===0, JSON.stringify(r.drew));
+  ok("the gate says why", /scene video is playing/i.test(r.gate), r.gate);
+  ok("auto images are off while it plays", r.active===false);
+  ok("the per-beat scene chooser is gone", r.routerGone===true);
 
   // ---- the settings control exists and the retired slider does not
   const ui=await pg.evaluate(()=>{
@@ -125,6 +131,48 @@ const {chromium}=require('playwright');
   });
   ok("the mode saves", save.stored==="smart" && save.mode==="smart", JSON.stringify(save));
   ok("autoImg is kept in step for the older readers", save.autoImg===true, JSON.stringify(save));
+
+  /* ---- HEAT FOLLOWS THE SCENE, BOTH WAYS. Starting a scene raises Heat of the moment; every path
+     that stops the scene has to put it back. Two of them used not to: deleting the scene from the
+     editor, and syncSceneDock noticing the scene is gone. Both left heat raised with no video. */
+  const heat=await pg.evaluate(()=>{
+    const out={}; const chat=curChat();
+    state.heatOn=false; state._heatWasOn=undefined; chat.sceneDockId=null;
+    state.scenes=[{id:"scn_h",name:"H",characterId:"v_a",characterName:"Ayla",
+                   universeId:chat.universeId,clips:[{id:"c1",url:"blob:x"}]}];
+    playSceneInChat("scn_h");
+    out.onStart={heat:state.heatOn, docked:chat.sceneDockId==="scn_h"};
+    closeSceneDock();
+    out.onClose={heat:state.heatOn, docked:!!chat.sceneDockId};
+
+    // the scene is DELETED while playing
+    state.heatOn=false; state._heatWasOn=undefined;
+    state.scenes=[{id:"scn_h2",name:"H2",characterId:"v_a",characterName:"Ayla",
+                   universeId:chat.universeId,clips:[{id:"c1",url:"blob:x"}]}];
+    playSceneInChat("scn_h2");
+    const raised=state.heatOn;
+    const realConfirm=window.confirm; window.confirm=()=>true;
+    try{ deleteScene("scn_h2"); }catch(e){ out.delErr=String(e); }
+    window.confirm=realConfirm;
+    out.onDelete={raisedFirst:raised, heat:state.heatOn, docked:!!chat.sceneDockId};
+
+    // the scene vanished from under the dock (syncSceneDock finds no scene)
+    state.heatOn=false; state._heatWasOn=undefined;
+    state.scenes=[{id:"scn_h3",name:"H3",characterId:"v_a",characterName:"Ayla",
+                   universeId:chat.universeId,clips:[{id:"c1",url:"blob:x"}]}];
+    playSceneInChat("scn_h3");
+    const raised3=state.heatOn;
+    state.scenes=[];                       // gone, without going through deleteScene
+    try{ syncSceneDock(true); }catch(e){}
+    out.onVanish={raisedFirst:raised3, heat:state.heatOn, docked:!!chat.sceneDockId};
+    return out;
+  });
+  ok("starting a scene raises heat and docks it", heat.onStart.heat===true && heat.onStart.docked===true, JSON.stringify(heat.onStart));
+  ok("closing it puts heat back", heat.onClose.heat===false && heat.onClose.docked===false, JSON.stringify(heat.onClose));
+  ok("deleting the playing scene puts heat back too",
+     heat.onDelete.raisedFirst===true && heat.onDelete.heat===false && heat.onDelete.docked===false, JSON.stringify(heat.onDelete));
+  ok("a scene that vanishes under the dock puts heat back",
+     heat.onVanish.raisedFirst===true && heat.onVanish.heat===false && heat.onVanish.docked===false, JSON.stringify(heat.onVanish));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

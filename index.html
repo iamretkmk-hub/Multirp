@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v39.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v39.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3182,12 +3182,10 @@ const DEFAULT_VISUAL_DIRECTOR=`You decide what the reader SEES for one beat of a
 You are given:
 - WHAT THE PICTURE ON SCREEN ALREADY SHOWS (may be empty — then there is no picture yet).
 - THE LATEST EXCHANGE, ending with the beat you are judging.
-- VIDEO SCENES available for the character who just spoke (may be empty).
 
-Answer with EXACTLY ONE of these, and nothing else:
+Answer with EXACTLY ONE CHARACTER, and nothing else:
 - \`0\` — keep the picture that is already on screen. Nothing worth re-drawing has changed.
 - \`1\` — draw a new picture. The image on screen no longer describes the moment.
-- the NAME of one video scene, copied exactly as it is written in the list — the story has arrived at the moment that scene was made for.
 
 ## WHEN A NEW PICTURE IS EARNED
 A new picture costs money and interrupts reading, so the default is \`0\`. Return \`1\` only when a reader looking at the current picture would be looking at the wrong thing. That means one of:
@@ -3209,10 +3207,7 @@ These are the ordinary texture of a conversation. They are NOT worth a frame, no
 Two people talking across a table for twenty exchanges is ONE picture. Return \`0\` every time until one of them physically does something a camera would notice.
 If there is no picture on screen at all, return \`1\` — the first frame of a scene is always earned.
 
-## WHEN A VIDEO SCENE WINS
-Return a scene NAME instead of a number only when the latest exchange has genuinely arrived at what that scene depicts — not when it merely resembles it, and not because the mood is heading that way. If no scene is a real match, or the list is empty, answer \`0\` or \`1\` as above. A scene name outranks \`1\`: when the moment is a scene, play the scene rather than drawing it.
-
-Return only \`0\`, \`1\`, or one scene name. No explanation, no punctuation, no quotes.`;
+Return only \`0\` or \`1\`. No words, no explanation, no punctuation, no quotes.`;
 
 /* ===== MEMORY SYSTEM PROMPTS (adapted from SkyrimAI) ===== */
 // ===== MEMORY ARC TRACKER (event-bounded memory, layer 1) =====
@@ -10422,7 +10417,7 @@ const PROMPT_REGISTRY=[
   {key:"routerPrompt", label:"Image/Video router", def:()=>DEFAULT_ROUTER, json:false,
    hint:"Picks which image/video model rule fits the scene, and which docked video scene each beat routes to."},
   {key:"visualDirector", label:"Visual director (new picture / video scene)", def:()=>DEFAULT_VISUAL_DIRECTOR, json:false,
-   hint:"Runs once per reply in \u201cLet the story decide\u201d mode: returns 0 (keep the picture on screen), 1 (draw a new one) or the name of one of the speaking character\u2019s video scenes (play it, which also raises Heat of the moment). Gets what the current picture shows, the latest exchange, and that character\u2019s scene list."},
+   hint:"Runs once per reply in \u201cLet the story decide\u201d mode: returns 0 (keep the picture already on screen) or 1 (draw a new one), and nothing else. Gets what the current picture shows and the latest exchange. Scene videos are started by hand and are never chosen for you."},
   {key:"memEval", label:"Memory arc tracker", def:()=>DEFAULT_MEMEVAL, json:true,
    hint:"Runs after each turn (background, on the character-router model) to decide when a memorable arc starts/continues/pauses/ends. Boundary detection only — importance is judged by the builder. Use {{open_event}}, {{exchange}}."},
   {key:"memBuild", label:"Memory builder", def:()=>DEFAULT_MEMBUILD, json:true,
@@ -21710,7 +21705,7 @@ function autoImgActive(){
   if(_heatNoImg) return false;       // v19.5: no auto image on non-final heat beats (no waiting mid-burst)
   const c=state.chats&&state.curChat?state.chats[state.curChat]:null;
   // v29 — SCENE MODE: while a scene video is docked over the story, image generation stops;
-  // each beat routes between the user's scenes instead (see autoVisualize/routeSceneForBeat).
+  // the player's own scene carries the visuals until they close it (see autoVisualize).
   // Closing the video window (closeSceneDock) clears sceneDockId and auto images resume.
   if(c&&c.sceneDockId&&typeof sceneById==="function"&&sceneById(c.sceneDockId)) return false;
   if(c&&c.pinnedMid){
@@ -21740,7 +21735,9 @@ function sceneModeActive(){
    question directly; K.imgEveryTurns stays defined only so the stored value can be read once during
    the migration in loadState. */
 function autoVisualize(mid,reply){
-  if(sceneModeActive()){ routeSceneForBeat(mid,reply); return; }
+  // A scene the player started is playing over the story: it carries the visuals, so nothing is
+  // drawn and nothing is chosen. It plays until they close it.
+  if(sceneModeActive()){ try{ _alog("img.skip","a scene video is playing over the story"); }catch(_){} return; }
   if(!autoImgActive()){ try{ _alog("img.skip",_imgGate()||"refused"); }catch(_){} return; }
   if(imgMode()==="smart"){ decideVisual(mid,reply); return; }
   illustrate(mid,reply);
@@ -21762,23 +21759,18 @@ async function decideVisual(mid,replyText){
     const x=msgs[i]; if(!x||x.mid===mid) continue;
     if(x.img||x.hadImg||x.imgState==="loading"){ shows=String(x.imgPrompt||x.content||"").slice(0,500); break; }
   }
-  // This speaker's video scenes only — never another character's (the same rule routeSceneForBeat follows).
-  let scenes=[];
-  try{ scenes=scenesFor(m&&m.speakerId,m&&m.speaker).filter(sc=>sc&&(sc.clips||[]).length); }catch(e){}
-  if(!shows && !scenes.length){ illustrate(mid,replyText); return; }   // no picture yet and nothing to play: always draw
+  if(!shows){ illustrate(mid,replyText); return; }   // no picture on screen yet: the first frame is always earned
   const recent=msgs.filter(x=>x&&!x.sysError&&!x.dayMarker&&!x.presenceNote&&x.content)
     .slice(-4).map(x=>`${x.role==='user'?state.user:(x.speaker||"Narrator")}: ${String(x.content).slice(0,600)}`).join("\n")
     ||String(replyText||"").slice(0,600);
-  const list=scenes.map(sc=>`- ${sc.name}${sc.when&&sc.when.trim()?`: ${sc.when.trim()}`:""}`).join("\n");
   _visualBusy=true;
   let ans="";
   try{
     ans=await chatCompletion([
       {role:"system",content:up("visualDirector")},
       {role:"user",content:
-        `WHAT THE PICTURE ON SCREEN ALREADY SHOWS:\n${shows||"(nothing — there is no picture yet)"}\n\n`+
-        `VIDEO SCENES for ${(m&&m.speaker)||"this character"}:\n${list||"(none)"}\n\n`+
-        `THE LATEST EXCHANGE (the last line is the beat you are judging):\n${recent}\n\nAnswer.`}
+        `WHAT THE PICTURE ON SCREEN ALREADY SHOWS:\n${shows}\n\n`+
+        `THE LATEST EXCHANGE (the last line is the beat you are judging):\n${recent}\n\nAnswer 0 or 1.`}
     ],state.routerModel,{temp:fnTemp("router",0),max:fnTok("router",12),dbg:"Visual director"});
   }catch(e){
     try{ _alog("img.draw","the visual director could not be reached — drawing anyway"); }catch(_){}
@@ -21788,68 +21780,16 @@ async function decideVisual(mid,replyText){
   const raw=String(ans||"").trim().replace(/^[`"'\s]+|[`"'.\s]+$/g,"");
   if(/^0$/.test(raw)){ try{ _alog("img.skip","the visual director kept the picture already on screen"); }catch(_){} return; }
   if(/^1$/.test(raw)){ illustrate(mid,replyText); return; }
-  // A scene name: match case-insensitively against this speaker's scenes only.
-  const want=raw.toLowerCase();
-  const hit=scenes.find(sc=>String(sc.name||"").trim().toLowerCase()===want)
-         || scenes.find(sc=>want.indexOf(String(sc.name||"").trim().toLowerCase())>=0);
-  if(hit){
-    try{ _alog("img.scene","the visual director played the scene “"+hit.name+"”"); }catch(_){}
-    try{ playSceneInChat(hit.id); }catch(e){ illustrate(mid,replyText); }   // docks the video AND raises heat
-    return;
-  }
   // Anything else is a malformed answer, and a missing picture is worse than a spare one.
   try{ _alog("img.draw","the visual director answered “"+raw.slice(0,40)+"” — drawing rather than skipping"); }catch(_){}
   illustrate(mid,replyText);
 }
-let _sceneRouteBusy=false;
-async function routeSceneForBeat(mid,replyText){
-  const chat=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
-  if(!chat||!chat.sceneDockId)return;
-  // v39.4 — "Let the story decide" implies scene routing; the Smart-routing switch below only
-  // governs the model-RULE router, and turning that off must not freeze a docked scene.
-  if(!state.routeOn && imgMode()!=="smart")return;   // routing disabled → keep whatever is playing
-  // v28.1 — route ONLY within the scenes belonging to whoever just spoke. Routing across the whole
-  // universe is what made playback jump to another character's scenes mid-conversation.
-  const _m=(chat.messages||[]).find(x=>x&&x.mid===mid);
-  const _spId=_m&&_m.speakerId, _spName=_m&&_m.speaker;
-  const scenes=scenesFor(_spId,_spName).filter(s=>s&&(s.clips||[]).length);
-  if(!scenes.length)return;                     // this speaker has none — leave what's playing alone
-  const _curId=chat.sceneDockId;
-  const curIsTheirs=scenes.some(s=>s.id===_curId);
-  // One candidate: no LLM call needed. Switch only if what's docked isn't already theirs.
-  if(scenes.length===1){
-    if(!curIsTheirs && scenes[0].id!==_curId){
-      chat.sceneDockId=scenes[0].id; markChatDirty(chat); persistChats(); syncSceneDock(true);
-      toast(`Scene: ${scenes[0].name}`);
-    }
-    return;
-  }
-  if(_sceneRouteBusy)return;                    // one route in flight per turn is enough
-  _sceneRouteBusy=true;
-  try{
-    // The router reads the last few lines (ending with this beat) — same freshest-last shape
-    // as the image router — plus a sticky "currently playing" bias so scenes don't flap.
-    const recent=(chat.messages||[])
-      .filter(m=>m&&!m.sysError&&!m.dayMarker&&!m.presenceNote&&m.content)
-      .slice(-3)
-      .map(m=>`${m.role==='user'?state.user:(m.speaker||"Narrator")}: ${m.content}`).join("\n")
-      ||`Narrator: ${String(replyText||"").slice(0,400)}`;
-    // The sticky "keep what's playing" bias only makes sense when what's playing is one of the
-    // candidates; if a different character's scene is docked, this beat should move off it.
-    const cur=curIsTheirs?sceneById(_curId):null;
-    const items=scenes.map(s=>({id:s.id,label:s.name,
-      when:(s.when&&s.when.trim())||`CHOOSE WHEN the moment matches "${s.name}".`}));
-    const prev=cur?`CURRENTLY PLAYING SCENE: ${cur.name}\n(If the latest exchange does NOT clearly call for a different scene, return that same scene's index again. Switch ONLY when the roleplay really moves to a moment another scene fits better.)\n\n`:"";
-    const picked=await pickRule(items,prev+`LATEST EXCHANGE (the authority — route on what the roleplay is NOW):\n${recent}`);
-    // Only a real change restarts playback; the same pick keeps the current loop seamless.
-    if(picked&&picked.id&&picked.id!==chat.sceneDockId&&sceneById(picked.id)){
-      chat.sceneDockId=picked.id; markChatDirty(chat); persistChats();
-      syncSceneDock(true);
-      toast(`Scene: ${picked.label}`);
-    }
-  }catch(e){}
-  _sceneRouteBusy=false;
-}
+/* v39.8 — routeSceneForBeat is GONE. It read each beat and switched which of a character's scenes
+   was docked, which is a choice the player makes now: a scene is started by hand ("Play over story")
+   and plays until it is closed. Nothing reads the roleplay to pick a scene any more — the only
+   automatic visual decision left is the visual director's, and that answers whether to draw a
+   picture, nothing else. (pickRule and routerPrompt stay: they still choose which image RULE
+   renders a frame.) */
 // The message whose media should fill the rail right now: pinned if set & still has media,
 // otherwise the most recent message that carries a finished image or video.
 function railMessage(chat){
@@ -26633,8 +26573,13 @@ function deleteScene(id){
   const i=(state.scenes||[]).findIndex(s=>s&&s.id===id); if(i<0)return;
   if(!confirm(`Delete scene "${state.scenes[i].name}"? The clips stay in the gallery.`))return;
   state.scenes.splice(i,1); persistScenes(); persistVideos();
-  // undock it from any story that was playing it
-  for(const cid in state.chats){ if(state.chats[cid].sceneDockId===id){ state.chats[cid].sceneDockId=null; markChatDirty(state.chats[cid]); } }
+  // undock it from any story that was playing it — and put heat back where it was, because
+  // starting the scene is what raised it (see _heatFollowScene).
+  let _wasHere=false;
+  for(const cid in state.chats){ if(state.chats[cid].sceneDockId===id){
+    if(cid===state.curChat)_wasHere=true;
+    state.chats[cid].sceneDockId=null; markChatDirty(state.chats[cid]); } }
+  if(_wasHere)_heatFollowScene(false);
   persistChats();
   closeSceneEditor(); renderGallery(); syncSceneDock(true);
   toast("Scene deleted");
@@ -28107,6 +28052,7 @@ function syncSceneDock(force){
     if(c&&c.sceneDockId&&!s){
       if(!_mediaHydrated) return;   // scenes still loading from IndexedDB — don't wipe the pin yet
       c.sceneDockId=null; markChatDirty(c); persistChats();   // scene was genuinely deleted
+      _heatFollowScene(false);   // it raised heat on the way in; it lowers it on the way out
     }
     if(_sceneDock)_teardownSceneDock();
     return;

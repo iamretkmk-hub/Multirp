@@ -39,9 +39,17 @@ uses, so one character's scenes can never play over another's. It answers:
 
 - `0` → keep the picture already on screen (talk, gestures, glances and tone never earn a frame);
 - `1` → `illustrate()` (a move, an arrival, clothing, a place, light, or a sexual act changing);
-- a **scene name** → `playSceneInChat()`, which docks the video AND raises Heat of the moment via
-  `_heatFollowScene(true)`; from the next beat `sceneModeActive()` sends `autoVisualize` into
-  `routeSceneForBeat`, the per-beat scene router.
+It answers nothing else. **Scene videos are started by hand** ("Play over story") and are never
+chosen for you — `routeSceneForBeat`, which read each beat and switched which of a character's
+scenes was docked, was removed in v39.8 along with the director's scene-name branch. While a scene
+is docked, `sceneModeActive()` makes `autoVisualize` draw nothing at all: the video carries the
+visuals until the player closes it.
+
+**Heat follows the scene both ways.** Starting one raises Heat of the moment
+(`_heatFollowScene(true)` inside `playSceneInChat`), so every path that STOPS the scene has to put
+it back. Three do: `closeSceneDock`, `deleteScene` (only when the deleted scene was the one playing
+in the *current* chat), and `syncSceneDock` when the scene has vanished from under the dock. The
+last two used not to, and left heat raised with no video playing.
 
 Every failure path draws rather than skips — a missing picture is worse than a spare one — and a
 malformed answer is logged with what the model actually said. `routeSceneForBeat` now also runs when

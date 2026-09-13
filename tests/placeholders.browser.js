@@ -98,6 +98,41 @@ const {chromium}=require('playwright');
       ta.value=DEFAULT_BASE_INSTRUCTION; plqInput(ta);
       return dirty && clean; }));
 
+  /* v41.2 — A CONVERTED BOX'S OWN GRAMMAR IS NOT A FAILED PLACEHOLDER. FINAL GUARDRAILS opened
+     with a red warning saying its seven {{if}} conditions and the {{call}} inside its {{comment}}
+     "reach the model as literal text", and offering {{comment}}, {{endcomment}} and {{endif}} as
+     placeholders you could insert. Every one of those is read and removed by ptRenderBox before
+     anything is sent. The scanner has to know the difference — without silencing the real warning
+     for an ORDINARY fragment, which never sees ptRenderBox at all. */
+  console.log("\n[box grammar vs. a failed placeholder]");
+  await pg.evaluate(()=>{ show('settings'); try{renderPayloadList();renderPayloadTemplates();}catch(e){} });
+  ok("a converted block's box opens with no warning", await pg.evaluate(()=>{
+      ptEditPiece("final_guardrails");
+      const ta=document.querySelector('textarea[data-btpl="rails_header"]');
+      const atRender=ta?ta.nextElementSibling.innerHTML:"(box did not open)";
+      if(ta) _phWarnPaint(ta);                       // the path that fires as you type
+      const live=ta?ta.nextElementSibling.innerHTML:"(box did not open)";
+      ptEditPiece("final_guardrails");
+      if(atRender!=="") return "on open: "+atRender.replace(/<[^>]+>/g,"").slice(0,200);
+      if(live!=="") return "on edit: "+live.replace(/<[^>]+>/g,"").slice(0,200);
+      return true; }));
+  ok("and offers only real placeholders, not {{comment}} or {{endif}}", await pg.evaluate(()=>{
+      const f=tplPlaceholders("rails_header");
+      const junk=f.filter(t=>/^(if\s|else$|endif$|comment$|endcomment$)/i.test(t));
+      return junk.length?("still offered: "+junk.join(", ")):(f.indexOf("narr_short")>=0?true:"lost narr_short"); }));
+  /* (!) The exemption is for boxes ONLY. An ordinary fragment is filled by fillTpl and never
+     rendered by ptRenderBox, so an {{if}} written into one really does ship as literal text. */
+  ok("the same text in an ordinary fragment is still flagged", await pg.evaluate(()=>
+      /render_mode/.test(_phWarnHtml("Say {{if render_mode = heat}} hi",["user"],false))));
+  ok("and is quiet inside a box", await pg.evaluate(()=>
+      _phWarnHtml("Say {{if render_mode = heat}} hi",["user"],true)===""));
+  ok("a genuinely unknown token is still caught inside a box", await pg.evaluate(()=>
+      /nosuchtoken/.test(_phWarnHtml("Hi {{nosuchtoken}}",["user"],true))));
+  ok("a bare call in a box is still flagged; one in a comment is not", await pg.evaluate(()=>{
+      const bare=_phWarnHtml("Rules: {{call//rail_voice}}",["user"],true);
+      const noted=_phWarnHtml("{{comment}} use {{call//rail_voice}} {{endcomment}} Rules.",["user"],true);
+      return /call/.test(bare) && noted===""; }));
+
   console.log("\n[nothing else moved]");
   ok("saveSettings does not throw", await pg.evaluate(()=>{
       show('settings'); try{ saveSettings(false); return true; }catch(e){ return "threw: "+e.message; } }));

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -35074,38 +35074,55 @@ const TPL_PH_EXTRA={voice_delivery:["user","self","target"],heat_delivery:["user
   heat_format:["user","lines","n","total","more"],
   heat_guidance:["user","self","who","n","total","more"],
   heat_more_no:["user"]};
+/* (!) v41.2 — BOX GRAMMAR IS NOT A PLACEHOLDER. {{if …}} / {{else}} / {{endif}} and
+   {{comment}} … {{endcomment}} are the converted box's own syntax: ptRenderBox reads them and
+   removes them before a single character is sent. They are not tokens fillTpl failed to fill, and
+   they must never be advertised as things a box "fills" — FINAL GUARDRAILS was offering
+   {{comment}} and {{endif}} as placeholders you could insert. */
+const PH_CONTROL=/^(?:if\s+[^{}]*|else|endif|comment|endcomment)$/i;
 function tplPlaceholders(k){
-  return [...new Set([..._phTokens(BLOCK_TPL_DEFAULTS[k]||""),...(TPL_PH_EXTRA[k]||[])])].sort();
+  return [...new Set([..._phTokens(BLOCK_TPL_DEFAULTS[k]||""),...(TPL_PH_EXTRA[k]||[])])]
+    .filter(t=>!PH_CONTROL.test(t)).sort();
 }
 /* Every {{token}} the TEXT uses, including shapes fillTpl cannot even match. fillTpl's own
    pattern is \w+, so a dotted token like {{npc.name}} is not a failed substitution — it is
    never seen as a token at all and reaches the model as literal characters. That is exactly the
    kind of silence this scanner exists to break, so it is deliberately looser than fillTpl. */
-function _phUsed(text){
-  return [...new Set((String(text||"").match(/\{\{\s*[^{}\n]{1,60}?\s*\}\}/g)||[])
-    .map(t=>t.slice(2,-2).trim()))];
+function _phUsed(text,isBox){
+  /* A {{comment}} block is a note to yourself — stripped before the box is rendered, so nothing
+     written inside one can reach the model and nothing inside one is worth warning about. This is
+     what flagged {{call//final_guardrails//rail_voice}}: it is in the comment that DOCUMENTS the
+     call form. */
+  const t=isBox?String(text||"").replace(PT_COMMENT,""):String(text||"");
+  const used=[...new Set((t.match(/\{\{\s*[^{}\n]{1,60}?\s*\}\}/g)||[])
+    .map(x=>x.slice(2,-2).trim()))];
+  /* (!) The exemption is for CONVERTED BOXES ONLY. An ordinary fragment is filled by fillTpl and
+     never sees ptRenderBox, so an {{if}} written into one really would ship as literal text —
+     exempting it everywhere would silence a genuine bug to quieten a false alarm. */
+  return isBox?used.filter(x=>!PH_CONTROL.test(x)):used;
 }
-function _phUnknown(text,allowed){
+function _phUnknown(text,allowed,isBox){
   const ok=new Set(allowed||[]);
-  return _phUsed(text).filter(t=>!ok.has(t));
+  return _phUsed(text,isBox).filter(t=>!ok.has(t));
 }
 /* The live "this will be sent literally" note under a prompt or fragment box. */
-function _phWarnHtml(text,allowed){
-  const bad=_phUnknown(text,allowed);
+function _phWarnHtml(text,allowed,isBox){
+  const bad=_phUnknown(text,allowed,isBox);
   if(!bad.length) return "";
   const list=bad.map(t=>"<code>{{"+esc(t)+"}}</code>").join(", ");
   const hint=allowed&&allowed.length
     ? "This one fills "+allowed.map(t=>"<code>{{"+esc(t)+"}}</code>").join(", ")+"."
     : "This one fills nothing \u2014 it takes no placeholders at all.";
+  const box=isBox?" Its <code>{{if}}</code> conditions and <code>{{comment}}</code> notes are read by the box itself and never sent.":"";
   return `<div class="plqWarn">${icon("warn")} ${list} ${bad.length===1?"is":"are"} not filled here and `
-    +`${bad.length===1?"reaches":"reach"} the model as literal text. ${hint}</div>`;
+    +`${bad.length===1?"reaches":"reach"} the model as literal text. ${hint}${box}</div>`;
 }
 function _phWarnPaint(el){
   const host=el&&el.nextElementSibling;
   if(!host||!host.classList||!host.classList.contains("plqWarnHost"))return;
   const allowed=el.dataset.pkey?promptPlaceholders(el.dataset.pkey)
               : el.dataset.btpl?tplPlaceholders(el.dataset.btpl):[];
-  host.innerHTML=_phWarnHtml(el.value,allowed);
+  host.innerHTML=_phWarnHtml(el.value,allowed,!!(el.dataset.btpl&&_ptBoxKeys[el.dataset.btpl]));
 }
 /* ---- floating picker menu (shared by token pickers + the ＋ Placeholder re-add list) ---- */
 function _phMenuClose(){ const m=document.getElementById('phMenu'); if(m)m.remove(); document.removeEventListener('click',_phMenuClose); }
@@ -35523,7 +35540,7 @@ function _ptFragBox(k){
     ${_index}
     <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)"${_tall}>
 ${esc(blkTpl(k))}</textarea>
-    <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k))}</div>
+    <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k),!!_box)}</div>
     <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>
     <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button>
   </div>`;

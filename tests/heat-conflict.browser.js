@@ -68,6 +68,10 @@ const {chromium}=require('playwright');
   ok("the format allows two channels and no narration",
      /TWO CHANNELS/.test(txt.fmt) && /THERE IS NO NARRATION/.test(txt.fmt) && /between \*asterisks\*/.test(txt.fmt));
   ok("a trio is required, not optional", /AT LEAST ONE run of three/.test(txt.fmt), txt.fmt.slice(0,60));
+  /* The old "NO internal-thought block" bullet survived from when heat had no thought channel, and
+     flatly contradicted the thought this mode now requires. */
+  ok("nothing in the format bans the thought it requires",
+     !/NO internal-thought block/.test(txt.fmt) && /only inward line/.test(txt.fmt), txt.fmt.slice(-400));
   ok("the punctuation ban also fires in the last slot",
      /Never "\u2026"/.test(txt.sound) && /at least one run of three/i.test(txt.sound), txt.sound.slice(0,90));
   ok("it forbids dots and dashes as gaps",

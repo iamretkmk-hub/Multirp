@@ -60,7 +60,11 @@ const {chromium}=require('playwright');
       const tas=host?host.querySelectorAll('textarea[data-btpl]'):[];
       const names=tas.length?Array.from(tas).map(t=>t.getAttribute('data-btpl')):[];
       ptEditPiece("final_guardrails");
-      if(names.length!==1||names[0]!=="rails_header") return "opened "+names.length+" boxes: "+names.join(", ");
+      // the box itself, plus the fragments the block claims that are NOT sections of it
+      // (heat_narr_*_short feed {{narr_short}} inside [[rail_heat_narr]])
+      if(names.indexOf("rails_header")<0) return "the box did not open: "+names.join(", ");
+      const stray=names.filter(n=>n!=="rails_header"&&!/^heat_narr_.*_short$/.test(n));
+      if(stray.length) return "still opening separate rule boxes: "+stray.join(", ");
       const secs=ptBoxSections("final_guardrails");
       const missing=RAIL_KEYS.filter(k=>secs.indexOf(k)<0);
       return missing.length?("rules lost on the way in: "+missing.join(", ")):true; }));

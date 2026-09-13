@@ -86,7 +86,6 @@ const {chromium}=require('playwright');
   const call=await pg.evaluate(()=>{
     const secs=ptBoxSections("final_guardrails");
     const known=ptKnownNames();
-    const cat=ptCatalog().map(c=>c.name);
     // a real turn's sources, so this is what a template would actually resolve against
     const p=(state.personas||[]).find(x=>x.id==="p_box")||null;
     let srcs=null;
@@ -104,7 +103,6 @@ const {chromium}=require('playwright');
     const heatOnly=srcs?ptResolve(srcs,"final_guardrails","rail_heat_len",rep):null;
     return {
       secs, nSecs:secs.length,
-      inCatalog:secs.filter(n=>cat.indexOf("final_guardrails//"+n)<0),
       unknown:secs.filter(n=>!known["final_guardrails//"+n]),
       seeded:srcs?secs.filter(n=>!Object.prototype.hasOwnProperty.call(srcs,"final_guardrails//"+n)):["no persona"],
       one:String(one||""), heatOnly:String(heatOnly||""), reported:rep.unknownCall,
@@ -112,8 +110,6 @@ const {chromium}=require('playwright');
     };
   });
   ok("the box has its sections", call.nSecs>=15, call.nSecs+" sections");
-  ok("every section is listed in the editor's catalog under its block",
-     call.inCatalog.length===0, call.inCatalog.join(", "));
   ok("and the validator knows all of them", call.unknown.length===0, call.unknown.join(", "));
   ok("every section is seeded in a real turn's sources",
      Array.isArray(call.seeded)&&call.seeded.length===0, String(call.seeded));
@@ -125,6 +121,30 @@ const {chromium}=require('playwright');
      known-and-empty. Reported as unknown, every ordinary turn would log a dozen phantom typos. */
   ok("a section this turn's conditions left out is empty, not a typo",
      call.heatOnly==="" && call.reported.length===0, call.reported.join(", "));
+
+  /* (!) v41.3 — A FOLDED RULE IS NOT A ROW IN THE PIECE LIST. It has no wording of its own, no box
+     of its own and nothing to reset, so a row offering copy / used by / edit for it is dead — and
+     listing every section again as final_guardrails//rail_… would rebuild the clutter the box was
+     made to remove. One row for the block. But the names must stay KNOWN, under both forms, or the
+     validator flags the app's own shipped template in red. */
+  console.log("\n[the piece list]");
+  const cat=await pg.evaluate(()=>{
+    const names=ptCatalog().map(c=>c.name);
+    const secs=ptBoxSections("final_guardrails");
+    const known=ptKnownNames();
+    return {rails:names.filter(n=>/^rail_/.test(n)),
+            sectionRows:names.filter(n=>n.indexOf("final_guardrails//")===0),
+            block:names.indexOf("final_guardrails")>=0,
+            flatUnknown:secs.filter(n=>!known[n]),
+            blockUnknown:secs.filter(n=>!known["final_guardrails//"+n]),
+            tplUnknown:ptScan(ptDefaultTemplate("solo"),ptKnownNames()).unknownCall};
+  });
+  ok("no folded rule is listed as a piece of its own", cat.rails.length===0, cat.rails.join(", "));
+  ok("and no section is listed under its block either", cat.sectionRows.length===0, cat.sectionRows.join(", "));
+  ok("the block itself is still a row", cat.block===true);
+  ok("every section stays callable by its flat name", cat.flatUnknown.length===0, cat.flatUnknown.join(", "));
+  ok("and by block//section", cat.blockUnknown.length===0, cat.blockUnknown.join(", "));
+  ok("so the shipped template validates clean", cat.tplUnknown.length===0, cat.tplUnknown.join(", "));
 
   console.log("\n[the editor]");
   const ed=await pg.evaluate(()=>{

@@ -156,6 +156,56 @@ const {chromium}=require('playwright');
       const t=ptTemplate("solo"); ptSetTemplate("solo",null);
       return /# TASK/.test(t) && t.indexOf("{{call//dialogue_history}}")>-1; }));
 
+  /* (!) v41.6 — HEAT BEAT 1 MUST BE A HEAT PAYLOAD WHEN ONE CHARACTER IS PRESENT. heatBeginTurn()
+     claims the player-facing reply as beat 1 and sets chat._heatBeat, documented as "what switches
+     the payload to the heat layout". The multi path asked _heatBeat?"heat":"multi"; the solo path
+     asked for "solo" BY NAME and never switched — so a hand-written heat template was ignored and
+     the solo one ran, and with heatN=1 (where beat 1 is the whole run) heat never used its own
+     template at all.
+     (!) Why it stayed invisible: with the SHIPPED templates every kind produces the same text, so
+     nothing looked wrong until someone wrote a heat template of their own. Hence two markers here
+     rather than a comparison of defaults. */
+  console.log("\n[heat beat 1, with one character present]");
+  const hk=await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    if(!state.personas.some(x=>x.id==="p_k"))
+      state.personas.push({id:"p_k",name:"Ayse",universeId:uni.id,instructions:"x",personality:"x",
+        backstory:"x",style:"x",goals:"x",look:{}});
+    const p=state.personas.find(x=>x.id==="p_k"); const chat=curChat();
+    chat.presentIds=["p_k"]; state.user="Kemal";
+    const wasOn=state.payloadTplOn, wasTpl=Object.assign({},state.payloadTemplates||{});
+    state.payloadTplOn=true;
+    ptSetTemplate("solo","SOLO-TEMPLATE-MARKER\n{{call//dialogue_history}}");
+    ptSetTemplate("heat","HEAT-TEMPLATE-MARKER\n{{call//dialogue_history}}");
+    const inj={recent:[],diary:[],longterm:[]};
+    const build=()=>{
+      const hb=buildCharPromptBlocks(p,[],inj,state.user,{chat,targetName:state.user,targetId:"__user__"});
+      const tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
+        targetId:"__user__",multi:false,injected:inj});
+      const kind=replyKind(chat,"solo");
+      const msgs=ptBuildMessages(kind,Object.assign({},hb,tb),[],{chat,npc:p,targetName:state.user});
+      return {kind,text:(msgs||[]).map(m=>m.content).join("\n")};
+    };
+    chat._heatBeat={total:"1",n:"1",narrN:"1"};  const heat=build();
+    delete chat._heatBeat;                        const solo=build();
+    state.payloadTplOn=wasOn; state.payloadTemplates=wasTpl; store.set(K.payloadTemplates,wasTpl);
+    return {heat,solo};
+  });
+  ok("a heat beat resolves to the heat kind", hk.heat.kind==="heat", hk.heat.kind);
+  ok("and an ordinary turn still resolves to solo", hk.solo.kind==="solo", hk.solo.kind);
+  ok("the hand-written HEAT template is the one that runs",
+     /HEAT-TEMPLATE-MARKER/.test(hk.heat.text), hk.heat.text.slice(0,90));
+  ok("and the solo template does not leak into it",
+     !/SOLO-TEMPLATE-MARKER/.test(hk.heat.text), hk.heat.text.slice(0,90));
+  ok("an ordinary turn still gets the solo template",
+     /SOLO-TEMPLATE-MARKER/.test(hk.solo.text) && !/HEAT-TEMPLATE-MARKER/.test(hk.solo.text),
+     hk.solo.text.slice(0,90));
+  /* One function decides this for both reply paths, so they cannot drift apart again. */
+  ok("replyKind carries any base through when heat is off", await pg.evaluate(()=>
+      replyKind({},"multi")==="multi" && replyKind({},"solo")==="solo"
+      && replyKind({_heatBeat:{n:"1"}},"multi")==="heat"
+      && replyKind({_heatBeat:{n:"1"}},"solo")==="heat"));
+
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));
 

@@ -341,10 +341,18 @@ it. Measured: a user template whose `# TASK` section was joined to `{{call//worl
 turn `world` was empty. **Rule: blank line between independent sections, `{{gap}}` only inside
 one conditional piece.** The editor now says so above every template box.
 
-**Heat of the moment — the two narration modes (v39.5).** A heat beat alternates its single
-narration clause between the plain mechanics of what the bodies are doing (`heat_narr_physical`)
-and the character's conscience (`heat_narr_superego`). A run OPENS on the mechanics — the reader
-sees what is happening before they are told what it costs. The alternation is decided in CODE, never asked
+**Heat of the moment — two channels, and the alternating thought (v40.0).** Heat has NO narration
+channel: speech in quotes, plus exactly ONE thought between underscores, and nothing between
+asterisks at all. That thought alternates between the plain physical registration of what is
+happening (`heat_narr_physical`) and the character's conscience (`heat_narr_superego`); a run OPENS
+on the physical one. The two fragment KEYS keep their old `narr` names deliberately — renaming a
+fragment orphans every override stored against it.
+
+The punctuation ban lives in TWO places on purpose: `heat_format` (early) and the `rail_heat_sound`
+rail (last slot before generation). An ellipsis is the easiest thing for a model to reach for when a
+line breaks, and stating the ban only in the format block thousands of tokens earlier did not hold.
+The rails are also where the "no narration" prohibition is repeated (`rail_heat_narr`), and where
+the trio requirement is restated as a floor rather than an option. The alternation is decided in CODE, never asked
 of the model: every beat is a separate generation with no memory of the last one, so `runHeatBursts`
 bumps `chat.heatNarrN` (persisted — heat length is often 1, and the alternation has to survive a
 run boundary and a reload) and puts it on `_heatBeat`; `heatNarrMode()` reads its parity and

@@ -38,7 +38,13 @@ const {chromium}=require('playwright');
   ok("no beat set still answers", alt.noBeat==="physical", alt.noBeat);
   ok("the two mode blocks differ", alt.blockA!==alt.blockB && alt.blockA.length>100 && alt.blockB.length>100);
   ok("the conscience block names the cost", /conscience/i.test(alt.blockA) && /cost/i.test(alt.blockA), alt.blockA.slice(0,90));
-  ok("the physical block forbids feeling", /no feeling/i.test(alt.blockB), alt.blockB.slice(0,90));
+  ok("the physical block forbids feeling",
+     /Registered, not judged/i.test(alt.blockB) && /no meaning/i.test(alt.blockB), alt.blockB.slice(0,120));
+  ok("both modes are THOUGHTS, not narration",
+     /THOUGHT/.test(alt.blockA) && /THOUGHT/.test(alt.blockB)
+     && !/\*asterisks\*/.test(alt.blockA) && !/\*asterisks\*/.test(alt.blockB), alt.blockA.slice(0,70));
+  ok("and both are written between underscores",
+     /_underscores_/.test(alt.blockA) && /_underscores_/.test(alt.blockB));
   ok("the two rail shorts differ", alt.shortA!==alt.shortB && alt.shortA.length>20 && alt.shortB.length>20);
 
   // ---- the counter advances and survives, so runs do not both open on the conscience
@@ -55,20 +61,29 @@ const {chromium}=require('playwright');
   // ---- what the heat format and guidance now demand
   const txt=await pg.evaluate(()=>({
     fmt:blkTpl("heat_format"), guid:blkTpl("heat_guidance"),
-    intact:blkTpl("rail_heat_intact"), narrRail:blkTpl("rail_heat_narr"),
+    intact:blkTpl("rail_heat_intact"), narrRail:blkTpl("rail_heat_narr"), sound:blkTpl("rail_heat_sound"),
     deliv:blkTpl("heat_delivery")
   }));
   ok("the format says she knows what is happening", /YOU KNOW WHAT IS HAPPENING/.test(txt.fmt));
-  ok("it forbids dots and dashes as gaps", /NEVER use/.test(txt.fmt) && /—/.test(txt.fmt) && /read aloud as syllables/.test(txt.fmt));
+  ok("the format allows two channels and no narration",
+     /TWO CHANNELS/.test(txt.fmt) && /THERE IS NO NARRATION/.test(txt.fmt) && /between \*asterisks\*/.test(txt.fmt));
+  ok("a trio is required, not optional", /AT LEAST ONE run of three/.test(txt.fmt), txt.fmt.slice(0,60));
+  ok("the punctuation ban also fires in the last slot",
+     /Never "\u2026"/.test(txt.sound) && /at least one run of three/i.test(txt.sound), txt.sound.slice(0,90));
+  ok("it forbids dots and dashes as gaps",
+     /NEVER "\u2026"/.test(txt.fmt) && /never "—"/.test(txt.fmt) && /read aloud as syllables/.test(txt.fmt));
+  ok("and names the ellipsis as the reflex to resist", /reflex to resist/i.test(txt.fmt));
   ok("one sound breaks a sentence, three break between them",
-     /ONE sound breaks a sentence/.test(txt.fmt) && /THREE in a row/.test(txt.fmt), txt.fmt.slice(0,60));
+     /ONE sound splits a sentence/.test(txt.fmt) && /THREE in a row/.test(txt.fmt), txt.fmt.slice(0,60));
   ok("the format carries a {{narr}} slot for the mode", txt.fmt.indexOf("{{narr}}")>=0);
   ok("guidance demands all four at once",
      /DESIRE/.test(txt.guid)&&/SHAME/.test(txt.guid)&&/FEAR/.test(txt.guid)&&/REGRET/.test(txt.guid), txt.guid.slice(0,80));
   ok("and forbids resolving any of them", /none of them gets resolved/i.test(txt.guid));
   ok("and forbids naming the feeling", /Never say any of those four words/i.test(txt.guid));
   ok("a rail says she does not dissolve", /still yourself/i.test(txt.intact) && /not a person it broke/i.test(txt.intact));
-  ok("the narration rail carries the mode", txt.narrRail.indexOf("{{narr_short}}")>=0, txt.narrRail);
+  ok("the thought rail carries the mode", txt.narrRail.indexOf("{{narr_short}}")>=0, txt.narrRail);
+  ok("and it bans narration outright in the last slot",
+     /NO NARRATION/.test(txt.narrRail) && /asterisks/.test(txt.narrRail), txt.narrRail.slice(0,80));
   ok("delivery does not re-direct a line made of sounds", /takes no direction of its own/i.test(txt.deliv));
 
   /* ---- the fragment 3-leg rule for the five new pieces: a default, a producer that calls
@@ -76,7 +91,7 @@ const {chromium}=require('playwright');
      REACHABLE and editable is the global guarantee every-fragment-editable.browser.js owns — this
      only checks that these five were declared and claimed, which is the leg a new fragment skips.) */
   const legs=await pg.evaluate(()=>{
-    const want=["heat_narr_superego","heat_narr_physical","heat_narr_superego_short","heat_narr_physical_short","rail_heat_intact"];
+    const want=["heat_narr_superego","heat_narr_physical","heat_narr_superego_short","heat_narr_physical_short","rail_heat_intact","rail_heat_sound"];
     const claimed=new Set();
     Object.keys(REPLY_BLOCKS).forEach(id=>(REPLY_BLOCKS[id].tpls||[]).forEach(t=>claimed.add(t)));
     return {missingDefault:want.filter(k=>!(k in BLOCK_TPL_DEFAULTS)),

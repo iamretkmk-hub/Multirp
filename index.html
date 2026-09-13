@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v40.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -19086,6 +19086,105 @@ const PT_ROLE_OPEN=/^\s*\[(system|user|assistant)\]\s*$/i;
 const PT_ROLE_CLOSE=/^\s*\[(?:(?:system|user|assistant)\s+end|end\s+(?:system|user|assistant))\]\s*$/i;
 const PT_HISTORY_LINE=/^\s*\{\{\s*call\s*\/\/\s*dialogue_history\s*\}\}\s*$/i;
 const PT_CALL=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\s*)?\}\}/g;
+/* ===== v41.0 — ONE BOX PER BLOCK ============================================================
+   The 159 little fragment boxes were unreadable on a phone: FINAL GUARDRAILS alone was 25 of them.
+   A block is ONE box now, and the two things the fragments were carrying move INSIDE it:
+
+     [[noecho]]  …text…  [[end]]     a named SECTION. {{call//final_guardrails//noecho}} returns
+                                      just this part; the bare call returns the whole box with the
+                                      markers stripped. A section can never resolve empty, because
+                                      it is a region of the same text rather than its own stored
+                                      string — which is what made the old fragment calls fragile.
+     {{if render_mode = heat}} … {{else}} … {{endif}}
+                                      a CONDITION. What the producers used to decide in JS (which
+                                      rail fires, which wording a mode gets) is written in the box.
+
+   (!) DOUBLE brackets, not single. Single brackets are the TTS channel — [moan], [gasp], [reset],
+   [say quietly and ragged] — and heat_format holds both kinds at once. tts-steering scans prompt
+   text for bracketed words and flags invented sound names, so a single-bracket marker would read
+   as one. Never loosen this to a single bracket.
+   Markers are stripped before anything reaches a model: they are structure, never content. */
+const PT_SECTION=/\[\[\s*([a-zA-Z0-9_]+)\s*\]\]([\s\S]*?)\[\[\s*(?:end|\/\s*\1)\s*\]\]/gi;
+const PT_SECTION_ANY=/\[\[\s*(?:\/\s*)?[a-zA-Z0-9_]+\s*\]\]|\[\[\s*end\s*\]\]/gi;
+const PT_IF_OPEN=/\{\{\s*if\s+([^{}]+?)\s*\}\}/i;
+const PT_IF_ANY=/\{\{\s*(?:if\s+[^{}]+?|else|endif)\s*\}\}/gi;
+/* The flag set a turn is judged against. Values are lowercased strings or booleans; an unknown name
+   is FALSE rather than an error, so a condition on a flag this build does not have yet simply does
+   not fire instead of blanking the box. */
+function ptCondFlags(ctx){
+  const f=Object.create(null);
+  Object.keys(ctx||{}).forEach(k=>{ const v=ctx[k]; f[String(k).toLowerCase()]=(v===true||v===false)?v:String(v==null?"":v).toLowerCase(); });
+  return f;
+}
+/* One condition: `name`, `name = value`, `name != value`. Bare `name` is true when the flag is
+   boolean-true or a non-empty string. Several may be joined with `and` / `or` (no mixing, no
+   parentheses — this is written on a phone). */
+function ptCondTest(expr,flags){
+  const one=t=>{
+    t=String(t||"").trim(); if(!t) return false;
+    const neg=/^not\s+/i.test(t); if(neg) t=t.replace(/^not\s+/i,"").trim();
+    const m=t.match(/^([a-zA-Z0-9_]+)\s*(!=|=)\s*(.*)$/);
+    let r;
+    if(m){ const have=flags[m[1].toLowerCase()], want=String(m[3]).trim().toLowerCase().replace(/^["']|["']$/g,"");
+           r=(m[2]==="=")?(String(have)===want):(String(have)!==want); }
+    else { const have=flags[t.toLowerCase()]; r=(have===true)||(typeof have==="string"&&have!==""&&have!=="false"); }
+    return neg?!r:r;
+  };
+  const src=String(expr||"");
+  if(/\s+or\s+/i.test(src))  return src.split(/\s+or\s+/i).some(one);
+  if(/\s+and\s+/i.test(src)) return src.split(/\s+and\s+/i).every(one);
+  return one(src);
+}
+/* Resolve every {{if}}…{{else}}…{{endif}} in a text. Innermost first, so nesting works. */
+function ptResolveConds(text,flags){
+  let t=String(text==null?"":text);
+  for(let guard=0; guard<200; guard++){
+    const open=t.search(PT_IF_OPEN);
+    if(open<0) break;
+    // find this block's matching endif, counting nested ifs
+    PT_IF_ANY.lastIndex=0;
+    let depth=0,start=-1,elseAt=-1,end=-1,expr="",m;
+    while((m=PT_IF_ANY.exec(t))){
+      const tok=m[0].toLowerCase();
+      if(/\{\{\s*if\s/i.test(tok)){
+        if(depth===0){ start=m.index; expr=(m[0].match(PT_IF_OPEN)||[])[1]||""; }
+        depth++;
+      }else if(/else/.test(tok)){ if(depth===1&&elseAt<0) elseAt=m.index; }
+      else { depth--; if(depth===0){ end=m.index+m[0].length; break; } }
+    }
+    if(start<0||end<0){ t=t.replace(PT_IF_ANY,""); break; }   // unbalanced: drop the markers, keep the text
+    const openEnd=t.indexOf("}}",start)+2;
+    const elseTok=elseAt>=0?t.slice(elseAt).match(/\{\{\s*else\s*\}\}/i):null;
+    const yes=t.slice(openEnd, elseAt>=0?elseAt:t.lastIndexOf("{{",end));
+    const no =elseAt>=0?t.slice(elseAt+(elseTok?elseTok[0].length:0), t.lastIndexOf("{{",end)):"";
+    t=t.slice(0,start)+(ptCondTest(expr,flags)?yes:no)+t.slice(end);
+  }
+  return t;
+}
+/* The whole box, conditions resolved and section markers removed. */
+function ptRenderBox(text,flags){
+  let t=ptResolveConds(text,flags);
+  t=t.replace(PT_SECTION_ANY,"");
+  return t.replace(/\n{3,}/g,"\n\n").trim();
+}
+/* One named section of a box. Returns null when there is no such section — the caller decides
+   whether that is a warning (an unknown name typed in a template) or simply nothing to say.
+   (!) Conditions resolve FIRST. A section written inside a {{if}} that is false this turn is not
+   in the box this turn, so calling it by name must return nothing rather than smuggling the other
+   mode's wording out of its condition. */
+function ptRenderSection(text,name,flags){
+  const want=String(name||"").toLowerCase();
+  const resolved=ptResolveConds(text,flags);
+  let hit=null; PT_SECTION.lastIndex=0; let m;
+  while((m=PT_SECTION.exec(resolved))){ if(String(m[1]).toLowerCase()===want){ hit=m[2]; break; } }
+  if(hit==null) return null;
+  return String(hit).replace(PT_SECTION_ANY,"").replace(/\n{3,}/g,"\n\n").trim();
+}
+function ptSectionNames(text){
+  const out=[]; PT_SECTION.lastIndex=0; let m;
+  while((m=PT_SECTION.exec(String(text==null?"":text)))) if(out.indexOf(m[1])<0) out.push(m[1]);
+  return out;
+}
 const PT_VAR=/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 
 /* The values a template may interpolate. Anything not here stays visible as literal text. */

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v42.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v42.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -20018,12 +20018,29 @@ epDefine("contemplate","Contemplate","contemplate",[{name:"data",label:"Everythi
    the engine decided what she had concluded about her marriage without being told she had one. An
    engine template cannot borrow the reply payload's pieces — the two have different vocabularies —
    so the character's own blocks are handed over here as parts, and are callable by these names. */
+/* (!) v42.3 — THE ENGINE SPEAKS THE NAMES YOU ALREADY KNOW. This shipped with `ask` and `scene`
+   only, so the reckoning did not know who was making it; v42.1 added four aggregate parts (who /
+   ties / carrying / pulls) and that was the wrong fix — it invented a second vocabulary for the
+   same material and made the person writing the template learn it. Three separate attempts to call
+   {{call//your_bio//full}} here is not a user misreading the docs, it is the names being wrong.
+   The character's own blocks are handed over under THEIR OWN BLOCK IDS, and every one also answers
+   to //full, so a template written against the reply payload's vocabulary works unchanged. The
+   aggregates still resolve for anyone already using them — they are passed but not declared, so
+   they stay callable without being sent twice down the classic path. */
 epDefine("afterHeatPrompt","After it is over","afterHeatPrompt",[
   {name:"ask",label:"Whose reckoning, and with whom"},
-  {name:"who",label:"Who she is",sep:"WHO SHE IS:\n"},
-  {name:"ties",label:"Her ties, and how she feels about him",sep:"WHERE SHE STANDS WITH PEOPLE:\n"},
-  {name:"carrying",label:"What she is carrying (promises, conditions, private aims)",sep:"WHAT SHE IS CARRYING:\n"},
-  {name:"pulls",label:"What pulled her toward it and what held her back",sep:"THE TWO PULLS:\n"},
+  {name:"your_bio",label:"Who she is"},
+  {name:"scenario",label:"The scenario she is in"},
+  {name:"relationships",label:"Her ties"},
+  {name:"feelings",label:"How she feels toward him"},
+  {name:"feelings_now",label:"What she feels right now"},
+  {name:"distant_memories",label:"Older memories"},
+  {name:"recent_memories",label:"Recent memories"},
+  {name:"scene_now",label:"Where and when this is"},
+  {name:"trackers",label:"Conditions true of her right now"},
+  {name:"promises",label:"Commitments she is under"},
+  {name:"private_intent",label:"What she privately wants"},
+  {name:"drives",label:"What pulled her toward it and what held her back"},
   {name:"scene",label:"What happened",sep:"WHAT HAPPENED:\n"}]);
 epDefine("daySummaryPrompt","Diary","daySummaryPrompt",[{name:"ask",label:"Whose diary, and for which day"},{name:"memories",label:"The memories they formed today"}]);
 epDefine("directorAuthor","Director notes","directorAuthor",[{name:"ask",label:"The instruction that closes the message",fixed:"Write the director notes for \"{{world}}\". Output only the notes."},{name:"request",label:"What you asked for, in your own words",sep:"USER'S REQUEST (weave this into the notes): "}]);
@@ -20157,10 +20174,20 @@ function epOwnVars(key){
 /* Names an engine template may call, for the editor's warnings and its piece list. */
 function epKnownNames(key){
   const d=epDef(key); const k={prompt:true};
-  Object.keys(ENGINE_LIBRARY_LABELS).forEach(n=>k[n]=true);
-  if(d) d.parts.forEach(p=>{ if(p.fixed==null) k[p.name]=true; });   // a fixed part is prose, not a call
+  Object.keys(ENGINE_LIBRARY_LABELS).forEach(n=>{ k[n]=true; k[n+"//full"]=true; });
+  /* (!) v42.3 — //full IS A VALID FORM HERE TOO. A reply template says {{call//your_bio//full}},
+     and someone writing an engine template writes the same thing, because it is the same material
+     under the same name. The call already RESOLVED — ptResolve falls back to the bare name — but
+     the validator did not know the form and painted a working template red, which is the one
+     failure mode that makes a warning worthless. */
+  if(d) d.parts.forEach(p=>{ if(p.fixed==null){ k[p.name]=true; k[p.name+"//full"]=true; } });
+  /* Names a call site passes without declaring them (an alias kept for templates already written
+     against it). Not sent down the classic path; still callable, so still known. */
+  (EP_EXTRA_NAMES[key]||[]).forEach(n=>{ k[n]=true; k[n+"//full"]=true; });
   return k;
 }
+/* Undeclared-but-passed part names, per engine — see epKnownNames. */
+const EP_EXTRA_NAMES={afterHeatPrompt:["who","ties","carrying","pulls"]};
 function epMessages(key,systemText,parts,vars){
   if(!state.payloadTplOn) return null;
   const d=epDef(key); if(!d) return null;
@@ -25386,7 +25413,7 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
        purpose: it costs a model call, and the bio, the ties and the standing are what a reckoning
        turns on. */
     const _ctx=(()=>{
-      const out={who:"",ties:"",carrying:"",pulls:""};
+      const out={};
       try{
         const _inj={recent:[],diary:[],longterm:[]};
         const _t=(presentCast(c).find(x=>x&&x.name===otherName)||{});
@@ -25395,6 +25422,12 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
         const tb=buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:otherName,
           targetId:_t.id||"__user__",multi:false,injected:_inj})||{};
         const j=(...k)=>k.map(x=>String(hb[x]||tb[x]||"").trim()).filter(Boolean).join("\n\n");
+        /* every block under its own id, and under id//full — the two forms a reply template uses */
+        ["your_bio","scenario","relationships","feelings","feelings_now","distant_memories",
+         "recent_memories","scene_now","trackers","promises","private_intent","drives"]
+          .forEach(k=>{ const v=j(k); out[k]=v; out[k+"//full"]=v; });
+        /* v42.1's aggregates, kept so a template already written against them still works. Passed
+           but NOT declared above, so epClassicUser never sends this material a second time. */
         out.who=j("your_bio","scenario");
         out.ties=j("relationships","feelings","feelings_now");
         out.carrying=j("promises","trackers","private_intent");

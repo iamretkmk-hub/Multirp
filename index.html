@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v43.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v43.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -16829,7 +16829,7 @@ async function generateBio(brief,context,opts){
       };
       castBlock="WHO ALREADY EXISTS IN THIS WORLD (facts on record — the new card must AGREE with these):\n"
         +_cast.map(_line).join("\n")
-        +"\n\nIf one of these cards already states this character's age, job, home, or how they are related to someone, use THAT — do not invent a second version of a fact the world has already fixed. Do not copy their text into the new card and do not write about them; they are here only so you do not contradict them.";
+        +"\n\nIf one of these cards already states this character's age, job, home, or how they are related to someone, use THAT — do not invent a second version of a fact the world has already fixed. Do not copy their text into the new card and do not write about them; they are here only so you do not contradict them.\n(!) NEVER give this card a name that is already on that list. These are OTHER people. A card that takes an existing person's name replaces them in the world.";
     }
   }catch(e){}
 
@@ -16848,6 +16848,20 @@ async function generateBio(brief,context,opts){
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
   const clean=s=>typeof s==="string"?s.trim():"";
+  /* (!) v43.2 — A CARD MAY NOT TAKE ANOTHER CHARACTER'S NAME. The cast list added in v43.1 puts
+     every existing name in front of the generator, which makes this failure newly reachable: a
+     revision comes back named after somebody else, the card is saved under that name, and the
+     world now has two people with one name and has lost the one it overwrote — which is how a
+     husband disappears and his wife ends up listed as her own husband. Refused here: when revising,
+     the existing name wins; when creating, a colliding name is dropped rather than saved over
+     someone. */
+  {const _nm=clean(j.name);
+   if(_nm){
+     const _k=asciiFold(_nm).toLowerCase().trim();
+     const _clash=(state.personas||[]).some(x=>x&&!x.removed&&x.universeId===(uni&&uni.id)
+        &&(!ex||x.id!==ex.id)&&asciiFold(String(x.name||"")).toLowerCase().trim()===_k);
+     if(_clash) j.name=(ex&&ex.name)?ex.name:"";
+   }}
   return {
     name:clean(j.name),
     avatar:clean(j.avatar)||"🎭",
@@ -17114,6 +17128,11 @@ function relSheetBlockFull(persona,opts){
       }
       const who=castLabel(id);
       if(!who)continue;
+      /* (!) v43.2 — and never list the character as one of their own acquaintances. id!==persona.id
+         above catches the ordinary case; it does not catch a DUPLICATE card of the same person,
+         which is a different id and was appearing as "Duygu Akbaba — husband" in Duygu's own
+         payload — her name wearing someone else's tie. Compared by folded name. */
+      if(asciiFold(who).toLowerCase().trim()===asciiFold(String(persona.name||"")).toLowerCase().trim())continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
       if(!tie&&!rel)continue;
@@ -22006,7 +22025,16 @@ function buildTailBlocks(opts){
     if(chat){
       const present=new Set(presentIds(chat));
       const uid=chat.universeId;
-      const absent=(state.personas||[]).filter(pp=>pp&&pp.universeId===uid&&isActiveChar(pp)&&pp.id!==selfId&&!present.has(pp.id));
+      /* (!) v43.2 — "Duygu is NOT in the room — do not reply AS Duygu." The filter excluded the
+         speaker by ID, which is not enough: a DUPLICATE persona with the same name is a different
+         id, is not in presentIds, and so counts as absent. Emre says her name, the detector matches
+         it against the duplicate, and the payload tells the model that the character it is playing
+         does not exist — directly contradicting "Respond as Duygu Akbaba" at the bottom.
+         Excluded by name too, so a stray second card of the same person can never do this. */
+      const _selfKey=asciiFold(String(selfName||"")).toLowerCase().trim();
+      const absent=(state.personas||[]).filter(pp=>pp&&pp.universeId===uid&&isActiveChar(pp)
+        &&pp.id!==selfId&&!present.has(pp.id)
+        &&!(_selfKey&&asciiFold(String(pp.name||"")).toLowerCase().trim()===_selfKey));
       let pl=""; const msgs=chat.messages||[];
       for(let i=msgs.length-1;i>=0;i--){ const m=msgs[i]; if(m&&m.role==='user'&&!m.sysError&&!m.textMsg&&m.content){ pl=String(m.content); break; } }
       if(pl && absent.length){

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.7</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v41.8</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11206,7 +11206,14 @@ function locByName(name){
   }
   return bestScore>0?best:null;
 }
-function residentsOf(loc){ if(!loc||!Array.isArray(loc.residents))return []; return loc.residents.map(id=>state.personas.find(p=>p.id===id)).filter(Boolean); }
+/* (!) v41.8 — DEDUPE. loc.residents is a list of ids and nothing stopped the same id appearing
+   twice, so a house with one owner listed twice rendered as "This place is Emre & Emre's home —
+   Emre & Emre lives here", which reads to the model as two people. Deduped where it is read, so a
+   stored list that already has the repeat is fixed without a migration. */
+function residentsOf(loc){
+  if(!loc||!Array.isArray(loc.residents))return [];
+  return [...new Set(loc.residents)].map(id=>state.personas.find(p=>p.id===id)).filter(Boolean);
+}
 // Where a character currently is + what kind of place it is. Used to give the roleplay and
 // the director engines short, structured location context instead of a giant world blob.
 function charLocationLine(p,chat){
@@ -35790,10 +35797,24 @@ function ptPreviewBlocks(kind){
         ||state.personas.find(x=>x.universeId===chat.universeId&&!x.removed);
   if(!p) return {err:"This universe has no characters yet."};
   const injected={recent:[],diary:[],longterm:[]};
-  const opts={chat,targetName:state.user,targetId:"__user__",textMode:kind==="text"};
-  const hb=buildCharPromptBlocks(p,[],injected,state.user,opts);
-  const tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
-    targetName:state.user,targetId:"__user__",multi:(kind==="multi"),injected,textMode:kind==="text"});
+  /* (!) v41.8 — PREVIEWING HEAT HAS TO BUILD A HEAT PAYLOAD. textMode was passed through for the
+     text kind but heat had no equivalent, so the heat preview rendered with render_mode "solo":
+     no heat format, no heat guidance, and — most misleading of all — a FINAL GUARDRAILS with every
+     {{if render_mode = heat}} section switched off, so none of rail_heat_len / _narr / _sound /
+     _intact / _end appeared. Someone reading that preview to check their heat template was reading
+     a payload heat never sends. chat._heatBeat is the switch the real run uses (see heatBeginTurn),
+     so the preview sets the same one and puts it back afterwards. */
+  const _hadBeat=Object.prototype.hasOwnProperty.call(chat,"_heatBeat"), _prevBeat=chat._heatBeat;
+  if(kind==="heat") chat._heatBeat={total:"3",n:"1",narrN:String(+chat.heatNarrN||1)};
+  let hb,tb;
+  try{
+    const opts={chat,targetName:state.user,targetId:"__user__",textMode:kind==="text"};
+    hb=buildCharPromptBlocks(p,[],injected,state.user,opts);
+    tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
+      targetName:state.user,targetId:"__user__",multi:(kind==="multi"),injected,textMode:kind==="text"});
+  }finally{
+    if(kind==="heat"){ if(_hadBeat) chat._heatBeat=_prevBeat; else delete chat._heatBeat; }
+  }
   return {blocks:Object.assign({},hb,tb,{text_timing:""}),npc:p,chat};
 }
 function ptPreview(kind){

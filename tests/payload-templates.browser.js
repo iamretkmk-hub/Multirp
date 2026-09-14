@@ -206,6 +206,47 @@ const {chromium}=require('playwright');
       && replyKind({_heatBeat:{n:"1"}},"multi")==="heat"
       && replyKind({_heatBeat:{n:"1"}},"solo")==="heat"));
 
+  /* (!) v41.8 — PREVIEWING HEAT MUST BUILD A HEAT PAYLOAD. textMode was threaded through for the
+     text kind, but heat had no equivalent, so the heat preview rendered at render_mode "solo": no
+     heat format, and a FINAL GUARDRAILS with every {{if render_mode = heat}} section switched off.
+     Someone checking their heat template against that preview was reading a payload heat never
+     sends — and would conclude the heat rails do not exist. */
+  console.log("\n[the preview builds the kind it says it is]");
+  const pv=await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    if(!state.personas.some(x=>x.id==="p_pv"))
+      state.personas.push({id:"p_pv",name:"Emre",universeId:uni.id,instructions:"x",personality:"x",
+        backstory:"x",style:"x",goals:"x",look:{}});
+    const chat=curChat(); chat.presentIds=["p_pv"]; state.user="Duygu";
+    const heat=ptPreviewBlocks("heat"), solo=ptPreviewBlocks("solo"), text=ptPreviewBlocks("text");
+    const mode=o=>((o.blocks||{})._railFlags||{}).render_mode;
+    const rails=o=>String((o.blocks||{}).final_guardrails||"");
+    const has=(o,n)=>rails(o).indexOf(ptBoxSectionText("final_guardrails",n).slice(0,40))>=0;
+    return {heat:mode(heat), solo:mode(solo), text:mode(text),
+      heatRails:["rail_heat_len","rail_heat_narr","rail_heat_intact","rail_heat_end"].filter(n=>has(heat,n)),
+      soloLeak:has(solo,"rail_heat_narr"),
+      heatFormat:/HEAT OF THE MOMENT/.test(String((heat.blocks||{}).format||"")),
+      // (!) the preview borrows the real chat object — it must not leave a heat beat on it
+      left:Object.prototype.hasOwnProperty.call(chat,"_heatBeat")};
+  });
+  ok("previewing heat renders at render_mode heat", pv.heat==="heat", String(pv.heat));
+  ok("and every heat rail is in the guardrails", pv.heatRails.length===4, pv.heatRails.join(", "));
+  ok("and the heat format block is built", pv.heatFormat===true);
+  ok("solo and text are unchanged", pv.solo==="solo" && pv.text==="text", pv.solo+" / "+pv.text);
+  ok("no heat rail leaks into the solo preview", pv.soloLeak===false);
+  /* (!) The preview borrows the live chat. A beat left on it would turn the next real reply into a
+     heat beat that nobody asked for. */
+  ok("the preview leaves no heat beat on the live chat", pv.left===false);
+
+  /* v41.8 — "This place is Emre & Emre's home". loc.residents is a list of ids with nothing
+     stopping a repeat, and the host line joined them with " & ", so one owner read as two people. */
+  ok("a resident listed twice is still one person", await pg.evaluate(()=>{
+      const p=(state.personas||[]).find(x=>x.id==="p_pv");
+      const names=residentsOf({id:"l_dup",name:"X",type:"home",residents:[p.id,p.id]}).map(x=>x.name);
+      const none=residentsOf({id:"l0",name:"X"}).length;
+      return names.length===1 && names[0]==="Emre" && none===0
+        ? true : JSON.stringify(names); }));
+
   console.log("\n[no errors accumulated]");
   ok("still no page errors", errs.length===0, errs.join(" | "));
 

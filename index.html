@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v42.3</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v42.4</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -25397,16 +25397,39 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
   const beats=msgs.slice(from).filter(m=>m&&m.role==='assistant'&&m.heatBeat&&m.speaker);
   if(!beats.length)return false;
   const last=beats[beats.length-1];
-  const p=(state.personas||[]).find(x=>x&&x.name===last.speaker&&!x.removed);
-  if(!p)return false;
-  // who it was with: the other person present, else the player
+  /* (!) v42.4 — ONE RECKONING PER PERSON, FROM HER OWN BEATS ONLY. This took the LAST speaker as
+     the one doing the reckoning and handed her EVERY unreckoned beat as "what happened", so with
+     two characters in a run Özlem was made to draw conclusions from Duygu's lines — her own words
+     arriving as somebody else's scene. Two bugs in one: the wrong material, and everyone but the
+     last speaker silently marked as reckoned without ever getting a decision.
+     Grouped by speaker now: each person who has beats gets a reckoning from her own, and the
+     marker only moves once they are all done. */
+  const bySpeaker=new Map();
+  beats.forEach(m=>{ const k=m.speaker; if(!bySpeaker.has(k))bySpeaker.set(k,[]); bySpeaker.get(k).push(m); });
+  _afterHeatBusy=true;
+  let _any=false;
+  try{
+    for(const [speaker,mine] of bySpeaker){
+      const ok=await _afterHeatFor(c,speaker,mine,dayStamp,periodStamp);
+      if(ok)_any=true;
+    }
+    c._afterHeatMid=last.mid; markChatDirty(c); try{ persistChats(); }catch(_){}
+    return _any;
+  }catch(e){ return _any; }
+  finally{ _afterHeatBusy=false; }
+}
+/* One person's reckoning, from her own beats. Split out of runAfterHeat so a scene with two people
+   in it produces two decisions instead of one confused one. */
+async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
+  const p=(state.personas||[]).find(x=>x&&x.name===speaker&&!x.removed);
+  if(!p||!beats.length)return false;
+  // who it was with: the other person present, else the player — never herself
   let otherName=state.user;
   try{
-    const present=presentCast(c).filter(x=>x&&x.id!==p.id);
+    const present=presentCast(c).filter(x=>x&&x.id!==p.id&&x.name!==p.name);
     if(present.length===1)otherName=present[0].name;
   }catch(_){}
-  _afterHeatBusy=true;
-  try{
+  {
     const scene=beats.slice(-8).map(m=>`${m.speaker}: ${String(m.content||"").slice(0,400)}`).join("\n");
     /* Her own payload blocks, built for a turn aimed at the person this was with — so "how you feel
        toward X" and "the two pulls" are about HIM, not about nobody. Memory retrieval is skipped on
@@ -25452,10 +25475,8 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
         day:dayStamp||c.gameDay||1,period:periodStamp||chatPeriod(c)||""};
       try{ persistPersonas(); }catch(_){}
     }
-    c._afterHeatMid=last.mid; markChatDirty(c); try{ persistChats(); }catch(_){}
     return !!text;
-  }catch(e){ return false; }
-  finally{ _afterHeatBusy=false; }
+  }
 }
 /* (!) v41.6 — WHICH PAYLOAD LAYOUT AND TEMPLATE THIS REPLY USES. chat._heatBeat means this reply
    is one beat of a heat run, and heat has a layout and a template of its own; `base` is what the

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v42.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v43.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7951,6 +7951,16 @@ async function chatCompletion(messages,model,opts={}){
     // no effort field. Models without effort levels ignore it, so it's safe to always forward.
     const eff = opts.reasoning_effort ?? ((opts.rp===true)?state.reasoningEffort:undefined);
     if(eff!==undefined && eff!==null && eff!=="") body.reasoning.effort=String(eff);
+    /* (!) v43.0 — THINKING NEEDS ITS OWN ROOM. max_tokens caps the whole completion, reasoning
+       tokens included, so turning thinking on without raising it spends the answer's budget on
+       thought: the model thinks its way to the end of the cap, returns reasoning and no text, and
+       the recovery below pays for a SECOND call to get a reply. That retry is invisible except in
+       Debug ("recovered after a thinking-only response"), so it reads as the feature working while
+       quietly doubling the cost of every turn.
+       The cap is raised to leave the configured budget for the ANSWER and give the thinking a
+       floor of its own. Only when thinking is actually on, and never lowered — a call site that
+       already asked for more keeps it. */
+    body.max_tokens=Math.max(+body.max_tokens||0, (+body.max_tokens||0)+1200, 2000);
   }else{
     body.reasoning={enabled:false, exclude:true};
   }
@@ -19781,7 +19791,7 @@ function ptPieceTemplate(id,kind){
     return "{{call//last_line_header}}\n{{call//heat_self_header}}\n{{call//last_line_body}}\n"
       +"{{gap}}\n{{call//last_line_footer}}\n{{call//heat_self_footer}}";
   if(id==="already_said")
-    return _ptProse("already_said_header")+_ptProse("already_said_instr")
+    return _ptProse("already_said_header")+_ptProse("already_said_instr")+_ptProse("already_said_not_style")
       +"{{gap}}\n{{call//already_said_continues}}\n{{gap}}\n{{call//already_said_lines}}"
       +"\n{{gap}}\n{{call//already_said_stalled}}";
   if(id==="promises")
@@ -20296,7 +20306,7 @@ function epSend(key,systemText,parts,vars){
     player:["player_intro","player_bg","player_look"],
     situation:["situation_leaving","situation_arriving"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
-    already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled",
+    already_said:["already_said_header","already_said_not_style","already_said_instr","already_said_continues","already_said_stalled",
       "already_said_verbatim","already_said_shortened","already_said_which_above","already_said_which_older","already_said_which_plain"],
     rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_stake_label","rumor_carrier_header","rumor_carrier_instr"],
     speaking_style:["style_header","style_notes"],
@@ -20751,7 +20761,7 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
 - The hour named beside it is what is plausible right now — who is awake, what is open, what fits the time. Let it bound what you suggest and what you do.
 - YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.
 - Who can hear you is covered under PRIVACY below, and it sets how freely you speak — read it before you decide what to say out loud.`,
-  scene_day:`CURRENT DAY: Day {{day}}{{period}}`,
+  scene_day:`CURRENT DAY: Day {{day}}, {{period}}`,
   scene_loc:`⚠️ YOUR CURRENT LOCATION: {{where}}. THIS IS WHERE YOU ARE RIGHT NOW. ⚠️`,
   scene_loc_sub:` — specifically the {{sub}}`,
   // Whose ground this is — home/host dynamics. Fires only when the current place has a resident.
@@ -20840,6 +20850,14 @@ If this is not the moment, carry it. It is allowed to just sit there and cost yo
   rumor_carrier_header:`# WHAT YOU HAVE HEARD (NOT YOURS)`,
   rumor_carrier_instr:`You have heard the talk below. It is gossip — secondhand, unproven, and about someone else's life.
 It is NOT your business and you do NOT raise it. Do not ask {{user}} about it, do not hint at it, do not steer the conversation near it, do not tell them people are talking. If they bring it up themselves, you can be honest about what you heard. Otherwise this is nothing but a thing you happen to know, and knowing it does not entitle you to a single word about it.`,
+  /* (!) v43.0 — THE TRANSCRIPT IS THE STRONGEST PROMPT IN THE PAYLOAD, AND NOBODY WROTE IT. Every
+     rule about form sits in the instructions; every EXAMPLE sits in the history, and there are
+     dozens of them. A scene that drifted once teaches the drift to every turn after it — three
+     beats where the format allows one, a phrase repeated because it was repeated before, a named
+     feeling because the last reply named one. The model is not disobeying, it is pattern-matching
+     on the most recent and most abundant evidence it has. Said once, beside the character's own
+     last lines, which is where the pull comes from. */
+  already_said_not_style:`● What you wrote earlier in this scene is WHAT HAPPENED, not how to write. Do not copy its shape, its length, or its habits — if an earlier reply broke the format rules above, it was wrong and you do not repeat it. The rules decide the form of this reply; the history only decides what is already true.`,
   already_said_header:`# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️`,
   already_said_instr:`These are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
 Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
@@ -21660,7 +21678,9 @@ function buildTailBlocks(opts){
                   line:briefDesc(x,320)})
              ).join("\n\n");
       if(exchangeIsStalled(chat,selfP)) _as.already_said_stalled=blkTpl("already_said_stalled");
-      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
+      _as.already_said_not_style=blkTpl("already_said_not_style");
+      let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n`
+            +`${_as.already_said_not_style}\n\n`;
       if(_cont)t+=`${_as.already_said_continues}\n\n`;
       t+=_as.already_said_lines;
       if(_as.already_said_stalled) t+=`\n\n${_as.already_said_stalled}`;
@@ -21746,8 +21766,17 @@ function buildTailBlocks(opts){
 
     const lines=[blkTpl(_textMode?"scene_intro_text":"scene_intro")];
     // CURRENT DAY (+ time of day) — the anchor everything else is judged against.
+    /* (!) v43.0 — {{period}} USED TO CARRY ITS OWN COMMA. It was filled with ", Midday" — leading
+       punctuation and all — so the shipped fragment could write "Day {{day}}{{period}}" and read
+       correctly, and anyone writing their OWN fragment got "Day 5 / , Midday": a separator they
+       typed plus one they could not see. A value with punctuation baked into it is a trap for
+       whoever edits the text around it. It is the bare period name now ("Midday"), the comma lives
+       in the fragment where it can be seen and changed, and a dangling separator left by an empty
+       period is trimmed rather than shipped. */
     {const per=(typeof chatPeriod==="function")?chatPeriod(chat):"";
-     lines.push(fillTpl(blkTpl("scene_day"),{day:String(chat.gameDay||1),period:per?`, ${per}`:""}));}
+     const _dl=fillTpl(blkTpl("scene_day"),{day:String(chat.gameDay||1),period:per||""})
+                 .replace(/[\s,;·\/|-]+$/,"").trim();
+     if(_dl)lines.push(_dl);}
     // YOUR CURRENT LOCATION (+ whose ground it is). In text mode this is the character's OWN
     // position in the world — they are not standing in the player's scene, they are on their phone.
     const _here2=(()=>{try{

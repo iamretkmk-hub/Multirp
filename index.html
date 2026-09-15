@@ -1054,7 +1054,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v44.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v44.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3633,12 +3633,14 @@ Return ONLY this JSON:
 USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely unrelated things — a fight with her daughter and a phone call about work are two memories, not one. Never more than three. Two things that happened in the same room between the same people are ONE memory however long they took.
 
 # WRITING THE CONTENT
+- Open with the day and the part of the day this memory is for, taken from the WHEN line at the top of what you were given. Never guess it and never carry over a date from these instructions.
 - First person, past tense, the character's own voice — the same way the fragments are written.
 - Keep what a person would keep: what happened, what it cost, what they decided, what they are still carrying. What they said only if the saying of it was the event.
 - Drop the beat-by-beat. If the fragments walk through a sequence step by step, compress it to what it amounted to.
 - Do NOT quote lines of dialogue back. A memory of a conversation is what it did to you, not a transcript of it. This matters: quoted lines get re-said.
 - Keep every concrete fact the fragments establish — who was there, where, what was agreed, what was refused, anything that would contradict a later scene if lost.
 - Resolve contradictions in favour of the LATER fragment; the fragments are in order and the last one saw the most.
+- Say plainly what happened. If they had sex, they had sex. No soft phrasing, no literary rewording, no summing a concrete act up as a feeling about it. These are facts, and a later scene is played from them.
 - Never invent anything that is not in the fragments.
 - Length: what it deserves. A quiet hour is a sentence. Something that changed a relationship is a short paragraph.
 
@@ -11287,9 +11289,19 @@ function locByName(name){
    twice, so a house with one owner listed twice rendered as "This place is Emre & Emre's home —
    Emre & Emre lives here", which reads to the model as two people. Deduped where it is read, so a
    stored list that already has the repeat is fixed without a migration. */
+/* (!) v44.3 — A LATENT NPC IS "HIDDEN FROM ALL PLAY UNTIL /seek REVEALS THEM" (isActiveChar), and
+   this returned them. The latent-NPC minter makes its characters RESIDENTS of the place it binds
+   them to, which is how /seek finds them — so every undiscovered inhabitant was in this list. Two
+   consumers show it: the location's own settings page (where they appear as a character the player
+   has never met and cannot find on the Characters screen) and the payload's host line, which could
+   name an undiscovered NPC as the owner of the room the player is standing in.
+   The reveal path does NOT come through here — _latentNpcsHere reads loc.residents directly — so
+   filtering costs it nothing. Removed characters go too, for the same reason they are skipped in
+   the relationship sheet: the card is kept, the person is out of play. */
 function residentsOf(loc){
   if(!loc||!Array.isArray(loc.residents))return [];
-  return [...new Set(loc.residents)].map(id=>state.personas.find(p=>p.id===id)).filter(Boolean);
+  return [...new Set(loc.residents)].map(id=>state.personas.find(p=>p.id===id))
+    .filter(p=>p&&isActiveChar(p));
 }
 // Where a character currently is + what kind of place it is. Used to give the roleplay and
 // the director engines short, structured location context instead of a giant world blob.
@@ -16948,7 +16960,10 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
   if(!persona||!state.key)return null;
   const uni=forUniverse||universeById(persona.universeId)||curUniverseObj();
   if(!uni)return null;
-  const cast=state.personas.filter(p=>p.universeId===uni.id);
+  // v44.3 — undiscovered and removed characters are not people anyone in this world knows yet, so
+  // they are not written a tie. Without this every character came out of the generator with a
+  // relationship toward an NPC the player has never met and cannot see on the Characters screen.
+  const cast=state.personas.filter(p=>p.universeId===uni.id&&isActiveChar(p));
   const others=cast.filter(p=>p.id!==persona.id);
   const locs=Array.isArray(uni.locations)?uni.locations:[];
 
@@ -17087,6 +17102,19 @@ function relSheetEntry(persona,targetId){
   return {tie,relationship:rel};
 }
 // Render a character's full relationship sheet (JSON) as a readable block for the roleplay payload.
+/* (!) v44.3 — SHOULD THIS STORED TIE BE SHOWN AT ALL? One predicate, because it used to be three
+   different answers: relSheetBlockFull skipped removed characters, relSheetBlock and
+   relSheetBlockFor skipped nobody, and NONE of them knew about undiscovered latent NPCs — who are
+   "hidden from ALL play until /seek reveals them" everywhere else in this file. relSheetBlock
+   reaches engine payloads, so an undiscovered NPC could be described to an engine as somebody this
+   character has known for years.
+   The tie is never deleted, only unrendered: revealing the NPC, or undeleting the character, brings
+   the line straight back. */
+function relTieHidden(id){
+  if(!id||id==="__user__")return false;
+  const p=(state.personas||[]).find(x=>x&&x.id===id);
+  return !!(p&&!isActiveChar(p));
+}
 function relSheetBlock(persona){
   if(!persona)return "";
   const rels=persona.relationships;
@@ -17097,6 +17125,7 @@ function relSheetBlock(persona){
       return (castLabel(a)||"").localeCompare(castLabel(b)||""); });
     for(const id of order){
       const e=rels[id]; if(!e)continue;
+      if(relTieHidden(id))continue;        // v44.3 — removed or undiscovered: kept in the data, not shown
       const who=castLabel(id); if(!who)continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
@@ -17177,6 +17206,7 @@ function relSheetBlockFull(persona,opts){
     const far=[];
     for(const id of order){
       const e=rels[id]; if(!e)continue;
+      if(relTieHidden(id))continue;        // v44.3 — removed or undiscovered: kept in the data, not shown
       if(id===persona.id)continue;
       /* (!) v42.9 — A DELETED CHARACTER IS STILL IN EVERYONE'S RELATIONSHIPS. Deleting a character
          sets removed:true and the UI stops listing them, but castLabel looks the persona up by id
@@ -17184,10 +17214,6 @@ function relSheetBlockFull(persona,opts){
          a person the player cannot see, edit or delete, still being described to the model. That
          is how one daughter appears twice: the live card and a removed one that nothing shows.
          Skipped here; the stored tie is left alone, so undeleting restores it. */
-      if(id!=="__user__"){
-        const _rp=(state.personas||[]).find(x=>x&&x.id===id);
-        if(_rp&&_rp.removed)continue;
-      }
       const who=castLabel(id);
       if(!who)continue;
       /* (!) v43.2 — and never list the character as one of their own acquaintances. id!==persona.id
@@ -17240,6 +17266,7 @@ function relSheetBlockFor(persona,targetIds){
       return (castLabel(a)||"").localeCompare(castLabel(b)||""); });
     for(const id of order){
       const e=rels[id]; if(!e)continue;
+      if(relTieHidden(id))continue;        // v44.3 — removed or undiscovered: kept in the data, not shown
       const who=castLabel(id); if(!who)continue;
       const tie=(e.tie||"").trim(), rel=(e.relationship||"").trim();
       if(id==="__user__" && _isNonRelUserTie(tie))continue;   // v19.94: no "You — stranger" line
@@ -20117,7 +20144,8 @@ function engineLibrary(chat){
     }),
     cast_all:     safe(()=>{
       const ch=c(); if(!ch) return "";
-      return state.personas.filter(p=>p.universeId===ch.universeId&&!p.removed).map(p=>p.name).join("; ");
+      // v44.3 — !p.removed alone let UNDISCOVERED (latent) characters be named in the payload.
+      return state.personas.filter(p=>p.universeId===ch.universeId&&isActiveChar(p)).map(p=>p.name).join("; ");
     })
   };
 }
@@ -34093,8 +34121,13 @@ async function reconcilePeriodFor(p,day,period){
   _reconcileBusy[key]=1;
   try{
     const listed=frag.map((m,i)=>`FRAGMENT ${i+1} (${m.location||"somewhere"}, importance ${(+m.importance||0).toFixed(2)}, ${m.emotion||"neutral"}):\n${memText(m)}`).join("\n\n");
+    /* (!) v44.3 — WHICH DAY AND WHICH PART OF IT. The day and period are on every fragment record
+       (gameDay/gamePeriod — that is how memsOfPeriod selected them), and neither reached the model:
+       the header said "one part of one day" without naming it. A prompt that asks the memory to
+       open with when it happened therefore had nothing to open with, and the only date in front of
+       the model was whatever example the prompt itself carried. Stated once, at the top. */
     const out=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
-      {data:`These are ${p.name}'s memories from one part of one day, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}`}),
+      {data:`WHEN: Day ${day}, ${period}.\n\nThese are ${p.name}'s memories from Day ${day}, ${period}, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}`}),
       state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
     const j=parseJSON(out);
     const made=(j&&Array.isArray(j.memories))?j.memories.filter(x=>x&&String(x.content||"").trim()):[];

@@ -87,6 +87,49 @@ const {chromium}=require('playwright');
   ok("no phantom 'name does not exist' warnings", R.phantom.length===0,
      JSON.stringify(R.phantom.map(p=>p.payload&&p.payload.unknown_calls)).slice(0,300));
 
+  /* (!) v43.6 — "when I close a video playing on the roleplay screen, the voice keeps coming."
+     A clip on screen fires cues, and every cue runs a whole reply turn whose lines go to the dub
+     queue. Closing the window stopped the picture and nothing else: the queue kept speaking to a
+     screen that was empty, and the turn still generating added more behind it. The video's lines
+     now die with the video — and ONLY the video's, so a reply the player asked for keeps its voice. */
+  console.log("\n[6] closing the video takes its voices with it");
+  const V=await pg.evaluate(async()=>{
+    const out={};
+    state.autoSpeak=true; state.key="k";
+    _dubKill("test-reset");
+    // Two lines the video put there, one the player typed for.
+    _vidCueBusy=true; _vidCueMuted=false;
+    _enqueueDub({kind:'dial',prep:Promise.resolve(null),m:{}});
+    _enqueueDub({kind:'dial',prep:Promise.resolve(null),m:{}});
+    _vidCueBusy=false;
+    _enqueueDub({kind:'dial',prep:Promise.resolve(null),m:{}});
+    out.tagged=_dubQ.filter(j=>j.cue).length;
+    out.untagged=_dubQ.filter(j=>!j.cue).length;
+    _dubKillCue("test");
+    out.leftAfterKill=_dubQ.length;
+    out.leftIsThePlayers=_dubQ.every(j=>!j.cue);
+    // the rest of a turn still generating when the window closed is never enqueued at all
+    _vidCueBusy=true; vidCueSilence("test close");
+    _enqueueDub({kind:'dial',prep:Promise.resolve(null),m:{}});
+    out.afterClose=_dubQ.filter(j=>j.cue).length;
+    // and the next cue turn starts speaking again
+    _vidCueMuted=false;
+    _enqueueDub({kind:'dial',prep:Promise.resolve(null),m:{}});
+    out.nextTurnSpeaks=_dubQ.filter(j=>j.cue).length;
+    _vidCueBusy=false; _dubKill("test-cleanup"); state.autoSpeak=false;
+    return out;
+  });
+  ok("a line produced while a clip is on screen is marked as the video's", V.tagged===1, "queued+tagged "+V.tagged);   // the first of the two is already pumping
+  ok("a line the player asked for is not", V.untagged===1, "untagged "+V.untagged);
+  ok("closing drops the video's queued lines", V.leftAfterKill===1, "left "+V.leftAfterKill);
+  ok("and leaves the player's alone", V.leftIsThePlayers===true);
+  ok("the rest of an in-flight reaction is never queued", V.afterClose===0, "queued "+V.afterClose);
+  ok("the next clip's reactions speak normally again", V.nextTurnSpeaks===1, "queued "+V.nextTurnSpeaks);
+  ok("closeSceneDock silences them", await pg.evaluate(()=>
+      /vidCueSilence/.test(String(closeSceneDock))));
+  ok("so does closing the fullscreen player", await pg.evaluate(()=>
+      /vidCueSilence/.test(String(closeScenePlayModal))));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -33,14 +33,14 @@ const {chromium}=require('playwright');
     try{ await modes.click({timeout:2500}); }catch(e){ ok("open the playback menu", "click failed: "+e.message.split("\n")[0]); }
     await pg.waitForTimeout(200);
     ok("the scene row is visible in it", await pg.evaluate(()=>{
-        const r=document.querySelector('#modesMenu .modeRow[data-mode="scene"]');
+        const r=document.querySelector('#chatMenu .modeRow[data-mode="scene"]');
         if(!r) return "row missing";
         const b=r.getBoundingClientRect();
         return (b.width>0&&b.height>0) ? true : "row has no size"; }));
     ok("its sub-label offers to play", await pg.evaluate(()=>
         (document.getElementById('modeSceneSub')||{}).textContent==="Play one of your scenes over the chat"));
 
-    const row=await pg.$('#modesMenu .modeRow[data-mode="scene"]');
+    const row=await pg.$('#chatMenu .modeRow[data-mode="scene"]');
     try{ await row.click({timeout:2500}); }catch(e){ ok("tap the row", "click failed: "+e.message.split("\n")[0]); }
     await pg.waitForTimeout(350);
     ok("the scene picker opens", await pg.evaluate(()=>{
@@ -62,7 +62,7 @@ const {chromium}=require('playwright');
     console.log("\n["+label+" — the same row closes it]");
     ok("the row now reads as playing", await pg.evaluate(()=>{
         reflectModes();
-        const r=document.querySelector('#modesMenu .modeRow[data-mode="scene"]');
+        const r=document.querySelector('#chatMenu .modeRow[data-mode="scene"]');
         return r.classList.contains('on')
           && (document.getElementById('modeSceneSub')||{}).textContent==="Playing — tap to close it"; }));
     ok("tapping it again closes the dock", await pg.evaluate(()=>{

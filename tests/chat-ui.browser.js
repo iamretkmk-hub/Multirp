@@ -86,7 +86,8 @@ const {chromium}=require('playwright');
         // and the clamp correctly refuses to move it sideways.
         const d=document.getElementById('sceneDock');
         d.style.setProperty('--sdW','200px'); d.style.setProperty('--sceneDockH','160px');
-        try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify({left:8,top:8,w:200,h:160})); }catch(e){}
+        // v:2 = already migrated off the old two-axis grip, so _sdGeo keeps this size as given
+        try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify({v:2,left:8,top:8,w:200,h:160})); }catch(e){}
         sceneDockApplyGeo();
         const a=d.getBoundingClientRect();
         const h=document.getElementById('sceneDockHandle');
@@ -103,6 +104,10 @@ const {chromium}=require('playwright');
         const after=document.getElementById('sceneDock').getBoundingClientRect();
         return Math.abs(after.left-before.left)<2 && Math.abs(after.top-before.top)<2
           ? true : "was "+Math.round(before.left)+","+Math.round(before.top)+" now "+Math.round(after.left)+","+Math.round(after.top); }));
+    /* v43.6 — the grip drives ONE number. It used to set width and height independently against a
+       picture drawn with object-fit:contain, so filling the window meant hand-matching the clip's
+       aspect ratio with a thumb. Now the width is the handle and the height is whatever that width
+       needs for the clip that is playing. */
     ok("the grip resizes it", await pg.evaluate(async()=>{
         const d=document.getElementById('sceneDock');
         const a=d.getBoundingClientRect();
@@ -112,7 +117,35 @@ const {chromium}=require('playwright');
         ev('pointerdown',r0.left+5,r0.top+5); ev('pointermove',r0.left-60,r0.top-40); ev('pointerup',r0.left-60,r0.top-40);
         await new Promise(r=>setTimeout(r,60));
         const c=d.getBoundingClientRect();
-        return (c.width<a.width-20 && c.height<a.height-10) ? true : "was "+Math.round(a.width)+"x"+Math.round(a.height)+" now "+Math.round(c.width)+"x"+Math.round(c.height); }));
+        return (c.width<a.width-20) ? true : "was "+Math.round(a.width)+" wide, now "+Math.round(c.width); }));
+    ok("the window takes the shape of the clip in it", await pg.evaluate(async()=>{
+        try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify({v:2,left:8,top:8,w:380})); }catch(e){}
+        sceneDockSetAspect(0); sceneDockSetAspect(16/9);
+        await new Promise(r=>setTimeout(r,40));
+        const c=document.getElementById('sceneDock').getBoundingClientRect();
+        const want=Math.round(c.width/(16/9))+26;          // + the drag bar under the picture
+        return Math.abs(c.height-want)<3
+          ? true : Math.round(c.width)+"x"+Math.round(c.height)+", 16:9 wants "+want; }));
+    ok("a portrait clip is capped by the screen, not spilled off it", await pg.evaluate(async()=>{
+        sceneDockSetAspect(9/16);
+        await new Promise(r=>setTimeout(r,40));
+        const c=document.getElementById('sceneDock').getBoundingClientRect();
+        return (c.height<=window.innerHeight-8 && c.width>=160)
+          ? true : Math.round(c.width)+"x"+Math.round(c.height)+" on a "+window.innerHeight+"px screen"; }));
+    ok("and the grip still resizes it once the shape is known", await pg.evaluate(async()=>{
+        try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify({v:2,left:8,top:8,w:380})); }catch(e){}
+        sceneDockSetAspect(0); sceneDockSetAspect(16/9); sceneDockApplyGeo();
+        const d=document.getElementById('sceneDock');
+        const a=d.getBoundingClientRect();
+        const g=document.getElementById('sceneDockGrip');
+        const r0=g.getBoundingClientRect();
+        const ev=(t,x,y)=>g.dispatchEvent(new PointerEvent(t,{clientX:x,clientY:y,bubbles:true,pointerId:7}));
+        ev('pointerdown',r0.left+5,r0.top+5); ev('pointermove',r0.left-70,r0.top+5); ev('pointerup',r0.left-70,r0.top+5);
+        await new Promise(r=>setTimeout(r,60));
+        const c=d.getBoundingClientRect();
+        const shaped=Math.abs(c.height-(Math.round(c.width/(16/9))+26))<3;
+        return (c.width<a.width-20 && c.height<a.height-10 && shaped)
+          ? true : "was "+Math.round(a.width)+"x"+Math.round(a.height)+" now "+Math.round(c.width)+"x"+Math.round(c.height); }));
     ok("it can be carried up over the chat header, to the top of the screen", await pg.evaluate(async()=>{
         // the travel limit is the phone screen, not the transcript's box: dragging up used to
         // stop at the header with the character's name in it.

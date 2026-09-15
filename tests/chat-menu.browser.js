@@ -1,7 +1,7 @@
-/* v37.0 — the two menus swapped jobs.
-   The sliders button beside the text field is the QUICK sheet: what the story is made of turn to
-   turn (map, clip, calendar, calls, texts, story state). The Menu is the rare half, and it is no
-   longer one flat scroll — three sections, each opening its own panel with a way back.
+/* v43.6 — ONE menu, and it is the sliders button at the bottom left.
+   There used to be two: a quick sheet on the sliders button and a "Menu" button in the top-right
+   corner of the header. They are merged. The root holds the frequent six (map, clip, calendar,
+   calls, texts, story state) above three sections that each open their own panel with a way back.
    Also covers heat following the clip, and heat length being allowed to be 1. */
 const {chromium}=require('playwright');
 (async()=>{
@@ -31,15 +31,25 @@ const {chromium}=require('playwright');
       return b.textContent.replace(/\s+/g," ").trim();
     }).filter(Boolean),sel);
 
-  console.log("\n[the quick sheet holds what you reach for every turn]");
-  ok("it is what the sliders button opens", await pg.evaluate(()=>{
-      toggleModesMenu();
-      return document.getElementById('modesMenu').classList.contains('open'); }));
-  ok("and it holds exactly the frequent six", JSON.stringify(await rows('#modesMenu .modeRow'))===
+  console.log("\n[one menu, and the sliders button opens it]");
+  ok("the header has no Menu button any more", await pg.evaluate(()=>
+      document.querySelectorAll('#screen-chat > header button').length===0
+        ? true : "header still has "+document.querySelectorAll('#screen-chat > header button').length+" button(s)"));
+  ok("there is no second menu left to look in", await pg.evaluate(()=>
+      !document.getElementById('modesMenu') && !document.getElementById('landMenuBtn')));
+  ok("the sliders button opens the one menu", await pg.evaluate(()=>{
+      document.getElementById('modesBtn').click();
+      return !document.getElementById('chatMenu').classList.contains('hide'); }));
+  ok("and it opens UPWARD from it, never off the top corner", await pg.evaluate(()=>{
+      const m=document.getElementById('chatMenu').getBoundingClientRect();
+      const b=document.getElementById('modesBtn').getBoundingClientRect();
+      return (m.bottom<=b.top+2 && m.left<window.innerWidth/2)
+        ? true : "menu "+Math.round(m.left)+","+Math.round(m.bottom)+" vs button top "+Math.round(b.top); }));
+  ok("its root still leads with the frequent six", JSON.stringify(await rows('#cmRoot .modeRow'))===
       JSON.stringify(["World map","Scene over the story","Calendar & tasks","Call a character","Messages","Story State"])
-      ? true : JSON.stringify(await rows('#modesMenu .modeRow')));
-  ok("the playback toggles are NOT in it any more", await pg.evaluate(()=>
-      document.querySelectorAll('#modesMenu .modeRow[data-mode]').length===1));
+      ? true : JSON.stringify(await rows('#cmRoot .modeRow')));
+  ok("only one of those six is a toggle", await pg.evaluate(()=>
+      document.querySelectorAll('#cmRoot .modeRow[data-mode]').length===1));
   ok("its badges still exist for the badge writers to find", await pg.evaluate(()=>
       !!document.getElementById('calBadgeMenu') && !!document.getElementById('textInboxBadgeMenu')));
   ok("the button carries plans due plus unread texts", await pg.evaluate(()=>{
@@ -50,14 +60,16 @@ const {chromium}=require('playwright');
       c.textContent=""; t.textContent=""; _syncQuickBadge();
       return (v==="5"&&shown&&document.getElementById('quickBadge').style.display==="none")
         ? true : "badge read "+v; }));
-  await pg.evaluate(()=>closeModesMenu());
+  ok("closeModesMenu still closes what the sliders button opened", await pg.evaluate(()=>{
+      closeModesMenu();
+      return document.getElementById('chatMenu').classList.contains('hide'); }));
 
-  console.log("\n[the Menu is the rare half, in sections]");
+  console.log("\n[the rare half is still sections, below the six]");
   ok("it opens at the top level", await pg.evaluate(()=>{
       toggleChatMenu();
       return !document.getElementById('cmRoot').classList.contains('hide')
           && document.getElementById('chatMenu').dataset.sec===""; }));
-  ok("the top level is three sections and nothing else", JSON.stringify(await rows('#cmRoot .cmSecBtn'))===
+  ok("the top level offers exactly three sections", JSON.stringify(await rows('#cmRoot .cmSecBtn'))===
       JSON.stringify(["Roleplay options","Chat & world","Go to"])
       ? true : JSON.stringify(await rows('#cmRoot .cmSecBtn')));
   ok("opening one hides the others", await pg.evaluate(()=>{
@@ -92,8 +104,8 @@ const {chromium}=require('playwright');
       const on=document.querySelector('#cmSec-rp .modeRow[data-mode="tts"]').classList.contains('on');
       state.autoSpeak=false; reflectModes();
       return off&&on ? true : "off="+off+" on="+on; }));
-  ok("the quick sheet's one toggle still reflects too", await pg.evaluate(()=>{
-      const r=document.querySelector('#modesMenu .modeRow[data-mode="scene"]');
+  ok("the root's one toggle still reflects too", await pg.evaluate(()=>{
+      const r=document.querySelector('#cmRoot .modeRow[data-mode="scene"]');
       curChat().sceneDockId=null; reflectModes();
       const a=r.classList.contains('on');
       curChat().sceneDockId="sc_q"; reflectModes();
@@ -101,7 +113,7 @@ const {chromium}=require('playwright');
       curChat().sceneDockId=null; reflectModes();
       return (!a&&c) ? true : "before="+a+" during="+c; }));
   ok("rows without a mode never blink on repeated reflects", await pg.evaluate(()=>{
-      const plain=[...document.querySelectorAll('#modesMenu .modeRow:not([data-mode]),#chatMenu .modeRow:not([data-mode])')];
+      const plain=[...document.querySelectorAll('#chatMenu .modeRow:not([data-mode])')];
       for(let i=0;i<4;i++){ reflectModes();
         const lit=plain.find(r=>r.classList.contains('on'));
         if(lit) return "a plain row lit on pass "+i; }

@@ -1047,7 +1047,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v43.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v43.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -25112,11 +25112,24 @@ function compactHistory(mapped){
      so it does it again, which is the repetition the `already_said` block exists to paper over.
      Their own lines are exempt now. The player's older narration is still thinned (their actions are
      what the memory system records, and the newest `stripKeepFull` keep theirs in full). */
-  const isSelfLine=m=>m.role==="assistant" && m.name!=="Narrator";
+  /* (!) v43.5 — AND THE CHARACTER'S OWN OLDER LINES, WHICH THIS USED TO EXEMPT. The v30.5 exemption
+     above was argued from REPETITION: strip a character's own body-beats and it cannot see that it
+     already gripped the counter, already looked away, so it does it again. That risk is real and it
+     has not gone away — but the cost of the exemption turned out to be larger. Those preserved
+     replies are the only EXAMPLES of form anywhere in the payload, and there are dozens of them
+     directly above the generation point. A scene that drifted once — three body-beats where one is
+     allowed, a named feeling, a phrase repeated — taught that drift to every turn after it, and no
+     instruction outweighed that much evidence. It is why the single-beat rule was the one format
+     rule dying every turn while the others held.
+     What guards the repetition now is the block built for it: `already_said` ships this character's
+     own most recent lines verbatim, which is where "you already did that" belongs. The newest
+     `stripKeepFull` entries also still keep their narration in full, so the immediate moment is
+     untouched either way.
+     (!) This is a REVERSAL of v30.5, deliberate, and it obeys the same stripNarr toggle and
+     stripKeepFull window as everything else here — turning the setting off turns this off too. */
   return mapped.map((m,i)=>{
     if(i>=cut) return m;                          // recent → full
     if(m.name==="Narrator") return m;             // keep narrator beats (scene state)
-    if(isSelfLine(m)) return m;                   // your own body — you know what you did
     const stripped=stripNarration(m.content);
     return stripped===m.content?m:{...m,content:stripped};
   });
@@ -25150,36 +25163,6 @@ function noteMarksArrival(m,p){
 //   2) Witness filter — within the scene, a character only "heard" dialogue they were present for.
 //      Untagged dialogue (no present[]) defaults to EXCLUDED for a specific character, so a legacy or
 //      mis-tagged line can't leak; ambient world content (narration, day markers) stays visible.
-/* (!) v43.3 — THE TRANSCRIPT IS THE STRONGEST STYLE INSTRUCTION IN THE PAYLOAD, AND NOBODY WROTE IT.
-   Every rule about FORM lives in the instructions. Every EXAMPLE lives here, and there are dozens of
-   them, sitting directly above the point where the model writes. A scene that drifted once — three
-   body-beats where one is allowed, a named feeling, a phrase repeated because it was repeated before
-   — teaches that drift to every turn after it, and it compounds: each reply becomes the example for
-   the next. No instruction outweighs that much evidence, so rewriting the rules never fixed it.
-   The character's OWN older replies are carried as what they SAID, with the narration and thought
-   channels stripped. The content survives — which is what continuity actually needs — and the SHAPE
-   stops being demonstrated.
-   The most recent HIST_VERBATIM messages are untouched: the immediate moment has to arrive exactly
-   as written, and it is too close to the answer to work as a pattern anyway.
-   (!) Only the character's own lines. The player's turns say what the PLAYER did and are not this
-   character's format to copy, and other characters' lines are reframed as input further down. */
-/* v43.4 — six still left about three of the character's own multi-beat replies standing as
-   examples, and the single-beat rule kept dying every turn while every other rule held. Four keeps
-   the immediate exchange exact and compacts the rest. */
-const HIST_VERBATIM=4;
-function _histCompactSelf(t){
-  const raw=String(t==null?"":t);
-  const out=raw
-    .replace(/_[^_\n]{2,400}_/g,"")        // _thought_
-    .replace(/\*[^*\n]{2,400}\*/g,"")      // *narration*
-    .replace(/[ \t]{2,}/g," ")
-    .replace(/\n{2,}/g,"\n")
-    .replace(/^[ \t]+|[ \t]+$/gm,"")
-    .trim();
-  // A reply that was ALL narration leaves nothing behind. Content beats the pattern lesson for one
-  // turn, so the original stands rather than a hole in the scene.
-  return out||raw;
-}
 function castHistory(chat,forP){
   let msgs=chat.messages||[];
   const curDay=chat.gameDay||1;
@@ -25311,9 +25294,7 @@ function castHistory(chat,forP){
       return idx>=priorThreadStart;                           // their most-recent prior shared scene → continuity
     }
     return true;
-  }).map((m,_i,_kept)=>{
-    // how far from the end this message sits, among the ones that survived the filter
-    const _fromEnd=_kept.length-_i;
+  }).map(m=>{
     // TEXT MESSAGES threaded in for continuity: label them clearly as phone texts (not words spoken in
     // the scene) so the character stays consistent with the thread without treating a text as a line
     // said out loud in the room. Their own texts keep their voice (assistant); the player's stay user.
@@ -25346,8 +25327,7 @@ function castHistory(chat,forP){
       const sp=m.speaker||"char";
       const isSelf = forP && ( (m.speakerId && m.speakerId===forP.id) || (sp===forP.name) );
       if(isSelf){
-        return {role:"assistant",name:sanitizeName(sp),
-                content:(_fromEnd>HIST_VERBATIM)?_histCompactSelf(m.content):m.content};
+        return {role:"assistant",name:sanitizeName(sp),content:m.content};
       }
       // NARRATION PRIVACY: another character's *narrated actions* are NOT witnessed — this character
       // only HEARS their spoken words. Their own narration and {{user}}'s narration stay full. A line

@@ -102,7 +102,13 @@ const {chromium}=require('playwright');
     ["x_day_transition_narration",{},
       "You write a brief, evocative transition that closes out a day in an ongoing roleplay and eases into nightfall/sleep, then hints the next day is beginning. 2-3 sentences, second person or ambient narration. No dialogue, no character names in quotes. End on the new day dawning."],
     ["x_reveal_npc",{},
-      'You flesh out a roleplay character from a short sketch, consistent with the world. Return ONLY JSON: {"personality":"2-4 sentences","look":"English visual appearance for image generation (hair, build, face, clothing)","backstory":"1-3 sentences","style":"how they speak","goals":"what they want"}.'],
+      /* v44.4 — this prompt writes four CARD fields, so it carries CARD_VOICE_RULE like every other
+         card writer, and its field descriptions name the voice. The rule's own text is asserted in
+         card-voice.browser.js; here we only pin the parts this registry owns. */
+      (t)=>t.indexOf("You flesh out a roleplay character from a short sketch, consistent with the world.")===0
+         && t.indexOf("## THE VOICE OF THIS CARD")>-1
+         && t.indexOf('"personality":"2-4 sentences in the second person')>-1
+         && t.indexOf('"look":"English visual appearance for image generation (hair, build, face, clothing)"')>-1],
     /* the doubled comma below is the original's, kept on purpose — see the header */
     ["x_arrival",{user:U,place:"Entrance, Emre's Home",situation:', where this awaits: "The lawyer"',also:" Ayse is here.",lang:"ENGLISH"},
       'You are the GAMEMASTER narrator. '+U+' has just arrived at Entrance, Emre\'s Home, , where this awaits: "The lawyer". Ayse is here. Write ONE short, vivid ENGLISH narration (1-2 sentences, third person, no dialogue, no quotes) that sets up this moment and pulls '+U+' into it.'],
@@ -122,6 +128,9 @@ const {chromium}=require('playwright');
   for(const [key,vals,want] of CASES){
     if(want===null) continue;
     const got=await pg.evaluate(a=>fillTpl(up(a.k),a.v),{k:key,v:vals});
+    /* A case may pin the whole string, or — where a prompt legitimately grew a shared block it now
+       includes — a predicate over it, so the pin stays on what this registry actually owns. */
+    if(typeof want==="function"){ ok(key, want(got)===true, "got: "+JSON.stringify(got).slice(0,400)); continue; }
     ok(key, got===want, "want: "+JSON.stringify(want)+"\n        got:  "+JSON.stringify(got));
   }
   ok("x_char_quest_reconcile names the player", await pg.evaluate(u=>{

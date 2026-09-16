@@ -39,9 +39,9 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       const t=castConvoText(curChat(),8,"__room__");
       return (t.indexOf("Bu akşam bize gel")===-1 && t.indexOf("Elini masanın altından")===-1
               && t.indexOf("Elini bırakmıyorum")===-1)?true:t; }));
-  ok("but it still says something happened, so the room can be suspicious", await pg.evaluate(()=>{
+  ok("and is not even told an aside happened", await pg.evaluate(()=>{
       const t=castConvoText(curChat(),8,"__room__");
-      return /could not hear|could not make out/.test(t)?true:t; }));
+      return !/could not hear|could not make out|whisper/i.test(t)?true:t; }));
   ok("the player, who is party to all of them, still sees them", await pg.evaluate(()=>{
       const t=castConvoText(curChat(),8);
       return (t.indexOf("Bu akşam bize gel")>-1 && t.indexOf("Elini bırakmıyorum")>-1)?true:t; }));
@@ -54,17 +54,20 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
   ok("the narrator beats ask for the room's view, not the player's", await pg.evaluate(()=>
       (typeof narrateCharMove==="function")?true:"missing"));
 
-  console.log("\n[said or done — the staging differs, the secret does not]");
-  ok("a body that is only *asterisks* is an action", await pg.evaluate(()=>
-      isConcealedAction("*Elini tutuyorum.*")===true && isConcealedAction("Bu akşam bize gel.")===false));
-  ok("a body with words in it counts as speech", await pg.evaluate(()=>
-      isConcealedAction('"Gel." *Elini tutuyorum.*')===false));
-  ok("the bystander note for an action does not claim he leaned in", await pg.evaluate(()=>{
-      const n=whisperBlindNote({content:"*Elini tutuyorum.*",whisperToName:"Burcu"});
-      return (/make out/.test(n) && !/leaned close/.test(n))?true:n; }));
-  ok("and for speech it says he said something", await pg.evaluate(()=>{
-      const n=whisperBlindNote({content:"Bu akşam bize gel.",whisperToName:"Burcu"});
-      return /leaned close/.test(n)?true:n; }));
+  console.log("\n[an aside is a SPAN — the rest of the line is public]");
+  ok("the first starred span is the aside, the rest is not", await pg.evaluate(()=>{
+      const r=whisperSplit('elini tutuyorum *bu aksam gel* Sonra gulumsuyorum.');
+      return (r.secret==="bu aksam gel" && /elini tutuyorum/.test(r.open) && /Sonra gulumsuyorum/.test(r.open))
+        ? true : JSON.stringify(r); }));
+  ok("no span at all means the whole line is private, as it always did", await pg.evaluate(()=>{
+      const r=whisperSplit('Bu aksam bize gel.');
+      return (r.secret==="Bu aksam bize gel." && r.open==="")?true:JSON.stringify(r); }));
+  ok("only the FIRST span closes the aside", await pg.evaluate(()=>{
+      const r=whisperSplit('*ilk* ortada *ikinci*');
+      return (r.secret==="ilk" && r.open==="ortada *ikinci*")?true:JSON.stringify(r); }));
+  ok("speech and action inside the span are not separated", await pg.evaluate(()=>{
+      const r=whisperSplit('*elini tutuyorum, "gel" diyorum*');
+      return /elini tutuyorum, "gel" diyorum/.test(r.secret)?true:JSON.stringify(r); }));
 
   console.log("\n[the payload each character is built with]");
   const hist=who=>pg.evaluate(id=>JSON.stringify(castHistory(curChat(),state.personas.find(p=>p.id===id))),who);
@@ -73,14 +76,22 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       return (h.indexOf("Bu akşam bize gel")>-1 && h.indexOf("Elini masan")>-1)?true:h.slice(0,300); })());
   ok("and the frame travels with them on every later turn", await (async()=>{
       const h=await hist("w_bu");
-      return /only you can tell|no one else can hear/.test(h)?true:h.slice(0,300); })());
+      return /for you alone . nobody else in the room/.test(h)?true:h.slice(0,300); })());
   ok("Ozlem gets neither, in either direction", await (async()=>{
       const h=await hist("w_oz");
       return (h.indexOf("Bu akşam bize gel")===-1 && h.indexOf("Elini masan")===-1
               && h.indexOf("Elini bırakmıyorum")===-1)?true:h.slice(0,300); })());
-  ok("Ozlem is told something happened", await (async()=>{
+  ok("Ozlem is not told anything happened at all", await (async()=>{
       const h=await hist("w_oz");
-      return /could not hear|could not make out/.test(h)?true:h.slice(0,300); })());
+      return !/could not hear|could not make out|whisper/i.test(h)?true:h.slice(0,300); })());
+  ok("but she does get the public remainder of a mixed line", await pg.evaluate(()=>{
+      const c=curChat(); const H=["w_bu","w_oz"];
+      c.messages.push({mid:"a5",role:"user",present:H,whisperTo:"w_bu",whisperToName:"Burcu",
+        content:'*bu aksam gel* Sonra herkese donup gulumsuyorum.'});
+      const oz=state.personas.find(p=>p.id==="w_oz");
+      const h=JSON.stringify(castHistory(c,oz));
+      c.messages.pop();
+      return (h.indexOf("Sonra herkese")>-1 && h.indexOf("bu aksam gel")===-1)?true:h.slice(-260); }));
   ok("an aside is never the line a bystander is answering", await pg.evaluate(()=>{
       const oz=state.personas.find(p=>p.id==="w_oz");
       const l=lastDialogueLine(curChat(),oz);
@@ -93,20 +104,19 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       const g=blkTpl("whisper_back_guidance");
       return (/only \{\{user\}\} will read it/.test(g) && /do not say it out loud/.test(g))?true:g.slice(0,200); }));
 
-  console.log("\n[the chat shows which kind it was]");
-  ok("isConcealedAction drives the pill wording", await pg.evaluate(()=>
-      isConcealedAction("*x*")===true && isConcealedAction("")===false));
-  ok("all four aside wordings are editable fragments", await pg.evaluate(()=>{
-      const want=["whisper_to_say","whisper_to_act","whisper_blind_say","whisper_blind_act","whisper_back_guidance"];
+  console.log("\n[the chat marks it]");
+  ok("both aside wordings are editable fragments", await pg.evaluate(()=>{
+      const want=["whisper_to_you","whisper_back_guidance"];
       const listed=REPLY_EXTRA_TPLS.whisper||[];
       const miss=want.filter(k=>!(typeof BLOCK_TPL_DEFAULTS[k]==="string")||listed.indexOf(k)<0);
       return miss.length?miss.join(", "):true; }));
-  ok("editing one changes what the room is told", await pg.evaluate(()=>{
+  ok("editing one changes what the target reads", await pg.evaluate(()=>{
       state.blockTpls=state.blockTpls||{};
-      state.blockTpls.whisper_blind_act="EDITED {{user}}/{{target}}";
-      const n=whisperBlindNote({content:"*x*",whisperToName:"Burcu"});
-      delete state.blockTpls.whisper_blind_act;
-      return n==="EDITED Emre/Burcu"?true:n; }));
+      state.blockTpls.whisper_to_you="EDITED {{user}}→{{target}}:";
+      const bu=state.personas.find(p=>p.id==="w_bu");
+      const h=JSON.stringify(castHistory(curChat(),bu));
+      delete state.blockTpls.whisper_to_you;
+      return /EDITED Emre→Burcu:/.test(h)?true:h.slice(0,240); }));
 
   console.log("\n[typing / opens the commands]");
   ok("it lists them all", await pg.evaluate(()=>{

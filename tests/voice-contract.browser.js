@@ -190,15 +190,18 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
   {
     const r=await other();
     // The card is FIRST person and stays that way — nothing converts it. What changes is the label.
-    ok("the card itself is still first person (nothing was rewritten)",
+    ok("the card itself is untouched, whichever voice it is in",
        /I came to Iskenderun/.test(r.target) && /when nothing pulls at me/.test(r.engine));
-    ok("the response target's sheet says whose 'I' it is",
-       /Burcu's own account, in Burcu's words/.test(r.target)?true:r.target);
+    ok("the response target's sheet names the owner of its pronouns",
+       /This is Burcu's own identity sheet, written TO Burcu/.test(r.target)?true:r.target);
+    // v48.1 — CARD_VOICE_RULE makes cards SECOND person, so the frame must not bet on "I".
+    ok("and covers a second-person card, not just a first-person one",
+       /says "you" — or "I" — it means Burcu/.test(r.target)?true:r.target);
     ok("and no longer calls it 'their' with no owner named",
        !/<their_backstory>I /.test(r.target)?true:r.target);
     ok("the bystander behaviour label names the person, not 'they'",
-       /How Burcu behaves, in Burcu's own words/.test(r.engine) && !/How they act/.test(r.engine),
-       r.engine.slice(0,200));
+       /How Burcu behaves/.test(r.engine) && /it means Burcu, never you/.test(r.engine)
+       && !/How they act/.test(r.engine), r.engine.slice(0,240));
     ok("so does the wardrobe label",
        /What Burcu usually wears/.test(r.engine) && !/Their usual clothing/.test(r.engine));
     ok("neither label guesses a gender", await pg.evaluate(()=>{

@@ -21,9 +21,10 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,500));} };
 
   console.log("\n[the contract: instruction is second person]");
+  // v47.1 — through the same checker the editor's button uses, so there is one definition of the rule.
   ok("no fragment says 'I' unless its job is to quote a voice", await pg.evaluate(()=>{
-      const re=/\b(I|I'm|I've|I'll|me|my|mine|myself)\b/;
-      const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!VOICE_FIRST_PERSON_OK.has(k)&&re.test(BLOCK_TPL_DEFAULTS[k]));
+      const bad=Object.keys(BLOCK_TPL_DEFAULTS)
+        .filter(k=>voiceScan(k,BLOCK_TPL_DEFAULTS[k]).some(x=>x.rule==="first person"));
       return bad.length?bad.join(", "):true; }));
   ok("the allowlist has no dead entries", await pg.evaluate(()=>{
       const dead=[...VOICE_FIRST_PERSON_OK].filter(k=>!BLOCK_TPL_DEFAULTS[k]);
@@ -168,6 +169,58 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
   ok("the shipped wording still passes the same checker with zero errors", await pg.evaluate(()=>{
       const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>voiceScan(k,BLOCK_TPL_DEFAULTS[k]).some(x=>x.level==="error"));
       return bad.length?bad.join(", "):true; }));
+
+  console.log("\n[a first-person card reaching a third-person reader]");
+  await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    const mk=(id,name,bio)=>({id,name,universeId:uni.id,instructions:"",personality:"I am the hidden head of my household.",
+      backstory:bio,style:"s",goals:"",traits:"Default: when nothing pulls at me -> I keep the room warm",
+      wardrobe:"Daily: my green dress",look:{raw:"tall, dark hair"}});
+    [["v_oz","Ozlem","I married Berker."],["v_bu","Burcu","I came to Iskenderun and stayed for Burak."]]
+      .forEach(([id,n,b])=>{ if(!state.personas.some(p=>p.id===id))state.personas.push(mk(id,n,b)); });
+    const c=curChat(); c.presentIds=["v_oz","v_bu"]; state.user="Emre";
+  });
+  const other=()=>pg.evaluate(()=>{
+    const chat=curChat();
+    const oz=state.personas.find(p=>p.id==="v_oz"), bu=state.personas.find(p=>p.id==="v_bu");
+    const B=buildCharPromptBlocks(oz,[bu],{recent:[],diary:[],longterm:[]},null,
+      {chat,targetName:"Burcu",targetId:"v_bu"});
+    return {target:String(B.response_target||""),engine:charBioBlock(bu,{self:false})};
+  });
+  {
+    const r=await other();
+    // The card is FIRST person and stays that way — nothing converts it. What changes is the label.
+    ok("the card itself is still first person (nothing was rewritten)",
+       /I came to Iskenderun/.test(r.target) && /when nothing pulls at me/.test(r.engine));
+    ok("the response target's sheet says whose 'I' it is",
+       /Burcu's own account, in Burcu's words/.test(r.target)?true:r.target);
+    ok("and no longer calls it 'their' with no owner named",
+       !/<their_backstory>I /.test(r.target)?true:r.target);
+    ok("the bystander behaviour label names the person, not 'they'",
+       /How Burcu behaves, in Burcu's own words/.test(r.engine) && !/How they act/.test(r.engine),
+       r.engine.slice(0,200));
+    ok("so does the wardrobe label",
+       /What Burcu usually wears/.test(r.engine) && !/Their usual clothing/.test(r.engine));
+    ok("neither label guesses a gender", await pg.evaluate(()=>{
+        const bad=["bio_behave_other","bio_wardrobe_other","target_bg","target_look"]
+          .filter(k=>/\b(he|him|his|she|her|hers)\b/i.test(BLOCK_TPL_DEFAULTS[k]));
+        return bad.length?bad.join(", "):true; }));
+  }
+
+  console.log("\n[ties are labels, in one shape, wherever they are read]");
+  ok("a tie keeps only its first clause", await pg.evaluate(()=>
+      _relTieLabel("the daughter of my friends; the child I never had")==="the daughter of my friends"
+        ? true : _relTieLabel("the daughter of my friends; the child I never had")));
+  ok("a bare tie is untouched", await pg.evaluate(()=>_relTieLabel("husband")==="husband"));
+  ok("an empty tie stays empty", await pg.evaluate(()=>_relTieLabel("")===""&&_relTieLabel(null)===""));
+  ok("the roster and the far-list trim it the same way", await pg.evaluate(()=>{
+      // both call _relTieLabel now; the roster caps tighter, so the shorter is a prefix of the longer
+      const a=_relTieLabel("the other woman who sees clearly",44);
+      const b=_relTieLabel("the other woman who sees clearly");
+      return b.indexOf(a.replace(/…$/,""))===0?true:JSON.stringify({a,b}); }));
+  ok("the writer is told a tie carries no pronoun", await pg.evaluate(()=>
+      /BARE LABEL/.test(DEFAULT_RELGEN) && /not "the son of her friends"/.test(DEFAULT_RELGEN)
+        ? true : "spec not tightened"));
 
   console.log("\n[nothing else moved]");
   ok("no page errors", errs.length===0?true:errs.join(" | "));

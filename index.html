@@ -794,6 +794,17 @@
   .phGuideRow{padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;line-height:1.45;}
   .phGuideRow code{color:var(--accent2);}
   .plqView{white-space:pre-wrap;font-size:11px;line-height:1.4;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;padding:8px;margin-top:6px;max-height:320px;overflow:auto;opacity:.85;}
+
+.inputBar{position:relative}
+#cmdPalette{position:absolute;left:8px;right:8px;bottom:100%;margin-bottom:6px;z-index:40;
+  max-height:min(52vh,340px);overflow:auto;background:var(--panel,#1b1b1f);border:1px solid var(--border);
+  border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.38);padding:4px}
+#cmdPalette.hide{display:none}
+#cmdPalette .cmdRow{padding:7px 10px;border-radius:9px;cursor:pointer}
+#cmdPalette .cmdRow.sel,#cmdPalette .cmdRow:hover{background:var(--chip,rgba(255,255,255,.07))}
+#cmdPalette .cmdRow code{color:var(--accent);font-size:12px}
+#cmdPalette .cmdArg{opacity:.55;font-size:11px;margin-left:4px}
+#cmdPalette .cmdDesc{opacity:.7;font-size:10.5px;line-height:1.35;margin-top:2px}
 </style>
 </head>
 <body data-theme="dark">
@@ -982,7 +993,8 @@
       <button type="button" class="modeRow" data-lang="de" onclick="setStoryLang('de',event)"><span class="modeTxt">🇩🇪 Deutsch<small>Geschichte auf Deutsch</small></span><span class="modeSw"></span></button>
       <button type="button" class="modeRow" data-lang="tr" onclick="setStoryLang('tr',event)"><span class="modeTxt">🇹🇷 Türkçe<small>Hikâye Türkçe yazılır</small></span><span class="modeSw"></span></button>
     </div>
-    <textarea id="chatInput" rows="1" placeholder="Say or do something…"></textarea>
+    <div id="cmdPalette" class="hide" role="listbox" aria-label="Commands"></div>
+    <textarea id="chatInput" rows="1" placeholder="Say or do something…" oninput="cmdPaletteSync()" onkeydown="return cmdPaletteKey(event)" onblur="setTimeout(cmdPaletteHide,140)"></textarea>
     <button class="iconBtn" id="sendBtn" onclick="sendMessage()"><svg class="ic"><use href="#i-send"/></svg></button>
   </div>
 </div>
@@ -1054,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v49.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v49.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14428,6 +14440,7 @@ function recentSceneMsgsFor(chat,p,n){
       return witnessedBy(m,p);                            // they must have been in the scene to hear it
     }
     if(m.speakerId===p.id||(m.speaker&&m.speaker===p.name))return true;   // their own lines, always
+    if(m.whisperTo)return false;   // v49.1 — somebody else's aside back to the player is not theirs to read
     return witnessedBy(m,p);                              // others' lines / narration only if witnessed
   }).slice(-(n||6))
     .map(m=>({role:m.role==='user'?'user':'assistant',
@@ -19323,7 +19336,12 @@ function _lineReachable(m,selfP,textMode){
     return m.textWith===selfP.id || m.speakerId===selfP.id;
   }
   if(textMode)return false;                       // a spoken room line is not what a text answers
-  if(m.whisperTo && selfP && m.whisperTo!==selfP.id)return false;
+  /* v49.1 — covers a character's whisper BACK as well: its speaker may answer it, its target (the
+     player) is party to it, and nobody else may treat it as the line in front of them. */
+  if(m.whisperTo && selfP){
+    if(m.role==='assistant'){ if(m.speakerId!==selfP.id) return false; }
+    else if(m.whisperTo!==selfP.id) return false;
+  }
   // you can only answer what you were there for. A message with no present array is legacy data
   // from before witnesses were recorded — left reachable rather than silently dropped.
   if(selfP && Array.isArray(m.present) && !witnessedBy(m,selfP))return false;
@@ -19507,7 +19525,10 @@ const REPLY_ORDER=["task","world","format",
 /* Fragments that belong to a CALLABLE rather than to a block. text_timing is called by name in the
    text template but is not one of the ordered blocks, so its two sentences have no block to hang
    under — declared here so the drift guard counts them as claimed and the editor can find them. */
-const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"]};
+const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"],
+  /* v49.1 — the aside wordings. They are written by castHistory and whisperBlindNote rather than
+     assembled into a payload block, so they have no block to hang under either. */
+  whisper:["whisper_to_say","whisper_to_act","whisper_blind_say","whisper_blind_act","whisper_back_guidance"]};
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
   world:{label:"Universe setting",kind:"dyn",desc:"The current universe's setting text. Universal — true for every character."},
@@ -21898,6 +21919,25 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
      claiming a person and frames the text as what it is: {{char}}'s own account, quoted. One stored
      bio, no conversion, and no gender to guess, because the frame uses the name. */
   bio_behave_other:`How {{char}} behaves — the situation that sets each one off, then what {{char}} does. This is {{char}}'s own sheet, written TO {{char}}: wherever it says "you" (or "I"), it means {{char}}, never you:`,
+  /* ===== v49.1 — AN ASIDE, SAID OR DONE ======================================
+     /whisper carries two different things now. A body that is nothing but *asterisks* is an ACTION
+     done where only one person can tell — a hand under the table — and a body with words in it is
+     murmured speech. They are staged differently for the people who are NOT its target: leaning in
+     to murmur is visible AS a murmur, while a hand under a table is at most a movement half-caught.
+     Neither tells them WHAT it was, which is the whole point; both leave them something to be
+     suspicious about, which is the other half of the point. */
+  whisper_to_say:`({{user}} leans in close and whispers to you, so no one else can hear):`,
+  whisper_to_act:`({{user}} does this where only you can tell — nobody else in the room sees it, and nobody else is told. It is yours alone to answer):`,
+  whisper_blind_say:`[{{user}} leaned close and said something to {{target}} — you could not hear what was said]`,
+  whisper_blind_act:`[something passed between {{user}} and {{target}} that you could not make out]`,
+  /* The character answering an aside. They get ONE channel and it is private, so there is nowhere
+     to blurt to — which is the point: a reply with nowhere private to go is a reply that leaks. */
+  whisper_back_guidance:`# THIS IS BETWEEN THE TWO OF YOU
+{{user}} did that where only you could tell. Nobody else in this room saw it, heard it, or has been told about it — not one of them knows what it was.
+
+Your whole reply goes back the same way: only {{user}} will read it. So answer it properly — say the thing you would only say like this.
+
+What the others WILL see is that something passed between you. You cannot hide that, and you do not have to. What you must not do is put the thing itself where they can reach it: do not say it out loud, do not name it, do not repeat it back, and do not explain it to anybody. If one of them asks you afterwards what that was, that is a moment you play — you are not obliged to tell them the truth.`,
   bio_wardrobe_self:`What you usually wear (dress yourself plausibly from this, fitting the scene and the time of day):`,
   /* v48.2 — the wardrobe was a menu and every reader had to choose from it. currentOutfit() now
      chooses, once, from where they are and what hour it is, so these say what is ON them. The old
@@ -24623,7 +24663,13 @@ function bubble(m){
   // Text messages live in the phone window too, but they also render inline here so the story reads
   // as one thread — clearly marked as a typed message, never mistaken for something said aloud.
   const textTag=m.textMsg?` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="Sent as a phone text message">${icon("message")} text message</span>`:"";
-  const whisperTag=m.whisperTo?` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="Whispered privately — only ${esc(m.whisperToName||'they')} can hear">🤫 whisper → ${esc(m.whisperToName||'')}</span>`:"";
+  /* v49.1 — an aside is said OR done, and the pill says which. Nobody else in the room gets either
+     one's content; the pill is the player's own reminder of what the rest of them cannot reach. */
+  const whisperTag=m.whisperTo?(function(){
+    const _a=(typeof isConcealedAction==="function")&&isConcealedAction(m.content);
+    const _to=esc(m.whisperToName||'');
+    return ` <span class="pill" style="font-size:9px;border-color:var(--accent);color:var(--accent)" title="${_a?`Done where only ${esc(m.whisperToName||'they')} can tell — nobody else in the room sees it`:`Whispered privately — only ${esc(m.whisperToName||'they')} can hear`}">${_a?"🫱 unseen":"🤫 whisper"} → ${_to}</span>`;
+  })():"";
   let avatar="",tempTag="";
   if(m.role==='assistant'){
     const sp=state.personas.find(x=>x.id===m.speakerId)||state.personas.find(x=>x.name===m.speaker);
@@ -25959,7 +26005,12 @@ async function sendWhisper(chat,rest){
   appendNewBubbles(); persistChats();
   const sb=document.getElementById('sendBtn'); if(sb)sb.disabled=true;
   try{
-    await playCharacterTurn(chat,target,state.user);   // ONLY the whispered-to character responds
+    /* v49.1 — and they answer the SAME way. Until now the target replied with an ordinary public
+       message, so you whispered and they told the room: the exact leak the aside exists to prevent,
+       and it was live. `whisperBack` marks their reply private to the player and hands them the note
+       that says so. One channel, and it is the private one — a reply with nowhere private to go is
+       a reply that leaks. */
+    await playCharacterTurn(chat,target,state.user,{whisperBack:true});   // ONLY the whispered-to character responds
     await runPresenceTracker(chat);
     maybeBuildMemory(chat);
     postTurn(chat);
@@ -26154,10 +26205,119 @@ function handleOOC(chat,text){
 
 /* ===== MULTI-CHARACTER TURN ENGINE ===== */
 // Conversation text limited to currently-present characters' exchange.
-function castConvoText(chat,limit){
+/* (!) v49.1 — A WHISPER WAS REACHING EVERY ENGINE VERBATIM. This is the transcript ten background
+   jobs read, and it had no whisper filter at all — while recentSceneMsgsFor, four hundred lines up,
+   has had the right rule the whole time ("a whisper to someone else — never its content").
+   Three of the ten callers are narrator-beat writers: narrateCharMove and narrateCharMoveGroup take
+   castConvoText(chat,3) as the WHY of an exit, an arrival or an area move. So a whisper to Burcu,
+   followed by Burcu getting up, produced a departure beat explaining her exit by what was whispered
+   — and a narrator beat is posted to the chat and read by the whole room. The turn routers and the
+   gm-reaction router had it too, which is how a character who never heard it could be routed to
+   answer it.
+   `viewerId` is who is reading: a character id sees their own whispers, "__user__" (the default)
+   is the player, who is party to all of them. Everyone else gets the same content-free note the
+   payload has always given them. Passing nothing keeps the player's view, which is what every
+   engine that writes for the PLAYER wants; the engines that write for the ROOM pass the room. */
+
+/* ===== v49.1 — THE COMMAND LIST ============================================
+   Every command lived only in the dispatcher's else-branch, as a toast nobody reads until they
+   have already typed something wrong. Typing "/" now opens the list, it narrows as you type, and
+   the arrow keys and Enter pick one. Purely a way IN to what already exists: the list is data, the
+   dispatcher is unchanged, and a command you type by hand behaves exactly as before. */
+const CHAT_COMMANDS=[
+  {cmd:"whisper", arg:"Name message", desc:"An aside only that person gets. Wrap it in *asterisks* and it is a concealed ACTION instead of murmured words — a hand under the table. Either way they answer you the same way, privately, and the room only ever sees that something passed between you."},
+  {cmd:"go",      arg:"Place",   desc:"Move the scene somewhere else."},
+  {cmd:"bring",   arg:"Name",    desc:"Bring a character into the scene."},
+  {cmd:"leave",   arg:"Name",    desc:"Send a character out of the scene."},
+  {cmd:"messages",arg:"Name",    desc:"Open the phone thread with someone."},
+  {cmd:"text",    arg:"Name",    desc:"Text a character instead of speaking to them."},
+  {cmd:"seek",    arg:"[Name]",  desc:"Look for somebody you can sense here but cannot see."},
+  {cmd:"hide",    arg:"Name",    desc:"Tuck a character away here until you /seek them."},
+  {cmd:"who",     arg:"",        desc:"Who is within earshot right now."},
+  {cmd:"cast",    arg:"",        desc:"Everyone in this universe, living and removed."},
+  {cmd:"remove",  arg:"Name",    desc:"Take a character out of the story."},
+  {cmd:"revive",  arg:"Name",    desc:"Bring a removed character back."},
+  {cmd:"voicedebug",arg:"",      desc:"Open the voice log."}
+];
+let _cmdSel=0;
+function _cmdQuery(){
+  const el=document.getElementById('chatInput'); if(!el)return null;
+  const v=String(el.value||"");
+  const m=v.match(/^\/([a-z]*)$/i);          // only while the WHOLE box is the command word
+  return m?m[1].toLowerCase():null;
+}
+function _cmdMatches(q){
+  if(q===null)return [];
+  return CHAT_COMMANDS.filter(c=>!q||c.cmd.indexOf(q)===0);
+}
+function cmdPaletteSync(){
+  const host=document.getElementById('cmdPalette'); if(!host)return;
+  const q=_cmdQuery(); const list=_cmdMatches(q);
+  if(q===null||!list.length){ cmdPaletteHide(); return; }
+  if(_cmdSel>=list.length)_cmdSel=0;
+  host.innerHTML=list.map((c,i)=>`<div class="cmdRow${i===_cmdSel?" sel":""}" role="option" data-cmd="${esc(c.cmd)}"
+      onmousedown="event.preventDefault();cmdPalettePick('${esc(c.cmd)}')">
+      <div><code>/${esc(c.cmd)}</code>${c.arg?` <span class="cmdArg">${esc(c.arg)}</span>`:""}</div>
+      <div class="cmdDesc">${esc(c.desc)}</div></div>`).join("");
+  host.classList.remove('hide');
+}
+function cmdPaletteHide(){ const h=document.getElementById('cmdPalette'); if(h){h.classList.add('hide');h.innerHTML="";} _cmdSel=0; }
+function cmdPalettePick(cmd){
+  const el=document.getElementById('chatInput'); if(!el)return;
+  const def=CHAT_COMMANDS.find(c=>c.cmd===cmd);
+  el.value="/"+cmd+(def&&def.arg?" ":"");
+  cmdPaletteHide(); el.focus();
+  try{ el.setSelectionRange(el.value.length,el.value.length); }catch(e){}
+}
+/* Returns false to swallow the key. Only ever active while the palette is open, so nothing here
+   can interfere with ordinary typing or with Enter-to-send. */
+function cmdPaletteKey(e){
+  const host=document.getElementById('cmdPalette');
+  const open=host&&!host.classList.contains('hide');
+  if(!open) return true;
+  const list=_cmdMatches(_cmdQuery());
+  if(!list.length) return true;
+  if(e.key==="ArrowDown"){ _cmdSel=(_cmdSel+1)%list.length; cmdPaletteSync(); e.preventDefault(); return false; }
+  if(e.key==="ArrowUp"){ _cmdSel=(_cmdSel-1+list.length)%list.length; cmdPaletteSync(); e.preventDefault(); return false; }
+  if(e.key==="Enter"||e.key==="Tab"){ cmdPalettePick(list[_cmdSel].cmd); e.preventDefault(); return false; }
+  if(e.key==="Escape"){ cmdPaletteHide(); e.preventDefault(); return false; }
+  return true;
+}
+
+function castConvoText(chat,limit,viewerId){
   const cast=curCast();const fallback=(cast[0]&&cast[0].name)||"Narrator";
+  const who=viewerId===undefined?"__user__":viewerId;
   return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg).slice(-(limit||14))
-    .map(m=>`${m.role==='user'?state.user:(m.speaker||fallback)}: ${m.content}`).join("\n");
+    .map(m=>{
+      const nm=m.role==='user'?state.user:(m.speaker||fallback);
+      let body=m.content;
+      const wTo=m.whisperTo;
+      if(wTo && who!=="__user__" && wTo!==who){
+        body=whisperBlindNote(m);                       // they saw it happen, not what it was
+      }
+      return `${nm}: ${body}`;
+    }).join("\n");
+}
+/* What somebody who was NOT the target perceives. An aside is staged differently depending on
+   whether it was said or done — leaning in to murmur is visible as a murmur; a hand under the
+   table is only a movement they half-catch — so the note is shaped to the body. */
+function whisperBlindNote(m){
+  try{
+    const tn=(m&&m.whisperToName)||"someone";
+    const act=isConcealedAction(m&&m.content);
+    return act
+      ? fillTpl(blkTpl("whisper_blind_act"),{user:state.user,target:tn})
+      : fillTpl(blkTpl("whisper_blind_say"),{user:state.user,target:tn});
+  }catch(e){ return "[something passed between them]"; }
+}
+/* An aside whose body is nothing but *asterisks* is an ACTION, not murmured words. Mixed bodies —
+   a line of speech plus a beat — count as speech, because the speech is the part that was said. */
+function isConcealedAction(text){
+  try{
+    const t=String(text||"").trim(); if(!t) return false;
+    const stripped=t.replace(/\*[^*\n]+\*/g,"").replace(/[\s.,;:!?…-]+/g,"");
+    return /\*[^*\n]+\*/.test(t) && stripped==="";
+  }catch(e){ return false; }
 }
 // Remove *narration* / _stage directions_ from a message, keeping spoken dialogue and plain
 // prose. Used only for OLDER messages in the roleplay history window (tiered compaction):
@@ -26472,13 +26632,26 @@ function castHistory(chat,forP){
     // WHISPER: a private aside is FULL for its target (and the player's own view), and a content-free
     // note for everyone else — they know a whisper happened, not what was said.
     if(m.role==='user' && m.whisperTo){
+      /* v49.1 — the frame travels with the line, on EVERY later turn it renders, not only the turn
+         it happened. A secret that is marked once and plain thereafter is a secret until the model
+         scrolls back. */
       const tn=m.whisperToName||"someone";
+      const _act=isConcealedAction(m.content);
       if(!forP || forP.id===m.whisperTo){
         return {role:"user",name:sanitizeName(state.user),
-          content:`(${state.user} leans in close and whispers to you, so no one else can hear): ${m.content}`};
+          content:`${fillTpl(blkTpl(_act?"whisper_to_act":"whisper_to_say"),{user:state.user,target:tn})} ${m.content}`};
       }
-      return {role:"user",name:sanitizeName(state.user),
-        content:`[${state.user} leaned close and whispered something to ${tn} — you could not hear what was said]`};
+      return {role:"user",name:sanitizeName(state.user),content:whisperBlindNote(m)};
+    }
+    /* v49.1 — and the same for a character's whisper BACK: full for the player, a note for the room. */
+    if(m.role==='assistant' && m.whisperTo){
+      const _actB=isConcealedAction(m.content);
+      if(!forP || m.speakerId===forP.id){
+        return {role:"assistant",name:sanitizeName(m.speaker||"char"),content:m.content};
+      }
+      return {role:"user",name:sanitizeName(m.speaker||"char"),
+        content:fillTpl(blkTpl(_actB?"whisper_blind_act":"whisper_blind_say"),
+          {user:m.speaker||"someone",target:state.user})};
     }
     if(m.role==='assistant' && !m.narratorEvent && !m.presenceNote && !m.dayMarker){
       // SPEAKER ISOLATION (anti-bleed): a weak model that sees EVERY prior character line as its
@@ -26983,6 +27156,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
        else. When pinned, the tail highlights that same line (answerTo below), so the header, the
        guidance and the quoted line all name one person — the contradiction that let a second
        responder answer a question meant for the player. */
+    const _whisperBack=!!(opts&&opts.whisperBack);
     const _pin=(opts&&opts.answerTo)||null;
     if(_pin==="__user__"){ targetName=state.user; targetId="__user__"; }
     else {
@@ -27013,6 +27187,11 @@ async function playCharacterTurn(chat,p,addressed,opts){
       if(_pl.head)messages.push({role:"system",content:_pl.head});
       messages.push(...taggedHist);
       if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    }
+    /* v49.1 — fires LAST, in the slot the addressee note proved rules survive in. */
+    if(_whisperBack){
+      const _wg=fillTpl(blkTpl("whisper_back_guidance"),{user:state.user,self:p.name});
+      if(_wg.trim()) messages.push({role:"system",content:_wg});
     }
     if(chat.pendingGmNudge){
       messages.push({role:"system",content:`[Director's note — react naturally in-scene as ${p.name}, do not mention this:] ${chat.pendingGmNudge}`});
@@ -27089,6 +27268,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
        mi karsilastiniz?" as simply the newest thing said and answers it — as Emre. Read back by
        lastDialogueLine() and turned into the addressee guard in RESPONSE GUIDANCE. */
     if(targetId){ msg.toId=targetId; msg.toName=targetName||(targetId==="__user__"?state.user:""); }
+    if(_whisperBack){ msg.whisperTo="__user__"; msg.whisperToName=state.user; }   // v49.1 — private both ways
     if(chat._heatBeat)msg.heatBeat=true;   // v27.1 — so a burst can never chain off its own output
     stampStatus(chat,msg);chat.messages.push(msg);
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
@@ -27285,7 +27465,7 @@ async function runPresenceTracker(chat){
       if(movers.length){
         // RP-triggered area move → the recent exchange is the "why". Narrate it short; fall back to
         // the terse stage direction if the model fails.
-        const narr=await narrateCharMoveGroup(chat,movers,{dir:"submove",why:castConvoText(chat,3).slice(-500)});
+        const narr=await narrateCharMoveGroup(chat,movers,{dir:"submove",why:castConvoText(chat,3,"__room__").slice(-500)});
         const terse=movers.map(m=>`— ${m.p.name} steps away to the ${m.sName} —`).join("\n");
         const note={mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
           moveNarr:narr?true:false,
@@ -27322,7 +27502,7 @@ async function runPresenceTracker(chat){
       // RP-triggered exit → the recent exchange is the "why". Origin is here; destination is left
       // vague (they head off — where to is usually unstated). Narrate before we clear their position.
       const fromHere=(chat&&chat.location)||"";
-      const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:fromHere,why:castConvoText(chat,3).slice(-500)});
+      const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:fromHere,why:castConvoText(chat,3,"__room__").slice(-500)});
       applyPresence(chat,[],[p.name]);
       notePresence(chat,[],[p.name],narr);
       if(chat.worldPositions)chat.worldPositions[p.id]=null;  // they went elsewhere
@@ -27349,7 +27529,7 @@ async function runPresenceTracker(chat){
       // RP-triggered arrival → the recent exchange is the "why".
       const narr=await narrateCharMoveGroup(chat,
         enter.map(p=>({p, fromName:charPlaceName(chat,p), toName, toDesc})),
-        {dir:"enter", why:castConvoText(chat,3).slice(-500)});
+        {dir:"enter", why:castConvoText(chat,3,"__room__").slice(-500)});
       applyPresence(chat,enter.map(p=>p.name),[]);
       notePresence(chat,enter.map(p=>p.name),[],narr);
       for(const p of enter){
@@ -37170,6 +37350,7 @@ function ptCatalog(){
   });
   out.push({name:"language_rule",label:"The story-language rule (write in Turkish, etc.)",desc:"Normally rides inside the formatting rules. Call it on its own if you have written your own format rules but still want the language enforced."});
   out.push({name:"text_timing",label:"How long the text sat unanswered",desc:"Text payload only — how much game time passed before this reply."});
+  out.push({name:"whisper",label:"Asides — whispers and concealed acts",desc:"What /whisper looks like to the person it is for and to everybody else, said or done, plus the note telling the answering character their reply is private too. Written into the transcript by castHistory rather than assembled as a block, so it is not one of the ordered pieces."});
   /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
      them or it flags its own default in red; and they are worth listing anyway — this is the list
      the editor shows, so a rule is something you can find, copy and move rather than guess at. */
@@ -37565,7 +37746,11 @@ function ptJumpToPrompt(name){
 }
 function ptEditPiece(name){
   if(name==="dialogue_history"){ toast("The transcript is your conversation — there is no wording to edit"); return; }
-  if(name==="text_timing"){ toast("Timed by the app; its two sentences are text_timing_days and text_timing_yesterday"); return; }
+  /* v49.1 — text_timing used to be turned away here with a toast naming its two sentences, because
+     this function reads REPLY_BLOCKS and text_timing is not a block: it belongs to a CALLABLE, which
+     is what REPLY_EXTRA_TPLS exists to declare. The toast was a workaround for a lookup that was
+     simply missing one map. Adding it opens text_timing properly and every other callable-owned
+     set with it — the aside wordings among them — rather than needing a second workaround. */
   /* v38.2 — THE WORDING LIVES BESIDE ITS NAME NOW. It used to live in a chunk box buried under a
      block row in another accordion, which is why this function was a jump instead of an editor:
      the name you type and the words it sends were in two different places. The boxes are gone; a
@@ -37588,6 +37773,11 @@ function ptEditPiece(name){
   const ownPrompt=(blk&&blk.kind==="prompt")
     ? `<button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:8px" onclick="ptJumpToPrompt('${name}')">Your own prompt text is in Reply payloads — open it</button>`
     : "";
+  const extra=(!blk||!Array.isArray(blk.tpls)||!blk.tpls.length)?REPLY_EXTRA_TPLS[name]:null;
+  if(Array.isArray(extra) && extra.length){
+    if(put(`<div class="desc" style="margin-top:6px">This piece is built from your story. Its fixed sentences are these \u2014 each is callable by name, so you can move one, drop one, or replace it with your own words:</div>`
+           +extra.map(_ptFragBox).join(""))) return;
+  }
   if(blk && Array.isArray(blk.tpls) && blk.tpls.length){
     const only=(blk.tpls.length===1&&blk.tpls[0]===name);
     if(put((only?"":`<div class="desc" style="margin-top:6px">This piece is built from your story. Its fixed sentences are these — each is callable by name, so you can move one, drop one, or replace it with your own words in the template:</div>`)

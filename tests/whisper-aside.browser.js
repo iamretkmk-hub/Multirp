@@ -1,0 +1,143 @@
+/* AN ASIDE, SAID OR DONE — and the leak it had.
+   /whisper was reaching every background engine verbatim: castConvoText had no whisper filter,
+   while recentSceneMsgsFor four hundred lines up has had the right rule the whole time. Three of
+   castConvoText's callers are narrator-beat writers (narrateCharMove / …Group take the last three
+   lines as the WHY of an exit or arrival) and a narrator beat is posted to the chat and read by the
+   whole room — so whispering to Burcu and having Burcu get up could publish the whisper.
+   Also: the whispered-to character used to answer with an ordinary PUBLIC message, which is the
+   exact leak an aside exists to prevent. Now the reply goes back the same way.
+   Run: node tests/whisper-aside.browser.js   (needs playwright; see tests/README.md) */
+const {chromium}=require('playwright');
+const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+(async()=>{
+  const b=await chromium.launch({executablePath:BIN});
+  const pg=await b.newPage({viewport:{width:412,height:915}});
+  const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
+  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
+  await pg.waitForTimeout(900);
+  let pass=0,fail=0;
+  const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,420));} };
+
+  await pg.evaluate(()=>{
+    const uni=state.universes[0];
+    [["w_bu","Burcu"],["w_oz","Ozlem"]].forEach(([id,n])=>{ if(!state.personas.some(p=>p.id===id))
+      state.personas.push({id,name:n,universeId:uni.id,instructions:"",personality:"p",backstory:"b",style:"s",goals:"",traits:"",look:{}}); });
+    const c=curChat(); c.presentIds=["w_bu","w_oz"]; state.user="Emre";
+    const H=["w_bu","w_oz"];
+    c.messages=[
+      {mid:"a1",role:"user",present:H,content:'"Herkes burada mı?"'},
+      {mid:"a2",role:"user",present:H,whisperTo:"w_bu",whisperToName:"Burcu",content:"Bu akşam bize gel."},
+      {mid:"a3",role:"user",present:H,whisperTo:"w_bu",whisperToName:"Burcu",content:"*Elini masanın altından tutuyorum.*"},
+      {mid:"a4",role:"assistant",speaker:"Burcu",speakerId:"w_bu",present:H,whisperTo:"__user__",whisperToName:"Emre",
+       content:"*Elini bırakmıyorum ama Özlem'e bakıyorum.*"}
+    ];
+  });
+
+  console.log("\n[the leak that was live: engines read the transcript]");
+  ok("the room's view of the transcript carries no whispered content", await pg.evaluate(()=>{
+      const t=castConvoText(curChat(),8,"__room__");
+      return (t.indexOf("Bu akşam bize gel")===-1 && t.indexOf("Elini masanın altından")===-1
+              && t.indexOf("Elini bırakmıyorum")===-1)?true:t; }));
+  ok("but it still says something happened, so the room can be suspicious", await pg.evaluate(()=>{
+      const t=castConvoText(curChat(),8,"__room__");
+      return /could not hear|could not make out/.test(t)?true:t; }));
+  ok("the player, who is party to all of them, still sees them", await pg.evaluate(()=>{
+      const t=castConvoText(curChat(),8);
+      return (t.indexOf("Bu akşam bize gel")>-1 && t.indexOf("Elini bırakmıyorum")>-1)?true:t; }));
+  ok("the target sees their own, not the other character's", await pg.evaluate(()=>{
+      const t=castConvoText(curChat(),8,"w_bu");
+      return (t.indexOf("Bu akşam bize gel")>-1)?true:t; }));
+  ok("a bystander character sees none of it", await pg.evaluate(()=>{
+      const t=castConvoText(curChat(),8,"w_oz");
+      return (t.indexOf("Bu akşam bize gel")===-1 && t.indexOf("Elini masanın altından")===-1)?true:t; }));
+  ok("the narrator beats ask for the room's view, not the player's", await pg.evaluate(()=>
+      (typeof narrateCharMove==="function")?true:"missing"));
+
+  console.log("\n[said or done — the staging differs, the secret does not]");
+  ok("a body that is only *asterisks* is an action", await pg.evaluate(()=>
+      isConcealedAction("*Elini tutuyorum.*")===true && isConcealedAction("Bu akşam bize gel.")===false));
+  ok("a body with words in it counts as speech", await pg.evaluate(()=>
+      isConcealedAction('"Gel." *Elini tutuyorum.*')===false));
+  ok("the bystander note for an action does not claim he leaned in", await pg.evaluate(()=>{
+      const n=whisperBlindNote({content:"*Elini tutuyorum.*",whisperToName:"Burcu"});
+      return (/make out/.test(n) && !/leaned close/.test(n))?true:n; }));
+  ok("and for speech it says he said something", await pg.evaluate(()=>{
+      const n=whisperBlindNote({content:"Bu akşam bize gel.",whisperToName:"Burcu"});
+      return /leaned close/.test(n)?true:n; }));
+
+  console.log("\n[the payload each character is built with]");
+  const hist=who=>pg.evaluate(id=>JSON.stringify(castHistory(curChat(),state.personas.find(p=>p.id===id))),who);
+  ok("Burcu gets both asides in full", await (async()=>{
+      const h=await hist("w_bu");
+      return (h.indexOf("Bu akşam bize gel")>-1 && h.indexOf("Elini masan")>-1)?true:h.slice(0,300); })());
+  ok("and the frame travels with them on every later turn", await (async()=>{
+      const h=await hist("w_bu");
+      return /only you can tell|no one else can hear/.test(h)?true:h.slice(0,300); })());
+  ok("Ozlem gets neither, in either direction", await (async()=>{
+      const h=await hist("w_oz");
+      return (h.indexOf("Bu akşam bize gel")===-1 && h.indexOf("Elini masan")===-1
+              && h.indexOf("Elini bırakmıyorum")===-1)?true:h.slice(0,300); })());
+  ok("Ozlem is told something happened", await (async()=>{
+      const h=await hist("w_oz");
+      return /could not hear|could not make out/.test(h)?true:h.slice(0,300); })());
+  ok("an aside is never the line a bystander is answering", await pg.evaluate(()=>{
+      const oz=state.personas.find(p=>p.id==="w_oz");
+      const l=lastDialogueLine(curChat(),oz);
+      return (!l || (l.text.indexOf("Bu akşam")===-1 && l.text.indexOf("Elini")===-1))?true:JSON.stringify(l); }));
+  ok("nor does it reach the per-character scene feed", await pg.evaluate(()=>{
+      const oz=state.personas.find(p=>p.id==="w_oz");
+      const j=JSON.stringify(recentSceneMsgsFor(curChat(),oz,8));
+      return (j.indexOf("Bu akşam")===-1 && j.indexOf("Elini")===-1)?true:j.slice(0,260); }));
+  ok("the answering character is told their reply is private too", await pg.evaluate(()=>{
+      const g=blkTpl("whisper_back_guidance");
+      return (/only \{\{user\}\} will read it/.test(g) && /do not say it out loud/.test(g))?true:g.slice(0,200); }));
+
+  console.log("\n[the chat shows which kind it was]");
+  ok("isConcealedAction drives the pill wording", await pg.evaluate(()=>
+      isConcealedAction("*x*")===true && isConcealedAction("")===false));
+  ok("all four aside wordings are editable fragments", await pg.evaluate(()=>{
+      const want=["whisper_to_say","whisper_to_act","whisper_blind_say","whisper_blind_act","whisper_back_guidance"];
+      const listed=REPLY_EXTRA_TPLS.whisper||[];
+      const miss=want.filter(k=>!(typeof BLOCK_TPL_DEFAULTS[k]==="string")||listed.indexOf(k)<0);
+      return miss.length?miss.join(", "):true; }));
+  ok("editing one changes what the room is told", await pg.evaluate(()=>{
+      state.blockTpls=state.blockTpls||{};
+      state.blockTpls.whisper_blind_act="EDITED {{user}}/{{target}}";
+      const n=whisperBlindNote({content:"*x*",whisperToName:"Burcu"});
+      delete state.blockTpls.whisper_blind_act;
+      return n==="EDITED Emre/Burcu"?true:n; }));
+
+  console.log("\n[typing / opens the commands]");
+  ok("it lists them all", await pg.evaluate(()=>{
+      show('chat'); const el=document.getElementById('chatInput');
+      el.value="/"; cmdPaletteSync();
+      return document.querySelectorAll('#cmdPalette .cmdRow').length===CHAT_COMMANDS.length?true:"count off"; }));
+  ok("and narrows as you type", await pg.evaluate(()=>{
+      const el=document.getElementById('chatInput'); el.value="/wh"; cmdPaletteSync();
+      const two=[...document.querySelectorAll('#cmdPalette .cmdRow')].map(x=>x.dataset.cmd);
+      el.value="/whi"; cmdPaletteSync();
+      const one=[...document.querySelectorAll('#cmdPalette .cmdRow')].map(x=>x.dataset.cmd);
+      // "who" begins with "wh" too, so two is right there and one is right at "whi"
+      return (two.join()==="whisper,who" && one.join()==="whisper")?true:JSON.stringify({two,one}); }));
+  ok("picking one fills the box ready for its argument", await pg.evaluate(()=>{
+      cmdPalettePick("whisper");
+      return document.getElementById('chatInput').value==="/whisper "?true:document.getElementById('chatInput').value; }));
+  ok("it closes once you are past the command word", await pg.evaluate(()=>{
+      const el=document.getElementById('chatInput'); el.value="/go Sahil"; cmdPaletteSync();
+      return document.getElementById('cmdPalette').classList.contains('hide')?true:"still open"; }));
+  ok("every command it offers is one the dispatcher answers", await pg.evaluate(()=>{
+      const src=String(handleOOC)+String(handsFreeCommand);
+      const bad=CHAT_COMMANDS.filter(c=>src.indexOf('"'+c.cmd+'"')<0 && c.cmd!=="whisper" && c.cmd!=="go" && c.cmd!=="messages");
+      return bad.length?bad.map(c=>c.cmd).join(", "):true; }));
+  ok("it sits above the composer and fits the phone", await pg.evaluate(()=>{
+      const el=document.getElementById('chatInput'); el.value="/"; cmdPaletteSync();
+      const h=document.getElementById('cmdPalette').getBoundingClientRect();
+      const bar=document.querySelector('.inputBar').getBoundingClientRect();
+      return (h.bottom<=bar.top+2 && h.left>=0 && h.right<=412 && h.height>0)?true:JSON.stringify(h); }));
+
+  console.log("\n[nothing else moved]");
+  ok("no page errors", errs.length===0?true:errs.join(" | "));
+  console.log("\n"+pass+" passed, "+fail+" failed");
+  await b.close(); process.exit(fail?1:0);
+})();

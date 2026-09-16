@@ -127,6 +127,7 @@ and the whole thing is truncated to the image model's prompt limit — with the 
 | `qwen-image/edit-plus` | 800 chars | ~500 — tight; the style tail can get cut |
 | `wan-2.6/image-edit` | 1200 chars | comfortable |
 | `wan-2.7/image-edit` | 5000 chars | no issue |
+| `seedream-v4.5/edit` | 3600 chars | no issue |
 | `seedream-v5.0-pro/edit` | 3600 chars | no issue |
 
 The 70–110 word budget in the template is set for the tight case. On a roomier model it can go up.

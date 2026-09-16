@@ -249,7 +249,7 @@ on screen and editable: **Re-speak** re-runs TTS only, no LLM call.
   images (`routeSceneForBeat`).
 ## Edit models: per-field opt-in, not a shared body
 
-`ATLAS_EDIT_MODELS` declares only what differs between the four, and the request builder adds a
+`ATLAS_EDIT_MODELS` declares only what differs between the five, and the request builder adds a
 field **only when that model's spec names it** — pointing the id at a sibling must never ship a
 field it would reject with a 400.
 
@@ -259,10 +259,16 @@ field it would reject with a 400.
 | `alibaba/wan-2.6/image-edit` | 4 | 1200 | as above, fixed `sizes` enum |
 | `alibaba/wan-2.7/image-edit` | 9 | 5000 | `n` not `num_images`; boolean `thinking_mode`; `sizeTier` — frame follows the first reference |
 | `bytedance/seedream-v5.0-pro/edit` | **10** | 3600 | **no count field at all**, no `prompt_extend`, no `negative_prompt`, no `seed`; `thinking` is the **string** `"enabled"/"disabled"`, not wan 2.7's boolean; plus `prompt_optimization_mode`, `output_format`, `background` |
+| `bytedance/seedream-v4.5/edit` | **10** | 3600 | same four silences as 5.0 Pro (no count, no `prompt_extend`, no `negative_prompt`, no `seed`) and **none of its four extras** — no `thinking`, no `prompt_optimization_mode`, no `output_format`, no `background`. Its own field is `enable_base64_output`, whose default `false` is the URL result the app wants, so it is never sent. 16-preset `sizes` enum in a 2K and a 4K tier, nothing below 2048 wide |
 
-Seedream's four extra fields are surfaced in Settings and shown **only** when the entered model id
-declares them (`syncAtlasImgOpts` reads the same `opts` list the builder does, so the panel and the
-request cannot disagree). `background: transparent` is silently downgraded to `opaque` unless the
+The model is **chosen from a dropdown** (`ATLAS_IMG_MODELS` → `setAtlasImgPreset`), one entry per
+setup, with a deliberately blank last entry that reveals a free-text box for any AtlasCloud id at
+all — including one this build has never heard of, which is sent as plain text-to-image unless
+`ATLAS_EDIT_MODELS` knows it. `atlasImgSetupNote` prints what the chosen id will actually do
+(reference slots, prompt cap, negative prompt, how the frame is resolved, seed) from the same spec
+the builder reads. 5.0 Pro's four extra fields are surfaced in Settings and shown **only** when the
+chosen or typed model id declares them (`syncAtlasImgOpts` reads the same `opts` list the builder
+does, so the panel and the request cannot disagree) — v4.5 declares none, so the panel stays down. `background: transparent` is silently downgraded to `opaque` unless the
 output is PNG *and* exactly one reference is sent — the API also requires that reference to carry an
 alpha channel, which is not knowable here, so the impossible combination is never sent rather than
 returning a 400 the user cannot read. `promptMax` is 3600 chars for the model's stated "under 600

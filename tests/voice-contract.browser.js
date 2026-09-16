@@ -116,6 +116,59 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       // the safety net the authored layouts must not have disturbed
       return ptDefaultTemplate("solo").indexOf("{{call//dialogue_history}}")>-1; }));
 
+  console.log("\n[the check runs on what is SENT, not only on what shipped]");
+  ok("the real slip from a live payload is caught", await pg.evaluate(()=>{
+      // bio_wardrobe_self, as it was actually typed: a half-finished "you" -> "I" rewrite.
+      const p=voiceScan("bio_wardrobe_self","## MY WARDROBE\n-What I usually wear (I dress yourself plausibly from this, fitting the scene and the time of day):");
+      const e=p.filter(x=>x.level==="error");
+      return (e.length&&e[0].rule==="mixed person")?true:JSON.stringify(p); }));
+  ok("and the reverse conversion too", await pg.evaluate(()=>
+      voiceScan("x","You should picture myself doing it").some(x=>x.rule==="mixed person")?true:"missed"));
+  ok("a guessed pronoun is an error", await pg.evaluate(()=>
+      voiceScan("x","react to their not being here; if he was only speaking ABOUT them")
+        .some(x=>x.level==="error"&&x.rule==="assumed gender")?true:"missed"));
+  ok("but a quoted example keeps its pronouns", await pg.evaluate(()=>
+      voiceScan("x",'no narration, no "he says", nothing like it').length===0?true:"false positive"));
+  ok("and so does one shown in *asterisks*", await pg.evaluate(()=>
+      voiceScan("x","never *she turns the glass*").length===0?true:"false positive"));
+  ok("a _other fragment may describe somebody else", await pg.evaluate(()=>
+      voiceScan("bio_behave_other","How they act — the thing he does").every(x=>x.rule!=="assumed gender")?true:"flagged"));
+  ok("first person in an instruction is a NOTE, not an error", await pg.evaluate(()=>{
+      const p=voiceScan("rel_header","# MY PEOPLE\nThese are my established ties.");
+      return (p.length===1&&p[0].level==="note")?true:JSON.stringify(p); }));
+  ok("a fragment allowed to quote a voice is left alone", await pg.evaluate(()=>
+      voiceScan("head_format","write it as *I turn the glass*").length===0?true:"flagged"));
+
+  console.log("\n[the editor's \"check my wording\" reads the typed copies]");
+  ok("it finds a rewritten fragment the shipped one does not have", await pg.evaluate(()=>{
+      state.blockTpls=state.blockTpls||{};
+      const was=state.blockTpls.bio_wardrobe_self;
+      state.blockTpls.bio_wardrobe_self="What I usually wear (I dress yourself plausibly from this):";
+      const rows=voiceScanOverrides();
+      if(was===undefined)delete state.blockTpls.bio_wardrobe_self; else state.blockTpls.bio_wardrobe_self=was;
+      const r=rows.filter(x=>x.key==="bio_wardrobe_self")[0];
+      return (r&&r.errors>0)?true:JSON.stringify(rows.map(x=>x.key)); }));
+  ok("a clean rewrite is not reported", await pg.evaluate(()=>{
+      state.blockTpls=state.blockTpls||{};
+      const was=state.blockTpls.trackers_header;
+      state.blockTpls.trackers_header="# WHAT IS TRUE OF YOU RIGHT NOW\nAct from these; never read one out.";
+      const hit=voiceScanOverrides().some(x=>x.key==="trackers_header");
+      if(was===undefined)delete state.blockTpls.trackers_header; else state.blockTpls.trackers_header=was;
+      return hit?"reported a clean one":true; }));
+  ok("errors sort above notes", await pg.evaluate(()=>{
+      state.blockTpls=state.blockTpls||{};
+      const keep=Object.assign({},state.blockTpls);
+      state.blockTpls.rel_header="# MY PEOPLE";                       // note only
+      state.blockTpls.trackers_header="I set yourself straight";      // error
+      const rows=voiceScanOverrides().filter(r=>r.key==="rel_header"||r.key==="trackers_header");
+      state.blockTpls=keep;
+      return (rows.length===2&&rows[0].key==="trackers_header")?true:JSON.stringify(rows.map(r=>r.key)); }));
+  ok("the panel renders without a host and does not throw", await pg.evaluate(()=>{
+      try{ voiceCheckUI(); return true; }catch(e){ return "threw: "+e.message; } }));
+  ok("the shipped wording still passes the same checker with zero errors", await pg.evaluate(()=>{
+      const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>voiceScan(k,BLOCK_TPL_DEFAULTS[k]).some(x=>x.level==="error"));
+      return bad.length?bad.join(", "):true; }));
+
   console.log("\n[nothing else moved]");
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

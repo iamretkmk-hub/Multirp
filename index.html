@@ -1054,7 +1054,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v46.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v46.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -21195,6 +21195,63 @@ X_PROMPT_CARDS.forEach(c=>ENGINE_PAYLOAD_DEFS.push({key:c.key,label:c.label,desc
 
    VOICE_FIRST_PERSON_OK lists the fragments allowed to contain "I/me/my" anyway: the ones whose
    job is to QUOTE the character's voice. tests/voice-contract.browser.js enforces the rest. */
+
+/* ===== v45.2 — THE CONTRACT, CHECKED AGAINST WHAT IS ACTUALLY SENT ==========
+   Every fragment exists twice: the wording that ships in BLOCK_TPL_DEFAULTS, and the wording the
+   user typed over it in Settings › Payloads. The user's copy WINS — it is what blkTpl() returns
+   and what the model receives. v45.1 shipped a contract test that read only the shipped copies,
+   which is the half that was mostly fine; the mistakes were all in the typed ones ("I dress
+   yourself", left sitting in bio_wardrobe_self while the shipped default underneath it was
+   correct). So the check runs on TEXT, and both the test and the editor button hand it the text
+   that is really going out.
+
+   Two tiers, because they are not the same kind of problem:
+     · error — the sentence itself is broken or asserts something the app does not know. A
+       first-person subject with a second-person reflexive ("I dress yourself") is not a style
+       choice, it is a slip. A gendered pronoun is the app guessing at someone's gender.
+     · note — the wording is consistent but departs from the contract's register, e.g. an
+       instruction written in the first person. Deliberate ones are common and fine; the note is
+       there so a drift you did NOT intend is visible.
+   Worked examples are exempt: what a fragment QUOTES — inside "double quotes", *asterisks* or
+   _underscores_ — is the voice of the output being demonstrated, not the fragment speaking. */
+const VOICE_1P=/\b(I|I'm|I've|I'll|me|my|mine|myself)\b/i;
+const VOICE_GENDERED=/\b(he|him|his|she|her|hers|himself|herself)\b/i;
+/* A first-person subject with a second-person reflexive, or the reverse — one clause holding two
+   people. This is the shape of every broken you→I conversion. */
+const VOICE_MIXED=/\b(I|we)\b[^.!?\n]{0,40}\byoursel(?:f|ves)\b|\byou(?:r)?\b[^.!?\n]{0,40}\b(?:myself|ourselves)\b/i;
+function _voiceBare(t){   // drop the worked examples before looking for the fragment's own voice
+  return String(t||"").replace(/"[^"\n]*"/g," ").replace(/\*[^*\n]*\*/g," ").replace(/_[^_\n]*_/g," ");
+}
+/* Check ONE piece of wording. `key` decides which exemptions apply; `text` is what will be sent. */
+function voiceScan(key,text){
+  const out=[], t=String(text==null?"":text), bare=_voiceBare(t);
+  if(!t.trim()) return out;
+  const mixed=t.match(VOICE_MIXED);
+  if(mixed) out.push({level:"error",rule:"mixed person",hit:mixed[0].trim(),
+    msg:'One sentence speaks as two people — a first-person subject with a second-person reflexive (the shape of a half-finished "you" → "I" rewrite).'});
+  // _other fragments describe somebody else and are allowed their pronouns; so is a quoted example.
+  if(!/_other$/.test(key) && VOICE_GENDERED.test(bare)) out.push({level:"error",rule:"assumed gender",
+    hit:(bare.match(VOICE_GENDERED)||[""])[0],
+    msg:"The app does not record anyone's gender, and the player names themselves. Use their name, or 'they'."});
+  if(!VOICE_FIRST_PERSON_OK.has(key) && VOICE_1P.test(t)) out.push({level:"note",rule:"first person",
+    hit:(t.match(VOICE_1P)||[""])[0],
+    msg:"The contract puts instruction in the second person, so it stays audibly separate from the character's own voice. Fine if you meant it."});
+  return out;
+}
+/* Every fragment the user has rewritten, with whatever their version breaks. Errors first. */
+function voiceScanOverrides(){
+  const ov=(state&&state.blockTpls)||{};
+  const rows=[];
+  Object.keys(ov).forEach(k=>{
+    if(!(k in BLOCK_TPL_DEFAULTS)) return;
+    const problems=voiceScan(k,ov[k]);
+    if(problems.length) rows.push({key:k,text:String(ov[k]||""),problems:problems,
+      errors:problems.filter(x=>x.level==="error").length});
+  });
+  rows.sort((a,b)=>(b.errors-a.errors)||a.key.localeCompare(b.key));
+  return rows;
+}
+
 const VOICE_FIRST_PERSON_OK=new Set([
   "format_header","narr_shape","heat_format","text_format",   // carry worked examples in the output's voice
   "voice_delivery","heat_delivery",                            // quote spoken lines verbatim
@@ -37044,6 +37101,56 @@ ${esc(blkTpl(k))}</textarea>
     <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button>
   </div>`;
 }
+
+/* ===== v45.2 — "CHECK MY WORDING" ===========================================
+   Reads the fragments the user has rewritten (NOT the shipped ones — those have their own test)
+   and reports where their wording speaks as the wrong person. Errors are real slips: a sentence
+   holding two people, or a pronoun the app has no business assuming. Notes are register drift and
+   are often deliberate, so they are reported quietly and separately.
+   Each row opens the fragment it is about, so a finding is one click from the box that fixes it.
+   What it cannot see: grammar. "HOW THEY LOOK LIKE" is wrong English, not a wrong person, and no
+   person check will ever flag it — Reset is the cure for that one. */
+function voiceCheckUI(){
+  const host=document.getElementById('voiceCheckHost'); if(!host)return;
+  const rows=voiceScanOverrides();
+  const nOv=Object.keys(BLOCK_TPL_DEFAULTS).filter(_tplCustomized).length;
+  if(!rows.length){
+    host.innerHTML=`<div class="desc" style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px">`
+      +`Read ${nOv} fragment${nOv===1?"":"s"} you have rewritten. Nothing speaks as the wrong person.`
+      +`<br><span style="opacity:.75">This checks PERSON only — "I" where "you" belongs, a sentence holding two people, a guessed he/she. It cannot see grammar.</span></div>`;
+    return;
+  }
+  const errs=rows.reduce((a,r)=>a+r.errors,0);
+  const notes=rows.reduce((a,r)=>a+(r.problems.length-r.errors),0);
+  const pill=(lvl)=>lvl==="error"
+    ? `<span style="color:var(--bad,#e5484d);font-weight:600">●</span>`
+    : `<span style="opacity:.55;font-weight:600">●</span>`;
+  host.innerHTML=`<div style="margin:0 0 8px;border:1px solid var(--border);border-radius:10px;overflow:hidden">`
+    +`<div class="desc" style="padding:8px 10px;border-bottom:1px solid var(--border)">`
+    +`Read ${nOv} fragment${nOv===1?"":"s"} you have rewritten. `
+    +`<b>${errs}</b> thing${errs===1?"":"s"} to fix`+(notes?`, ${notes} worth a look`:``)+`.`
+    +`<br><span style="opacity:.75">A <span style="color:var(--bad,#e5484d)">red</span> dot is a slip — the sentence speaks as two people, or guesses somebody's gender. A grey dot is wording that differs from the house style and may well be deliberate. This checks PERSON only; it cannot see grammar.</span></div>`
+    +rows.map(r=>`<div style="padding:8px 10px;border-bottom:1px solid var(--border)">`
+        +`<div style="font-size:11px"><code style="color:var(--accent)">${esc(r.key)}</code> `
+        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:6px" onclick="voiceCheckOpen('${esc(r.key)}')">open</button>`
+        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:4px" onclick="voiceCheckReset('${esc(r.key)}')">reset it</button></div>`
+        +r.problems.map(x=>`<div class="desc" style="margin-top:4px">${pill(x.level)} <b>${esc(x.rule)}</b>`
+            +(x.hit?` — <code>${esc(x.hit)}</code>`:``)+`<br><span style="opacity:.8">${esc(x.msg)}</span></div>`).join("")
+      +`</div>`).join("")
+    +`</div>`;
+}
+/* Open the fragment a finding is about and put it on screen. */
+function voiceCheckOpen(k){
+  const ta=document.querySelector(`textarea[data-btpl="${CSS.escape(k)}"]`);
+  if(!ta){ toast("That fragment's box is not open — expand its block first"); return; }
+  let d=ta.parentElement; while(d&&d.tagName!=="DETAILS") d=d.parentElement;
+  while(d){ if(d.tagName==="DETAILS")d.open=true; d=d.parentElement; }
+  try{ ta.scrollIntoView({block:"center",behavior:"smooth"}); }catch(e){ try{ ta.scrollIntoView(); }catch(e2){} }
+  ta.focus();
+}
+/* Put one back to the shipped wording and re-run, so the row disappears as it is fixed. */
+function voiceCheckReset(k){ plqTplReset(k); voiceCheckUI(); }
+
 /* Open a block's own prompt box in Reply payloads and put it on screen. Returns false when the row
    is not there to open, so the caller can fall through to its own message. */
 function ptJumpToPrompt(name){
@@ -37247,7 +37354,8 @@ function renderPayloadTemplates(){
           if(n) btns.push(`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="plqTplResetMany()">Reset ${n} fragment${n===1?"":"s"} you have rewritten</button>`);
           if(snap){ const cnt=Object.keys(snap.tpls).length;
             btns.push(`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="plqTplUndoReset()">Undo the last reset — put ${cnt} fragment${cnt===1?"":"s"} back</button>`); }
-          return btns.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">${btns.join("")}</div>`:"";})()}
+          if(n) btns.push(`<button class="btn sec small" style="width:auto;padding:6px 10px" title="Read the wording you have typed and report where it speaks as the wrong person" onclick="voiceCheckUI()">Check my wording</button>`);
+          return btns.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">${btns.join("")}</div><div id="voiceCheckHost"></div>`:`<div id="voiceCheckHost"></div>`;})()}
        <div style="max-height:min(70vh,560px);overflow:auto;border:1px solid var(--border);border-radius:10px">
        ${cat.map(c=>_ptPieceRow(c.name,c.label,c.desc,"reply")).join("")}
        </div>

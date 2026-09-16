@@ -1054,7 +1054,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v44.4</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v44.5</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -19074,7 +19074,32 @@ function lastDialogueLine(chat,selfP,textMode){
          a wordless turn is skipped here and this loop reaches further back for a line that was
          actually said. */
       if(selfP){ text=crossHeard(text)||""; if(!text.trim())continue; }
-      return {name:sp,text:text.trim()};
+      /* v44.5 — and WHO it was said to. A line is not just words in the room: "Merhaba Emre,
+         Nil'le mi karsilastiniz?" is a question put to one person, and every other listener needs
+         to know it was not put to them. Generated replies carry that as toId/toName (see
+         playCharacterTurn); lines from older builds have neither and read as addressed to nobody,
+         which is the behaviour this file had before. */
+      return {name:sp,text:text.trim(),toId:m.toId||null,toName:m.toName||null};
+    }
+  }catch(e){}
+  return null;
+}
+/* v44.5 — THE SAME WALK, RESTRICTED TO THE PLAYER'S OWN LINES.
+   When the turn router queues two responders against ONE player line, both of them are answering
+   THAT line. Responder #2 is not replying to responder #1 — who was, at that moment, replying to
+   the player standing right next to them. Left to lastDialogueLine(), responder #2 was handed
+   responder #1's reply as "the line you are responding to", and if that reply was a question put
+   to the player, responder #2 answered it IN THE PLAYER'S PLACE. Pinning the chain to the player's
+   line is what keeps a group answer a group answer. */
+function lastPlayerLine(chat,selfP,textMode){
+  try{
+    const msgs=(chat&&chat.messages)||[];
+    for(let i=msgs.length-1;i>=0;i--){
+      const m=msgs[i];
+      if(!m||m.role!=='user'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
+      if(!m.content||!String(m.content).trim())continue;
+      if(!_lineReachable(m,selfP,textMode))continue;
+      return {name:state.user,text:String(m.content).trim(),toId:null,toName:null};
     }
   }catch(e){}
   return null;
@@ -19789,7 +19814,7 @@ const PT_INLINE_HEAD={
 const RT_ORDER=["target_header","cont_target_header","heat_target_header",
   "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_look"];
 const RG_ORDER=["heat_guidance","guidance_open","guidance_target","guidance_close",
-  "guidance_continue","guidance_reply","guidance_absence"];
+  "guidance_continue","guidance_reply","guidance_absence","guidance_not_yours"];
 const DRIVE_FRAGS=["drive_toward","drive_against"];
 /* v38.1 — step 3: the blocks whose prose is WOVEN through their data rather than sitting on top of
    it. Same treatment, one fragment per named part, the fixed prose printed by the template. */
@@ -19936,7 +19961,8 @@ function ptPieceTemplate(id,kind){
     return "{{call//heat_guidance}}\n"
       +"{{call//guidance_open}}{{call//guidance_target}}{{call//guidance_close}}\n"
       +"{{call//guidance_continue}}{{call//guidance_reply}}\n"
-      +"{{gap}}\n{{call//guidance_absence}}";
+      +"{{gap}}\n{{call//guidance_absence}}"
+      +"\n{{gap}}\n{{call//guidance_not_yours}}";
   /* DRIVES & BRAKES. The heading and the closing note are fixed prose, so they are written out
      here; the two passages are the live part. All one paragraph, so a turn with neither passage
      drops the heading and the note with them. */
@@ -20494,7 +20520,7 @@ function epSend(key,systemText,parts,vars){
     quests:["quest_header","quest_intro","quest_me_note"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
     drives:["drive_header","drive_toward","drive_against","drive_ego"],
-    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","guidance_absence","heat_guidance"],
+    response_guidance:["guidance_open","guidance_target","guidance_close","guidance_reply","guidance_continue","guidance_absence","guidance_not_yours","heat_guidance"],
     feelings:["feel_header","feel_lasting","feel_lasting_alt"],
     feelings_now:["feel_now_header","feel_momentary","feel_momentary_impact","feel_tension_desire","feel_tension_anger","feel_tension_fear"],
     // v41.1 — one box; the rails are [[sections]] inside it. The two _short fragments are not
@@ -21076,6 +21102,11 @@ Keep proper nouns exactly as they appear in the conversation — names of people
   /* v38.1 — the absent-addressee guard. Fires only when {{user}}'s last line NAMES somebody who
      is not in the room: {{names}} is that person (or people), {{self}} the character replying. */
   guidance_absence:`ABSENCE NOTE: {{user}}'s last line mentions {{names}}, who is NOT in the room. {{names}} cannot see, hear, or answer — do NOT speak, act, narrate, or reply AS {{names}}, and never put words in their mouth. Respond ONLY as {{self}}. If {{user}} was calling for {{names}} or expecting them to answer, react to their not being here; if he was only speaking ABOUT them, just take it as said and reply to the point he was making.`,
+  /* v44.5 — hearing something is not being asked it. Sits last in RESPONSE GUIDANCE, after the
+     absence note, because by then the payload has already told this character three times that the
+     highlighted line is theirs to answer — and the last instruction before generation is the one
+     that wins. */
+  guidance_not_yours:`ADDRESSEE NOTE: {{speaker}} said that to {{addressee}}, not to you. You heard it — everyone here did — but you were not the one asked. React as {{self}} and only as {{self}}: a look, an opinion of your own, a word in passing, or nothing at all. Do NOT answer it in {{addressee}}'s place, do NOT speak, act or narrate AS {{addressee}}, and do not supply the answer they are waiting for — if it was a question to {{addressee}}, it stays theirs to answer.`,
   guidance_continue:`Nothing new has been said to you: the highlighted line above is your OWN, and it is already answered. Do not reply to {{target}} again and do not restate what you just said — carry straight on from your own last line. Something has to MOVE this turn: do the thing you stopped short of, notice something, change the distance between you, or let the silence cost somebody something.`,
   guidance_reply:`React to the highlighted line above: that is what {{target}} just said or did. Answer it from your own side — never by repeating it back first. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
   // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
@@ -21794,6 +21825,10 @@ function buildTailBlocks(opts){
      line spoken across a room are indistinguishable and each ends up answering the other. */
   const _tm=!!(opts&&opts.textMode);
   const B={};
+  /* v44.5 — the line section (1) ends up highlighting, kept for section (5): the addressee guard
+     has to talk about the SAME line the payload quotes, or it is just another voice in the
+     argument. */
+  let _answering=null;
 
   // (1) THE LINE YOU ARE RESPONDING TO. The transcript ends with whatever happened last — which is
   //     often a presence note, a travel beat or GM narration, not a line anyone said to you. Pull
@@ -21875,13 +21910,21 @@ function buildTailBlocks(opts){
     // highlight. Otherwise it's the freshest line actually aimed at them.
     const hs=selfContinueLine(chat,selfP,_tm);
     const _mkLL=(line,hk,fk)=>{
+      _answering=line;
       const _l={}; _l[hk]=blkTpl(hk); _l.last_line_body=`${line.name}: ${line.text}`; _l[fk]=blkTpl(fk);
       B._ll=_l;
       B.last_line=`${_l[hk]}\n${_l.last_line_body}\n\n${_l[fk]}`;
     };
     if(hs) _mkLL(hs,"heat_self_header","heat_self_footer");
-    else { const ll=lastDialogueLine(chat,selfP,_tm);
-           if(ll)_mkLL(ll,"last_line_header","last_line_footer"); }
+    else {
+      /* v44.5 — when the caller pinned who this turn answers, highlight THAT person's line, not
+         whatever was said most recently. The two disagreeing is what the pin exists to stop: the
+         header said "aimed at X" while the line quoted here was Y's. */
+      const _pin=opts&&opts.answerTo;
+      const ll=(_pin==="__user__"?(lastPlayerLine(chat,selfP,_tm)||lastDialogueLine(chat,selfP,_tm))
+                                 :lastDialogueLine(chat,selfP,_tm));
+      if(ll)_mkLL(ll,"last_line_header","last_line_footer");
+    }
   }
 
   // (2) HOW YOU SPEAK — the character's voice, delivered at the point the line gets written rather
@@ -22183,6 +22226,23 @@ function buildTailBlocks(opts){
           _rg.guidance_absence=fillTpl(blkTpl("guidance_absence"),{user:state.user,names:nms,self:selfName});
           g+=`\n\n${_rg.guidance_absence}`;
         }
+      }
+    }
+  }catch(e){}
+  /* v44.5 — PRESENT-ADDRESSEE GUARD, the twin of the absence note above. That one covers a name
+     spoken about someone who is not in the room; this one covers the far commoner case where the
+     addressee IS in the room and simply is not you. Burcu turns to the player and asks him a
+     question; Özlem hears it, is handed it as "the line you are responding to", and answers it —
+     as him. Everything else in the payload is pushing her to answer: the header names a target,
+     the guidance says react to the highlighted line. So the correction has to arrive in the same
+     place, last, and name the person whose answer it is. */
+  try{
+    const _ll=_answering;
+    if(_ll && _ll.name!==selfName && _ll.toId && _ll.toId!==selfId){
+      const _to=(_ll.toId==="__user__")?(state.user||""):(_ll.toName||"");
+      if(_to && _to!==selfName){
+        _rg.guidance_not_yours=fillTpl(blkTpl("guidance_not_yours"),{speaker:_ll.name,addressee:_to,self:selfName});
+        g+=`\n\n${_rg.guidance_not_yours}`;
       }
     }
   }catch(e){}
@@ -24359,7 +24419,10 @@ async function sendMessage(){
     }
     // v38.6 — a spoken line never carries the transcript's "(text message)" tag; see stripChannelLabel.
     reply=stripChannelLabel(reply);
-    const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
+    const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
+      // v44.5 — a solo reply is always to {{user}}; recorded so that if someone walks in mid-scene,
+      // the line they find waiting is already marked as somebody else's to answer.
+      toId:"__user__",toName:state.user};
     stampStatus(chat,msg);chat.messages.push(msg);
     // BACKGROUND (does not wait on screen): persist, fire the image pipeline the instant text is
     // ready, run the voice check. The bubble itself is shown by the presentation queue.
@@ -25637,7 +25700,11 @@ async function runMultiCharTurn(chat,playerText,stimulus){
       if(!inSceneIds(chat).includes(r.id))continue;
       if(!_mcOpened){ _mcOpened=true; heatBeginTurn(chat); }   // v39.9 — the first responder is beat 1
       let ok=false;
-      try{ ok=await playCharacterTurn(chat,r,state.user); } finally{ heatEndTurn(chat); }
+      /* v44.5 — PINNED TO THE PLAYER. The router queued these responders against ONE player line,
+         so that is the line each of them answers. Unpinned, responder #2 was re-aimed at responder
+         #1 — the freshest line in the room by then — and when #1 had put a question to the player,
+         #2 answered it for him. `answerTo` keeps the whole group answering the person who spoke. */
+      try{ ok=await playCharacterTurn(chat,r,state.user,{answerTo:"__user__"}); } finally{ heatEndTurn(chat); }
       if(ok){lastSpeaker=r;turns++;spokenThisChain.add(r.id);}
       const tr=await runPresenceTracker(chat);
       if(tr.lastBeat){lastSpeaker=tr.lastBeat;turns+=(tr.entered.length+tr.exited.length);}
@@ -25906,8 +25973,12 @@ async function runHeatBursts(chat){
     }
   }finally{ _heatBusy=false; _heatNoImg=false; if(chat)delete chat._heatBeat; }
 }
-// One character produces one message, shown with its own name/avatar.
-async function playCharacterTurn(chat,p,addressed){
+/* One character produces one message, shown with its own name/avatar.
+   `opts.answerTo` PINS who this turn is answering, overriding the "freshest line in the room"
+   guess below. The turn router uses it: every responder it queued against one player line is
+   answering the PLAYER, no matter who else has spoken since. Pass "__user__" for the player, or a
+   character id. Omitted, nothing changes — the target is derived as before. */
+async function playCharacterTurn(chat,p,addressed,opts){
   const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see _dirSeq)
   const _hseq=_heatSeq, _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
   const present=presentCast(chat);
@@ -25934,25 +26005,36 @@ async function playCharacterTurn(chat,p,addressed){
     // longer the last speaker, which left RESPONSE GUIDANCE naming a different person than the line the
     // model actually sees last (e.g. it said "responding to Emre" while the last line was Cansu's).
     let targetName=state.user, targetId="__user__";
-    {
-      const ll=lastDialogueLine(chat,p);   // the SAME line the tail highlights — never a different person
-      const ls=ll&&ll.name;
-      if(ls){
-        if(ls===state.user){ targetName=state.user; targetId="__user__"; }
-        else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=ls; targetId=null; } }
+    /* v44.5 — the pin, when a call site knows better than the transcript does. The transcript can
+       only report who spoke LAST; it cannot know that this character was queued to answer someone
+       else. When pinned, the tail highlights that same line (answerTo below), so the header, the
+       guidance and the quoted line all name one person — the contradiction that let a second
+       responder answer a question meant for the player. */
+    const _pin=(opts&&opts.answerTo)||null;
+    if(_pin==="__user__"){ targetName=state.user; targetId="__user__"; }
+    else {
+      const _pc=_pin?(present.find(c=>c.id===_pin)||others.find(c=>c.id===_pin)):null;
+      if(_pc){ targetName=_pc.name; targetId=_pc.id; }
+      else{
+        const ll=lastDialogueLine(chat,p);   // the SAME line the tail highlights — never a different person
+        const ls=ll&&ll.name;
+        if(ls){
+          if(ls===state.user){ targetName=state.user; targetId="__user__"; }
+          else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=ls; targetId=null; } }
+        }
+        if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
       }
-      if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
     }
     // v19 payload assembly: block content per character; block ORDER from the "multi" payload layout.
     const _kind=replyKind(chat,"multi");
     const _hb=buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId});
-    const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected });
+    const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected, answerTo:_pin });
     const _pl=buildPayload(_kind,_hb,_tb);
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
     let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName},
       ()=>Object.assign({},buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
-        buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected })));
+        buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected, answerTo:_pin })));
     if(!messages){
       messages=[];
       if(_pl.head)messages.push({role:"system",content:_pl.head});
@@ -26029,6 +26111,11 @@ async function playCharacterTurn(chat,p,addressed){
     // just switched off. This is the "heat keeps talking after I turn it off" fix.
     if(_wasHeat && (!state.heatOn || _hseq!==_heatSeq)) return false;
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
+    /* v44.5 — WHO THIS LINE WAS SAID TO, recorded on the line itself. Everyone in the room hears
+       it, but only one person was asked. Without this the next speaker sees "Merhaba Emre, Nil'le
+       mi karsilastiniz?" as simply the newest thing said and answers it — as Emre. Read back by
+       lastDialogueLine() and turned into the addressee guard in RESPONSE GUIDANCE. */
+    if(targetId){ msg.toId=targetId; msg.toName=targetName||(targetId==="__user__"?state.user:""); }
     if(chat._heatBeat)msg.heatBeat=true;   // v27.1 — so a burst can never chain off its own output
     stampStatus(chat,msg);chat.messages.push(msg);
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The

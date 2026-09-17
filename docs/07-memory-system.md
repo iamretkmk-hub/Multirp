@@ -22,10 +22,25 @@ runLocationGossipLeak (POI leak)   observations → GOSSIP rumors            Jac
    prevents re-covering messages already cut into memories (fixes near-duplicate layering).
 2. The **arc tracker** (`memEval` prompt, on the director model `mcModel`) judges the last ~6
    real lines: `{progress: ongoing|paused|finished, topic: same|different, summary}`.
+   **Its bias is to CLOSE (v52.1).** One arc becomes one memory, so a thread held open across many
+   beats is a few sentences covering all of them and the middle is gone — lost at write time, which
+   is the one loss nothing downstream can repair. Fragments, by contrast, are repaired:
+   `reconcilePeriodFor` rewrites a period's memories as the one thing a person would keep. So the
+   prompt closes at each resting point (a beat landing is enough; an intimate encounter is recorded
+   beat by beat, not as one thread) and reserves `paused` for a hold of a line or two. The earlier
+   defaults said the opposite; boot refreshes any stored copy of them
+   (`_refreshPipe("memEval", …, "CLOSE AT THE FIRST RESTING POINT")`).
 3. Commit paths → `commitMemoryArc(chat, start, end, dayStamp?)`:
    - `finished` → commit the arc;
    - `topic:different` → commit the old arc, open a new one at the last user line;
-   - safety valve at `MEM_ARC_CAP` (40 messages) for arcs that never close;
+   - closing skips nothing: a commit sets `memDoneIdx` to the arc's last message and the next arc
+     opens after it, so the spans tile the transcript with no gap and no overlap however short
+     the arcs are (`arc-tracker.browser.js` pins this);
+   - backstop at `MEM_ARC_CAP` (**12** messages, was 40) for a tracker that never closes — under
+     the current prompt an arc closes long before it, and since v52.1 a `paused` arc is no longer
+     exempt (that exemption was the one path an arc could grow without any limit). The valve also
+     used to reopen the next arc *on* the message it had just committed, so its spans overlapped by
+     one line each time it fired; it now clears the tracker the way the `finished` path does;
    - travel (characters left behind) and **End Day** → `flushMemoryArc` (stamps the
      *just-ended* day so day-filtered engines still see it).
 4. `commitMemoryArc` builds **one memory per participant**, each scoped to what that character

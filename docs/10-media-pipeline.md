@@ -112,11 +112,27 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
      even when the cast is "and you". Handing an edit model a man it must place is exactly how a
      first-person shot comes back as an ordinary two-shot of a couple. Untick POV and the same rule
      is the two-shot again, his pictures included.
-   The shipped `r_pov_talk` ("Daily / talking — your POV") is first in `DEFAULT_IMG_RULES`, so it is
-   also what renders with routing off. It arrives **additively** (`K.imgPovMigration`): unlike every
-   earlier rule-set migration, which replaces the whole set and so reaches only an unedited one, this
-   inserts one rule at the top of a customised set and touches nothing else — skipped when the set
-   already has any rule with `pov:true`, so nobody ends up with two.
+   **The two paths (v52.3)** are the first two entries of `DEFAULT_IMG_RULES`, each with its own
+   full template held as a constant so the rules, the migration and the rule editor's
+   Insert-template picker all read one copy:
+   · `r_pov_talk` "Standard / daily — your POV" → `IMG_STYLE_POV`. The daily path, POV all the way
+     down: the lens is his face, the emotional-register shot list is restricted to angles his own
+     head could be at, he takes no IMAGE slot (the phrase "the man in IMAGE 2" appears in it only
+     to forbid it), his hands may enter the low frame, and her gaze comes to the lens.
+   · `r_intimate_std` "Intimate — contact & sex (third person)" → `IMG_STYLE_INTIMATE`. The contact
+     path: the camera is back in the room, POV is banned outright ("a shot from inside one of their
+     heads cannot show two bodies in contact"), the player is IMAGE 2 and a body with weight and an
+     expression, the frame's job is to make the **join** readable (relative direction, weight and
+     pressure rather than a gap, asymmetry, then the join named once), every one of the four hands
+     is accounted for, nobody looks at the lens, and the over-the-clothes rule is kept — a hand on
+     a body is a hand on what that body is wearing unless the roleplay took the garment off.
+   Both arrive **additively** (`K.imgPovMigration`): unlike every earlier rule-set migration, which
+   replaces the whole set and so reaches only an unedited one, these insert rules into a customised
+   set and touch nothing else. v1 adds the POV type unless the set already has any rule with
+   `pov:true`; v2 adds the intimate type unless the set already has that id, and refreshes a v52.2
+   POV template to the full one **only on a byte-for-byte match with `IMG_STYLE_POV_V1`** — the
+   standard the v9 step already holds itself to, because a scene template is the part of this app
+   people most often rewrite and a matching heading is not evidence the words under it are ours.
 5b. **Reference roster (edit models only)** — `buildRefPack` gathers the pictures, and
    `editPrompt` prepends a roster tying each one to a person in the frame.
    **(!) The roster and the scene text must share a vocabulary.** `rewritePrompt` orders the

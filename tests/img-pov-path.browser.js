@@ -32,9 +32,56 @@ const {chromium}=require('playwright');
   ok("its template is written from his eyes and keeps him out of the frame",
      /point-of-view shot from the player's own eyes/.test(def.style)
      &&/NEVER a body in this frame/.test(def.style)
-     &&/viewer takes no IMAGE slot/.test(def.style), "");
+     &&/THE VIEWER TAKES NO IMAGE SLOT/.test(def.style), "");
   ok("and it tells the writer she looks into the lens",
-     /Her eyes meet the lens/.test(def.style)&&/look INTO the lens/.test(def.style), "");
+     /HERE IT COMES TO THE LENS/.test(def.style)&&/SHE MAY LOOK INTO THE LENS/.test(def.style), "");
+  ok("the POV template is POV all the way down — it never hands him a slot, only forbids one",
+     (def.style.match(/the man in IMAGE 2/g)||[]).length
+       ===(def.style.match(/Never write "the man in IMAGE 2"/g)||[]).length
+     &&/never a shot from anywhere his head is not/i.test(def.style)
+     &&/EXAMPLE POV FRAMES/.test(def.style), "slots: "+(def.style.match(/the man in IMAGE 2/g)||[]).join(" / "));
+  ok("it carries the full structure, not a sketch — shot, pose, face, hands, clothing, closer",
+     /## 1\. THE SHOT IS CHOSEN BY THE EMOTION/.test(def.style)
+     &&/## 3\. WHERE SHE IS, AND THE POSE/.test(def.style)
+     &&/## 5\. HER HANDS/.test(def.style)&&/## 6\. THE VIEWER'S OWN HANDS/.test(def.style)
+     &&/## 7\. CLOTHING STATE/.test(def.style)&&/## 8\. ONE CLOSING COMPOSITION CLAUSE/.test(def.style)
+     &&def.style.length>8000, "length "+def.style.length);
+
+  // ---- the second path
+  const inti=await pg.evaluate(()=>{
+    const d=DEFAULT_IMG_RULES.find(r=>r.id==="r_intimate_std");
+    return {found:!!d,pov:d&&d.pov,cast:d&&d.cast,when:d&&d.when,style:d&&d.promptStyle,
+            second:DEFAULT_IMG_RULES[1]&&DEFAULT_IMG_RULES[1].id,
+            shared:d&&DEFAULT_IMG_RULES.find(r=>r.id==="r_pov_talk").promptStyle!==d.promptStyle};
+  });
+  ok("an INTIMATE path ships, third person, right behind the POV one",
+     inti.found===true&&inti.pov===false&&inti.second==="r_intimate_std", JSON.stringify({f:inti.found,p:inti.pov,s:inti.second}));
+  ok("it is cast as the character and you, so both sets of pictures go up",
+     inti.cast==="player", inti.cast);
+  ok("its when-clause takes the whole contact side and hands talk back to POV",
+     /are IN CONTACT/.test(inti.when)&&/DON'T CHOOSE while nobody is touching anybody/.test(inti.when), inti.when.slice(0,140));
+  ok("its template bans the POV camera outright",
+     /NEVER a first-person point of view on this path/.test(inti.style)
+     &&/cannot show two bodies in contact/.test(inti.style), "");
+  ok("and puts the player back in the frame as a body with a slot",
+     /The player is IMAGE 2 and on this path he is a BODY IN THE FRAME/.test(inti.style)
+     &&/Never write the player as a faceless viewer here/.test(inti.style), "");
+  ok("the contact itself is made the subject, with the join named once",
+     /THE CONTACT IS THE SUBJECT/.test(inti.style)&&/THEN NAME THE JOIN ITSELF/.test(inti.style)
+     &&/WEIGHT AND PRESSURE/.test(inti.style), "");
+  ok("every hand is accounted for and nobody looks at the lens",
+     /EVERY HAND IS ACCOUNTED FOR/.test(inti.style)
+     &&/Neither of them looks at the camera or the viewer on this path/.test(inti.style), "");
+  ok("it keeps the over-the-clothes rule the standard prompt had",
+     /WHAT THE ROLEPLAY HAS NOT REMOVED IS STILL BEING WORN/.test(inti.style)
+     &&/he is gripping her through the denim/.test(inti.style), "");
+  ok("and it carries worked poses to read from",
+     /EXAMPLE COMPLEX POSES/.test(inti.style)&&/MISSIONARY/.test(inti.style)
+     &&/THE MOMENT AFTER/.test(inti.style)&&inti.style.length>8000, "length "+inti.style.length);
+  ok("the two paths are genuinely different documents", inti.shared===true, "");
+  ok("both are offered to a customised rule in the Insert-template picker",
+     await pg.evaluate(()=>{ const ids=ruleTplOptions('img').map(d=>d.id);
+       return ids.indexOf("r_pov_talk")>=0&&ids.indexOf("r_intimate_std")>=0; }));
 
   // ---- the path helper and the writer block
   const guide=await pg.evaluate(()=>({
@@ -103,21 +150,48 @@ const {chromium}=require('playwright');
   });
   await pg.reload(); await pg.waitForTimeout(2400);
   const after=await pg.evaluate(()=>state.imgRules.map(r=>({id:r.id,pov:!!r.pov,style:r.promptStyle})));
-  ok("a customised set gains the POV type at the top",
-     after.length===3&&after[0].id==="r_pov_talk"&&after[0].pov===true, JSON.stringify(after.map(r=>r.id)));
+  ok("a customised set gains BOTH paths, POV first and intimate behind it",
+     after.length===4&&after[0].id==="r_pov_talk"&&after[0].pov===true
+     &&after[1].id==="r_intimate_std"&&after[1].pov===false, JSON.stringify(after.map(r=>r.id)));
   ok("and nothing the user wrote is touched",
-     after[1].id==="my_a"&&after[1].style==="A"&&after[2].id==="my_b"&&after[2].style==="B", JSON.stringify(after));
+     after[2].id==="my_a"&&after[2].style==="A"&&after[3].id==="my_b"&&after[3].style==="B",
+     JSON.stringify(after.map(r=>({id:r.id,style:String(r.style).slice(0,4)}))));
   await pg.reload(); await pg.waitForTimeout(2400);
   const twice=await pg.evaluate(()=>state.imgRules.filter(r=>r.id==="r_pov_talk").length);
   ok("it never runs twice", twice===1, "found "+twice);
+  ok("nor does the intimate insert",
+     await pg.evaluate(()=>state.imgRules.filter(r=>r.id==="r_intimate_std").length)===1);
   const own=await pg.evaluate(async()=>{
     const mine=[{id:"my_pov",label:"My own POV",when:"w",cast:"player",pov:true,promptStyle:"P",enabled:true}];
     store.set(K.imgRules,mine); store.setRaw(K.imgPovMigration,null); return true;
   });
   await pg.reload(); await pg.waitForTimeout(2400);
-  ok("a set that already has a POV rule of its own is left as it is",
-     await pg.evaluate(()=>state.imgRules.length===1&&state.imgRules[0].id==="my_pov"),
+  ok("a POV rule the user built themselves is never replaced, and the intimate path lands after it",
+     await pg.evaluate(()=>{ const r=state.imgRules;
+       return r.length===2&&r[0].id==="my_pov"&&r[0].promptStyle==="P"&&r[1].id==="r_intimate_std"; }),
      await pg.evaluate(()=>state.imgRules.map(r=>r.id).join(",")));
+
+  // ---- v2 refreshes the short v1 template but never an edited one
+  const refreshed=async(style)=>{
+    await pg.evaluate(async(st)=>{
+      store.set(K.imgRules,[{id:"r_pov_talk",label:"old",when:"w",cast:"player",pov:true,
+                             promptStyle:st,enabled:true}]);
+      store.setRaw(K.imgPovMigration,"v1");
+    },style);
+    await pg.reload(); await pg.waitForTimeout(2400);
+    return pg.evaluate(()=>{ const r=state.imgRules.find(x=>x.id==="r_pov_talk");
+      return {style:r.promptStyle,label:r.label,n:state.imgRules.length}; });
+  };
+  const v1style=await pg.evaluate(()=>IMG_STYLE_POV_V1);
+  const r1=await refreshed(v1style);
+  ok("the untouched v1 POV template is replaced by the full one",
+     /THE LENS IS HIS FACE/.test(r1.style)&&r1.label==="Standard / daily — your POV", r1.label);
+  const r2=await refreshed(v1style+"\n\nAND ONE LINE I ADDED MYSELF.");
+  ok("one edited character anywhere in it and the whole template is left alone",
+     /AND ONE LINE I ADDED MYSELF/.test(r2.style)&&!/THE LENS IS HIS FACE/.test(r2.style), r2.style.slice(-60));
+  const r3=await refreshed(v1style.replace("THE SHOT IS FIRST PERSON","THE SHOT IS FIRST PERSON, ALWAYS"));
+  ok("and an edit inside a heading is an edit too",
+     /THE SHOT IS FIRST PERSON, ALWAYS/.test(r3.style)&&!/THE LENS IS HIS FACE/.test(r3.style), r3.style.slice(0,120));
 
   // ---- THE WINDOW: what the writer is handed, in the real illustrate() path
   const shot=async(opts)=>pg.evaluate(async(a)=>{

@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v59.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v59.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3605,6 +3605,7 @@ Write {{char}}'s memory of this event with {{user}} (and any others present).
 
 ## What to record
 Capture the CONCRETE, referenceable substance — not narrative fluff. A good memory lets {{char}} later recall the real facts AND their emotional truth.
+0. THE DAY, THE PART OF THE DAY AND THE PLACE ARE GIVEN TO YOU, on the WHEN and WHERE lines at the top of what you were handed. They are the only source for them. Never guess one, never work one out from the conversation, and never carry one over from an example in these instructions — an invented date is stored as fact and is read back later as one.
 1. First person, present-tense recollection (no "last week", no "I remember when").
 2. What actually happened: who was there, where, what was said or done that matters, what was decided or revealed, what changed between people.
 3. The felt emotion — {{char}}'s genuine reaction and what the event left them with.
@@ -7065,6 +7066,10 @@ function loadState(){
      light and you don't pull away" is an order, it is the most concrete instruction in the payload
      that follows it, and it decided the turn before the character got to. It reports state now. */
   _refreshPipe("relShortPrompt","IMMEDIATE emotional reaction of one character","YOU REPORT THE STATE. YOU DO NOT DECIDE THE TURN",DEFAULT_REL_SHORT);
+  /* v59.1 — the arc builder, the bystander gist and the phone-thread builder are all handed a WHEN
+     (and a WHERE, where there is one) now. The prompt has to say they are authoritative, or a
+     model that was inventing a date carries on inventing one beside the real thing. */
+  _refreshPipe("memBuild","durable, first-person MEMORY","THE DAY, THE PART OF THE DAY AND THE PLACE ARE GIVEN TO YOU",DEFAULT_MEMBUILD);
   // v27.x — core traits rewritten: the long in-voice five-factor sketches (quote + parenthetical
   // example per axis) become compact five-axis behavior profiles — one "Axis (low|mid|high):
   // trigger → behavior" rule per axis. Far shorter in every payload and directly playable by the
@@ -26403,7 +26408,10 @@ async function rememberTextExchange(chat,p){
 /* Write ONE memory for a finished stretch of a phone thread. */
 async function _commitTextArc(chat,p,span){
   try{
-    const convo=span.map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    /* A phone thread has no scene location — the record stores location:"" for that reason — so
+       this one is given the WHEN and no WHERE rather than a place it would then have to invent. */
+    const convo=`${memWhenWhereLine(chat,chat.gameDay,_memPeriod(chat),{noWhere:true})}\n\n`
+      +span.map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
       "\n\n"+fillTpl(up("x_membuild_text_note"),{char:p.name,user:state.user})+"\n\n"+engineLangDirective();
     const out=await chatCompletion(epSend("memBuild",sys,{convo},{who:p.name}),state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
@@ -36160,6 +36168,32 @@ function memWhenLabel(m){
   const per=(m&&m.gamePeriod)?String(m.gamePeriod).trim():"";
   return `Day ${d}${per?" · "+per:""}`;
 }
+/* v59.1 — WHEN AND WHERE, TOLD TO THE WRITER. Every memory record this app stores is stamped with
+   gameDay, gamePeriod and a location, in code, from what the app knows. None of it was ever put in
+   front of the model that WRITES the memory — so a prompt asking the memory to open with when it
+   happened had nothing to open with, and a prompt asking for the place "from the given location
+   list" was given no list. Both get invented, confidently, and the invention is what gets stored:
+   a scene played on day 3 at the pool comes back as "It is Day 1 Evening" at "Emre Tokmak's home".
+   The period reconciler was given this line in v44.3 for exactly this reason; the arc builder, the
+   bystander gist and the phone-thread builder — the three writers that produce nearly every memory
+   in the bank — never were. Same line, same place, all of them. */
+function memWhenWhereLine(chat,day,period,opts){
+  const bits=[];
+  const d=(typeof day==="number")?day:((chat&&chat.gameDay)||1);
+  const per=period||(()=>{ try{ return chatPeriod(chat); }catch(e){ return ""; } })();
+  bits.push(`WHEN: Day ${d}${per?", "+per:""}.`);
+  if(!(opts&&opts.noWhere)){
+    let where="";
+    try{
+      const loc=chat&&chat.locationId?locById(chat.locationId):null;
+      const sub=loc?subById(loc,curSubId(chat)):null;
+      where=[(loc&&loc.name)||(chat&&chat.location)||"",(sub&&sub.name)||""].filter(Boolean).join(" — ");
+    }catch(e){ where=(chat&&chat.location)||""; }
+    if(where)bits.push(`WHERE: ${where}.`);
+  }
+  bits.push("These two are given to you and they are the only source for them. Never guess the day, the part of the day or the place, and never carry one over from an example in your instructions.");
+  return bits.join("\n");
+}
 async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp){
   if(!state.mem||!state.key) return;
   const day = (typeof dayStamp==="number") ? dayStamp : curGameDay();
@@ -36204,12 +36238,12 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp){
         const speakers=[...new Set(witnessed.filter(m=>m.role!=='user'&&m.speakerId&&m.speakerId!==p.id).map(m=>m.speaker))];
         const withWhom=speakers.length?speakers.join(", "):"someone";
         sys=fillTpl(up("gistBuild"),{char:p.name,user:state.user});
-        userMsg=`${p.name} is present in the same place but NOT part of the conversation — across the room, not within earshot of the actual words. From the outside, ${p.name} can only see that ${state.user} and ${withWhom} are talking. Here is what was said (${p.name} did NOT hear this — use it ONLY to judge the emotional SHAPE of the exchange, never the specifics):\n\n${convo}`;
+        userMsg=`${memWhenWhereLine(chat,day,period)}\n\n${p.name} is present in the same place but NOT part of the conversation — across the room, not within earshot of the actual words. From the outside, ${p.name} can only see that ${state.user} and ${withWhom} are talking. Here is what was said (${p.name} did NOT hear this — use it ONLY to judge the emotional SHAPE of the exchange, never the specifics):\n\n${convo}`;
         max=fnTok("mem",260);
       }else{
         sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
           (cast.length>1?`\n\nIMPORTANT: Write this memory strictly from ${p.name}'s own perspective and personal experience. Only record what ${p.name} personally witnessed.`:"");
-        userMsg=`Complete event ${p.name} witnessed (with ${state.user}):\n\n${convo}`;
+        userMsg=`${memWhenWhereLine(chat,day,period)}\n\nComplete event ${p.name} witnessed (with ${state.user}):\n\n${convo}`;
         max=fnTok("mem",560);
       }
       const out=await chatCompletion(epSend("memBuild",sys+"\n\n"+engineLangDirective(),{data:userMsg}),state.memModel,{temp:fnTemp("mem",0.3),max,dbg:(isBystander?"Bystander gist · ":"Memory (arc) · ")+p.name});

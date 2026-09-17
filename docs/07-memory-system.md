@@ -59,6 +59,25 @@ runLocationGossipLeak (POI leak)   observations → GOSSIP rumors            Jac
 5. Phone texts never enter arcs (excluded from the judged window); `rememberTextExchange`
    writes their memories separately.
 
+### WHEN and WHERE reach the writer (v59.1)
+
+Every memory record is stamped with `gameDay`, `gamePeriod` and a location **in code**, from what
+the app knows. None of it used to be put in front of the model that *writes* the memory — so a
+prompt asking the memory to open with when it happened had nothing to open with, and one asking for
+the place "from the given location list" was handed no list. Both got invented, confidently, and the
+invention is what was stored and read back later as fact: a day-3 afternoon at the pool came back as
+*"It is Day 1 Evening"* at a house nobody had named.
+
+`memWhenWhereLine(chat, day, period, {noWhere})` prefixes the user message for all three writers —
+the arc builder, the bystander gist and `_commitTextArc` (WHEN only: a phone thread has no scene
+location, which is why its record stores `location:""`). It names the day, the part of the day, the
+place down to the sub-area, and says outright that these are the only source for them and must never
+be guessed or carried over from an example in the instructions. `DEFAULT_MEMBUILD` rule 0 says the
+same from the prompt side.
+
+The period reconciler was given this line in **v44.3** for exactly this reason; the three writers
+that produce nearly every memory in the bank never were.
+
 ## Period reconciliation (`reconcilePeriodFor` — when a part of the day ends)
 
 Every memory a character wrote in the part of the day that just ended (`memsOfPeriod`, ≥2 of them)

@@ -251,11 +251,20 @@ deterministically on the plan's own words and meeting-ish tags, so nothing is ha
 retrieval call is spent), and how they currently feel about the other party (`relFeelSummary`).
 Both prompts now say the journey is where the meeting comes back to mind — **one brief clause** of
 why they are going and how it sits with them, never a recap.
-And both say the road carries exactly who it is told: a meeting trip is made ALONE. With an empty
-companion list the writer had nothing to say about who else was travelling, so prose filled the
-gap and the counterpart turned up walking beside the player — on the way to a meeting they were
-supposed to arrive at separately. `DEFAULT_CHAR_MOVE` calls its beat "ONE HALF of an appointment".
-Player-chosen companions from the travel UI are unaffected: "together" is correct there.
+**NOBODY TRAVELS TOGETHER (v55.1).** The alone rule is universal, not a meeting's privilege: no
+journey in this app is shared. With an empty companion list the writer had nothing to say about who
+else was travelling, so prose filled the gap and the counterpart turned up walking beside the
+player — on the way to a meeting they were supposed to arrive at separately. And a companion ticked
+in the travel UI was labelled `Travelling: <name>`, which is an invitation to write the two of them
+in a car talking, and that is what came back.
+So the context now names them as **also going, each by their own way**, and the prompt writes them
+at the destination rather than on the road; with nobody ticked it says so outright. The travel UI's
+own line says the same, so ticking somebody no longer promises a shared ride.
+`DEFAULT_CHAR_MOVE` matches: nobody accompanies a mover, two people heading for the same place do
+not head there together, a meeting arrival is "ONE HALF of an appointment", and a batch from
+`narrateCharMoveGroup` is **several separate journeys reported in one breath, not a party** — which
+also settles a contradiction v54.1 introduced, where the prompt said "only the character named is
+moving" while that function hands it a list and asks for all of them in one beat.
 
 ## Texts (phone side-channel)
 

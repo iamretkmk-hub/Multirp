@@ -163,17 +163,42 @@ const {chromium}=require('playwright');
   ok("an ordinary trip that is not a meeting carries none of it",
      !/TRAVELS ALONE/.test(trip2)&&!/THE MEETING THIS JOURNEY IS FOR/.test(trip2), trip2.slice(0,200));
 
+  const trip3=await pg.evaluate(async()=>{
+    const chat=curChat(); const she=state.personas[0];
+    chat.locationId="l_home"; chat.location="Ev"; chat.presentIds=[she.id];
+    const seen=[]; const real=window.chatCompletion;
+    window.chatCompletion=async(msgs)=>{ seen.push(msgs); return "yol beti"; };
+    try{ await travelTo("l_rest",[she.id]); }finally{ window.chatCompletion=real; }
+    return String((seen[0]||[]).filter(m=>m.role==="user").pop().content||"");
+  });
+  ok("a companion the player ticked is named as ALSO GOING, by their own way",
+     /Also going to the same place, each making their OWN way there/.test(trip3)
+     &&/Burcu/.test(trip3), trip3.slice(0,320));
+  ok("and the context never calls them a travelling companion again",
+     !/^Travelling:/m.test(trip3)&&/NOT on the road with/.test(trip3), trip3.slice(0,320));
+  ok("with nobody ticked the context says so outright",
+     /Nobody else is going/.test(trip2), trip2.slice(0,200));
+
   // ---- the prompts themselves
   const pr=await pg.evaluate(()=>({t:DEFAULT_TRAVEL,c:DEFAULT_CHAR_MOVE,cal:DEFAULT_CAL,
                                    stale:(window.__stalePipes||[]).join(" | ")}));
-  ok("the travel narrator is told the road carries exactly who it is told",
-     /WHO IS ON THE ROAD IS GIVEN TO YOU/.test(pr.t)&&/A JOURNEY MADE TO KEEP A MEETING/.test(pr.t)
-     &&/NOT met on the way/.test(pr.t), "");
+  ok("the travel narrator is told no journey is ever shared",
+     /NOBODY TRAVELS TOGETHER/.test(pr.t)&&/THE ROAD BELONGS TO \{\{user\}\} ALONE/.test(pr.t)
+     &&/A JOURNEY MADE TO KEEP A MEETING/.test(pr.t)&&/never met on the road/.test(pr.t), "");
+  ok("and that people going to the same place are written at the destination, not on the road",
+     /make their own way there, by their own route/.test(pr.t)
+     &&/never as company on the journey/.test(pr.t)
+     &&/WHO IS AT THE DESTINATION IS GIVEN TO YOU/.test(pr.t), "");
+  ok("the old companion-weaving instruction is gone",
+     !/weave them in naturally/.test(pr.t)&&!/a shared glance/.test(pr.t), "");
   ok("and that the journey is where the meeting comes back to mind",
      /ONE brief clause of why they are going and how it sits with them/.test(pr.t), "");
   ok("the character-move narrator is told they move alone",
      /THEY MOVE ALONE/.test(pr.c)&&/never the two of them turning up together/.test(pr.c)
      &&/ONE HALF of an appointment/.test(pr.c), "");
+  ok("and a batch of movers is several journeys reported together, not a party",
+     /several separate journeys and not a party/.test(pr.c)
+     &&/never write them moving as one body/.test(pr.c), "");
   ok("the meetings tracker knows the third shape and how to write it",
      /NEITHER OF THEM HOSTS/.test(pr.cal)&&/the exact word "both"/.test(pr.cal)
      &&/HOW TO TELL THEM APART/.test(pr.cal), "");
@@ -185,7 +210,10 @@ const {chromium}=require('playwright');
   const rt=async(key,v)=>{ await pg.evaluate(a=>store.setRaw(K[a.k],a.v),{k:key,v});
     await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(a=>state[a],key); };
   ok("an older stored travel prompt picks up the alone rule",
-     /WHO IS ON THE ROAD/.test(await rt("travelPrompt","You are the GAMEMASTER narrating a journey in a roleplay. Old body.")));
+     /NOBODY TRAVELS TOGETHER/.test(await rt("travelPrompt","You are the GAMEMASTER narrating a journey in a roleplay. Old body.")));
+  ok("and so does a copy that only has the v54.1 meeting rule",
+     /NOBODY TRAVELS TOGETHER/.test(await rt("travelPrompt",
+       "You are the GAMEMASTER narrating a journey in a roleplay. A JOURNEY MADE TO KEEP A MEETING and nothing else.")));
   ok("a travel prompt the user wrote themselves is left alone",
      (await rt("travelPrompt","My own travel narrator."))==="My own travel narrator.");
 

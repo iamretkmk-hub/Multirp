@@ -220,6 +220,43 @@ plants the right memory (`_plantNoShowMemory`). End Day: `reconcileCalendarDay`
 (`calReconcile`) marks done what actually happened. UI: calendar modal (badged in the chat
 menu), manual add/edit (`addCalManual`), world-map section.
 
+### Three shapes of a meeting (v54.1) — `meetMode(e)`
+
+`executor` carries the shape, and **every** reader goes through `meetMode`/`meetIsBoth` rather
+than testing `executor!=="user"` (which silently answered "the character is coming"):
+
+| value | meaning | where |
+|---|---|---|
+| a character's name | they travel to `{{user}}` | `{{user}}`'s home, or the named place |
+| `"user"` (or empty) | `{{user}}` travels to them | their home, or the named place |
+| `"both"` | **nobody hosts** — each travels, arriving separately | the named place, and it is **required** |
+
+`"both"` is the ordinary out-in-the-world case the calendar could not express: the two home
+modes are somebody's front door, so a café was stored as one of the houses and then narrated as
+a visit. Consequences: `_resolvePlanLoc` never falls back to a home for it; `resolveDueMeetings`
+gets its own branch (the player is asked to set out, travels alone, then the counterpart arrives
+in their own beat — the only mode where both arrivals are narrated); the payload line says
+"NEITHER of you hosts … arriving separately" instead of naming an actor; `reconcileCalendarDay`
+treats it as the player's own (no offstage result beat); the dedupe guard stops reading the
+sentinel as a participant's name. `calPrompt` knows the third value, when to use it (whose door
+is being knocked on) and that writing it obliges a real `where`; the tracker normalises a
+capitalised "Both" and refuses it on a char↔char plan, where it would mean nothing.
+
+### A journey made to keep a meeting (v54.1)
+
+`travelTo(locId, companions, {meeting, counterpart})` and `narrateCharMove` both receive
+`meetingBackstory(chat, e, p)`: what was arranged, why, whether it was firmly agreed or only
+floated, up to three of the traveller's **own** memories bearing on it (`_meetMemLines` — scored
+deterministically on the plan's own words and meeting-ish tags, so nothing is hallucinated and no
+retrieval call is spent), and how they currently feel about the other party (`relFeelSummary`).
+Both prompts now say the journey is where the meeting comes back to mind — **one brief clause** of
+why they are going and how it sits with them, never a recap.
+And both say the road carries exactly who it is told: a meeting trip is made ALONE. With an empty
+companion list the writer had nothing to say about who else was travelling, so prose filled the
+gap and the counterpart turned up walking beside the player — on the way to a meeting they were
+supposed to arrive at separately. `DEFAULT_CHAR_MOVE` calls its beat "ONE HALF of an appointment".
+Player-chosen companions from the travel UI are unaffected: "together" is correct there.
+
 ## Texts (phone side-channel)
 
 Full-payload character replies adapted to texting (`buildTextReplySystem` + `textReplyPrompt`;

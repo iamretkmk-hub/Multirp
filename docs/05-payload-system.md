@@ -304,6 +304,53 @@ which is a different kind of exposure and a more interesting one.
 example, `"Buraya... [pause] <whisper>geleceğini hiç sanmıyordum.</whisper>"`. The tags are the same
 in every language, so the example is English now like the instruction around it.
 
+## v58.1 — a thought that changes nothing, three turns running
+
+Reported from a live scene: a hand goes waist → breast → gripping, and her thought says the same
+thing each turn ("his hand is there, but moving now would make it strange") while her body does
+nothing. Four causes, three of them ours:
+
+1. **The short-term feelings note was writing behaviour.** `relShortPrompt` asked it to *"spell out
+   how that feeling should visibly COLOR your next line"*, so it produced *"you keep your voice
+   light, your smile half-there, and you don't pull away"* — the only block in the payload issuing
+   concrete orders for **this** turn, and the order was *do not react*. The model obeyed. The note
+   now reports **state and impulse** and is explicitly forbidden from prescribing composure; the
+   sentence that caused this ships as its worked *wrong* example.
+2. **DRIVES & BRAKES was a frozen snapshot.** It is cached on `psycheSig`, built from location,
+   sub-area, who is present, day, period and the relationship axes **in bands** — none of which a
+   hand moving changes. `_psycheBodySig` adds a term made from the narration spans of the last few
+   lines, reduced through `_repWords` (note: that helper *strips* asterisk spans, so they are
+   unwrapped first — feeding it the raw spans returns nothing and the term silently disappears).
+   Cost, accepted deliberately: in a scene where bodies are moving the block is now rewritten most
+   turns instead of once, because a re-wording moves the term and Turkish agglutination alone
+   guarantees re-wordings. Talk-only turns carry no narration and cost nothing.
+3. **The repetition detector measured whole LINES.** A line can look new every turn — new
+   narration, a new joke — while the thought inside it repeats. `ownRecentThoughts` /
+   `thoughtIsStuck` measure the `_thought_` channel on its own, and fire
+   `already_said_thought_stuck`: *a thought you have had three times and not acted on is a decision
+   you are avoiding; thinking it a fourth time is the one move no longer available* — act on it, or
+   drop it and mean it, both with a cost. The older `already_said_stalled` menu also gained the
+   option it never had: **do something physical**. Every one of its five options was a way of
+   speaking or withdrawing, so a character whose problem was not moving got five more ways not to
+   move.
+4. **The resistance gate was written about the spoken line.** *"If it agrees, softens, changes the
+   subject, or simply says something, none of this is in play"* — so a compliment plus a closing
+   hand switched the whole ladder off. `resistance_actions` (its own fragment, because
+   `resistance_body` is the part people rewrite for their own world) says an ask can be made with a
+   hand, a repeated action is asked again, an action gone further is a **new** ask, and not
+   objecting is an answer rather than a neutral.
+
+And `drive_ego`, which said only *"do not narrate this weighing"* — right for speech and narration,
+wrong for the one channel built to hold it. The ban is scoped to what others perceive; the thought
+is given the job, with the condition that makes it matter: **it has to be going somewhere** — a line
+drawn with its terms, a decision just taken, a want admitted, a reason found thin. *"I should, but I
+won't"* is named as the absence of a thought, and a thought is stated **not** to be spent the way a
+line is: it was never spoken, so it still stands next turn and either shows or is visibly given up.
+
+`resistance` is an INLINE_HEAD block with no fragment-set map, so the new clause is appended to the
+blob by the builder rather than called from the layout — a `{{call//resistance_actions}}` there
+resolves against nothing and the editor correctly flags it as a piece that does not exist.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

@@ -801,3 +801,21 @@ the true claim and "nobody at all" is not.
   fact is about the target but every reference to the reader is "you"; the unambiguous opening
   (`<their own name>,`) is repaired in code. Character generation asks for the ten behaviour lines
   `IN THE SECOND PERSON`, which every other field on that card already specified.
+
+### The safety net was red, and it was a `drives` bug
+
+Four tests (`parity-live`, `bare-pieces`, `video-cues`, `language-rule`) were failing the same
+assertion before this batch: the generated default template no longer assembled byte-identically to
+classic `buildPayload`. That check is the one guarding "turning templates on does not silently
+change what every character receives", so a red one is not cosmetic.
+
+All four were one bug, and it was in the block this audit was already about. `{{gap}}` exists
+because a template blank line starts a new paragraph and a paragraph made only of prose is never
+auto-dropped — so a piece laid out as *fixed heading · conditional calls · fixed closing note* has
+to be ONE paragraph, or its fixed halves ship alone on a turn where every call came back empty.
+What that fix missed is that the fixed halves are **fragments**, and a fragment may contain a blank
+line of its own; inlined verbatim, it splits the paragraph from the inside and the orphan half
+leaks. `drive_ego`'s closing note was therefore rendering on every turn the psyche engine had not
+written for — in the one block whose entire contract is that it does not exist until it has
+something to say. `_ptGapify` converts internal blank lines in inlined prose to `{{gap}}`, and all
+four go green.

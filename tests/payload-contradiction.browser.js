@@ -165,6 +165,22 @@ const {chromium}=require('playwright');
   ok("the ladder itself is not gated — it is the counterweight", await pg.evaluate(()=>
       /B\.resistance=`\$\{blkTpl\("resistance_header"\)\}/.test(String(buildTailBlocks))));
 
+  console.log("\n[a fragment's own blank line does not leak out of a dropped block]");
+  /* The four byte-identity failures across parity-live, bare-pieces, video-cues and language-rule
+     were all this: `drive_ego` is inlined into the template as fixed prose, it contains a blank
+     line, and that blank line split the one paragraph the auto-drop needs in order to remove the
+     whole piece. So the closing note shipped on every turn the psyche engine had not written for. */
+  ok("inlined prose keeps its blank lines as {{gap}}, which stays inside the paragraph",
+     await pg.evaluate(()=>{
+      const t=ptPieceTemplate("drives","solo");
+      return !/\n[ \t]*\n/.test(t) && /\{\{gap\}\}/.test(t) ? true : JSON.stringify(t).slice(0,300); }));
+  ok("so a turn with no drives at all ships none of the block", await pg.evaluate(()=>{
+      const chat=curChat(); delete chat._psyche;
+      const P=state.personas.find(p=>p.id==="p_b");
+      const B=buildTailBlocks({chat,selfP:P,selfId:P.id,selfName:P.name,targetName:state.user,
+        targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
+      return !B.drives ? true : B.drives.slice(0,200); }));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

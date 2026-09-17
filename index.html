@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v56.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v56.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3944,7 +3944,7 @@ A person does not keep six numbered entries about one afternoon. They keep ONE t
 
 # OUTPUT
 Return ONLY this JSON:
-{"memories":[{"content":"…","importance":0.5,"emotion":"…","people":["…"],"tags":["…"],"location":"…"}]}
+{"memories":[{"content":"…","importance":0.5,"emotion":"…","feelings":"…","type":"EXPERIENCE","people":["…"],"tags":["…"],"location":"…"}]}
 
 USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely unrelated things — a fight with her daughter and a phone call about work are two memories, not one. Never more than three. Two things that happened in the same room between the same people are ONE memory however long they took.
 
@@ -3964,7 +3964,9 @@ USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely 
 - importance: the highest of the fragments', raised a little if the whole is bigger than its parts.
 - emotion: the one that best fits the whole stretch.
 - people / tags: the union of the fragments', deduplicated.
-- location: where most of it happened.`;
+- location: where most of it happened.
+- feelings: what the stretch left them carrying, in one short line — the felt half of the memory, which is read back with it wherever it is used. Leave it empty only when the fragments carry no feeling at all.
+- type: EXPERIENCE, RELATIONSHIP, KNOWLEDGE, DECISION, CONFLICT or INTIMACY — whichever the whole stretch actually was. Anything else is filed as EXPERIENCE.`;
 /* v37.1 — WHOSE HEAD IS THIS? The prompt used to open on "# ROLE — you are the part of a
    character's mind that never speaks" and ask for passages in the SECOND PERSON, addressed as
    "you". But the material it reads is full of two people: the character's ties, the recent
@@ -7043,6 +7045,9 @@ function loadState(){
      hands this same prompt a LIST and asks for all of them in one beat. Two instructions, opposite
      directions, in one call. Several movers are several separate journeys reported together. */
   _refreshPipe("charMovePrompt","writing a SHORT beat for a character","several separate journeys and not a party",DEFAULT_CHAR_MOVE);
+  // v56.1 — the reconciler's own fields reach the record now (they were hardcoded), so the shipped
+  // contract asks for them.
+  _refreshPipe("memReconcile","A stretch of one character's day has just ended","- feelings: what the stretch left them carrying",DEFAULT_MEMRECONCILE);
   // v27.x — core traits rewritten: the long in-voice five-factor sketches (quote + parenthetical
   // example per axis) become compact five-axis behavior profiles — one "Axis (low|mid|high):
   // trigger → behavior" rule per axis. Far shorter in every payload and directly playable by the
@@ -36129,6 +36134,40 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp){
    NOT on a day roll: the diary already consolidates a whole day, and doing both would summarise a
    summary. Background and best-effort — nothing the player does waits on it, and a failure leaves
    the originals exactly as they were. */
+/* v56.1 — reading a model's memory answer whatever wrapper it arrives in. Three helpers, used by
+   the period reconciler; each exists because a prompt in this app is something the player edits.
+   _memReconcileList: {memories:[…]} is the shipped contract, but a bare {content:…} (the arc
+   builder's shape), a top-level array, or one of the other obvious wrapper words are all a real
+   answer and are all accepted. Anything with no usable content is still nothing.
+   _memImp: the two memory engines disagree about the name — the arc builder reads
+   `importance_score`, the reconciler's own contract says `importance` — so both are read, and a
+   0-1 number is the only thing accepted.
+   _memType: the enum the memory system files by, so a model's free-text type cannot invent a tier. */
+const MEM_TYPES=["EXPERIENCE","RELATIONSHIP","KNOWLEDGE","DECISION","CONFLICT","INTIMACY","OBSERVATION"];
+function _memType(t){
+  const k=String(t||"").trim().toUpperCase();
+  return MEM_TYPES.indexOf(k)>=0?k:"";
+}
+function _memImp(x){
+  const n=(x&&typeof x.importance_score==="number")?x.importance_score
+         :((x&&typeof x.importance==="number")?x.importance:NaN);
+  return isFinite(n)?Math.max(0,Math.min(1,n)):0;
+}
+function _memReconcileList(j){
+  if(!j)return [];
+  let arr=null;
+  if(Array.isArray(j)) arr=j;
+  else if(Array.isArray(j.memories)) arr=j.memories;
+  else {
+    for(const k of ["memory","entries","items","results","result","output"]){
+      if(Array.isArray(j[k])){ arr=j[k]; break; }
+      if(j[k]&&typeof j[k]==="object"&&!Array.isArray(j[k])&&j[k].content){ arr=[j[k]]; break; }
+    }
+    if(!arr && typeof j==="object" && j.content) arr=[j];        // a bare single memory
+  }
+  if(!Array.isArray(arr))return [];
+  return arr.filter(x=>x&&typeof x==="object"&&String(x.content||"").trim());
+}
 function memsOfPeriod(ownerId,day,period){
   if(!period)return [];
   return (state.memory||[]).filter(m=>m&&m.ownerId===ownerId&&m.gameDay===day&&m.gamePeriod===period
@@ -36153,8 +36192,18 @@ async function reconcilePeriodFor(p,day,period){
       {data:`WHEN: Day ${day}, ${period}.\n\nThese are ${p.name}'s memories from Day ${day}, ${period}, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}`}),
       state.memModel,{temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
     const j=parseJSON(out);
-    const made=(j&&Array.isArray(j.memories))?j.memories.filter(x=>x&&String(x.content||"").trim()):[];
-    if(!made.length)return;              // nothing usable — leave the originals untouched
+    /* (!) v56.1 — THE ANSWER WAS BEING THROWN AWAY FOR ITS WRAPPER. This read j.memories and
+       nothing else, so a reconciler prompt that asks for a bare {"content": …} — which is what the
+       arc BUILDER's contract looks like, and the obvious thing to write when editing this prompt —
+       produced a perfectly good memory that was dropped on the floor. Silently: the originals
+       stayed, the debug log showed the model answering, and the memory tab showed the old
+       fragments, with nothing anywhere saying why. This prompt is user-editable by design, so the
+       engine reads whatever sane shape comes back instead of one blessed one. */
+    const made=_memReconcileList(j);
+    if(!made.length){
+      try{ console.warn("[memory] reconcile for",p&&p.name,"returned nothing usable — the fragments are kept as they are. Raw:",String(out||"").slice(0,300)); }catch(_){}
+      return;                            // nothing usable — leave the originals untouched
+    }
     const union=k=>[...new Set(frag.flatMap(m=>Array.isArray(m[k])?m[k]:[]))];
     const topImp=Math.max(...frag.map(m=>+m.importance||0));
     const built=made.slice(0,3).map(x=>({
@@ -36163,10 +36212,14 @@ async function reconcilePeriodFor(p,day,period){
       location:x.location||frag[0].location||"",
       people:Array.isArray(x.people)&&x.people.length?x.people.map(String):union("people"),
       emotion:x.emotion||frag[frag.length-1].emotion||"neutral",
-      feelings:"",
-      importance:Math.max(topImp,(typeof x.importance==="number")?x.importance:0),
+      /* v56.1 — feelings and type reach the record now. The arc builder has honoured both since it
+         was written; this one hardcoded "" and "EXPERIENCE", so a reconciled memory silently lost
+         the felt half that memInjectText appends to every line it puts in a payload, and an
+         INTIMACY or a DECISION came back filed as an ordinary experience. */
+      feelings:x.feelings?String(x.feelings).trim():(frag.map(m=>m&&m.feelings).filter(Boolean)[0]||""),
+      importance:Math.max(topImp,_memImp(x)),
       tags:Array.isArray(x.tags)&&x.tags.length?x.tags.map(t=>String(t).toLowerCase()):union("tags"),
-      type:"EXPERIENCE",
+      type:_memType(x.type)||"EXPERIENCE",
       ownerId:p.id, character:p.name, date:Date.now(), gameDay:day, gamePeriod:period,
       source:"reconciled", reconciledFrom:frag.length,
       universeId:frag[0].universeId||null, chatId:frag[0].chatId||null

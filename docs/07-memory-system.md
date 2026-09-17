@@ -59,6 +59,28 @@ runLocationGossipLeak (POI leak)   observations → GOSSIP rumors            Jac
 5. Phone texts never enter arcs (excluded from the judged window); `rememberTextExchange`
    writes their memories separately.
 
+## Period reconciliation (`reconcilePeriodFor` — when a part of the day ends)
+
+Every memory a character wrote in the part of the day that just ended (`memsOfPeriod`, ≥2 of them)
+goes to `memReconcile`, which rewrites them as the one thing a person would actually keep; the
+replacements are built first and swapped in only once they exist, so a failure anywhere cannot lose
+a memory. Capped at three. `onPeriodChanged` runs it after `flushMemoryArc`, never on a day roll —
+the diary owns that.
+
+**Reading the answer (v56.1).** The reader used to accept exactly one shape, `{"memories":[…]}`, and
+return early on anything else — silently, keeping the originals. Since this prompt is user-editable,
+and since the arc BUILDER's contract is a bare `{"content": …}`, an edited reconciler prompt asking
+for that shape produced a perfectly good memory that was dropped on the floor with nothing anywhere
+saying why. `_memReconcileList` now accepts `{memories:[…]}`, a bare single object, a top-level
+array, or one of the obvious wrapper words; anything with no usable `content` is still nothing, and
+that case now warns instead of failing silently.
+Two fields also stopped being discarded: `feelings` and `type` were hardcoded to `""` and
+`"EXPERIENCE"` here while the arc builder had always honoured both — so a reconciled memory lost the
+felt half that `memInjectText` appends wherever it is injected, and an INTIMACY came back filed as an
+ordinary experience. `_memType` clamps to the real enum; `_memImp` reads **both** `importance_score`
+(the arc builder's name) and `importance` (this prompt's), which is where an edited prompt gets the
+other name from. The shipped contract asks for all of them.
+
 ## Diaries (`writeDayDiaries`, End Day)
 
 One private DIARY entry per participating character, written from the day's memories

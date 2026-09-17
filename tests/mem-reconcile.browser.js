@@ -110,6 +110,26 @@ const {chromium}=require('playwright');
 
   // ---- and the shipped prompt now asks for the two fields the code stopped discarding
   const pr=await pg.evaluate(()=>({d:DEFAULT_MEMRECONCILE,stale:(window.__stalePipes||[]).join(" | ")}));
+  ok("every JSON example in the shipped prompt actually parses",
+     await pg.evaluate(()=>{
+       const lines=DEFAULT_MEMRECONCILE.split("\n").map(l=>l.trim()).filter(l=>l.startsWith('{"memories"'));
+       if(lines.length<2) return false;
+       return lines.every(l=>{ try{ const j=JSON.parse(l); return !!(j.memories&&j.memories.length); }catch(e){ return false; } });
+     }), "an example in the prompt is not valid JSON");
+  ok("it carries a worked example, not only a placeholder skeleton",
+     await pg.evaluate(()=>{
+       const lines=DEFAULT_MEMRECONCILE.split("\n").map(l=>l.trim()).filter(l=>l.startsWith('{"memories"'));
+       const filled=lines.map(l=>JSON.parse(l).memories[0]).filter(m=>String(m.content||"").length>40);
+       return filled.length===1 && /^Day \d+, /.test(filled[0].content) && /\bI\b/.test(filled[0].content);
+     }), "no filled example, or it does not open with the day and speak as I");
+  ok("the shipped prompt states first person and bans the second",
+     /FIRST person — "I"/.test(pr.d)&&/Never "you"/.test(pr.d), "");
+  ok("its example names importance the way the arc builder does",
+     /"importance_score":0\.5/.test(pr.d)&&/importance_score: 0\.0-1\.0/.test(pr.d)
+     &&/Plain "importance" is read too/.test(pr.d), "");
+  ok("and it warns about the failure the player actually hit",
+     /Never put an unescaped quotation mark inside a string value/.test(pr.d)
+     &&/Every string closed/.test(pr.d), "");
   ok("the shipped contract asks for feelings and type",
      /"feelings":"…","type":"EXPERIENCE"/.test(pr.d)
      &&/- feelings: what the stretch left them carrying/.test(pr.d)
@@ -121,6 +141,9 @@ const {chromium}=require('playwright');
   ok("an older stored reconciler prompt is refreshed to it",
      /- feelings: what the stretch left them carrying/.test(
        await rt("# ROLE\nA stretch of one character's day has just ended. Old body without the marker.")));
+  ok("and so is a v56.1 copy, which has the feelings line but no worked example",
+     /A worked one, to copy the SHAPE and the VOICE from/.test(
+       await rt("# ROLE\nA stretch of one character's day has just ended.\n- feelings: what the stretch left them carrying, in one short line.")));
   ok("a reconciler prompt the user wrote themselves is left exactly as it is",
      (await rt("My own reconciler. Return {\"content\":\"…\"}."))==="My own reconciler. Return {\"content\":\"…\"}.");
 

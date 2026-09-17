@@ -81,6 +81,17 @@ ordinary experience. `_memType` clamps to the real enum; `_memImp` reads **both*
 (the arc builder's name) and `importance` (this prompt's), which is where an edited prompt gets the
 other name from. The shipped contract asks for all of them.
 
+**The shipped prompt's own example (v57.1).** It was a placeholder skeleton, and it named importance
+the way this engine did rather than the way the arc builder does — the disagreement that sent an
+edited prompt down the wrong field in the first place. It now shows `importance_score`, says plain
+`importance` still works, and carries a **worked** example beside the skeleton so the two things
+most likely to drift are visible in situ: the first-person "I" and the day-and-hour opening. The
+voice rule is stated as FIRST person and bans the second outright — the fragments being rewritten
+are first person, so a reconciled memory in another voice leaves the bank mixing voices mid-way. It
+also warns, in the words of the failure a player actually hit, that an unescaped quotation mark
+inside a string value breaks the parse. Both example lines are asserted to be valid JSON by the
+test, so the prompt can never again ship an example that cannot parse.
+
 ## Diaries (`writeDayDiaries`, End Day)
 
 One private DIARY entry per participating character, written from the day's memories

@@ -67,19 +67,56 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
 2. **Per-character continuity** — `chat.imgPromptBy[charKey]` holds only *that character's*
    previous frame prompt (a newcomer starts blank so they're never drawn into the previous
    speaker's picture). Cleared on exit/travel.
+2b. **The window since the last picture (v52.2)** — `chat.imgWindowBy[charKey]` holds the mid of
+   the frame that character was last drawn in, and everything after it goes to the writer as
+   analysis material. Pictures are not drawn every turn (the visual director skips beats it
+   judges unchanged), so before this the turns in between reached the writer through nothing at
+   all: a jacket came off three beats ago and the frame still showed it on. **Whose lines:** this
+   character's and the player's only — the same isolation `imgPromptBy` has enforced since v19.3,
+   so two characters in one room never draw from each other's dialogue. Bounded by
+   `IMG_WINDOW_MAX_LINES`/`IMG_WINDOW_MAX_CHARS` (20 / 3000, trimmed from the old end), never
+   reaches past the last `travelBeat`, skips the trigger line (it is already in the latest
+   exchange), and is stamped only on a **successful** frame so a failure does not swallow the
+   turns it failed on. Reset with the continuity prompts: `travelTo` wipes the map, an exiting
+   character loses theirs (`applyPresence`).
 3. **Route first** (`pickRule(state.imgRules, routeText)`): the router LLM (`routerPrompt`,
    `routerModel`) sees the location line, the character's own **sticky previous scene type**
    (`chat.lastImgRuleBy[charKey]` — "keep the same type unless the roleplay changed"), and
    the latest exchange; returns a rule index. Routing off / one rule ⇒ first enabled rule.
+   **This is also the POV fork (v52.2).** A rule carries `pov`, so choosing the scene type
+   chooses the path, and `routerPrompt` decides it by CONTACT, not by mood: nobody touching
+   anybody (talking, eating, arriving, an argument in words) takes a POV type; the moment they
+   are in contact — a hand on an arm, an embrace, a kiss, anything sexual — it takes a
+   third-person type, because two bodies in contact cannot be read from inside one of their
+   heads. Stickiness must not hold the shot on the wrong side of that fork.
 4. **Write the prompt** — system prompt layering:
    `rewritePrompt` (universal extraction rules) → shared FOUNDATION (for legacy rules) →
-   the routed rule's own `promptStyle` (camera/pose/shot detail) → the frame guide. The
-   user message = continuity reference (previous frame; exchange overrides it) + latest
+   the routed rule's own `promptStyle` (camera/pose/shot detail) → the frame guide → and on the
+   POV path only, `IMG_WRITER_POV_GUIDE`. The user message = continuity reference (previous
+   frame; exchange overrides it) + the window since that frame (analysis only) + latest
    exchange. **No character sheet is sent** — the writer refers to people generically.
 5. **Deterministic tail (code, not LLM)**: the focal speaker's real appearance
    (`_imgSpeakerAppearance` from structured `look` + wardrobe), the location clause, the
    time-of-day lighting clause — then the user's selected **style tail** last
    (`styleTail()`, idempotent append).
+5a. **POV vs third person (v52.2)** — `rulePov(rule)` reads the rule editor's POV switch, which
+   had been saved since v25 and read by **nothing**: every scene rendered third person whatever it
+   said. It now selects the path in two places at once.
+   · **The writer** gets `IMG_WRITER_POV_GUIDE`: the lens is the player's face, he is not a body in
+     the frame (no head, no shoulders, no mirror, no over-the-shoulder onto himself, no IMAGE slot),
+     his hands may enter the low frame when the exchange puts them there, and **the gaze rule is
+     reversed** — she looks INTO the lens. That reversal is why this is a code block and not a line
+     in a template: "characters never look at the camera" is a hard guardrail everywhere else in the
+     writer, and an override has to be stated at the level of the rule it overrides.
+   · **The reference pack**: `buildRefPack` does **not** send the player's photographs on a POV rule
+     even when the cast is "and you". Handing an edit model a man it must place is exactly how a
+     first-person shot comes back as an ordinary two-shot of a couple. Untick POV and the same rule
+     is the two-shot again, his pictures included.
+   The shipped `r_pov_talk` ("Daily / talking — your POV") is first in `DEFAULT_IMG_RULES`, so it is
+   also what renders with routing off. It arrives **additively** (`K.imgPovMigration`): unlike every
+   earlier rule-set migration, which replaces the whole set and so reaches only an unedited one, this
+   inserts one rule at the top of a customised set and touches nothing else — skipped when the set
+   already has any rule with `pov:true`, so nobody ends up with two.
 5b. **Reference roster (edit models only)** — `buildRefPack` gathers the pictures, and
    `editPrompt` prepends a roster tying each one to a person in the frame.
    **(!) The roster and the scene text must share a vocabulary.** `rewritePrompt` orders the

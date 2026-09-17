@@ -128,21 +128,36 @@ const {chromium}=require('playwright');
      /Not objecting IS an answer/.test(res)&&/it is not something you get to keep doing/.test(res), "");
 
   // ---------- the thought rule
+  /* v61.1 — the contract moved OUT of `drive_ego` and into the guardrails box as `rail_thought`.
+     `drive_ego` renders only once the psyche engine has written for the scene, so the rules
+     governing a channel that exists on EVERY turn were absent from most of them; and a motivation
+     block was defining output format. The rails box is the one place BOTH payload paths render
+     (the authored layouts and the generated default), and it is the closest to generation. The ban
+     on narrating the weighing stays in `drive_ego`, where it belongs. */
   const ego=await pg.evaluate(()=>blkTpl("drive_ego"));
+  const thc=await pg.evaluate(()=>blkTpl("rails_header"));
   ok("the weighing is banned only where people can see it",
      /Do not narrate this weighing where anyone can see it/.test(ego)
      &&/in speech and in what your body does/.test(ego), "");
+  ok("and drive_ego no longer carries the thought rules itself",
+     !/AND IT DOES NOT EXPIRE WHEN THE TURN DOES/.test(ego)
+     &&!/A THOUGHT POINTS SOMEWHERE/.test(ego), ego.slice(0,200));
   ok("the thought is given the job, with the condition that makes it matter",
-     /YOUR THOUGHT IS WHERE IT ACTUALLY HAPPENS/.test(ego)
-     &&/it has to be going somewhere/.test(ego), "");
+     /\[\[rail_thought\]\]/.test(thc)
+     &&/A THOUGHT POINTS SOMEWHERE/.test(thc)
+     &&/it is the deciding, caught in motion/.test(thc), "");
   ok("the deadlock caption is named and refused",
-     /"I should, but I won't" is not a thought/.test(ego)
-     &&/become a decision you are hiding from yourself/.test(ego), "");
+     /"I should, but I won't" is not a thought/.test(thc)
+     &&/a decision you are hiding from yourself/.test(thc), "");
   ok("and a thought is stated NOT to be spent the way a line is",
-     /AND IT DOES NOT EXPIRE WHEN THE TURN DOES/.test(ego)
-     &&/it was never spent, because it was never spoken/.test(ego), "");
+     /AND IT DOES NOT EXPIRE/.test(thc)
+     &&/never spoken, so it was never spent/.test(thc), "");
   ok("a line you draw is one of the shapes it offers",
-     /a line you draw, with the terms attached/.test(ego), "");
+     /a line you draw with the terms attached/.test(thc), "");
+  ok("it is a registered rail — listed, editable, and withheld from a typed text",
+     await pg.evaluate(()=>RAIL_ORDER_SPOKEN.indexOf("rail_thought")>-1
+       && RAIL_ORDER_HEAT.indexOf("rail_thought")>-1
+       && RAIL_ORDER_TEXT.indexOf("rail_thought")===-1), "");
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");

@@ -137,8 +137,9 @@ directly playable line in the payload, so its call got room to finish its senten
 tokens out, 300 → 560 chars stored).
 
 **`already_said`** still quotes two lines: the last one verbatim (that is the one that must not be
-repeated) and the one before it trimmed on a word boundary — the older line is there to show a
-shape, not to be re-read.
+repeated) and the one before it trimmed on a word boundary. **(!) v61.1 — the older line is a GIST,
+not a shape.** Showing it as a shape made the strongest evidence in the payload an exemplar of form;
+see "the example that was beating the rule" below.
 
 ## v30.4 — the payload arguing with itself
 
@@ -341,7 +342,8 @@ nothing. Four causes, three of them ours:
    objecting is an answer rather than a neutral.
 
 And `drive_ego`, which said only *"do not narrate this weighing"* — right for speech and narration,
-wrong for the one channel built to hold it. The ban is scoped to what others perceive; the thought
+wrong for the one channel built to hold it. **(!) v61.1 — the rules below live in `rail_thought`
+now, not in `drive_ego`**; see the v61.1 section. The ban is scoped to what others perceive; the thought
 is given the job, with the condition that makes it matter: **it has to be going somewhere** — a line
 drawn with its terms, a decision just taken, a want admitted, a reason found thin. *"I should, but I
 won't"* is named as the absence of a thought, and a thought is stated **not** to be spent the way a
@@ -702,3 +704,100 @@ Two counterweights, because either alone is thin:
   narration words against 17 spoken, two thirds stage direction, and sailed through.) Like `repeatRetryNote`, the note names
   the offence with its own numbers and tells the model to KEEP the dialogue — told only "that was
   wrong", a model rewrites the half it got right.
+
+## v61.1 — the payload arguing with the data
+
+The v30.4 pass removed the places the payload contradicted *itself*. This one removes the places
+it contradicts the **save file**, plus the one instruction that was losing to an example.
+
+### One fact, three states (the worst of them)
+
+A character's plan to confess to her husband was, in a single assembled payload:
+
+- `goals_and_ambitions` — still to do,
+- `calendar_done` — done, **and** stamped with the Evening it had been pencilled in for, which had
+  not happened yet at Midday,
+- `drives` — not done and pending imminently.
+
+There is no correct output available to a model handed that. The observed reply resolved it by
+ignoring the most consequential event in the character's history. Three sources, three fixes:
+
+| Source | Was | Now |
+|---|---|---|
+| `calendar_done` | stamped `e.period` (the plan's **scheduled** hour) and called any day ≥ today "today" | completion carries its own `completedPeriod`, written where `completedDay` is; the day-end reconciler is asked *when* it happened and reads it off the evidence (its own hour beats the day-end clock, which always says Night); anything stamped later than the current day+period is **withheld** rather than asserted as lived |
+| `goals_and_ambitions` | rewritten only at day's end, so a want achieved at breakfast sat there all day | `liveGoalsLines()` drops a line a **completed** calendar entry says back to it (same overlap test `_prSameThing` uses), inside that entry's own live window. The stored list is untouched and the curator still does the real rewrite — it now gets `liveGoalsLines(p,{raw:true})` so it can see and explicitly drop the line, plus a `WHAT THEY ALREADY DID` section and a rule attached to it |
+| `drives` | the psyche writer was given ties, vows, trackers and the scene, never the finished calendar | new `done` piece on `psychePrompt`, fed from the same `calendarDoneLine` the character reads, with a hard rule: never write a force still waiting for something that list says is done. It also reads `engineGoals(p)` (the current want-list) instead of the frozen authored field |
+
+### The example that was beating the rule
+
+`already_said` quoted the character's own last reply **verbatim** and labelled the one before it
+*"you are being shown its shape"* — making the strongest piece of evidence in the payload an
+exemplar of form, pointed at the wrong target. Measured across two characters, output beat-count and
+length tracked the demonstrated shape, not `rail_form`.
+
+It is not one bug but two, and both ship together:
+
+- the older line is a **gist** now (140 chars, labelled "what it DID … not how it was written"); the
+  newest stays verbatim, because only the exact words can enforce "do not say this again";
+- **`head_format_limits` was missing from the `solo` and `multi` authored layouts.** Only `gm`
+  called it. Those two layouts use `head_format` in place of the `format` block, so the LIMITS
+  section — *"at most ONE narration and ONE thought per reply"* — was in neither. The one form rule
+  that kept dying every turn was the one not being sent.
+
+### `drives` was three blocks wearing one heading
+
+`drive_ego` carried ~350 words of thought-channel rules inside the one tail block that renders
+**only** when the psyche engine has already written for the scene. So the contract governing a
+channel that exists on every turn was absent from most turns, and a *motivation* block was defining
+output format. The rules are `rail_thought` now: one home, in the guardrails box — the only place
+**both** payload paths render (the authored layouts and the generated default), and the closest to
+generation. `drive_ego` keeps the sentence that is genuinely about the weighing. `drive_header` is
+trimmed from ~110 words to ~40, and `psychePrompt` from 90 words a side to 70.
+
+### `resistance_actions` fires when there is an action to read
+
+~150 words explaining that a hand can make an ask a sentence does not — spent on every turn,
+including ones whose incoming line is a greeting. The test is structural, not semantic: a narrated
+span in the line being answered, or `_psycheBodySig()` finding one in the last few messages (the
+same scan DRIVES & BRAKES uses to notice a body in the room). Anything unexpected fails **open**.
+`resistance_body` still ships every turn — it is the counterweight nothing else in the payload
+balances.
+
+### Exposure is not leak-chance
+
+`gossipChance` answers *does talk from here travel through the cast's social network*. The PRIVACY
+block printed it under *how exposed the area you are standing in is*, which is a different question:
+a beach club gate at midday read **"fairly private (talk here rarely spreads)"** while a private
+house read **"semi-public"** — backwards in both directions, in the one block that governs how
+freely a character speaks. `exposureLabel(loc,chance)` floors the **label** at a venue that is not
+somebody's home; the gossip mechanic itself is untouched. And `scene_alone` ("nobody can hear a word
+of this … as freely as with no one watching") now has a `scene_alone_public` twin: the presence
+system tracks the **cast**, not the strangers at a beach club, so "nobody you know is with you" is
+the true claim and "nobody at all" is not.
+
+### Smaller repairs
+
+- **A narrator beat is not something this character wrote.** World beats, presence notes and day
+  markers went on the wire as `{role:"assistant"}` — the model's own channel — so every payload
+  carried worked examples of omniscient third-person scene-setting in the role the model reads as
+  *things I have written*. Then FINAL GUARDRAILS said "never put words in the narrator's mouth".
+  They are `{role:"user", name:"Narrator"}` now, content prefixed so the beat stays self-identifying
+  with a provider that drops `name`.
+- **An unrecognised promise `kind` is a mis-scrape, not a promise.** `recordPromise` fell back to
+  `"promise"` for anything, so a narrated act ("he does not stop…") and a claim over a person ("she
+  is his now") entered the ledger as standing oaths under *WHAT WAS SWORN TO YOU — you expect it
+  kept*. The taxonomy is the extractor's own contract; an answer that does not meet it is dropped,
+  and the prompt now names both shapes.
+- **A tracker a character cannot act on is withheld.** `[ Pregnancy: 0/280 ]` reached a payload as
+  the whole of what she knew about her body — a ratio with no stage attached, on a tracker whose
+  stages begin at 1, in the same payload that says drama never comes from "a tracker". A character's
+  own reading shows the **stage, in words**, without the raw count; a tracker with stages that has
+  reached none is not true of them yet and is not sent. No stages at all ⇒ the number IS the fact
+  and it stays. Dashboard and director lists are unchanged — they need the arithmetic.
+- **Mid-word truncation.** Calendar results were `.slice(0,240)` / `.slice(0,300)`; they go through
+  `briefDesc` like everything else. The learned-facts cap went 180 → 320 — the half-sentence it was
+  cutting was *"his wife and their child are away for…"*, which is the entire clock on an affair.
+- **Person drift.** The daily evaluator is told, with the failing sentence as the example, that the
+  fact is about the target but every reference to the reader is "you"; the unambiguous opening
+  (`<their own name>,`) is repaired in code. Character generation asks for the ten behaviour lines
+  `IN THE SECOND PERSON`, which every other field on that card already specified.

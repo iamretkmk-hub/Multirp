@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v60.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v60.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6579,8 +6579,16 @@ function loadState(){
       c.calendar.forEach(e=>{
         if(e.title)e.title=subU(e.title);
         if(e.who)e.who=stripN(subU(e.who));
-        if(!e.executor){ const d=String(e.doer||"").trim().toLowerCase();
-          e.executor=(!d||d===String(state.user||"").toLowerCase()||d==="{{user}}"||d==="user")?"user":subU(String(e.doer).trim()); }
+        /* (!) v60.1 — THIS USED TO INVENT A DIRECTION FOR ANY ENTRY THAT HAD NONE. The step exists
+           to carry a v21 entry's `doer` over to `executor`; with no doer at all it fell to the
+           same branch and stamped "user" — so a plan whose writer never recorded who acts came
+           back asserting THE PLAYER IS COMING. A character standing in someone else's kitchen was
+           told to expect him there, on a plan that says in its own words that she went to him.
+           No doer, no executor: actorOf already prints nothing for an unset one, which is the
+           honest reading of "nobody wrote down who acts". */
+        if(!e.executor){ const d=String(e.doer||"").trim();
+          if(d){ const dl=d.toLowerCase();
+            e.executor=(dl===String(state.user||"").toLowerCase()||dl==="{{user}}"||dl==="user")?"user":subU(d); } }
         if(!e.certainty)e.certainty="certain";
         if(e.probability===undefined)e.probability=null;
       });
@@ -10945,7 +10953,7 @@ Return ONLY JSON:
   "acted": true|false,
   "plan": {
     "title": "<max 10 words, Turkish — what {{char}} sets out to do>",
-    "detail": "<1-2 sentences, Turkish — what they intend and WHY now; this is recorded as the plan's reason, becomes the character's own memory of making it, and anchors how the plan later plays out>",
+    "detail": "<ONE short phrase naming the purpose, in the character's own terms — \"to ask him why he never came\", \"to settle the money before the weekend\". It is printed back to that character as \"for: …\" in their own calendar, so it must read as THEIR reason and never as a note written about them: no \"she decides\", no \"X plans to\", no third person, no name. Not a narration of the plan, one phrase.>",
     "with": "<EXACT name of ONE other character, or empty for a solo move>",
     "where": "<place name>",
     "day": <int>,
@@ -12910,7 +12918,7 @@ async function reconcileCalendarDay(chat,day,uni){
         const ex=_pulsePersonasByName(chat,e.executor)[0];
         if(ex&&!parts.some(p=>p.id===ex.id))parts.push(ex);
       }
-      const head=`#${e.id} "${e.title}"${e.who?` — with ${e.who}`:""}${e.day!=null?` — planned day ${e.day}`:""}${e.period?` (${e.period})`:""}${e.withUser===false?` — between characters, without ${state.user}`:(meetIsBoth(e)?` — neither hosts: ${state.user} and ${e.who||"they"} each go to the place separately`:(meetMode(e)==="char"?` — ${e.executor} comes to ${state.user}`:` — ${state.user} goes`))}${e.detail?`\nPurpose: ${String(e.detail).slice(0,160)}`:""}`;
+      const head=`#${e.id} "${e.title}"${e.who?` — with ${e.who}`:""}${e.day!=null?` — planned day ${e.day}`:""}${e.period?` (${e.period})`:""}${e.withUser===false?` — between characters, without ${state.user}`:(meetIsBoth(e)?` — neither hosts: ${state.user} and ${e.who||"they"} each go to the place separately`:(meetMode(e)==="char"?` — ${e.executor} comes to ${state.user}`:` — ${state.user} goes`))}${e.detail?`\nPurpose: ${briefDesc(e.detail,160)}`:""}`;
       const memBlocks=parts.map(p=>{
         const lines=_ownerDayMemories(p,day,uni,{cap:6});
         if(lines.length)anyMems=true;
@@ -13285,7 +13293,13 @@ function calendarContextLine(chat,selfName,selfId,opts){
       const here=new Set((presentCast(c)||[]).map(x=>x&&x.name&&x.name.toLowerCase()).filter(Boolean));
       if(String(state.user||"").trim())here.add(String(state.user).toLowerCase());   // the player is always in their own scene
       const others=_others(e).split(/\s*,\s*/).map(x=>x.trim()).filter(Boolean);
-      if(!others.length)return false;
+      /* (!) v60.1 — A PLAN WITH NOBODY ELSE ON IT COULD NEVER READ AS HAPPENING. This returned
+         false whenever the reader was the only name on the entry, which is exactly the shape of a
+         plan a character made for themselves ("go to his house and ask him why"). So a character
+         who had travelled there, arrived, and asked the question was still being told the plan was
+         pending — while standing in the middle of keeping it. Being AT its place at its hour is
+         what makes it happening; a second name is what makes it happening WITH someone. */
+      if(!others.length) return !!(e.locationId && c.locationId && e.locationId===c.locationId);
       return others.every(n=>here.has(n.toLowerCase()));
     }catch(_){ return false; }
   };
@@ -13293,14 +13307,32 @@ function calendarContextLine(chat,selfName,selfId,opts){
     const others=_others(e);
     const arrived=due&&_hereNow(e);
     return `${e.title}${e.period?" ("+e.period+")":""}${others?" with "+others:""}${locOf(e)?" at "+locOf(e):""}`
-      +`${e.detail?` — for: ${String(e.detail).slice(0,120)}`:""}${certOf(e)}`
+      /* v60.1 — briefDesc, not slice. A hard cut at 120 left her reading her own plan as
+         "…ask directly why he never came to t" — the same amputation v38.6 fixed for a text
+         memory, in the block every character reads every single turn. */
+      +`${e.detail?` — for: ${briefDesc(e.detail,120)}`:""}${certOf(e)}`
       +(arrived
-        ? ` — ⚠️ ${others} ${others.indexOf(",")<0?"is":"are"} HERE, and the hour is now: this is the meeting, happening. Do not wait for it or talk about arranging it.`
+        ? (others
+            ? ` — ⚠️ ${others} ${others.indexOf(",")<0?"is":"are"} HERE, and the hour is now: this is the meeting, happening. Do not wait for it or talk about arranging it.`
+            : ` — ⚠️ You are AT the place and the hour is now: this is you keeping it, already underway. Do not wait for it, plan it, or talk about arranging it.`)
         : actorOf(e));
   };
   const overdue=cal.filter(e=>_calOverdue(c,e) && e.day>=today-3);   // missed within the last few days
   const active=cal.filter(e=>!_calOverdue(c,e));
-  const dueNow=active.filter(e=>planDueNow(c,e));
+  /* v60.1 — planDueNow stays true for the whole rest of the day once an entry's period arrives, so
+     an Afternoon plan was still announcing itself as HAPPENING NOW at Evening. Its hour passing is
+     not the same as its hour being now: unless it is visibly being kept (above), it moves to its
+     own line and reads as slipping. */
+  const _hourPassed=e=>{
+    try{
+      if(e.day!==today||!e.period)return false;
+      const pi=PERIODS.indexOf(e.period);
+      return pi>=0 && chatPeriodIndex(c)>pi;
+    }catch(_){ return false; }
+  };
+  const _due=active.filter(e=>planDueNow(c,e));
+  const dueNow=_due.filter(e=>!_hourPassed(e)||_hereNow(e));
+  const lateToday=_due.filter(e=>_hourPassed(e)&&!_hereNow(e));
   const todayPlans=active.filter(e=>e.day===today && !planDueNow(c,e));
   const upcoming=active.filter(e=>e.day>today && e.day<=today+2);  // next couple days
   const parts=[];
@@ -13308,6 +13340,7 @@ function calendarContextLine(chat,selfName,selfId,opts){
   // colours how they treat whoever missed it.
   if(overdue.length) parts.push("UNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): "+overdue.map(e=>`${e.title}${_others(e)?" with "+_others(e):""} — was for Day ${e.day}, never happened`).join("; "));
   if(dueNow.length)    parts.push("⏰ HAPPENING NOW: "+dueNow.map(e=>fmt(e,true)).join("; "));
+  if(lateToday.length) parts.push("ITS HOUR HAS PASSED TODAY, and it has not happened — you are either about to keep it late or it is slipping away, and you know which: "+lateToday.map(e=>fmt(e,false)).join("; "));
   if(todayPlans.length)parts.push("TODAY: "+todayPlans.map(e=>fmt(e,false)).join("; "));
   if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e,false)} (Day ${e.day})`).join("; "));
   if(!parts.length)return "";
@@ -26579,7 +26612,17 @@ function deliverProactiveText(chat,p,message,why){
       // v38.6 — briefDesc, not slice: a hard cut at 60 characters left the character remembering
       // "(evening plan feels loose, wants to make it concrete without )" — a sentence amputated
       // mid-word, inside a memory that is then read back to them as a fact about their own day.
-      content:`I texted ${state.user} first${why?` (${briefDesc(why,60)})`:""}: "${briefDesc(message,80)}"`,
+      /* (!) v60.1 — THE PARENTHETICAL WAS THE ENGINE TALKING. `why` is the proactive-text judge's
+         own reason for deciding to send, written ABOUT this character in the third person, in
+         whatever language that engine happened to answer in — so the bank filled with lines like
+           I texted Emre first (Akşamki planın belirsizliği Burcu'yu rahatsız ediyor…): "…"
+           I texted Emre first (The loosely floated meeting needs a nudge, and she wants to…): "…"
+         Two languages, third person, inside a FIRST-person record that is read back to her as her
+         own memory — and clipped with an ellipsis on top. engineLangDirective exists to stop
+         exactly this everywhere a model writes a memory; this line was building one in code and
+         went around it. The message she actually sent carries the motive anyway: she can read what
+         she wrote. The note about why the engine decided to send it is not hers and is dropped. */
+      content:`I texted ${state.user} first: "${briefDesc(message,80)}"`,
       type:"EXPERIENCE",emotion:"",importance:0.5,tags:["text"],date:Date.now(),gameDay:chat.gameDay||1,
       people:memPeople(p.name,state.user),
       gamePeriod:_memPeriod(chat),
@@ -32208,6 +32251,12 @@ async function runGoalPursuit(chat,day,uni){
           day:pDay, period:per,
           who:[p.name].concat(comp?[comp.name]:[]).join(", "),
           where:String(pl.where||"").trim(), locationId:loc?loc.id:null,
+          /* v60.1 — WHO ACTS IS THE ONE WHO PLANNED IT. This wrote no executor at all, and the
+             boot back-fill above then stamped "user" on it, so every plan a character made for
+             themselves reached that character as "the player is the one coming; you are expected
+             to be there" — the exact opposite of a plan that says she will go to him. A pursuit
+             plan has exactly one actor and it is never ambiguous: the character pursuing it. */
+          executor:p.name, executorId:p.id,
           withUser:false, source:"world", goalPlan:true
         });
         if(entry){
@@ -34983,7 +35032,7 @@ async function maybeCharQuestText(chat){
       }catch(err){}
       const msgTxt=String(j&&j.message||"").trim().replace(/\*[^*]*\*/g,"").trim();
       if(!msgTxt)continue;
-      deliverProactiveText(chat,holder,msgTxt,"kendi emeli: "+q.title);
+      deliverProactiveText(chat,holder,msgTxt,"");   // v60.1 — the `why` no longer reaches a memory (it was Turkish engine text in an English bank)
       chat._cqTextDay=today; markChatDirty(chat);
       q.delivered=true; q.deliveredDay=q.deliveredDay||today; q.awaitingUser=true;
       q.lastNudgeDay=today; q.nudges=(q.nudges||0)+1;

@@ -242,6 +242,45 @@ sentinel as a participant's name. `calPrompt` knows the third value, when to use
 is being knocked on) and that writing it obliges a real `where`; the tracker normalises a
 capitalised "Both" and refuses it on a char↔char plan, where it would mean nothing.
 
+### A plan that claimed the player was coming (v60.1)
+
+From a live payload: an entry reading *"She plans to go to Emre's house and ask directly why he never
+came"* reached her with the line **"Emre Tokmak is the one coming; you are expected to be there"** —
+while she was standing in his kitchen, having already asked. Three faults stacked:
+
+1. `runGoalPursuit` wrote **no `executor` at all**. A pursuit plan has exactly one actor and it is
+   never ambiguous — the character pursuing it — so it now records `executor`/`executorId`.
+2. The boot back-fill then **invented one**: the v22 step that carries a legacy `doer` over to
+   `executor` fell through to `"user"` when there was no doer either, so any writer that forgot the
+   field produced a plan asserting the player was coming. With no doer, nothing is stamped now, and
+   `actorOf` already prints nothing for an unset executor — which is the honest reading of "nobody
+   wrote down who acts".
+3. `_hereNow` returned false whenever the reader was the **only** name on the entry — the exact
+   shape of a plan a character made for herself — so a plan being kept still read as pending. Being
+   at its location at its hour is now enough; a second name is what makes it happening *with*
+   someone, and the wording splits accordingly.
+
+Also: `planDueNow` stays true for the rest of the day once a period arrives, so an Afternoon plan
+still announced **HAPPENING NOW** at Evening. An entry whose hour has passed and which is not
+visibly being kept moves to its own `ITS HOUR HAS PASSED TODAY` line. And the purpose is cut with
+`briefDesc`, not `slice(0,120)`, which had left her reading *"…ask directly why he never came to t"*;
+`goalPursuit`'s `detail` field is now specified as one short purpose phrase **in the character's own
+terms**, because it is printed back to that character as "for: …" and was arriving as a note written
+about her in the third person.
+
+### The proactive-text memory carried the engine's reasoning (v60.1)
+
+`deliverProactiveText` built its memory as ``I texted X first (${why}): "…"`` — where `why` is the
+proactive-text judge's own reason for deciding to send, written **about** the character in the third
+person, in whatever language that engine answered in. The bank filled with
+*"I texted Emre first (Akşamki planın belirsizliği Burcu'yu rahatsız ediyor…)"* and
+*"(The loosely floated meeting needs a nudge, and she wants to…)"* — two languages, third person,
+ellipsis-clipped, inside a first-person record read back to her as her own memory.
+`engineLangDirective` exists to prevent exactly this wherever a **model** writes a memory; this line
+built one in code and went around it. The parenthetical is gone — the message she sent carries the
+motive, and she can read what she wrote. The one caller that hard-coded a Turkish `why` passes
+nothing now.
+
 ### A journey made to keep a meeting (v54.1)
 
 `travelTo(locId, companions, {meeting, counterpart})` and `narrateCharMove` both receive

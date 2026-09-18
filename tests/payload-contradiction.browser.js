@@ -72,9 +72,31 @@ const {chromium}=require('playwright');
      await pg.evaluate(()=>/WHAT THEY ALREADY DID/.test(String(_curateGoalsFor))
        && /WHAT THEY ALREADY DID names it as finished/.test(DEFAULT_GOALS_CURATOR)));
   ok("and so is the drives writer, which reads the current want-list rather than the frozen field",
-     await pg.evaluate(()=>/bits\.done=calendarDoneLine/.test(String(_writePsyche))
+     await pg.evaluate(()=>/bits\.done=settledEventLines/.test(String(_writePsyche))
        && /engineGoals\(p,400\)/.test(String(_writePsyche))
        && /ALREADY HAPPENED means already happened/.test(DEFAULT_PSYCHE)));
+  /* v62.1 — and all three read ONE source, so a resolved quest cannot be settled for the drives
+     writer and still pending for the goal list. */
+  ok("the goal filter, the curator and the drives writer share one settled-event source",
+     await pg.evaluate(()=>/settledEventLines/.test(String(_goalsSettledTexts))
+       && /settledEventLines/.test(String(_curateGoalsFor))
+       && /settledEventLines/.test(String(_writePsyche))));
+  ok("and it reads the pursuits and the world quests, not only the calendar",
+     await pg.evaluate(()=>{
+      const src=String(settledEventLines);
+      return /_charQuests/.test(src) && /gameData&&uni\.gameData\.quests/.test(src)
+          && /calendarDoneLine/.test(src); }));
+  ok("a resolved pursuit settles the goal that describes it", await pg.evaluate(()=>{
+      const B=state.personas.find(p=>p.id==="p_b");
+      const uni=state.universes[0];
+      const gd=uni.gameData=(uni.gameData&&typeof uni.gameData==="object")?uni.gameData:{};
+      gd.charQuests=[{id:"cq1",holderId:"p_b",title:"Get Burak to look at me the way he used to",
+        status:"done",completedDay:4,result:"He did."}];
+      B.goalsLive={lines:["Get Burak to look at me the way he used to.",
+                          "Keep Aslan out of all of it."],day:3,at:Date.now()};
+      const live=liveGoalsLines(B);
+      gd.charQuests=[];
+      return live.length===1 && /Aslan/.test(live[0]) ? true : JSON.stringify(live); }));
 
   console.log("\n[the example stops beating the rule]");
   ok("the LIMITS rule is in the solo and multi layouts, not only in gm", await pg.evaluate(()=>{
@@ -144,8 +166,47 @@ const {chromium}=require('playwright');
   ok("a real commitment still records", await pg.evaluate(()=>{
       const chat=curChat();
       const r=recordPromise(chat,{holder:"Burcu",to:state.user,promise:"never to lie to you again",
-        kind:"prohibition",ask:"because it would start the whole thing again"},4);
-      return !!r && r.kind==="prohibition" ? true : JSON.stringify(r); }));
+        kind:"prohibition",ask:"because it would start the whole thing again",
+        shows_as:"the next time he asks her where she was"},4);
+      return !!r && r.kind==="prohibition" && /where she was/.test(r.showsAs||"")
+        ? true : JSON.stringify(r); }));
+  /* v62.1 — a commitment that constrains no later turn is not one. Asking the extractor to NAME
+     the moment is the cheapest real test available, and the entries that failed it are exactly the
+     ones reaching "WHAT WAS SWORN TO YOU" as narration or as a claim over a person. */
+  ok("a commitment that names no future moment is not recorded", await pg.evaluate(()=>{
+      const chat=curChat();
+      const a=recordPromise(chat,{holder:"Burcu",to:state.user,promise:"to be better",
+        kind:"change",shows_as:""},4);
+      const b=recordPromise(chat,{holder:"Burcu",to:state.user,promise:"to be better",
+        kind:"change",shows_as:"always"},4);
+      return (a===null&&b===null) ? true : JSON.stringify([a,b]); }));
+  ok("the schema and the purge pass both ask for it", await pg.evaluate(()=>
+      /"shows_as"/.test(DEFAULT_PROMISES) && /shows_as/.test(DEFAULT_PROMISE_PURGE)));
+  ok("the purge pass is registered, editable, and mapped to its own card", await pg.evaluate(()=>
+      !!PROMPT_BY_KEY.promisePurge && typeof up("promisePurge")==="string"
+   && ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(b=>b&&b.promptKey==="promisePurge"))));
+  ok("and it runs once per chat, before the extractor", await pg.evaluate(()=>
+      /await runPromisePurge\(chat\)/.test(String(runPromiseEngine))
+   && /chat\._prPurged/.test(String(runPromisePurge))));
+
+  console.log("\n[one copy of each thing]");
+  ok("a superseded decision stops being read back as current", await pg.evaluate(()=>{
+      const before=visibleMemories().length;
+      state.memory.push({id:"m_sup",ownerId:"p_b",character:"Burcu",type:"DECISION",
+        content:"I am not going back to that house.",gameDay:3,gamePeriod:"Night",
+        universeId:state.universes[0].id,date:Date.now(),superseded:true});
+      const after=visibleMemories().filter(m=>m.id==="m_sup").length;
+      state.memory=state.memory.filter(m=>m.id!=="m_sup");
+      return after===0 ? true : "superseded memory still injected"; }));
+  ok("the reconciler is what marks it, from the stretch that reversed it", await pg.evaluate(()=>
+      /_liveDecisionsFor/.test(String(reconcilePeriodFor))
+   && /supersedes/.test(String(reconcilePeriodFor))
+   && /WHAT THIS STRETCH REVERSED/.test(DEFAULT_MEMRECONCILE)));
+  ok("the stance of whoever the turn is aimed at is stated once, in feelings",
+     await pg.evaluate(()=>/stanceElsewhere/.test(String(relSheetBlockFull))
+       && /_feelHasSettled/.test(String(buildCharPromptBlocks))));
+  ok("and a private aim the goal list already carries is not restated beside it",
+     await pg.evaluate(()=>/liveGoalsLines\(_selfP\)/.test(String(intentParts))));
   ok("the extractor is told what a claim over a person is", await pg.evaluate(()=>
       /A CLAIM OVER A PERSON/.test(DEFAULT_PROMISES)
    && /Who is BOUND, and what did THEY undertake to do/.test(DEFAULT_PROMISES)));

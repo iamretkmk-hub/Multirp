@@ -29,9 +29,22 @@ const {chromium}=require('playwright');
   ok("the note is forbidden from deciding the turn",
      /YOU REPORT THE STATE\. YOU DO NOT DECIDE THE TURN/.test(relp.d)
      &&/never tell them to hold steady, keep their voice light, keep smiling, not pull away/.test(relp.d), "");
+  /* v63.1 — and it asks for the impulse WITHOUT the visible beat. The note used to request "ONE
+     concrete thing it is doing to you that someone in the room would notice", which is a body-beat
+     — and `feel_momentary` in the payload already tells the character the charge goes into what
+     their hands are doing. Two sources prescribing one beat. The engine reports the body; the
+     character chooses what it does. */
   ok("it asks for the impulse instead of the behaviour",
-     /name the IMPULSE it is producing/.test(relp.d)
+     /the IMPULSE under it/.test(relp.d)
      &&!/spell out how that feeling should visibly COLOR your next line/.test(relp.d), "");
+  ok("and it is scoped to the body — no names, no visible actions",
+     /IT IS THE BODY, AND ONLY THE BODY/.test(relp.d)
+     &&/NO NAMES/.test(relp.d)
+     &&/NO ACTIONS, and nothing anyone in the room could see/.test(relp.d)
+     &&!/someone in the room would notice/.test(relp.d), "");
+  ok("it leans rather than deciding, and is held to the settled view",
+     /IT LEANS\. IT DOES NOT DECIDE/.test(relp.d)
+     &&/weather does not rewrite the ground/.test(relp.d), "");
   ok("and it carries the real sentence that caused this as the worked wrong example",
      /you keep your voice light and you don't pull away/.test(relp.d)
      &&/Wrong \(do NOT do this — it is an order/.test(relp.d), "");

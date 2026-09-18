@@ -819,3 +819,68 @@ leaks. `drive_ego`'s closing note was therefore rendering on every turn the psyc
 written for — in the one block whose entire contract is that it does not exist until it has
 something to say. `_ptGapify` converts internal blank lines in inlined prose to `{{gap}}`, and all
 four go green.
+
+## v63.1 — the emotional loop as one system
+
+Five engines write about one thing — how a character has come to see somebody — on five different
+cadences, and the failure they share is drifting apart: each true on its own, contradicting the
+others inside a single payload.
+
+**The loop's intended shape was already right.** A fast spike saturates through `applyFastDelta`,
+decays 18% per cycle toward `_fastBaseline(o)` — computed *from* the slow axes — and is logged to
+`dayOpinions`. At day's end `evalRelationship` reads memories as the primary substrate, the day's
+fleeting feelings as explicit LOW WEIGHT, the foundation and the current values, with `familiarity`
+gating how deep the rest can go. Fast is anchored to slow; fast tints slow only through the day
+pass; memories outrank feelings. That much needed no changing.
+
+**What was broken is who could see what.**
+
+| | Was | Now |
+|---|---|---|
+| `relShortPrompt` (writes the `feelings_now` note) | slow axis NUMBERS + the foundation sheet | + `settledViewOf(o)` — the sentence the daily evaluation rewrites, told the moment *leans* off it and cannot contradict it |
+| `psychePrompt` (writes `drives`) | same gap | + the same sentence, as its own declared piece, with the rule attached |
+
+Both read the **foundation** — a static document regenerated only for movers — and neither read the
+**maintained** view. So the loudest line in the payload and the two pulls beneath it were written
+blind to the one sentence saying how the character currently feels about this person.
+
+The note is also scoped to the body now: no names, no visible actions. It used to ask for "ONE
+concrete thing it is doing to you that someone in the room would notice" while `feel_momentary`
+told the character the charge goes into what their hands are doing — two sources prescribing one
+beat. The engine reports the hormones; the character chooses what the body does with them.
+
+### Everything that moves the view goes through memory
+
+The daily evaluation reasons from memories, so that is the channel — not direct axis writes, which
+would put a second author on the slow axes. A broken promise already did this correctly, and so did
+gossip (**correction to an earlier reading of this code**: every `recordGossip` path plants a
+carrier-owned memory, and the evaluation treats the player as the default subject, so rumours have
+always reached the axes). Two did not, and do now:
+
+- **An unkept meeting.** `calendarContextLine` rendered "you noticed; it stung, and it colours how
+  you treat whoever missed it" and touched nothing. A player could stand someone up three times
+  while the numbers said the bond was fine. Planted once per entry, character participants only.
+- **The reckoning after heat.** `afterHeat` was write-only: she decided something, it rendered, and
+  the evaluation judged the same night with no idea a decision had been taken. Planted as a
+  `DECISION`, which is also the type the supersession check reads — so a later reckoning that
+  reverses it marks it rather than sitting beside it.
+
+### Absence is an event, not a decay
+
+The slow axes moved in exactly one place, for characters who *spoke that day*. Someone the player
+never went near was frozen — the same numbers on day twenty as on day three. Absence was the one
+thing in this world that could not change how anybody felt.
+
+It is a **profile**, not a fade toward zero, because decay says being ignored makes a person care
+less and that is backwards: `jealousy` **up** (the axis is defined at positive as possessive,
+threatened, fearing replacement), `trust` **down**, `respect` down gently. `affection` is left alone
+— longing and resentment pull it both ways and neither wins on absence alone. `familiarity` is left
+alone; the axis table says it rarely drops. `comfort` is never written and still falls, because its
+resting level is computed from trust/affection/familiarity minus fear — that is the existing
+coupling doing the work.
+
+Bounded three ways so it can never become the story: a grace period before it starts, a saturating
+step of about two points, and a cap on how far the whole drift can carry a bond from where the
+silence began. It plants a record at a few crossings, so the description has something to catch up
+from — without that the numbers would drift while `desc` went on saying she trusts him, which is the
+two-states-of-one-fact failure the whole pass exists to remove.

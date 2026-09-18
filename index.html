@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v70.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v70.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -25187,8 +25187,14 @@ function buildTailBlocks(opts){
      carried until something replaces it. Only for the person it was about: her decision about Emre
      is not context for a conversation with her daughter. */
   try{
-    const _ah=selfP&&selfP.afterHeat;
-    if(_ah&&_ah.text&&_ah.withName&&(targetName||state.user)===_ah.withName)
+    /* v70.3 — from the per-person record first. The single slot is overwritten by whoever she
+       reckoned with most recently, so her decision about Emre vanished from Emre's payload the
+       moment a different night was reckoned with — the block was correct about whose decision it
+       showed and wrong about whether it still had one. */
+    const _tn=targetName||state.user;
+    const _ah=(selfP&&selfP.afterHeatBy&&selfP.afterHeatBy[_tn])
+           || ((selfP&&selfP.afterHeat&&selfP.afterHeat.withName===_tn)?selfP.afterHeat:null);
+    if(_ah&&_ah.text)
       B.after_heat=`${blkTpl("after_heat_header")}\n${_ah.text}`;
   }catch(e){}
 
@@ -28940,10 +28946,35 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
       }catch(e){}
       return out;
     })();
-    const prev=(p.afterHeat&&p.afterHeat.withName===otherName)?p.afterHeat.text:"";
+    /* (!) v70.3 — ONE SLOT COULD NOT HOLD A HISTORY. The previous decision was already scoped to
+       the right person, but it lived in a single `p.afterHeat` that every reckoning overwrote — so
+       a night with someone else in between wiped the chain, and the next reckoning about the FIRST
+       person read as if it were the first ever. That is exactly the mechanism a repeated affair
+       needs: the decision getting shorter, the condition getting cheaper, until there isn't one.
+       With one slot it silently reset every time the story went anywhere else. Kept per person now;
+       the single slot is still written, for the older readers and for anything already stored. */
+    const prev=(function(){
+      const byName=(p.afterHeatBy&&p.afterHeatBy[otherName])||null;
+      if(byName&&byName.text)return byName.text;
+      return (p.afterHeat&&p.afterHeat.withName===otherName)?p.afterHeat.text:"";
+    })();
+    /* v70.3 — AND WHEN THIS IS BEING WRITTEN. A reckoning taken with them still in the room is not
+       the reckoning taken walking home, and neither is the one taken at the end of the day. Same
+       night, three different decisions. */
+    const whenNow=(function(){
+      try{
+        const stillHere=presentCast(c).some(x=>x&&x.name===otherName);
+        if(stillHere)return "You are still in the room with them. Nothing has been put behind you yet.";
+        const sameDay=(dayStamp==null)||(dayStamp===(c.gameDay||1));
+        const samePeriod=(!periodStamp)||(periodStamp===(chatPeriod(c)||""));
+        if(sameDay&&samePeriod)return "They have gone. It is still the same part of the day and you are on your own with it.";
+        return "Time has passed since it happened — the day has moved on and you are looking back at it.";
+      }catch(_){ return ""; }
+    })();
     const sys=fillTpl(up("afterHeatPrompt"),{char:p.name,other:otherName,user:state.user});
     const ask=`${p.name}'s reckoning, after ${otherName}.`
-      +(prev?`\n\nWHAT SHE DECIDED LAST TIME (say what has changed, do not repeat it):\n${prev}`:"");
+      +(whenNow?`\n\nWHEN THIS IS BEING DECIDED:\n${whenNow}`:"")
+      +(prev?`\n\nWHAT SHE DECIDED LAST TIME ABOUT ${otherName} (say what has changed, do not repeat it):\n${prev}`:"");
     /* (!) v42.2 — AND THE NAMES. ptVars(...,"any") is the engine scope, which deliberately has no
        char/self: a background engine usually is not about one person. This one is, and a template
        that opens "You are {{char}}." was shipping those eight characters to the model. epSend takes
@@ -28953,8 +28984,11 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.6),max:Math.max(fnTok("mem",300),420),dbg:"After it is over · "+p.name});
     const text=String(out||"").trim().replace(/^["'\s]+|["'\s]+$/g,"");
     if(text){
-      p.afterHeat={text:briefDesc(text,700),withName:otherName,
+      const _rec={text:briefDesc(text,700),withName:otherName,
         day:dayStamp||c.gameDay||1,period:periodStamp||chatPeriod(c)||""};
+      p.afterHeat=_rec;                                  // the live one, for the payload block
+      p.afterHeatBy=p.afterHeatBy||{};
+      p.afterHeatBy[otherName]=_rec;                     // and kept per person, so a chain survives
       try{ persistPersonas(); }catch(_){}
       /* v63.1 — AND IT GOES INTO THE RECORD. This was write-only: a character decided something
          about the person she had just been with, it rendered in `after_heat`, and the slow axes
@@ -36348,7 +36382,25 @@ async function maybeCharQuestText(chat){
       // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
       const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
         return li?`${holder.name} last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
-      const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${state.user}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${state.user}.`}\n${seenLine?seenLine+"\n":""}Write the text message. Return the JSON.`;
+      /* v70.3 — WHAT HAS ALREADY BEEN SAID ABOUT THIS. The follow-up rule ("a considered follow-up
+         that moves the matter forward, NOT a nag") was being asked of a model that could see only a
+         COUNT — "they have raised it before (2x)" — and not one word of what those two messages
+         actually said, nor whether the player answered them. There is no way to avoid repeating
+         yourself when you cannot see what you said, so the second ask paraphrased the first and the
+         third paraphrased the second. Two sides, both stamped: what this character has already sent
+         about this ask, and the recent thread, which is where the player's answer or silence is. */
+      const priorAsks=((q.texts||[]).slice(-3))
+        .map(t=>`- [Day ${t.day}${t.period?", "+t.period:""}] you wrote: "${t.text}"`).join("\n");
+      const threadLines=(()=>{ try{
+        return textThreadMsgs(chat,holder.id).slice(-3).map(m=>{
+          const when=(m.gday!=null)?`Day ${m.gday}${m.gperiod?", "+m.gperiod:""}`:"earlier";
+          return `- [${when}] ${m.role==="user"?state.user:holder.name}: ${String(m.content||"").slice(0,300)}`;
+        }).join("\n");
+      }catch(_){ return ""; } })();
+      const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${state.user}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n`
+        +(priorAsks?`\n# What you have already sent them about this — do not say any of it again\n${priorAsks}\n`:"")
+        +(threadLines?`\n# Your recent texts with ${state.user} (theirs and yours — read whether they answered)\n${threadLines}\n`:"")
+        +`\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${state.user}.`}\n${seenLine?seenLine+"\n":""}Write the text message. Return the JSON.`;
       let j=null;
       try{
         const out=await chatCompletion(epSend("charQuestText",sys,{data:usr}),
@@ -36361,6 +36413,10 @@ async function maybeCharQuestText(chat){
       chat._cqTextDay=today; markChatDirty(chat);
       q.delivered=true; q.deliveredDay=q.deliveredDay||today; q.awaitingUser=true;
       q.lastNudgeDay=today; q.nudges=(q.nudges||0)+1;
+      /* The message itself, not just the tally — this is what the next follow-up reads so it does
+         not paraphrase what it already sent. Three is plenty; an ask this old has other problems. */
+      (q.texts=q.texts||[]).push({day:today,period:chatPeriod(chat)||"",text:briefDesc(msgTxt,240)});
+      if(q.texts.length>3)q.texts=q.texts.slice(-3);
       charQuestNote(uni,q,today,`Texted ${state.user} and put the ask to them.`);
       persistUniverses();
       _qlog("cq.text",`"${q.title}" — ${holder.name} texted the player (nudge ${q.nudges})`);

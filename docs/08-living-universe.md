@@ -396,3 +396,29 @@ existed:
 - Neither party's location was sent. The composer could not tell texting someone across town from
   texting someone standing in the same room. Both are stated in the `# Now` block, and the
   same-place case is said out loud rather than left to be inferred.
+
+## v70.3 — two engines reasoning from a tally instead of a record
+
+**`charQuestText` could see how often it had asked, not what it had said.** The follow-up rule — *a
+considered follow-up that moves the matter forward, NOT a nag* — was being asked of a model given a
+count (`they have raised it before (2x)`) and not one word of those two messages, nor whether the
+player had answered them. There is no way to avoid repeating yourself when you cannot see what you
+said, so the second ask paraphrased the first. Each sent ask is now recorded on the quest
+(`q.texts`, day/period/text, capped at three) and reaches the prompt under an instruction not to
+repeat any of it; the recent text thread goes in beside it, stamped, because that is where the
+player's answer — or their silence — actually is. Day and period were already being sent.
+
+**`afterHeatPrompt`'s previous decision had nowhere to live.** It was already scoped to the right
+person, but it was read from a single `p.afterHeat` that every reckoning overwrote. A night with
+somebody else in between wiped the chain, and the next reckoning about the *first* person read as
+though it were the first ever. That chain is the whole mechanism — the decision getting shorter, the
+condition getting cheaper, until there isn't one — and with one slot it silently reset whenever the
+story went anywhere else. The same slot fed the `after_heat` payload block, so her decision about
+one person disappeared from their payload too.
+
+The record is kept per person now (`p.afterHeatBy[name]`), with the single slot still written so an
+older save and the existing readers keep working; both the engine and the payload block read the
+per-person record first and fall back. A decision is still never shown to anyone it was not about.
+
+The reckoning is also told **which moment it is being taken in** — still in the room with them, just
+after they have gone, or later with the day moved on. Same night, three different decisions.

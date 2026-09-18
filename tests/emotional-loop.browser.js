@@ -266,6 +266,74 @@ const {chromium}=require('playwright');
           && t.indexOf("{{call//rp_format}}")<0
           && t.indexOf("{{call//rp_task}}")<0; }));
 
+  /* v70.3 — ONE SLOT COULD NOT HOLD A HISTORY. The previous decision handed to the reckoning was
+     already scoped to the right person, but it lived in a single p.afterHeat that every reckoning
+     overwrote — so a night with someone else in between wiped the chain, and the next reckoning
+     about the FIRST person read as if it were the first ever. That chain is the mechanism: the
+     decision getting shorter, the condition getting cheaper, until there isn't one. With one slot
+     it silently reset whenever the story went anywhere else. The same slot fed the after_heat
+     payload block, so her decision about one person vanished from their payload too. */
+  console.log("\n[the decision is kept per person, so a chain can form]");
+  {
+    const pick=(selfP,targetName)=>pg.evaluate(o=>{
+      const _tn=o.t, selfP=o.p;
+      const _ah=(selfP&&selfP.afterHeatBy&&selfP.afterHeatBy[_tn])
+             || ((selfP&&selfP.afterHeat&&selfP.afterHeat.withName===_tn)?selfP.afterHeat:null);
+      return _ah?_ah.text:"";
+    },{p:selfP,t:targetName});
+    const withBoth={afterHeatBy:{Emre:{text:"ABOUT_EMRE",withName:"Emre"},
+                                Hakan:{text:"ABOUT_HAKAN",withName:"Hakan"}},
+                    afterHeat:{text:"ABOUT_HAKAN",withName:"Hakan"}};
+    ok("a night with someone else no longer wipes the earlier decision",
+       await pick(withBoth,"Emre")==="ABOUT_EMRE"?true:"the Emre decision was lost");
+    ok("and the newer one is still right for its own person",
+       await pick(withBoth,"Hakan")==="ABOUT_HAKAN");
+    const legacy={afterHeat:{text:"LEGACY",withName:"Emre"}};
+    ok("a save written before the per-person record still resolves",
+       await pick(legacy,"Emre")==="LEGACY"?true:"legacy saves lost their decision");
+    ok("and it is still never shown to the wrong person",
+       await pick(legacy,"Hakan")===""?true:"a decision leaked to someone it was not about");
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("the engine reads the per-person record first",
+       /const byName=\(p\.afterHeatBy&&p\.afterHeatBy\[otherName\]\)/.test(src)
+         ? true : "the reckoning still reads the single slot alone");
+    ok("the payload block reads it too",
+       /selfP\.afterHeatBy&&selfP\.afterHeatBy\[_tn\]/.test(src)
+         ? true : "after_heat still reads the single slot alone");
+    ok("both stores are written, so nothing already saved breaks",
+       /p\.afterHeat=_rec;/.test(src) && /p\.afterHeatBy\[otherName\]=_rec;/.test(src)
+         ? true : "one of the two stores is not written");
+    ok("the reckoning is told which moment it is being taken in",
+       /WHEN THIS IS BEING DECIDED/.test(src) && /You are still in the room with them/.test(src)
+         ? true : "the moment never reaches the prompt");
+    ok("and the previous-decision line names the person it was about",
+       /WHAT SHE DECIDED LAST TIME ABOUT \$\{otherName\}/.test(src)
+         ? true : "the line is still unscoped in its wording");
+  }
+
+  /* v70.3 — the character-quest text could see a COUNT of how often it had asked and not one word
+     of what it had said, nor whether the player answered. There is no way to avoid repeating
+     yourself when you cannot see what you said. */
+  console.log("\n[the quest text can see what it already sent]");
+  {
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("each sent ask is recorded on the quest",
+       /\(q\.texts=q\.texts\|\|\[\]\)\.push\(\{day:today,period:chatPeriod\(chat\)\|\|"",text:briefDesc\(msgTxt,240\)\}\)/.test(src)
+         ? true : "the message itself is still not kept");
+    ok("and the log is bounded",
+       /if\(q\.texts\.length>3\)q\.texts=q\.texts\.slice\(-3\)/.test(src)
+         ? true : "q.texts can grow without limit");
+    ok("the prior asks reach the prompt, stamped",
+       /# What you have already sent them about this — do not say any of it again/.test(src)
+         ? true : "prior asks never reach the prompt");
+    ok("so does the recent thread, so silence is readable",
+       /# Your recent texts with \$\{state\.user\} \(theirs and yours — read whether they answered\)/.test(src)
+         ? true : "the thread never reaches the prompt");
+    ok("the thread lines carry a day/period stamp",
+       /const when=\(m\.gday!=null\)\?`Day \$\{m\.gday\}\$\{m\.gperiod\?", "\+m\.gperiod:""\}`:"earlier"/.test(src)
+         ? true : "the quest thread lines are unstamped");
+  }
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

@@ -85,8 +85,15 @@ const {chromium}=require('playwright');
   ok("it is an ordered, editable block like any other", await pg.evaluate(()=>
       REPLY_ORDER.indexOf("calendar_done")>-1 && !!REPLY_BLOCKS.calendar_done
       && typeof BLOCK_TPL_DEFAULTS.calendar_done_header==="string"));
-  ok("its header tells them not to recite it", await pg.evaluate(()=>
-      /Never list them/.test(BLOCK_TPL_DEFAULTS.calendar_done_header)));
+  /* v62.1 — the ban on reciting is stated ONCE now, in `rail_indirect`, for the whole payload and
+     in the last block before generation. Five modules were each explaining themselves and
+     forbidding their own recitation; none added anything the rail does not already cover. What
+     this header keeps is the part only it carries: these are lived, so refer to one the way a
+     person refers to last night. */
+  ok("its header says how one is referred to, and leaves the ban to the rail", await pg.evaluate(()=>
+      /the way a person refers to last night/.test(BLOCK_TPL_DEFAULTS.calendar_done_header)
+   && !/Never list them/.test(BLOCK_TPL_DEFAULTS.calendar_done_header)
+   && /never as an announcement/i.test(BLOCK_TPL_DEFAULTS.rails_header)));
 
   console.log("\n[a meeting can hold more than two people]");
   ok("every participant is matched by id", await pg.evaluate(()=>{

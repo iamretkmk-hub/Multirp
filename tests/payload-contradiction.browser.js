@@ -321,6 +321,55 @@ const {chromium}=require('playwright');
         targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
       return !B.drives ? true : B.drives.slice(0,200); }));
 
+  console.log("\n[one copy of each rule, in the place it fires hardest]");
+  ok("do-not-recap is stated once, under the quoted line", await pg.evaluate(()=>{
+      const n=["last_line_footer","guidance_reply"].filter(k=>/do not recap|never by repeating it back/i.test(blkTpl(k)));
+      const heading=["solo","multi","gm","text","heat"].some(k=>ptPreset(k).indexOf("{{call//head_react_not_recap}}")>-1);
+      return (n.length===1 && n[0]==="last_line_footer" && !heading) ? true
+           : JSON.stringify({n,heading}); }));
+  ok("who the turn is aimed at is asserted once, at the generation point", await pg.evaluate(()=>{
+      const said=["target_player","target_char"].filter(k=>/aimed at/i.test(blkTpl(k)));
+      return (said.length===0 && /aimed at/i.test(blkTpl("guidance_target"))) ? true
+           : JSON.stringify(said); }));
+  ok("and the per-module recitation bans are gone — rail_indirect covers them", await pg.evaluate(()=>{
+      const bad=["mem_recent_instr","calendar_done_header","quest_intro","trackers_header"]
+        .filter(k=>/never recite|never read one out|never list them/i.test(blkTpl(k)));
+      return bad.length===0 && /never as an announcement/i.test(blkTpl("rails_header"))
+        ? true : JSON.stringify(bad); }));
+  ok("the wearing line states the outfit and attaches no rule to it", await pg.evaluate(()=>
+      !/do not describe/i.test(blkTpl("bio_wearing_self"))));
+
+  console.log("\n[the voice machinery stays out of the prose]");
+  ok("a delivery tag is stripped from anything quoted back", await pg.evaluate(()=>{
+      const out=stripDeliveryTags('"[say quietly with a low tone] Gelmeyecegini dusunmustum." <break>');
+      return !/\[|\]|</.test(out) && /Gelmeyecegini/.test(out) ? true : out; }));
+  ok("and both quoting blocks run it", await pg.evaluate(()=>
+      /stripDeliveryTags\(x\)/.test(String(buildTailBlocks))
+   && /stripDeliveryTags\(line\.text\)/.test(String(buildTailBlocks))));
+  ok("directions are prosody, never an emotion label", await pg.evaluate(()=>
+      /Never name the emotion/.test(blkTpl("voice_delivery"))
+   && /never spend the reply's one narration beat on the voice/.test(blkTpl("voice_delivery"))));
+
+  console.log("\n[a dated word lives in one block]");
+  ok("a meeting the reader themselves swore to drops from the calendar", await pg.evaluate(()=>{
+      const chat=curChat(); chat.gameDay=4; chat.period="Midday";
+      chat.calendar=[{id:"c9",kind:"meeting",title:"Come to the hearing",who:"Burcu",day:5,period:"Morning"}];
+      chat.promises=[{id:"pr9",status:"open",holderId:"p_b",holderName:"Burcu",toId:"__user__",
+        toName:state.user,promise:"to come to the hearing",kind:"promise",weight:"binding",day:3}];
+      const withPromise=calendarContextLine(chat,"Burcu","p_b",{bare:true});
+      chat.promises=[];
+      const without=calendarContextLine(chat,"Burcu","p_b",{bare:true});
+      return (!/hearing/i.test(withPromise) && /hearing/i.test(without)) ? true
+           : JSON.stringify({withPromise,without}); }));
+
+  console.log("\n[the narrator speaks the story's language]");
+  ok("the movement logs are fragments, not hard-coded English", await pg.evaluate(()=>
+      ["narr_move_self","narr_move_with","narr_move_char"].every(k=>k in BLOCK_TPL_DEFAULTS)
+   && /blkTpl\("narr_move_self"\)/.test(String(syncPlayerSubArea))));
+  ok("and the guardrail written against the app's own example is gone", await pg.evaluate(()=>
+      !/the narrator's/.test(blkTpl("rails_header"))
+   && /never put words in .*mouth/.test(blkTpl("rails_header"))));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

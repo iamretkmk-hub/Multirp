@@ -127,7 +127,7 @@ const {chromium}=require('playwright');
        promise:"to call on Sunday",statusDay:3,day:1,note:"she did not"}];
     markChatDirty(chat);
     const t=ptDefaultTemplate("solo");
-    return {tplHasDrives:/PULLING AT YOU/.test(t)&&/\{\{call\/\/drive_toward\}\}/.test(t)};
+    return {tplHasDrives:/CAUGHT BETWEEN/.test(t)&&/\{\{call\/\/drive_toward\}\}/.test(t)};
   });
   ok("the drives heading and closing note are prose in the template",
      loaded.tplHasDrives===true?true:"drives not unpacked");
@@ -150,7 +150,7 @@ const {chromium}=require('playwright');
       if(!(B._drives&&B._drives.drive_toward&&B._drives.drive_against)) miss.push("drives");
       if(!(B._rg&&B._rg.guidance_absence)) miss.push("absence note");
       if(!(B._rt&&B._rt.target_header&&B._rt.target_bg)) miss.push("target fragments");
-      if(!(B.drives&&B.drives.indexOf("PULLING AT YOU")>-1)) miss.push("drives block");
+      if(!(B.drives&&B.drives.indexOf("CAUGHT BETWEEN")>-1)) miss.push("drives block");
       if(!(B._mem&&B._mem.mem_recent_entries&&B._mem.mem_distant_entries)) miss.push("memories");
       if(!(B._pr&&B._pr.promise_yours&&B._pr.promise_owed&&B._pr.promise_ended)) miss.push("promises");
       if(!(B._as&&B._as.already_said_lines)) miss.push("already said");
@@ -267,8 +267,10 @@ const {chromium}=require('playwright');
       const t=ptDefaultTemplate("solo");
       return /# TASK/.test(t) && /\{\{call\/\/task\}\}/.test(t) && !/call\/\/task\/\/full/.test(t)
         ? true : t.slice(0,200); }));
+  // v64.1 — renamed. Six emotional blocks used to collide on "feeling", "now" and two ⚠️; each is
+  // named by its timescale now, and the ties block took the subtitle it always had.
   ok("so is the relationships heading", await pg.evaluate(()=>
-      /RELATIONSHIPS/.test(ptDefaultTemplate("solo"))));
+      /WHO THESE PEOPLE ARE TO YOU/.test(ptDefaultTemplate("solo"))));
   /* v41.1 — the rails are ONE BOX cut into [[sections]] now, so the template calls each section
      by name through its block. Still one rail per line, still every rail visible and movable —
      the name it answers to is the only thing that changed. */

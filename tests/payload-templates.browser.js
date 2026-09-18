@@ -52,7 +52,7 @@ const {chromium}=require('playwright');
     return {got:!!t, all,
       missing:["Be her.","A city.","Ayse.","Evening.","Answer.","Kemal.","She wants it."].filter(x=>all.indexOf(x)<0),
       // and the prose the template prints itself must not also come back in with the rescued block
-      doubled:(all.split("THE TWO THINGS PULLING AT YOU").length-1)>1
+      doubled:(all.split("WHAT YOU ARE CAUGHT BETWEEN").length-1)>1
         ||(all.split("Do not narrate this weighing").length-1)>1,
       order:(t||[]).map(m=>m.role).join(",")};
   });

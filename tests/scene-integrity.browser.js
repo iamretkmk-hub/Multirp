@@ -132,6 +132,72 @@ const {chromium}=require('playwright');
       const f=feelingsBlock(chat,"p_h","__user__",state.user);
       return !/hatred;|deep distrust;/.test(f.text||"") ? true : f.text.slice(0,200); }));
 
+  /* v69.1 — THE EVENT'S TYPE REACHES THE WRITER. The classifier has always returned it and the
+     event has always carried it, but it stopped at the event record: the writer got the summary
+     and the turn budget and had to infer from prose whether this was someone arriving, a sound
+     from the next room, or something that moved elsewhere. So an environment beat drew the full
+     character budget and a turn minimum it had nothing to spend on — and the writer filled the gap
+     the only way it could, by inventing a person to carry the sound. */
+  console.log("\n[the classifier's event type reaches the scene writer]");
+  {
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("the default takes a type placeholder", await pg.evaluate(()=>
+        up("sceneWriter").indexOf("{{type}}")>=0));
+    ok("and branches on all three kinds", await pg.evaluate(()=>{
+        const t=up("sceneWriter");
+        const miss=["**offstage**","**environment**","**character**"].filter(x=>t.indexOf(x)<0);
+        return miss.length===0?true:"missing "+miss.join(", "); }));
+    ok("every placeholder it uses is one the call site fills", await pg.evaluate(()=>{
+        const used=[...new Set((up("sceneWriter").match(/\{\{[a-z_]+\}\}/g)||[]))];
+        const filled=["{{user}}","{{summary}}","{{turn}}","{{min}}","{{max}}","{{type}}"];
+        const un=used.filter(x=>!filled.includes(x));
+        return un.length===0?true:"never filled: "+un.join(", "); }));
+    ok("it renders with nothing left unsubstituted", await pg.evaluate(()=>{
+        const out=fillTpl(up("sceneWriter"),
+          {user:"Emre",summary:"a knock",turn:1,min:3,max:8,type:"environment"});
+        const left=out.match(/\{\{[a-z_]+\}\}/g)||[];
+        return left.length===0?true:"left: "+left.join(", "); }));
+    ok("no refresh pipe stood down", await pg.evaluate(()=>{
+        const sp=window.__stalePipes||[];
+        return sp.length===0?true:"stale: "+sp.join(", "); }));
+
+    // the wire itself: drive runSceneWriter and read the system prompt it sends
+    const sent=t=>pg.evaluate(async ty=>{
+      state.key="k"; state.sceneOn=true;
+      window.__sys="";
+      window.fetch=async(u,init)=>{ let b2={};try{b2=JSON.parse(init.body)}catch(e){}
+        const sys=(b2.messages||[]).filter(m=>m.role==="system").map(m=>m.content).join("\n");
+        if(sys) window.__sys=sys;
+        return {ok:true,status:200,
+          json:async()=>({choices:[{message:{content:JSON.stringify(
+            {narration:"n",bring_in:null,resolved:true,resolution:"done"})}}]}),
+          text:async()=>"x"}; };
+      const u=(state.universes||[])[0];
+      const chat={id:"cs"+Math.random(),universeId:u.id,gameDay:1,messages:[
+          {role:"user",content:"hi",present:[]}],presentIds:[],rel:{},
+        activeEvent:{summary:"a phone rang twice",type:ty,turn:1,minTurns:3,maxTurns:8,
+                     resolved:false,participant:null}};
+      state.chats=state.chats||{}; state.chats[chat.id]=chat; state.curChat=chat.id;
+      try{ await runSceneWriter(chat); }catch(e){ return "THREW: "+e.message; }
+      return window.__sys;
+    },t);
+    for(const ty of ["character","environment","offstage"]){
+      const sys=await sent(ty);
+      ok('an "'+ty+'" event tells the writer so',
+         (typeof sys==="string" && new RegExp("Event type: "+ty+" ").test(sys))
+           ? true : "the prompt did not name it: "+String(sys).slice(0,160));
+    }
+    ok("an event with no type still reads as a character event", await (async()=>{
+        const sys=await sent(undefined);
+        return /Event type: character /.test(String(sys))
+          ? true : "fell through to: "+String(sys).slice(0,160); })());
+    ok("the classifier keeps offstage instead of flattening it",
+       /_t==="character"\|\|_t==="environment"\|\|_t==="offstage"/.test(src)
+         ? true : "the setup path still collapses the type");
+    ok("and an unrecognised type lands on environment, not character",
+       /\)\?_t:"environment"/.test(src)?true:"unknown types do not default safely");
+  }
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -344,3 +344,27 @@ written in the editor or lazily on first quest need) + layer 2 **chronicle**
 (`runUniverseChronicler`/`chronicler` — 2–6 neutral dated entries per day; old entries
 condense into eras via `condenseChronicle`). Fed to the quest designers
 (`universeMemoryBlock`) alongside live undercurrents and `hotPairsBlock`.
+
+## v69.1 — the Scene Writer is told what kind of event it is
+
+The classifier (`sceneSetup`) has always returned a `type`, and the event record has always carried
+it as `ev.type`. It stopped there. `runSceneWriter` filled the prompt with `{{user}}`, `{{summary}}`,
+`{{turn}}`, `{{min}}` and `{{max}}` — and nothing else — so the writer had to infer from the summary
+prose whether this was a person arriving, a sound that reached the room, or something that moved
+elsewhere entirely. The turn budget and the arrival rules then applied identically to all of them:
+an environment beat drew a character event's minimum turns with nothing to spend them on, and the
+writer closed the gap the only way a writer can, by inventing somebody to carry the sound.
+
+`{{type}}` is a placeholder now, filled from `ev.type` and normalised to one of `character`,
+`environment` or `offstage` (anything else reads as `environment` — one or two turns, nobody
+enters; an event with no type at all reads as `character`, which is how an untyped event has always
+behaved). The shipped default branches on it under **WHAT KIND OF EVENT THIS IS — READ FIRST**:
+`offstage` is one line stating a fact of the world, resolved on the turn it fires with the minimum
+not applying; `environment` is the signal itself, resolved within two turns, with the person behind
+it staying offstage and unnamed; `character` keeps Rule Zero, the spine and the full budget.
+
+The setup path also stops flattening the classifier's answer. The shipped classifier prompt offers
+`character | environment` only, so `offstage` does not occur today — but that prompt is
+user-editable, and an edited one that adds the third value now reaches a writer that knows what to
+do with it. Until then an offstage-ish event arrives as `environment` and is written as a short beat
+nobody reacts to, which is the acceptable degradation.

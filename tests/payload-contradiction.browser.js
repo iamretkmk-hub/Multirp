@@ -244,17 +244,66 @@ const {chromium}=require('playwright');
       const m=mapMsgToApi({role:"assistant",speaker:"Burcu",content:"Selam."});
       return m.role==="assistant"&&m.name==="Burcu" ? true : JSON.stringify(m); }));
 
-  console.log("\n[the physical-ask clause fires when there is an action to read]");
-  ok("it is gated on a narrated span rather than shipped unconditionally", await pg.evaluate(()=>
-      /_act && blkTpl\("resistance_actions"\)/.test(String(buildTailBlocks))));
-  /* (!) The window is bounded on purpose. `_psycheBodySig` looks like the helper for this and is
-     not — it scans backwards until it has six spans, with no message limit, so in any chat that
-     has ever carried narration the gate would never shut. */
-  ok("and on a BOUNDED window, so a span fifty turns ago cannot hold it open", await pg.evaluate(()=>
+  console.log("\n[resistance ships when something was asked, and not otherwise]");
+  /* v62.1 — v61.1 gated only the physical-ask clause and left the ~900-word ladder shipping every
+     turn. On a turn where nothing was asked it had nothing to apply to, and the cheapest way to
+     satisfy a wall of rules about holding out is to act as though there were something to hold out
+     against. The gate FAILS OPEN at every step: a question, a stall, a live pursuit or an
+     unreadable line all keep it. What it excludes is the turn that answers a statement. */
+  ok("the whole block is gated, not just the physical-ask clause", await pg.evaluate(()=>
+      /if\(_asked\)\{/.test(String(buildTailBlocks))
+   && /_physical && blkTpl\("resistance_actions"\)/.test(String(buildTailBlocks))));
+  ok("and the physical half still reads a BOUNDED window", await pg.evaluate(()=>
       /slice\(-6\)/.test(String(buildTailBlocks))
-   && !/_psycheBodySig\(chat\)\s*;?\s*\}\s*catch/.test(String(buildTailBlocks))));
-  ok("the ladder itself is not gated — it is the counterweight", await pg.evaluate(()=>
-      /B\.resistance=`\$\{blkTpl\("resistance_header"\)\}/.test(String(buildTailBlocks))));
+   && !/_psycheBodySig\(chat\)/.test(String(buildTailBlocks))));
+  ok("every uncertain case fails open — a question, a stall, a pursuit, an unreadable line",
+     await pg.evaluate(()=>{
+      const src=String(buildTailBlocks);
+      return /if\(!_answering\) return true;/.test(src)
+          && /\[\?\uff1f\]/.test(src)
+          && /exchangeIsStalled\(chat,selfP\)/.test(src)
+          && /charQuestSheetLines/.test(src)
+          && /catch\(e\)\{ return true; \}/.test(src); }));
+  ok("the self-gating paragraph is gone from the text, now that code decides",
+     await pg.evaluate(()=>!/THIS ONLY APPLIES IF SOMETHING WAS ACTUALLY ASKED/.test(blkTpl("resistance_body"))));
+  ok("and the duplicate heading is gone from every layout", await pg.evaluate(()=>
+      ["solo","multi","gm","text","heat"].every(k=>ptPreset(k).indexOf("{{call//head_resistance}}")<0)));
+
+  console.log("\n[the absence note answers direct address, not any mention]");
+  /* Merely MENTIONING somebody who is not here is how people talk about other people, and it was
+     raising a paragraph of "do NOT reply AS them" every time a name came up — on turns where
+     nobody was going to. The note earns its place when the player is TALKING TO the absent person,
+     which is what it was written for. An unparseable name fails open and keeps it. */
+  const _absence=async (line)=>pg.evaluate((line)=>{
+      const uni=state.universes[0];
+      const mk=(id,name)=>({id,name,universeId:uni.id,instructions:"x",personality:"x",
+        backstory:"x",style:"x",goals:"x",look:{}});
+      if(!state.personas.some(p=>p.id==="p_z"))state.personas.push(mk("p_z","Deniz"));
+      const chat=curChat(); chat.presentIds=["p_b"];
+      chat.messages=[{mid:"z1",role:"user",content:line,present:["p_b"]}];
+      const B=state.personas.find(p=>p.id==="p_b");
+      const T=buildTailBlocks({chat,selfP:B,selfId:B.id,selfName:B.name,targetName:state.user,
+        targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
+      return !!(T._rg&&T._rg.guidance_absence);
+    },line);
+  ok("addressed by name → the note fires", await _absence("Deniz, neredesin?")===true);
+  ok("asked after in the third person → it does not",
+     await _absence("Deniz bu aksam nerede acaba?")===false);
+  ok("not mentioned at all → it does not", await _absence("Bugun hava guzel.")===false);
+
+  console.log("\n[the tracker block speaks to a person]");
+  ok("no shouting in the heading or the group labels", await pg.evaluate(()=>{
+      const uni=state.universes[0];
+      uni.trackers=[{id:"t_l",name:"Love",owner:"__story__",min:0,max:100,start:0,behavior:"free",
+        stages:[{at:0,text:"indifferent"},{at:45,text:"clearly attracted"}]}];
+      state.trackOn=true;
+      const chat=curChat(); chat.trackerVals={};
+      const rendered=blkTpl("trackers_header")+"\n"+trackerContext(chat,"p_b");
+      return !/YOUR TRACKERS|STORY TRACKERS|YOUR PERSONAL TRACKERS|PUBLICLY VISIBLE/.test(rendered)
+          && /True of this story/.test(rendered)
+        ? true : rendered.slice(0,240); }));
+  ok("and the debug capsule splitter follows the new labels", await pg.evaluate(()=>
+      /True of this story/.test(String(_subCapsules))));
 
   console.log("\n[a fragment's own blank line does not leak out of a dropped block]");
   /* The four byte-identity failures across parity-live, bare-pieces, video-cues and language-rule

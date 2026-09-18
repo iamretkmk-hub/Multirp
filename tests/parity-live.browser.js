@@ -106,7 +106,9 @@ const {chromium}=require('playwright');
       {mid:"q0",role:"user",content:"I sat down.",present:["p_q","p_r"]},
       {mid:"q1",role:"assistant",speaker:"Ayse",speakerId:"p_q",content:'"You came back."',
        present:["p_q","p_r"],status:{location:"The cafe",day:3,period:"Evening"}},
-      {mid:"q2",role:"user",content:"Where is Deniz tonight?",present:["p_q","p_r"]}];
+      // v62.1 — the absence note is gated to DIRECT ADDRESS: this line calls Deniz by name.
+      // Merely asking AFTER an absent person no longer raises it (asserted below).
+      {mid:"q2",role:"user",content:"Deniz, neredesin?",present:["p_q","p_r"]}];
     chat._psyche={p_q:{toward:"She wants to be told she was missed.",
                        against:"Saying it first would cost her the only ground she has."}};
     // memories, promises and play notes — so RECENT/DISTANT MEMORIES, PROMISES, HOW YOU SPEAK and

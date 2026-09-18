@@ -101,13 +101,16 @@ const {chromium}=require('playwright');
       const s=String(B.drives||"");
       return s.indexOf("TOWARD_TEXT")>-1 && s.indexOf("AGAINST_TEXT")>-1
           && s.indexOf("WHAT PULLS YOU TOWARD IT")>-1 && s.indexOf("WHAT HOLDS YOU BACK")>-1; }));
-  ok("one empty side drops only its own heading", await pg.evaluate(()=>{
+  /* v62.1 — ONE SIDE IS NOT "THE TWO PULLS". This used to ship the half it had, dropping only the
+     missing heading. But the block's own heading promises a conflict and its closing note says an
+     empty side is genuinely empty — so what reached the model was a single unopposed push inside a
+     frame claiming to be a weighing. A nudge, not a deliberation. It waits for the other side. */
+  ok("one empty side holds the whole block back", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       chat._psyche={p_d:{sig:"x",toward:"ONLY_TOWARD",against:""}};
       const B=buildTailBlocks({chat,selfP:D,selfId:D.id,selfName:D.name,targetName:"Emre",
         targetId:"p_e",multi:false,injected:{recent:[],diary:[],longterm:[]}});
-      const s=String(B.drives||"");
-      return s.indexOf("ONLY_TOWARD")>-1 && s.indexOf("WHAT HOLDS YOU BACK")===-1; }));
+      return !B.drives ? true : String(B.drives).slice(0,160); }));
   ok("no number ever reaches the block", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       chat._psyche={p_d:{sig:"x",toward:"a want you cannot sit still under",against:"Hakan would know"}};

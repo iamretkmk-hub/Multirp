@@ -85,10 +85,40 @@ const {chromium}=require('playwright');
   ok("the older quoted line is a gist, and says so rather than showing a shape",
      await pg.evaluate(()=>/in gist/.test(blkTpl("already_said_shortened"))
        && !/shape/.test(blkTpl("already_said_shortened"))));
-  ok("the newest line is still verbatim — only exact words can enforce 'do not say this again'",
-     await pg.evaluate(()=>/word for word/.test(blkTpl("already_said_verbatim"))));
-  ok("and the block says to count beats against the rules, not against what it quotes",
-     await pg.evaluate(()=>/Count your beats against the rules/.test(blkTpl("already_said_not_style"))));
+  /* v62.1 — and the NEWEST line too. The verbatim slot was the road every format error travelled:
+     the character's own last reply, reproduced exactly, a few hundred characters from generation,
+     and the strongest evidence in the payload about what a reply looks like. A gist carries the
+     anti-repeat signal without carrying the shape. The two prose paragraphs that used to argue
+     against the exemplar go with it — a rule that never wins teaches that the rules are advisory. */
+  ok("every quoted line is a gist — the verbatim slot is gone entirely", await pg.evaluate(()=>
+      !("already_said_verbatim" in BLOCK_TPL_DEFAULTS)
+   && !/already_said_verbatim/.test(String(buildTailBlocks))));
+  ok("and the two paragraphs that used to argue with the example are gone", await pg.evaluate(()=>
+      !("already_said_not_style" in BLOCK_TPL_DEFAULTS)
+   && !/already_said_not_style/.test(String(buildTailBlocks))));
+  ok("the block no longer calls its own quotes word-for-word", await pg.evaluate(()=>
+      /in gist/.test(blkTpl("already_said_instr")) && !/word for word/.test(blkTpl("already_said_instr"))));
+
+  console.log("\n[the channel normalizer repairs a malformed turn before it is stored]");
+  ok("underscores doing narration's job are re-delimited", await pg.evaluate(()=>{
+      const out=normalizeChannels('"Selam." _elini masaya koyuyor._');
+      return /\*elini masaya koyuyor\.\*/.test(out) && !/_/.test(out) ? true : out; }));
+  ok("a reply that already uses the narration channel is untouched", await pg.evaluate(()=>{
+      const src='*Elini kaldiriyorum.* "Selam." _Bunu neden yaptim._';
+      return normalizeChannels(src)===src ? true : normalizeChannels(src); }));
+  ok("a snake_case word is not a thought and is not converted", await pg.evaluate(()=>{
+      const src='"Dosya adi build_step_two olmali."';
+      return normalizeChannels(src)===src ? true : normalizeChannels(src); }));
+  ok("heat is exempt — its own format forbids asterisks, so the test fires on every beat",
+     await pg.evaluate(()=>{
+      const src='"Ah—" _Dayanamiyorum._';
+      return normalizeChannels(src,{heat:true})===src ? true : normalizeChannels(src,{heat:true}); }));
+  ok("and all three spoken paths run it before storing", await pg.evaluate(()=>{
+      const miss=[];
+      if(!/normalizeChannels\(stripChannelLabel\(reply\)\)/.test(String(sendMessage))) miss.push("solo");
+      if(!/normalizeChannels\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
+      if(!/\{heat:_wasHeat\}/.test(String(playCharacterTurn))) miss.push("multi heat-exempt");
+      return miss.length?miss.join(", "):true; }));
 
   console.log("\n[exposure is not leak-chance]");
   ok("a public venue never reads as private, however quiet its corner", await pg.evaluate(()=>{

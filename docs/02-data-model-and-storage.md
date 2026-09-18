@@ -29,7 +29,10 @@ IDB collections in `_idbColl`; `loadState()` prefers those over any legacy local
   `freqPenalty`, `presPenalty`, `provDeny`, `geminiUnsafe`, `fnCfg` (per-agent overrides:
   `{temp, tok, reason, effort}` per bucket, read by `fnTemp(fn,default)` / `fnTok(fn,default)` /
   `fnReason(fn)` / `fnEffort(fn)`). Buckets: `rewriter`, `mc`, `mem`, `gm`, `unigen`, `router`,
-  `call` — plus `rp` and `reply`, which share the roleplay creativity bucket and have no card.
+  `call`, `narrate`, `bio` — plus `rp` and `reply`, which share the roleplay creativity bucket and
+  have no card. **The bucket follows the model**: whichever card supplies a call's model is the
+  card whose bucket it reads (pinned by `tests/agent-reasoning.browser.js`). A fallback chain names
+  its primary model first, so `state.mcModel||state.memModel` is a Director call, not a Memory one.
   Every field is `null`/absent = **Auto**, which means the call-site default, so an untouched
   install behaves exactly as it did before the override existed.
 - **Prompts**: one property per `PROMPT_REGISTRY` key (`baseInstruction`, `formatRules`,

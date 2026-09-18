@@ -12,7 +12,13 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   in, most specific first:
   1. `opts.reasoning:true` / `false` — one call, wins over everything.
   2. **The agent's own card** (v66.1). `opts.fn` names an `fnCfg` bucket, and that bucket's
-     `reason` (`true`/`false`/`null`=Auto) and `effort` decide. This is how a *background* engine
+     `reason` (`true`/`false`/`null`=Auto) and `effort` decide. ⚠️ The bucket must belong to the
+     card that supplies the call's MODEL. v66.1 shipped with four groups crossed — every authoring
+     job read Memory, the character generator read Memory and Authoring at once, the arrival
+     narration ran the roleplay model through Memory, and the Auto-RP narrator (also the roleplay
+     model) read Memory — so turning thinking on for Memory made the Auto-RP narrator think.
+     Harmless while a bucket held only a temperature; a visible bug once it held a thinking switch.
+     Fixed and pinned in v67.1. This is how a *background* engine
      thinks: turn it on for the gamemaster or the daily engines, leave the routers and trackers
      off. Every bucket ships as Auto, so this changes nothing until you set it.
   3. `state.reasoningOn` + `state.reasoningEffort` — the **roleplay reply only** (`opts.rp`),

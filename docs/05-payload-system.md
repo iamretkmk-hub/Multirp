@@ -902,3 +902,59 @@ step of about two points, and a cap on how far the whole drift can carry a bond 
 silence began. It plants a record at a few crossings, so the description has something to catch up
 from — without that the numbers would drift while `desc` went on saying she trusts him, which is the
 two-states-of-one-fact failure the whole pass exists to remove.
+
+## v67.1 — the drives writer was reading someone else's payload
+
+An audit of one live `psychePrompt` request found four separate faults stacked on each other.
+
+**`relOf` never existed.** The engine read the relationship through `relOf(p,targetId)` at three
+call sites, every one behind a `typeof relOf==="function"` guard, and the function was defined
+nowhere in the file. The guard turned a typo into a permanent silent default, so for the whole life
+of this engine:
+
+- `axes` — the "private numbers nobody else sees" the prompt opens by claiming access to — was
+  always the empty string, and the entire HOW HARD EACH ONE PRESSES section was calibrated on data
+  that never arrived;
+- `settled` was always empty, so the v63.1 rule making both pulls lean off the settled view was
+  inert — the rule shipped and the data did not;
+- `psycheSig`'s relationship term was a constant, so the block never refreshed when the feelings
+  moved, only when the place, cast, day, period, trackers or narration did.
+
+Meanwhile `feelingsBlock`, one call site away, read the same pair correctly through
+`relObj(chat,from,to)`. That is how `feelings` and `drives` came to disagree about whether a
+relationship existed at all — the two-states-of-one-fact failure again, in the engine written to
+prevent it. `relObj` lazily creates a zeroed record, so the readings are now gated on the pair
+actually holding something: a table of noughts under a heading calling it private access reads as
+real data and is worse than the absence it replaces. `psycheSig` reads `chat.rel` directly, because
+a signature function must not write.
+
+**`scene` was the gamemaster's brief.** `bits.scene` asked for `directorContext(chat,"gm")` — the
+mode built to help the GM author events — under a heading promising only where the character is and
+who can see. It delivered the world's directing notes ("shape events, grievances, and their tone"),
+every offstage character's wants and pressure points ("these are the people you may bring in"), the
+venue list with privacy ratings, four other people's `[private]` trackers, and the who-is-who
+matrix. Three of those contradict the prompt's own opening rules — write about one person, decide
+nothing, invent nothing — and they sat closest to the exchange, where a prompt is loudest. There is
+a `"psyche"` mode now: the scene state and the earshot, and nothing else.
+
+**The social graph arrived three times** — the author's one-line-per-person note, a full sheet for
+each of those same people, and the matrix from the director context — roughly two thousand words of
+the same graph for a prompt whose whole output is capped at a hundred and forty. `sheetsOnly` drops
+the note that restates the sheets; the mode change drops the matrix. The settled view and the
+private readings stay exactly where they are: they are what has MOVED in those relationships, and
+every block that colours how a character sees someone has to agree with the others.
+
+**Both pulls presumed a transgression.** TOWARD was told to "include what this person supplies that
+{{self}} has been going without"; AGAINST was a four-item checklist opening on the person who would
+be hurt. Given a civil exchange the writer had a shape to fill and no way to answer "nothing is
+pulling here yet" — so it filled it. Two lines of gym small talk came back as a betrayal frame, and
+an offer of help with work came back as a fear that her husband would say she could not manage. The
+rewrite adds a size rule (most moments are not transgressions), makes an empty side an explicitly
+correct answer rather than a failure, allows the moment to be about the work, the money, a body or
+someone's standing rather than always about the people, and forbids naming a cost the material does
+not support. The naming rule survives for when a cost is real: a brake with no name on it does not
+hold.
+
+Also: the call ran on the **gamemaster** model while reading the **prompt rewriter's** bucket, so
+the card being adjusted was not the card in play — see `06-ai-providers.md` for the general rule and
+the three other places it was crossed.

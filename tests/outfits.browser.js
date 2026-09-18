@@ -131,6 +131,48 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       const a=up("x_outfits_generator"), t=up("x_wearing_tracker");
       return (a&&a.indexOf("SECOND PERSON")>-1 && t&&t.indexOf('"changed"')>-1)?true:"missing"; }));
 
+  /* v67.1 — THE ACTIVITY OUTFITS COULD NOT FIRE. _outfitAreaActivity was fed the SUB-AREA name
+     alone, and a sub-area is furniture: the gym is "Site Fitness Centre" and its areas are "Free
+     Weights Zone", "Cardio Floor", "Locker Rooms" — not one of which carries a cue. At a venue with
+     no sub-areas at all the area resolves to "Entrance", so swim, sport and sleep could not fire
+     anywhere in the world. The activity belongs to the PLACE; the area only refines it. */
+  console.log("\n[the activity outfit reads the venue, not just the area]");
+  ok("a gym's areas do not name the gym — the venue does", await pg.evaluate(()=>
+      _outfitAreaActivity("Free Weights Zone","Site Fitness Centre")==="sport" &&
+      _outfitAreaActivity("Cardio Floor","Site Fitness Centre")==="sport" ? true
+      : "weights="+_outfitAreaActivity("Free Weights Zone","Site Fitness Centre")));
+  ok("a venue with no sub-areas still resolves", await pg.evaluate(()=>
+      _outfitAreaActivity("Entrance","Site Olympic Pool")==="swim" &&
+      _outfitAreaActivity("Entrance","Beach Club")==="swim" ? true
+      : "pool="+_outfitAreaActivity("Entrance","Site Olympic Pool")));
+  ok("an explicit area still wins over the venue", await pg.evaluate(()=>
+      _outfitAreaActivity("Bedroom","Site Fitness Centre")==="sleep" ? true
+      : _outfitAreaActivity("Bedroom","Site Fitness Centre")));
+  ok("and ordinary venues still name no activity", await pg.evaluate(()=>{
+      const bad=["Site Restaurant","Site Shopping Center","Site Garden Park","Site Marina Pier",
+                 "Site School","Site Coffee House"].filter(n=>_outfitAreaActivity("Entrance",n));
+      return bad.length===0?true:"false positive on: "+bad.join(", "); }));
+  ok("the area alone still works when it is the one that names it", await pg.evaluate(()=>
+      _outfitAreaActivity("Swimming Pool","Grand Hotel")==="swim" ? true : "regressed"));
+  /* The sub-location was the SUSPECT and is innocent: byLoc keys on the parent venue, so standing
+     in an area of it resolves exactly as standing in it does. Pinned so it stays that way. */
+  ok("a sub-area does not break the by-location outfit", await pg.evaluate(()=>{
+      const u=(state.universes||[])[0]; if(!u)return "no universe";
+      const loc={id:"loc_probe",name:"Probe Hall",description:"x",
+        sublocations:[{id:"s1",name:"Front Entrance"},{id:"s2",name:"Back Room"}]};
+      (u.locations=u.locations||[]).push(loc);
+      const p={id:"c_probe",name:"P",wardrobe:"jeans",
+        outfits:{byLoc:{loc_probe:"a grey coat"},home:{},userHome:{},activity:{}}};
+      const chat={id:"cp",universeId:u.id,locationId:"loc_probe",gameDay:1,messages:[],rel:{}};
+      const flat=currentOutfit(p,chat);
+      chat.subPos={c_probe:"s2"};
+      const insub=currentOutfit(p,chat);
+      return (flat.text==="a grey coat"&&insub.text==="a grey coat")
+        ? true : JSON.stringify({flat,insub}); }));
+  ok("_imgOutfitDecided reads the chat it was handed", await pg.evaluate(()=>
+      /_imgOutfitDecided\(character,chat\)/.test(String(_imgOutfitDecided))
+      || _imgOutfitDecided.length===2 ? true : "still takes one argument"));
+
   console.log("\n[nothing else moved]");
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

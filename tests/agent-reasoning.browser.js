@@ -27,6 +27,7 @@ const {chromium}=require('playwright');
                text:async()=>JSON.stringify({choices:[{message:{content:"ok"}}]}) };
     };
   });
+  const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
   const send=opts=>pg.evaluate(async o=>{
       window.__bodies=[];
       try{ await chatCompletion([{role:"user",content:"hi"}],"deepseek/deepseek-v4-pro",o); }catch(e){}
@@ -103,7 +104,6 @@ const {chromium}=require('playwright');
   await pg.evaluate(()=>{ state.reasoningOn=false; });
 
   console.log("\n[every agent bucket is actually wired at its call sites]");
-  const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
   ok("no per-function call site was left untagged", (()=>{
       const bare=(src.match(/\{temp:fnTemp\(/g)||[]).length;
       return bare===0?true:bare+" opts objects still start with temp:fnTemp"; })());
@@ -119,9 +119,57 @@ const {chromium}=require('playwright');
       const keys=new Set((src.match(/\{fn:"([a-z]+)",/g)||[]).map(m=>m.slice(5,-2)));
       /* "rp" (arrival lines, proactive texts) and "reply" (the A/B tester) share the roleplay
          creativity bucket and have no card of their own, so they simply read Auto. */
-      const known=new Set(["rewriter","mc","mem","gm","unigen","router","call","rp","reply"]);
+      const known=new Set(["rewriter","mc","mem","gm","unigen","router","call","rp","reply","narrate","bio"]);
       const stray=[...keys].filter(k=>!known.has(k));
       return stray.length===0?true:"unknown bucket(s): "+stray.join(", "); })());
+
+  /* v67.1 — THE BUCKET MUST FOLLOW THE MODEL. While a bucket only carried creativity and a token
+     cap this was a quiet wrong; v66.1 gave each one a THINKING switch and it became "I turned
+     thinking on for Memory and my Auto-RP narrator started thinking" — because that narrator runs
+     on the ROLEPLAY model and read the memory bucket. Four groups were crossed this way: every
+     authoring job read Memory, the character generator read Memory and Authoring at once, the
+     arrival narration ran on the roleplay model through Memory, and the narrator as above. The
+     card you adjust has to be the card in play, so the model expression decides the bucket. */
+  console.log("\n[every bucket belongs to the card that supplies the model]");
+  {
+    const WANT=[
+      [/state\.memModel/,            "mem"],
+      [/state\.gmModel(?!\|\|state\.rewriter)/, "gm"],
+      [/state\.mcModel/,             "mc"],
+      [/state\.rewriter/,            "rewriter"],
+      [/state\.routerModel/,         "router"],
+      [/state\.bioModel/,            "bio"],
+      [/authoringModel\(\)/,          "unigen"],
+      [/rpModel\(\)/,                "rp"],
+    ];
+    // every tagged call site: the model expression immediately before the opts object
+    const sites=[...src.matchAll(/,\s*([A-Za-z_$][\w$.()|"\-\/ ]*?),\s*\{fn:"([a-z]+)"/g)]
+      .map(m=>({model:m[1].trim(),fn:m[2]}));
+    ok("the scan found the call sites", sites.length>60?true:"only "+sites.length+" found");
+    /* A fallback chain names the PRIMARY model first — state.mcModel||state.memModel||state.model
+       is a Director call that degrades, not a Memory call — so the bucket follows the leading
+       token, and a rule that matched anywhere in the expression would call that a violation. */
+    const bad=[];
+    for(const st of sites){
+      let best=null,at=Infinity;
+      for(const [rx,want] of WANT){
+        const m=st.model.match(rx);
+        if(m && m.index<at){ at=m.index; best=want; }
+      }
+      if(best && st.fn!==best) bad.push(st.model+" → "+st.fn+" (want "+best+")");
+    }
+    ok("no call site reads another card's bucket", bad.length===0?true:bad.join(" | "));
+  }
+  ok("the Auto-RP narrator has its own bucket, not Memory's", (()=>{
+      const m=src.match(/playerNarratePrompt[\s\S]{0,400}?\{fn:"([a-z]+)"/);
+      return m&&m[1]==="narrate"?true:"narrator bucket is "+(m?m[1]:"?"); })());
+  ok("the drives writer's bucket follows the gamemaster model", (()=>{
+      const m=src.match(/state\.gmModel\|\|state\.rewriter,\{fn:"([a-z]+)"/);
+      return m&&m[1]==="gm"?true:"drives bucket is "+(m?m[1]:"?"); })());
+  ok("both new buckets have a card", await pg.evaluate(()=>{
+      const b=new Set([...document.querySelectorAll('[data-kind="reason"]')].map(h=>h.dataset.ovr));
+      const miss=["narrate","bio"].filter(k=>!b.has(k));
+      return miss.length===0?true:"no card for: "+miss.join(", "); }));
 
   console.log("\n[the live voice call is wired too — it never passes through chatCompletion]");
   ok("vcReasoning is off by default", await pg.evaluate(()=>{
@@ -133,9 +181,9 @@ const {chromium}=require('playwright');
       return (r.enabled===true&&r.effort==="low")?true:JSON.stringify(r); }));
 
   console.log("\n[the controls are on every agent card]");
-  ok("seven reason hosts, one per agent card", await pg.evaluate(()=>{
+  ok("nine reason hosts, one per agent card", await pg.evaluate(()=>{
       const hosts=[...document.querySelectorAll('[data-kind="reason"]')].map(h=>h.dataset.ovr).sort();
-      const want=["call","gm","mc","mem","rewriter","router","unigen"];
+      const want=["bio","call","gm","mc","mem","narrate","rewriter","router","unigen"];
       return JSON.stringify(hosts)===JSON.stringify(want)?true:JSON.stringify(hosts); }));
   ok("every card that has creativity/tokens also has thinking", await pg.evaluate(()=>{
       const a=new Set([...document.querySelectorAll('[data-kind="temp"]')].map(h=>h.dataset.ovr));

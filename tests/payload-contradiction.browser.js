@@ -99,11 +99,27 @@ const {chromium}=require('playwright');
       return live.length===1 && /Aslan/.test(live[0]) ? true : JSON.stringify(live); }));
 
   console.log("\n[the example stops beating the rule]");
-  ok("the LIMITS rule is in the solo and multi layouts, not only in gm", await pg.evaluate(()=>{
-      const miss=["solo","multi","gm"].filter(k=>ptPreset(k).indexOf("{{call//head_format_limits}}")<0);
+  /* v62.1 restored `head_format_limits` to the solo and multi layouts, which had been shipping
+     without any beat cap at all (only `gm` called it). v64.1 replaced those layouts wholesale with
+     the authored rp_* set, whose format fragment does not carry a cap — so what is pinned here is
+     the CONTRACT rather than the mechanism: the one-narrated-beat rule has to reach the payload
+     from somewhere. It does, from `rail_form`, in FINAL GUARDRAILS — the last block before
+     generation, and the strongest position in the prompt.
+     (!) That is now the ONLY copy. It is enough on the argument that the exemplar which used to
+     beat it — the character's own last reply, quoted verbatim — is gone entirely (every quoted
+     line is a gist since v62.1), and an example is what was winning. If beat-count drifts in play,
+     this is the first place to look, and the fix is one call added to the layout. */
+  ok("the one-narrated-beat cap reaches the payload", await pg.evaluate(()=>{
+      const uni=state.universes[0];
+      const A=state.personas.find(x=>x.id==="p_b");
+      const chat=curChat(); chat.presentIds=["p_b"];
+      const T=buildTailBlocks({chat,selfP:A,selfId:A.id,selfName:A.name,targetName:state.user,
+        targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
+      return /ONE short \*narrated\* beat in the whole reply at most/.test(String(T.final_guardrails||""))
+        ? true : "rail_form did not render"; }));
+  ok("and every spoken layout calls the block that carries it", await pg.evaluate(()=>{
+      const miss=["solo","multi","gm"].filter(k=>ptPreset(k).indexOf("{{call//final_guardrails//full}}")<0);
       return miss.length?miss.join(", "):true; }));
-  ok("and it is the rule that caps the beats", await pg.evaluate(()=>
-      /At most ONE narration and ONE thought per reply/.test(blkTpl("head_format_limits"))));
   ok("the older quoted line is a gist, and says so rather than showing a shape",
      await pg.evaluate(()=>/in gist/.test(blkTpl("already_said_shortened"))
        && !/shape/.test(blkTpl("already_said_shortened"))));

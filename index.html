@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v68.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v68.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -32423,6 +32423,10 @@ function fillTpl(s,map){return s.replace(/\{\{(\w+)\}\}/g,(m,k)=>map[k]!==undefi
 async function endDay(){
   const chat=curChat();
   const day=chat.gameDay||1;
+  /* v68.1 — the part of the day being ended, read BEFORE the roll below resets it to Morning.
+     Without it the final arc was committed with the just-ended DAY and the NEW day's period, so
+     the one memory that closes a day was filed under a stretch it did not happen in. */
+  const endPeriod=(typeof chatPeriod==="function")?chatPeriod(chat):"";
   if(!confirm(`End Day ${day}? This advances the story to Day ${day+1}. Characters who were here today will write a private diary, and their relationships will be re-evaluated — both happen in the background, so the new day starts right away.`))return;
 
   const uni=(chat&&chat.universeId)||state.curUniverse||null;
@@ -32486,7 +32490,7 @@ async function endDay(){
   // 3) BACKGROUND JOBS — diaries, then long-axis relationships, then auto relationship re-eval.
   // These run off the SNAPSHOT (not live chat.messages), so the advanced day can't corrupt them.
   // Fired without await so the player can keep playing; they land a moment later.
-  endDayBackground(chat,day,uni,daySnapshot,fallbackName).catch(()=>{});
+  endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod).catch(()=>{});
 }
 
 // Everything End Day does AFTER the day has visibly advanced. Runs in the background.
@@ -33725,7 +33729,7 @@ function armedStagingSummary(chat){
   if(!lines.length)return "";
   return `WAITING MOMENTS (offstage forces are poised to act the instant the scene allows — you may, if it fits naturally, nudge the scene toward ONE of these conditions; do NOT name or reveal what's waiting, just let the situation shift):\n${lines.join("\n")}`;
 }
-async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
+async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod){
   // v24.4 — endDay passes the universe ID here, but half the passes below expect the universe
   // OBJECT (`uni=uni||universeById(...)` keeps a truthy string as-is, then `uni.gameData` /
   // `uni.id` are undefined and the pass silently no-ops — the day-end quest reconciler and the
@@ -33738,7 +33742,33 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName){
   // just ended BEFORE diaries and the intent former run, so both see the day's complete memory set.
   // Stamped with `day` (the just-ended day) because gameDay already advanced in the foreground —
   // otherwise the intent former's `gameDay===day` filter would miss this arc.
-  if(state.mem && state.key){ try{ await flushMemoryArc(chat, day); }catch(e){} }
+  /* v68.1 — stamped with the period that just ENDED as well as the day. chatPeriod(chat) is
+     already "Morning" of the new day by the time this runs, so the closing memory of a day used to
+     be filed under Day N, Morning — a stretch that belongs to Day N+1 — where the reconciler below
+     would never find it beside the memories it actually belongs with. */
+  if(state.mem && state.key){ try{ await flushMemoryArc(chat, day, endPeriod||undefined); }catch(e){} }
+
+  /* ---- PERIOD RECONCILE (v68.1) ---- THE LAST STRETCH OF EVERY DAY WAS NEVER CONSOLIDATED.
+     reconcilePeriodFor had exactly one caller, onPeriodChanged, and that hook returns early on a
+     day roll — "the diary owns that, not this" — on the understanding that day end made its own
+     call. It never did. So every period that ended by ending the day, rather than by the clock
+     moving on, kept its raw fragments forever: the diary was written from them, the payload
+     injected them one by one, and the stretch the player had just finished was the one stretch
+     that never became a memory of a stretch. Sweeps every owner and period of the just-ended day,
+     so a day the player ran straight through without a single period change is caught too; a
+     stretch already collapsed is skipped by the guard in reconcilePeriodFor. */
+  if(state.mem && state.key){
+    try{
+      const pairs=new Map();
+      (state.memory||[]).forEach(m=>{
+        if(m&&m.gameDay===day&&m.ownerId&&m.gamePeriod) pairs.set(m.ownerId+"|"+m.gamePeriod,[m.ownerId,m.gamePeriod]);
+      });
+      for(const [oid,per] of pairs.values()){
+        const who=(state.personas||[]).find(x=>x&&x.id===oid);
+        if(who){ try{ await reconcilePeriodFor(who,day,per); }catch(e){} }
+      }
+    }catch(e){}
+  }
 
   // ---- CALENDAR RECONCILE (v20.2) ---- with the day's memories now complete, mark any tracked
   // event that actually happened as done. Runs before intent/gossip so a fulfilled/unkept commitment
@@ -37391,13 +37421,27 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp){
      mid-way through — which it then re-said, because the summary quotes its own lines. */
   const period = (typeof periodStamp==="string" && periodStamp) ? periodStamp
                 : (()=>{ try{ return chatPeriod(chat); }catch(e){ return ""; } })();
-  const cast=curCast().slice();
-  presentCast(chat).forEach(p=>{if(p&&p.temp&&!cast.some(c=>c.id===p.id))cast.push(p);});
   // Span of messages belonging to this arc.
   const span=chat.messages.slice(startIdx, (typeof endIdx==="number"?endIdx+1:chat.messages.length));
-  // Who participated / witnessed this arc: present cast + temps. Each is scoped by their own arrival.
-  const presentSet=new Set(presentIds(chat));
-  const memCast=cast.filter(p=>p&&(presentSet.has(p.id)||p.temp));
+  /* (!) v68.1 — WHO LIVED THIS ARC, NOT WHO IS STILL STANDING IN THE ROOM. This filtered the cast
+     by presentIds(chat) — presence as of the moment the commit happens — so a character who had
+     just walked out was not eligible for the memory of the scene they had spent the last ten
+     minutes in. And leaving is not some rare edge: "she says she has to get home and goes" is
+     exactly the beat that makes the arc tracker answer "finished", so the departure and the commit
+     fire on the same turn every time, and the departure always lands first. The tracker returned
+     finished, the log showed it, and nothing was ever written — the last memory of every visit,
+     gone, which is also why the memory always stopped one scene short of where the story was.
+     The span already carries who was there, message by message, in m.present; witnessedBy() below
+     scopes each person to the lines they were actually there for, so someone who left halfway
+     keeps the half they lived. Presence-now is still folded in, for an arc whose messages predate
+     the stamps. */
+  const spanPresent=new Set(presentIds(chat));
+  span.forEach(m=>{ if(m&&Array.isArray(m.present))m.present.forEach(id=>{ if(id)spanPresent.add(id); }); });
+  const cast=curCast().slice();
+  presentCast(chat).forEach(p=>{if(p&&p.temp&&!cast.some(c=>c.id===p.id))cast.push(p);});
+  // A temp who has already left is off presentCast too, so they are recovered from the span.
+  (chat.tempChars||[]).forEach(t=>{ if(t&&t.id&&spanPresent.has(t.id)&&!cast.some(c=>c.id===t.id))cast.push(t); });
+  const memCast=cast.filter(p=>p&&(spanPresent.has(p.id)||p.temp));
   if(!memCast.length||!span.length) return;
   for(const p of memCast){
     // Per-character arrival cut WITHIN the arc: a late arrival only remembers from when they entered.
@@ -37540,6 +37584,11 @@ async function reconcilePeriodFor(p,day,period){
   if(_reconcileBusy[key])return;
   const frag=memsOfPeriod(p.id,day,period);
   if(frag.length<2)return;               // one memory of a stretch is already the reconciled form
+  /* v68.1 — and a stretch whose every fragment is ALREADY a reconciled memory has nothing new in
+     it to reconcile. This mattered the moment day-end began sweeping the day's periods (below):
+     a period the period-change hook had already collapsed into two or three would otherwise be
+     collapsed again, further each time, for no new information. */
+  if(frag.every(m=>m&&m.source==="reconciled"))return;
   _reconcileBusy[key]=1;
   try{
     const listed=frag.map((m,i)=>`FRAGMENT ${i+1} (${m.location||"somewhere"}, importance ${(+m.importance||0).toFixed(2)}, ${m.emotion||"neutral"}):\n${memText(m)}`).join("\n\n");

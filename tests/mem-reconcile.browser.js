@@ -147,6 +147,49 @@ const {chromium}=require('playwright');
   ok("a reconciler prompt the user wrote themselves is left exactly as it is",
      (await rt("My own reconciler. Return {\"content\":\"…\"}."))==="My own reconciler. Return {\"content\":\"…\"}.");
 
+  /* v68.1 — THE LAST STRETCH OF EVERY DAY WAS NEVER CONSOLIDATED. reconcilePeriodFor had exactly
+     one caller — onPeriodChanged — and that hook returns early on a day roll ("the diary owns
+     that, not this"), on the understanding that End Day made its own call. It never did. So a
+     period that ended by ending the day, rather than by the clock moving on, kept its raw
+     fragments forever. */
+  console.log("\n[end day reconciles the stretches the clock never closed]");
+  ok("reconcilePeriodFor is reachable from End Day, not only from a period change", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const calls=(src.match(/await reconcilePeriodFor\(/g)||[]).length;
+      const inEndDay=/PERIOD RECONCILE \(v68\.1\)[\s\S]{0,1200}?await reconcilePeriodFor\(/.test(src);
+      return (calls>=2 && inEndDay) ? true : "callers="+calls+" inEndDay="+inEndDay; })());
+  ok("the period-change hook still bails on a day roll, so the two never double up", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /if\(\(chat\.gameDay\|\|1\)!==prevDay\)return;/.test(src)
+        ? true : "onPeriodChanged no longer defers the day roll"; })());
+  ok("End Day stamps the arc with the period that ENDED, not the new morning", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /await flushMemoryArc\(chat, day, endPeriod\|\|undefined\)/.test(src)
+          && /const endPeriod=\(typeof chatPeriod==="function"\)\?chatPeriod\(chat\):"";/.test(src)
+        ? true : "the closing arc still takes the new day's period"; })());
+  ok("an already-collapsed stretch is not collapsed again", await pg.evaluate(async()=>{
+      state.key="k"; state.mem=true;
+      let calls=0;
+      const of=window.fetch;
+      window.fetch=async()=>{ calls++; return {ok:true,status:200,
+        json:async()=>({choices:[{message:{content:JSON.stringify({memories:[{content:"c"}]})}}]}),
+        text:async()=>"x"}; };
+      const u=(state.universes||[])[0];
+      const who={id:"c_rec",name:"Rec",universeId:u.id};
+      (state.personas=state.personas||[]).push(who);
+      const mk=(i,src2)=>({id:"mr"+i,ownerId:"c_rec",character:"Rec",content:"frag "+i,
+        gameDay:9,gamePeriod:"Evening",importance:0.5,date:Date.now(),source:src2,
+        universeId:u.id,chatId:null});
+      state.memory=(state.memory||[]).concat([mk(1,"reconciled"),mk(2,"reconciled")]);
+      await reconcilePeriodFor(who,9,"Evening");
+      const afterAllReconciled=calls;
+      state.memory=state.memory.concat([mk(3,"auto")]);
+      await reconcilePeriodFor(who,9,"Evening");
+      const afterFreshArrived=calls;
+      window.fetch=of;
+      return (afterAllReconciled===0 && afterFreshArrived===1)
+        ? true : "collapsed-again="+afterAllReconciled+" fresh="+afterFreshArrived; }));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

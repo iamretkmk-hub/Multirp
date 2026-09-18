@@ -199,3 +199,39 @@ importance slider). `visibleMemories()` scopes to the current universe.
 - Memory content is written in the **story language** (`langDirective`) — switching languages
   mid-campaign mixes languages in the bank; retrieval still works (embeddings are
   multilingual; lexical matching degrades).
+
+## v68.1 — the memory of a visit was lost to the act of leaving
+
+Three faults, found from one debug export in which the arc tracker answered `finished` twice in a
+row and the memory tab stayed empty.
+
+**`commitMemoryArc` gave the memory to whoever was still standing in the room.** The cast was
+filtered by `presentIds(chat)` — presence as of the instant the commit runs — so a character who
+had just walked out was not eligible for the memory of the scene they had spent the last ten
+minutes in. That is not a rare edge: *"she says she has to get home and goes"* is exactly the beat
+that makes the tracker answer `finished`, so the departure and the commit fire on the same turn
+every time, and the departure always lands first. The tracker returned `finished`, the debug log
+showed it, and nothing was ever written — which is why the memory bank always stopped one scene
+short of the story. The cast is now read off the span itself (`m.present`, which every message
+already carries), with presence-now folded in for arcs older than the stamps. `witnessedBy()` still
+scopes each person to the lines they were actually there for, so someone who left halfway keeps the
+half they lived, and a character who was never in the span still gets nothing.
+
+**The last stretch of every day was never consolidated.** `reconcilePeriodFor` had exactly one
+caller, `onPeriodChanged`, and that hook returns early on a day roll — *"the diary owns that, not
+this"* — on the understanding that End Day made its own call. It never did. So a period that ended
+by ending the day, rather than by the clock moving on, kept its raw fragments forever: the diary was
+written from them, the payload injected them one at a time, and the stretch the player had just
+finished was the one stretch that never became a memory of a stretch. End Day now sweeps every
+owner and period of the just-ended day, which also catches a day run straight through without a
+single period change.
+
+**The closing arc was filed under the wrong stretch.** `endDayBackground` passed the just-ended
+`day` but no period, so `commitMemoryArc` fell back to `chatPeriod(chat)` — already "Morning" of the
+*new* day by the time the background pass runs. The one memory that closes a day was stamped Day N,
+Morning: a stretch belonging to Day N+1, where the reconciler would never find it beside the
+memories it belongs with. The period is captured before the roll and passed down.
+
+`reconcilePeriodFor` also gained a guard: a stretch whose every fragment is already `source:
+"reconciled"` is skipped, so the new day-end sweep cannot re-collapse what the period-change hook
+already collapsed.

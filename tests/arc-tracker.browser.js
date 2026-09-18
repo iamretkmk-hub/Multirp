@@ -148,6 +148,59 @@ Your DEFAULT is always "ongoing" + "same".`;
    for(const [a,z] of sorted){ if(a!==next)bad=[next,a]; next=Math.max(next,z+1); }
    ok("and the valve's own spans still tile the transcript", bad===null, "break at "+JSON.stringify(bad)+" in "+JSON.stringify(sorted));}
 
+  /* v68.1 — THE MEMORY WENT TO WHOEVER WAS STILL STANDING THERE. commitMemoryArc filtered the
+     cast by presentIds(chat) — presence as of the instant of the commit — so a character who had
+     just walked out was not eligible for the memory of the scene they had just lived. Leaving is
+     not an edge case here: "she says she has to get home and goes" is precisely the beat that
+     makes the tracker answer "finished", so the departure and the commit fire on the same turn
+     every time, and the departure lands first. The tracker said finished, the debug log showed it,
+     and nothing was written — the last memory of every visit, lost. */
+  console.log("\n[the memory goes to whoever LIVED the arc]");
+  {
+    const setup=()=>pg.evaluate(()=>{
+      state.key="k"; state.mem=true; state.memMinImp=0;
+      /* Unique content per call on purpose: commitMemoryArc refuses a memory whose text this
+         character already holds, so a stub that answers the same thing twice makes the SECOND
+         case look like a failure to build when it was a successful de-duplication. */
+      window.__n=0;
+      window.fetch=async()=>({ok:true,status:200,
+        json:async()=>({choices:[{message:{content:JSON.stringify({content:"a memory "+(++window.__n),
+          location:"here",people:["P"],emotion:"tense",importance_score:0.9})}}]}),
+        text:async()=>"x"});
+      const u=(state.universes||[])[0];
+      if(!(state.personas||[]).some(x=>x&&x.id==="c_gone"))
+        (state.personas=state.personas||[]).push({id:"c_gone",name:"Gone",universeId:u.id});
+      window.__mkChat=(presentNow,stamps)=>{
+        const mk=(role,sid,t,pres)=>({role,speaker:role==='user'?state.user:"Gone",speakerId:sid,
+                                      content:t,present:pres});
+        return {id:"c"+Math.random(),universeId:u.id,gameDay:1,location:"Room",rel:{},
+          presentIds:presentNow,
+          messages:[mk('user',null,"hi",stamps[0]),mk('assistant',"c_gone","hello",stamps[1]),
+                    mk('user',null,"stay?",stamps[2]),mk('assistant',"c_gone","I must go.",stamps[3])]};
+      };
+      return true;
+    });
+    await setup();
+    const run=(presentNow,stamps)=>pg.evaluate(async o=>{
+      const c=window.__mkChat(o.p,o.s);
+      const before=(state.memory||[]).length;
+      await commitMemoryArc(c,0,3,1,"Evening");
+      return (state.memory||[]).length-before;
+    },{p:presentNow,s:stamps});
+    const ALL=["c_gone"];
+    ok("still there → a memory", await run(ALL,[ALL,ALL,ALL,ALL])===1);
+    ok("walked out one beat before the tracker closed it → still a memory",
+       await run([],[ALL,ALL,ALL,ALL])===1);
+    ok("there for only the first half → a memory of the half they lived",
+       await run([],[ALL,ALL,[],[]])===1);
+    ok("never in the span at all → no memory invented for them",
+       await run([],[[],[],[],[]])===0);
+    ok("the commit does not read presence-now as the cast", (()=>{
+        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        return /const memCast=cast\.filter\(p=>p&&\(spanPresent\.has\(p\.id\)\|\|p\.temp\)\)/.test(src)
+          ? true : "commitMemoryArc still filters on presentIds alone"; })());
+  }
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

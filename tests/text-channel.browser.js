@@ -142,6 +142,58 @@ const {chromium}=require('playwright');
       state.x_text_notice=before;
       return n.content==="— Emre is on his phone —" ? true : JSON.stringify(n.content); }));
 
+  /* v70.2 — WHAT THE PROACTIVE COMPOSER WAS MISSING. _stampText has always written gday/gperiod
+     onto every text message and the thread rendered neither, so three unanswered messages an hour
+     apart and three spread over three days read identically — and "how long have I been left on
+     read", the thing that most decides whether a person writes again and what they write, was not
+     in the payload. Nor was where either of them is standing: without it the composer could not
+     tell texting someone across town from texting someone in the same room. */
+  console.log("\n[the proactive composer knows when and where]");
+  {
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("the thread carries a day/period stamp per line",
+       /const when=\(m\.gday!=null\)\?`Day \$\{m\.gday\}/.test(src)
+         ? true : "thread lines are still unstamped");
+    ok("and is trimmed to the recent few now that each line says when",
+       /textThreadMsgs\(chat,p\.id\)\.slice\(-4\)/.test(src)
+         ? true : "the thread window did not change");
+    ok("a where-line is built and reaches the Now block",
+       /const whereLine=/.test(src) && /\$\{whereLine\?"\\n"\+whereLine:""\}/.test(src)
+         ? true : "the locations never reach the prompt");
+    ok("the same-room case is stated, not left to be inferred",
+       /you are in the same room right now/.test(src)
+         ? true : "nothing tells the composer they are standing together");
+    ok("the stamps it renders are the ones _stampText writes", await pg.evaluate(()=>{
+        const chat={gameDay:7,period:"Evening",messages:[]};
+        const m=_stampText(chat,{role:"user",content:"hi",textMsg:true});
+        return (m.gday===7 && typeof m.gperiod==="string")
+          ? true : "stamp shape changed: "+JSON.stringify({gday:m.gday,gperiod:m.gperiod}); }));
+  }
+
+  /* v70.2 — {{open_intents}} had nothing behind it, so a prompt naming it shipped the literal
+     placeholder. The engine asks whether a NEW motive has formed; it needs to know which ones this
+     person already carries, or the same grievance re-forms from the same memories every night. */
+  console.log("\n[the intent former knows what this character is already after]");
+  ok("an empty record says so plainly", await pg.evaluate(()=>
+      /nothing on record/.test(holderIntentRecord({intents:[]},"h1",x=>x,5))));
+  ok("a live motive is named with its strength", await pg.evaluate(()=>{
+      const t=holderIntentRecord({intents:[{holderId:"h1",targetId:"t1",kind:"grudge",
+        aim:"to make him admit it",strength:0.62,status:"brewing",born:3}]},"h1",()=>"Hakan",5);
+      return /STILL LIVE/.test(t)&&/Hakan/.test(t)&&/0\.62/.test(t) ? true : t; }));
+  ok("a spent one is marked as already acted on", await pg.evaluate(()=>{
+      const t=holderIntentRecord({intents:[{holderId:"h1",targetId:"t2",kind:"overture",
+        aim:"to be forgiven",status:"spent",born:2}]},"h1",()=>"Burcu",5);
+      return /ALREADY ACTED ON/.test(t)&&/an overture/.test(t) ? true : t; }));
+  ok("another character's motive never appears in it", await pg.evaluate(()=>{
+      const t=holderIntentRecord({intents:[
+        {holderId:"OTHER",targetId:"t1",kind:"grudge",aim:"SECRET_MARKER",status:"brewing",born:1}
+      ]},"h1",()=>"Hakan",5);
+      return !/SECRET_MARKER/.test(t) ? true : "it leaked another holder's intent"; }));
+  ok("the call site actually passes it", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /open_intents:holderIntentRecord\(chat,holderId,nameById,day\)/.test(src)
+        ? true : "intentForm still sends no open_intents"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

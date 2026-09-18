@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v70.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v70.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11359,7 +11359,7 @@ const PROMPT_REGISTRY=[
   {key:"promisePurge", label:"Promises — purge pass", def:()=>DEFAULT_PROMISE_PURGE, json:true,
    hint:"Runs ONCE per chat over the commitments ALREADY on the ledger — the ones recorded before the extractor was tightened. Re-reads each open entry against the same two tests (is somebody BOUND, and can the moment it shows be named), deletes what fails, and rewrites the survivors in the second person. No placeholders; the open ledger is appended as live data. Returns {keep:[{id,promise,shows_as}], delete:[id]}."},
   {key:"intentForm", label:"Intent formation (offstage agency)", def:()=>DEFAULT_INTENT_FORM, json:true,
-   hint:"At End Day, decides if a character now privately wants something — warm (courtship/loyalty/protection) or hostile (grievance/rivalry/scheme) — reasoning from how the relationship moved. Returns valence. Use {{char}}, {{nature}}, {{day_memories}}, {{relationships}}, {{roster}}, {{user}}."},
+   hint:"At End Day, decides if a character now privately wants something — warm (courtship/loyalty/protection) or hostile (grievance/rivalry/scheme) — reasoning from how the relationship moved. Returns valence. Use {{char}}, {{nature}}, {{goals}}, {{day_memories}}, {{relationships}}, {{roster}}, {{open_intents}} (what this character already carries, live and already acted on), {{user}}."},
   {key:"intentTick", label:"Intent tick (fester & recruit)", def:()=>DEFAULT_INTENT_TICK, json:true,
    hint:"Each End Day, develops a live intent: hardens/fades, recruits allies, signals readiness. Use {{holder}}, {{nature}}, {{kind}}, {{target}}, {{aim}}, {{trigger}}, {{strength}}, {{allies}}, {{candidates}}."},
   {key:"memReconcile", label:"Memory reconciler (end of each part of the day)", def:()=>DEFAULT_MEMRECONCILE, json:true,
@@ -27785,7 +27785,31 @@ async function maybeProactiveText(chat,opts){
        angry" — five axis labels, opening with "neutral" while contradicting it four times. */
     const feel=relFeelSummary(o);
     const mems=memoriesOf(p.id).slice(-6).map(m=>"- "+memPayloadText(memText(m),320)).join("\n");
-    const th=textThreadMsgs(chat,p.id).slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    /* v70.2 — WHEN EACH TEXT WAS SENT, NOT JUST WHO SENT IT. _stampText has always written gday
+       and gperiod onto every text message and the thread rendered neither, so the composer saw a
+       flat list with no time in it: three unanswered messages an hour apart and three spread over
+       three days read identically, and "how long have I been left on read" — the single thing that
+       most decides whether a person writes again, and what they write — was not in the payload at
+       all. Four lines rather than six: with a stamp on each, the recent ones carry more than a
+       longer unstamped list did. */
+    const th=textThreadMsgs(chat,p.id).slice(-4).map(m=>{
+      const when=(m.gday!=null)?`Day ${m.gday}${m.gperiod?", "+m.gperiod:""}`:"earlier";
+      return `[${when}] ${m.role==="user"?state.user:p.name}: ${m.content}`;
+    }).join("\n");
+    /* v70.2 — AND WHERE EACH OF THEM IS. A text is a message to somebody who is not in the room;
+       without the two locations the composer could not tell the difference between texting someone
+       across town and texting someone standing next to them, and the second one is absurd. Both
+       sides, plainly, and the same-place case said out loud rather than left to be inferred. */
+    const whereLine=(()=>{ try{
+      const here=chat.locationId?locById(chat.locationId):null;
+      const mine=(here&&here.name)||chat.location||"";
+      const theirsRaw=charLocationLine(p,chat)||"";
+      const theirs=theirsRaw.replace(/^Location:\s*/,"").split(" — ")[0].split(" (")[0].trim();
+      const together=!!(Array.isArray(chat.presentIds)&&chat.presentIds.includes(p.id));
+      if(together) return `${state.user} is at ${mine||"the same place"} and so are you — you are in the same room right now. A text to someone standing in front of you is not something a person does.`;
+      if(!mine&&!theirs) return "";
+      return `${state.user} is ${mine?`at ${mine}`:"somewhere you do not know"}. You are ${theirs?`at ${theirs}`:"elsewhere"}.`;
+    }catch(_){ return ""; } })();
     const cal=(()=>{ try{ return calendarContextLine(chat,p.name,p.id); }catch(_){ return ""; } })();
     // THE ROLEPLAY ITSELF (witness-scoped): the last scene this character was in with the player, plus
     // when they last saw each other — so a text after a meeting is continuous with that meeting instead
@@ -27808,7 +27832,7 @@ async function maybeProactiveText(chat,opts){
       +(opts.eventText?`\n# A background event just happened\n${opts.eventText}\n`:"")
       +(th?`\n# Your text thread so far\n${th}\n`:"")
 
-      +`\n# Now\nDay ${today}, ${chatPeriod(chat)}. Decide whether ${p.name} texts ${state.user} now. Return the JSON.`;
+      +`\n# Now\nDay ${today}, ${chatPeriod(chat)}.${whereLine?"\n"+whereLine:""} Decide whether ${p.name} texts ${state.user} now. Return the JSON.`;
     // v28.6 — was state.gmModel, so an unprompted text was written by a different model than every
     // other line this character speaks. It is the same character on the same channel: same model.
     const outr=await chatCompletion(epSend("x_proactive_text",sys,{data:usr}),rpModel(),{fn:"rp",temp:fnTemp("rp",0.8),max:fnTok("rp",220),dbg:"Proactive text — "+p.name});
@@ -33482,6 +33506,31 @@ async function maybeWorldPulse(chat,opts){
     if(fired)chat.pulseCount=(chat.pulseCount||0)+1;
   }catch(e){}
 }
+/* v70.2 — WHAT THIS CHARACTER IS ALREADY AFTER. {{open_intents}} had nothing behind it, so a
+   prompt that named it shipped the literal "{{open_intents}}" to the model. The engine's question
+   is whether a NEW motive has formed, and it cannot answer that well without knowing which ones
+   this person is already carrying and which they have already acted on — otherwise the same
+   grievance re-forms from the same memories every night it stays charged.
+   Their own record only: an intent is a secret, and one aimed AT them is not theirs to know. */
+function holderIntentRecord(chat,holderId,nameById,day){
+  try{
+    const all=((chat&&chat.intents)||[]).filter(i=>i&&i.holderId===holderId);
+    if(!all.length)return "(nothing on record — this would be their first)";
+    const line=i=>{
+      const who=(typeof nameById==="function"&&nameById(i.targetId))||i.targetName||"someone";
+      const age=(typeof day==="number"&&typeof i.born==="number")
+        ? (day-i.born<=0?"formed today":day-i.born===1?"since yesterday":`${day-i.born} days old`) : "";
+      const aim=i.aim?` — wants: ${briefDesc(String(i.aim),140)}`:"";
+      const kind=i.kind||"motive";
+      const a=/^[aeiou]/i.test(kind)?"an":"a";
+      return i.status==="spent"
+        ? `- ALREADY ACTED ON: ${a} ${kind} toward ${who}${aim}${age?` (${age})`:""}. Do not form this one again unless something new revived it.`
+        : `- STILL LIVE: ${a} ${kind} toward ${who}${aim} (strength ${(+i.strength||0).toFixed(2)}${age?", "+age:""}).`;
+    };
+    const live=all.filter(i=>i.status!=="spent"), spent=all.filter(i=>i.status==="spent").slice(-4);
+    return live.concat(spent).map(line).join("\n")||"(nothing on record — this would be their first)";
+  }catch(e){ return "(nothing on record)"; }
+}
 async function runIntentEngine(chat,day,uni){
   if(!chat||state.intentOn===false||!state.key||!state.mem)return;
   const uid=uni||(chat&&chat.universeId)||state.curUniverse||null;
@@ -33540,7 +33589,8 @@ async function runIntentEngine(chat,day,uni){
           user:state.user, char:holder.name,
           nature:(holder.personality?String(holder.personality).slice(0,220):"ordinary"),
           goals:engineGoals(holder,300)||"(no stated goals — judge from nature and events)",
-          day_memories:mems, relationships:relBlock, roster:rosterList })+"\n\n"+engineLangDirective(),{data:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}),model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
+          day_memories:mems, relationships:relBlock, roster:rosterList,
+          open_intents:holderIntentRecord(chat,holderId,nameById,day) })+"\n\n"+engineLangDirective(),{data:`Does ${holder.name} now hold a motive worth acting on — warm or hostile? Return the JSON.`}),model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",250),dbg:"Intent form · "+holder.name});
       const j=parseJSON(out)||{};
       const arr=Array.isArray(j.intents)?j.intents:[];
       for(const it of arr.slice(0,1)){

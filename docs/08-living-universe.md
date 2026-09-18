@@ -368,3 +368,31 @@ The setup path also stops flattening the classifier's answer. The shipped classi
 user-editable, and an edited one that adds the third value now reaches a writer that knows what to
 do with it. Until then an offstage-ish event arrives as `environment` and is written as a short beat
 nobody reacts to, which is the acceptable degradation.
+
+## v70.2 — two engines that could not see what they were reasoning about
+
+**`intentForm` had no `{{open_intents}}`.** A prompt naming it shipped the literal placeholder to
+the model. The engine's question is whether a *new* motive has formed tonight, and it was answering
+that with no knowledge of which motives this character already carries — so the same grievance
+could re-form from the same charged memories every night it stayed hot, and a motive they had
+already acted on could be invented again from scratch.
+
+`holderIntentRecord(chat, holderId, nameById, day)` fills it with that character's **own** record:
+live ones first (kind, target, aim, strength, age), then the last few spent ones marked
+`ALREADY ACTED ON` with an instruction not to re-form them. Their own only — an intent is a secret,
+and one aimed *at* them is not theirs to know; a test pins that another holder's motive never
+appears. The registry hint now lists every name the call site actually fills, `{{goals}}` included,
+which it had been omitting.
+
+**The proactive text composer could not see time or place.** Two gaps, both of data that already
+existed:
+
+- `_stampText` has always written `gday` and `gperiod` onto every text message, and the thread
+  rendered neither. Three unanswered messages an hour apart and three spread over three days read
+  identically, so "how long have I been left on read" — the single thing that most decides whether
+  a person writes again, and what they write — was not in the payload at all. Each line carries its
+  day and period now, and the window is the last four rather than six: with a stamp on each, the
+  recent ones say more than a longer unstamped list did.
+- Neither party's location was sent. The composer could not tell texting someone across town from
+  texting someone standing in the same room. Both are stated in the `# Now` block, and the
+  same-place case is said out loud rather than left to be inferred.

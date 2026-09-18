@@ -958,3 +958,36 @@ hold.
 Also: the call ran on the **gamemaster** model while reading the **prompt rewriter's** bucket, so
 the card being adjusted was not the card in play — see `06-ai-providers.md` for the general rule and
 the three other places it was crossed.
+
+## v70.1 — an engine separator asked for a name nothing was supplying
+
+`{{self}}` in the drives writer's own template was reported as a name that does not resolve. It was
+right, and the cause was not the template.
+
+An engine separator's `{{value}}` names are filled from two places: the global engine vocabulary
+(`PT_VALUES` entries with `scope:"any"` — `user`, `day`, `period`, `location`, `sub_area`,
+`universe`, `story_language`) and the `vars` object the call site passes as `epSend`'s fourth
+argument. `self`, `char`, `target`, `npc.name` and `response.target` are `scope:"reply"`: they
+belong to the reply payload's vocabulary, because an engine in general has no single character
+writing the turn.
+
+`psychePrompt` is the exception that proves it — the whole engine is about exactly one person. Its
+shipped separator reads `HOW {{self}} HAS COME TO FEEL ABOUT {{target}}`, and the call site passed
+`{target}` and nothing else. `target` resolved *because* it was passed; `self` was never added
+beside it. An unfilled value is deliberately left **visible** rather than blanked (see the note in
+`epMessages` — a `{{world}}` reaching the model is a bug you can see, an empty string where a
+world's name belongs is a bug you cannot), so the literal `{{self}}` went out in the payload and the
+template editor flagged it.
+
+It was invisible for as long as the `settled` part came back empty — which, until v67.1 fixed the
+dead `relOf` call, was always. Fixing the part is what made the unresolved name start shipping.
+
+`memBuild` had the same shape on one of its two call sites (`{{who}}`, supplied by the text-memory
+path and not by the arc path), harmless in the payload because that separator's part is empty there
+and an empty part drops its label — but still a name the editor cannot resolve on an engine that
+works. Both call sites supply it now.
+
+`tests/engine-values.test.js` pins the invariant for every engine: **every `{{name}}` in an
+`epDefine` separator or fixed text must be either in the engine vocabulary or supplied by every
+`epSend` call site for that key.** It also pins that `self` stayed reply-scoped — the fix is the
+call site declaring what it has, not the vocabulary growing a name most engines cannot mean.

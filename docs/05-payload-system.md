@@ -879,6 +879,24 @@ alone; the axis table says it rarely drops. `comfort` is never written and still
 resting level is computed from trust/affection/familiarity minus fear — that is the existing
 coupling doing the work.
 
+**And only an intimate bond is neglected.** The first cut gated on "any bond at all", which meant a
+shopkeeper the player had not walked past in a week grew possessive and stopped trusting them.
+Absence is only an injury where there is an attachment to injure; everywhere else it is time
+passing, which is what it should read as. Two conditions, both read off the slow axes so the test
+uses the same data the rest of the system reasons from rather than a tie label that would need
+parsing in whatever language the story is written in:
+
+- **familiarity** above a floor — the axis whose positive pole is literally *"deeply, intimately
+  known"*. Without it there is no intimacy whatever else is high: strong feeling toward a
+  near-stranger is the infatuation the axis table already warns about, and an infatuation does not
+  curdle into jealousy because somebody was busy for four days.
+- **affection above a floor, and positive** — a real attachment. This also excludes the case that
+  would have been outright wrong: someone who dislikes the player is not wounded by their absence,
+  they are relieved by it.
+
+The drift then **scales with the attachment**, so a marriage moves further on a silent week than a
+friendship does; `NEGLECT_PROFILE` is the step at full attachment, not a flat rate.
+
 Bounded three ways so it can never become the story: a grace period before it starts, a saturating
 step of about two points, and a cap on how far the whole drift can carry a bond from where the
 silence began. It plants a record at a few crossings, so the description has something to catch up

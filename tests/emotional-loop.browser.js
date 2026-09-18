@@ -97,7 +97,7 @@ const {chromium}=require('playwright');
   const drift=async (gap)=>pg.evaluate((gap)=>{
       const chat=curChat(); chat.gameDay=10;
       const o=relObj(chat,"p_n","__user__");
-      o.trust=40; o.jealousy=0; o.respect=30; o.affection=50; o.familiarity=50;
+      o.trust=40; o.jealousy=0; o.respect=30; o.affection=60; o.familiarity=60;
       o.desc="She has come to rely on him.";
       o.lastSeenDay=10-gap; o.neglectDays=0;
       const before={t:o.trust,j:o.jealousy,r:o.respect,a:o.affection,f:o.familiarity};
@@ -107,7 +107,7 @@ const {chromium}=require('playwright');
   ok("nothing moves inside the grace period", await pg.evaluate(async()=>{
       const chat=curChat(); chat.gameDay=10;
       const o=relObj(chat,"p_n","__user__");
-      o.trust=40; o.desc="x"; o.lastSeenDay=9; o.neglectDays=0;
+      o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=9; o.neglectDays=0;
       runNeglectDrift(chat,10);
       return o.trust===40; }));
   {
@@ -129,23 +129,44 @@ const {chromium}=require('playwright');
       const cold=_fastBaseline(o,"comfort");
       return cold<warm && !/comfort/.test(JSON.stringify(NEGLECT_PROFILE)) ? true
            : JSON.stringify({warm,cold}); }));
-  ok("a bond with nothing in it is not being neglected", await pg.evaluate(()=>{
+  /* v63.1a — ONLY AN INTIMATE BOND. The first cut gated on "any bond at all", so a shopkeeper the
+     player had not walked past in a week grew possessive. Absence is only an injury where there is
+     an attachment to injure. Both conditions are read off the SLOW axes, so the test is the same
+     data the rest of the system reasons from rather than a tie label in some language. */
+  const setBond=async (o)=>pg.evaluate((o)=>{
       const chat=curChat(); chat.gameDay=10;
-      const o=relObj(chat,"p_n","__user__");
-      REL_DIMS.forEach(d=>o[d.key]=0); o.desc=""; o.lastSeenDay=1; o.neglectDays=0;
+      const r=relObj(chat,"p_n","__user__");
+      REL_DIMS.forEach(d=>r[d.key]=0); r.st={};
+      Object.keys(o).forEach(k=>r[k]=o[k]);
+      r.desc="x"; r.lastSeenDay=1; r.neglectDays=0;
+      const before={j:r.jealousy,t:r.trust};
       runNeglectDrift(chat,10);
-      return o.jealousy===0 ? true : "drifted an empty bond"; }));
+      return {moved:(r.jealousy!==before.j||r.trust!==before.t), j:r.jealousy, t:r.trust};
+    },o);
+  ok("an empty bond does not drift",
+     (await setBond({})).moved===false);
+  ok("an acquaintance they know well but are not attached to does not",
+     (await setBond({familiarity:70,affection:5,trust:30})).moved===false);
+  ok("a strong feeling toward someone barely known does not — that is infatuation, not intimacy",
+     (await setBond({familiarity:10,affection:70,trust:30})).moved===false);
+  ok("someone who dislikes the player is not wounded by their absence",
+     (await setBond({familiarity:70,affection:-50,trust:-30})).moved===false);
+  ok("an intimate bond does", (await setBond({familiarity:60,affection:60,trust:40})).moved===true);
+  ok("and the deeper the attachment, the further a silent day carries it", await pg.evaluate(()=>{
+      const near=neglectWeight({affection:NEGLECT_MIN_AFFECTION});
+      const deep=neglectWeight({affection:95});
+      return deep>near && near>0 && deep<=1 ? true : JSON.stringify({near,deep}); }));
   ok("an older save is stamped rather than charged for days that predate the stamp",
      await pg.evaluate(()=>{
       const chat=curChat(); chat.gameDay=10;
       const o=relObj(chat,"p_n","__user__");
-      o.trust=40; o.desc="x"; o.lastSeenDay=0; o.neglectDays=0;
+      o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=0; o.neglectDays=0;
       runNeglectDrift(chat,10);
       return o.lastSeenDay===10 && o.trust===40 ? true : JSON.stringify({d:o.lastSeenDay,t:o.trust}); }));
   ok("the drift saturates — it cannot run away", await pg.evaluate(()=>{
       const chat=curChat();
       const o=relObj(chat,"p_n","__user__");
-      o.trust=40; o.jealousy=0; o.desc="x"; o.lastSeenDay=1; o.neglectDays=0;
+      o.trust=40; o.jealousy=0; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=1; o.neglectDays=0;
       for(let d=0;d<200;d++){ chat.gameDay=10+d; runNeglectDrift(chat,10+d); }
       return o.neglectDays<=NEGLECT_CAP && Math.abs(o.jealousy)<100 ? true
            : JSON.stringify({n:o.neglectDays,j:o.jealousy}); }));
@@ -154,7 +175,7 @@ const {chromium}=require('playwright');
       state.memory=(state.memory||[]).filter(m=>m&&m.source!=="neglect");
       const chat=curChat();
       const o=relObj(chat,"p_n","__user__");
-      o.trust=40; o.desc="x"; o.lastSeenDay=6; o.neglectDays=0;
+      o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=6; o.neglectDays=0;
       chat.gameDay=10; runNeglectDrift(chat,10);          // gap of 4 — a marked crossing
       return (state.memory||[]).some(m=>m&&m.source==="neglect"&&m.ownerId==="p_n"); }));
   ok("sharing a scene clears the clock", await pg.evaluate(()=>

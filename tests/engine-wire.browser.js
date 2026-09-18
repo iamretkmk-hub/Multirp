@@ -199,6 +199,95 @@ const {chromium}=require('playwright');
       console.log("        "+blob.length+" of "+Object.keys(ENGINE_PARTS).length+": "+blob.join(", "));
       return blob.length<=25?true:("grew to "+blob.length); }));
 
+  /* ===== v70.4 — the character-quest loop ===== */
+  console.log("\n[the designer can see what is already being chased]");
+  ok("{{open_quests}} is in the shipped default", await pg.evaluate(()=>
+      up("charQuestGen").indexOf("{{open_quests}}")>=0));
+  ok("and the call site fills it", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /open_quests:openQuestLines\(uni,day\)/.test(src)?true:"the designer is still sent nothing"; })());
+  ok("an empty world says so rather than shipping a blank", await pg.evaluate(()=>
+      /nothing is being pursued/.test(openQuestLines({id:"u_none"},5))));
+  ok("open quests and recently-closed ones are listed, stale ones are not", await pg.evaluate(()=>{
+      const saved=window._charQuests;
+      window._charQuests=()=>[
+        {holderName:"A",targetName:"B",title:"LIVE",status:"active",createdDay:1},
+        {holderName:"C",targetName:"D",title:"RECENT",status:"done",completedDay:4,result:"he agreed"},
+        {holderName:"E",targetName:"F",title:"ANCIENT",status:"done",completedDay:-50}];
+      const t=openQuestLines({id:"u"},5);
+      window._charQuests=saved;
+      return (/LIVE/.test(t)&&/in progress/.test(t)&&/RECENT/.test(t)&&/he agreed/.test(t)&&!/ANCIENT/.test(t))
+        ? true : t; }));
+
+  console.log("\n[done_when has a consumer]");
+  {
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("the designer is asked for a checkable condition", await pg.evaluate(()=>
+        /done_when/.test(up("charQuestGen"))));
+    ok("the spawn stores it on the quest",
+       /doneWhen:String\(qq\.done_when\|\|""\)\.slice\(0,200\)/.test(src)
+         ? true : "done_when is parsed by nobody");
+    ok("the stepper is given it",
+       /done_when:q\.doneWhen\|\|/.test(src) ? true : "the condition never reaches the step");
+    ok('and told that "done" means that sentence is true', await pg.evaluate(()=>{
+        const t=up("charQuestStep");
+        return /DONE WHEN: \{\{done_when\}\}/.test(t) && /That sentence is the test/.test(t)
+          ? true : "the step still judges freehand"; }));
+    /* The rest of the loop already existed and is what makes done_when worth having: a closed
+       quest becomes a settled event, and liveGoalsLines drops any goal that matches one. */
+    ok("a closed quest reaches the settled-events feed, which is what drops the goal",
+       await pg.evaluate(()=>{
+        const p={id:"p_q",name:"Q",goalsLive:{lines:["Get Berker to sell the boat","Lose the weight"]}};
+        const savedCQ=window._charQuests, savedU=window.universeById;
+        window.universeById=()=>({id:"u",gameData:{}});
+        window._charQuests=()=>[{holderId:"p_q",title:"Get Berker to sell the boat",
+                                 status:"done",completedDay:4,result:"he agreed"}];
+        const before=liveGoalsLines(p).slice();
+        window._charQuests=savedCQ; window.universeById=savedU;
+        return (before.length===1 && /weight/.test(before[0]))
+          ? true : "goals after a finished quest: "+JSON.stringify(before); }));
+  }
+
+  console.log("\n[the step knows where the target is]");
+  ok("{{target_place}} is in the default", await pg.evaluate(()=>
+      up("charQuestStep").indexOf("{{target_place}}")>=0));
+  ok("and the call site resolves it from world positions", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /target_place:\(locById\(pos\[target\.id\]\)\|\|\{\}\)\.name/.test(src)
+        ? true : "only the holder's place is sent"; })());
+  ok("every placeholder both quest prompts use is one their call site fills", await pg.evaluate(()=>{
+      const genFilled=["open_quests","char","personality","goals","intents","recent","ties","cast",
+                       "locations","day","period","user","world"];
+      const stepFilled=["char","personality","title","desc","motive","target","target_sheet",
+                        "target_place","done_when","tie","progress","recent","place","day","period",
+                        "user","world"];
+      const un=(t,f)=>[...new Set((t.match(/\{\{([a-z_]+)\}\}/g)||[]))]
+                        .map(x=>x.slice(2,-2)).filter(x=>!f.includes(x));
+      const a=un(up("charQuestGen"),genFilled), b=un(up("charQuestStep"),stepFilled);
+      return (!a.length&&!b.length)?true:"unfilled — gen:"+a.join(",")+" step:"+b.join(","); }));
+
+  console.log("\n[one emotion vocabulary, one memory language]");
+  ok("the three writers that share the memory bank name the same token list", await pg.evaluate(()=>{
+      const want="joyful, content, neutral, concerned, fearful, angry, sad, surprised, affectionate, tense";
+      const miss=["charQuestStep","offstageEvent","calExec"].filter(k=>up(k).indexOf(want)<0);
+      return miss.length===0?true:"no shared list in: "+miss.join(", "); }));
+  ok("and their memories are written in the bank's language", await pg.evaluate(()=>{
+      const bad=["charQuestStep","offstageEvent","calExec"].filter(k=>/Turkish memory/.test(up(k)));
+      return bad.length===0?true:"still asks for a Turkish memory: "+bad.join(", "); }));
+  ok("the token is enforced in code, not only asked for", await pg.evaluate(()=>{
+      const cases={joyful:"joyful", happy:"joyful", "content.":"content", furious:"angry",
+                   "Mutlu":"neutral", "":"neutral", "not a feeling":"neutral", tense:"tense"};
+      const bad=Object.keys(cases).filter(k=>normalizeEmotion(k)!==cases[k]);
+      return bad.length===0?true:"wrong for: "+bad.map(k=>k+"->"+normalizeEmotion(k)).join(", "); }));
+  ok("both write paths into the bank normalise it", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /emotion:normalizeEmotion\(m\.emotion\)/.test(src)
+          && /emotion:normalizeEmotion\(j\.emotion\)/.test(src)
+        ? true : "a write path still stores the raw token"; })());
+  ok("no refresh pipe stood down", await pg.evaluate(()=>{
+      const sp=window.__stalePipes||[];
+      return sp.length===0?true:"stale: "+sp.join(", "); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -422,3 +422,50 @@ per-person record first and fall back. A decision is still never shown to anyone
 
 The reckoning is also told **which moment it is being taken in** — still in the room with them, just
 after they have gone, or later with the day moved on. Same night, three different decisions.
+
+## v70.4 — the character-quest loop closes
+
+**The designer could not see what was already being chased.** `charQuestGen` was asked whether this
+character now commits to a concrete pursuit, with no sight of the pursuits already running — so two
+characters could set off after the same thing, and a holder whose quest had just closed could be
+handed the same one again, the goal still reading as unmet because the finished quest was nowhere in
+view. `{{open_quests}}` now lists the open ones (title, target, in progress since day N) and the
+ones closed in the last week (title, target, how it ended), with the instruction that a quest
+already chasing this is a reason to return `{"quest": false}`.
+
+**`done_when` now exists and has a consumer.** The designer states one observable, checkable
+sentence — *a state of the world someone could point at, not a feeling* — it is stored on the quest
+as `doneWhen`, and the stepper is given it with the rule that `outcome: "done"` is returned only
+when what it just narrated makes that sentence true. The rest of the loop was already built and is
+what makes the condition worth having: a closed quest becomes a settled event (`settledEventLines`),
+and `liveGoalsLines` already drops any live goal matching one. Quest → event → goal was never the
+broken link; the freehand "is it finished?" judgement at the front of it was. Pinned end to end.
+
+**The stepper could not see where the target was.** Only the holder's place was sent, so *"they
+cannot simply walk up to them"* had nothing behind it: a move could put two people in a room the
+world has in different towns, and a pursuit of somebody who is not there could repeat the same
+approach every night without ever failing to reach them. `{{target_place}}` is resolved from world
+positions, with the rule that a move across a distance is a journey, a message, a wait, or something
+done through someone else.
+
+**One emotion vocabulary, one memory language.** `memBuild` has always declared a fixed ten-token
+English list and called it a machine value. The three world-pulse writers that plant into the *same*
+bank — `charQuestStep`, `offstageEvent`, `calExec` — asked only for `"<one word>"`, inside prompts
+written in the story's language, and for the memory itself asked for *"a 1-2 sentence Turkish
+memory"* while the runtime `mixedLangDirective` overrode them to English. The bank therefore filled
+with English tokens from one writer and whatever the model chose, in whichever language, from the
+others, and nothing downstream could compare them. All three now state the same token list and ask
+for the memory in the bank's one language, so the prompt body agrees with the directive instead of
+contradicting it inside the same request. `normalizeEmotion()` is the backstop at both write paths
+(`_plantWorldMemory` and the arc builder): a recognised synonym maps to its canonical token, and
+anything else becomes `neutral`.
+
+`gistBuild` and `poiGossip` keep their own seven-token palette on purpose — those are an observer's
+attitude to something witnessed, not a felt emotion, and they are not what the four writers above
+share.
+
+**Non-USER quests and the offstage director:** they do not reach it, and they do not need to.
+`charQuestStagingSummary` filters to `targetId === "__user__"`, so only quests aimed at the player
+feed the Gamemaster's staging; char→char quests have their own day-end stepper
+(`runCharQuestPursuit`). The `ask` field is already stored only for user quests
+(`ask: targetId==="__user__" ? … : ""`), so nothing is being carried that nothing reads.

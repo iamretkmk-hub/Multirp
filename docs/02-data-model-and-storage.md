@@ -26,8 +26,12 @@ IDB collections in `_idbColl`; `loadState()` prefers those over any legacy local
   formerly-hidden overrides `fallbackModel`, `sttFixModel`, `recapModel`, `portraitModel`,
   `mapImgModel`, `uniPicModel`…).
 - **Sampling / generation**: `tokens`, `temp`, `reasoningOn`, `reasoningEffort`, `topP`, `topK`,
-  `freqPenalty`, `presPenalty`, `provDeny`, `geminiUnsafe`, `fnCfg` (per-function temp/token
-  overrides used by `fnTemp(fn,default)` / `fnTok(fn,default)`).
+  `freqPenalty`, `presPenalty`, `provDeny`, `geminiUnsafe`, `fnCfg` (per-agent overrides:
+  `{temp, tok, reason, effort}` per bucket, read by `fnTemp(fn,default)` / `fnTok(fn,default)` /
+  `fnReason(fn)` / `fnEffort(fn)`). Buckets: `rewriter`, `mc`, `mem`, `gm`, `unigen`, `router`,
+  `call` — plus `rp` and `reply`, which share the roleplay creativity bucket and have no card.
+  Every field is `null`/absent = **Auto**, which means the call-site default, so an untouched
+  install behaves exactly as it did before the override existed.
 - **Prompts**: one property per `PROMPT_REGISTRY` key (`baseInstruction`, `formatRules`,
   `memBuild`, `gmJudge`, …) — the *global* layer of the prompt resolution chain.
 - **Feature toggles & thresholds**: `mem`, `autoImg`, `gmOn/gmEvery/gmSensitivity`, `sceneOn`,

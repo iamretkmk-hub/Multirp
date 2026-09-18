@@ -8,9 +8,20 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   (`opts.max` ?? `state.tokens`).
 - **Reasoning control**: reasoning is **disabled by default**
   (`reasoning:{enabled:false, exclude:true}`) — the pipeline is JSON/judgment work that must
-  not think out loud, and hybrid models (deepseek-v4-pro) otherwise leak/waste. Opt back in
-  per call (`opts.reasoning:true`) or globally (`state.reasoningOn`). Reasoning *effort* is
-  forwarded only for roleplay replies (`opts.rp`).
+  not think out loud, and hybrid models (deepseek-v4-pro) otherwise leak/waste. Three ways back
+  in, most specific first:
+  1. `opts.reasoning:true` / `false` — one call, wins over everything.
+  2. **The agent's own card** (v66.1). `opts.fn` names an `fnCfg` bucket, and that bucket's
+     `reason` (`true`/`false`/`null`=Auto) and `effort` decide. This is how a *background* engine
+     thinks: turn it on for the gamemaster or the daily engines, leave the routers and trackers
+     off. Every bucket ships as Auto, so this changes nothing until you set it.
+  3. `state.reasoningOn` + `state.reasoningEffort` — the **roleplay reply only** (`opts.rp`),
+     unchanged since v37.6.
+  Effort resolves the same way: `opts.reasoning_effort` ?? the bucket's `effort` ?? the roleplay
+  setting. `""` (Auto) omits the field at every level.
+  ⚠️ The **live voice call** streams straight to OpenRouter and never passes through
+  `chatCompletion`, so it reads its bucket itself via `vcReasoning()`. Anything else that builds
+  its own request body has to do the same, or its card is a switch wired to nothing.
 - **Sampling controls apply to roleplay replies ONLY** (`opts.rp===true`): top_p, top_k,
   frequency/presence penalties from Settings; "" (Auto) omits the field. Background engines
   always run provider defaults so their JSON stays parseable. Explicit `opts.top_p` etc.

@@ -78,8 +78,11 @@ const {chromium}=require('playwright');
       const row=document.getElementById('setReasoningOn').closest('.kvline');
       return !/applies to every call/.test(row?row.textContent:"")
         ? true : "the old claim is still on the reasoning row"; }));
+  /* v66.1 — the row is still roleplay-only, but "never the background engines" stopped being
+     true: each agent carries its own switch now. It still has to say which calls IT governs, or
+     the switch reads as app-wide again, which is the bug this suite exists for. */
   ok("it says roleplay replies only", await pg.evaluate(()=>
-      /roleplay replies only — never the background engines/.test(document.documentElement.innerHTML)));
+      /roleplay replies only — each background agent has its own switch/.test(document.documentElement.innerHTML)));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

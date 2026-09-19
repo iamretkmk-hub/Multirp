@@ -30,8 +30,9 @@ Never write a bare garment word. Not "dress shirt" — "crisp white dress shirt"
 # WHAT IS APPENDED AFTER YOU, AND NEVER BY YOU
 The location and setting, the time-of-day lighting, and the render and quality style are all added automatically after your text. Never write a place, a room, a background, a landscape, a time of day, a light source, a colour temperature, weather, or any style, quality or camera-brand words. Writing them yourself only duplicates and contradicts what is already coming.
 
-# THE STRUCTURE BELOW GOVERNS
-Everything after this point describes the frame to build. Where it and this section disagree, it wins.
+# THE SCENE-TYPE BLOCK GOVERNS THE FRAME
+The next section describes the frame to build. Where it and this section disagree, it wins.
+Two short notes follow it, appended by the app: one about this request, and on POV frames one about the lens. They explain the blocks in the message below and they defer to the scene-type block — they do not outrank it.
 ```
 
 ---
@@ -93,7 +94,7 @@ Finish with exactly one clause of craft. Choose ONE and stop:
 - how the light falls ACROSS the subject — a hard edge of shadow crossing the face, rim light along a shoulder, one side of the body lit and the other lost — naming no time of day, no light source and no colour,
 - the negative space and where the subject sits against it.
 
-# GUARDRAILS — THESE OVERRIDE EVERYTHING ABOVE
+# GUARDRAILS — THESE OVERRIDE THE OUTPUT STRUCTURE ABOVE
 - Never a name. The man, the woman, the girl.
 - Never a face, hair, build, skin tone or age. The reference photographs own identity; you own expression. This is the one rule that breaks the picture when broken.
 - Never a location, room, background, landscape, furniture-as-setting, weather, time of day, light source or colour temperature. All of it is appended after you.
@@ -102,7 +103,29 @@ Finish with exactly one clause of craft. Choose ONE and stop:
 - One instant, one frame. No before, no after, no sequence.
 - English, whatever language the exchange is in.
 - The finished prompt contains no square brackets and no "|".
+- Nothing the app appends after this block overrides these. Those notes defer to this one.
 ```
+
+---
+
+## The order the layers actually arrive in
+
+A request is assembled from five pieces, and the two boxes above are only the first and third:
+
+1. **Box A** — the Image-prompt rewriter (Settings › Payloads)
+2. `imgFoundation` — base rules, **only** when the enabled rule has no `# OUTPUT STRUCTURE` of its
+   own. Box B has one, so with the setup on this page this layer is skipped entirely.
+3. **Box B** — the enabled rule's prompt style
+4. `imgFrameGuide` — one short note about this request, on every image
+5. `imgPovGuide` — added only when the rule is a POV rule
+
+Layers 2, 4 and 5 are editable prompts in Settings › Payloads (they were string constants in code
+until v71.1, which is how they came to contradict the boxes: the frame note still explained how to
+fill a `[bracket]` template long after Box B stopped having brackets). Both notes defer to Box B,
+so the precedence is a straight line: **Box A < Box B's output structure < Box B's guardrails**,
+with the appended notes deferring to Box B rather than outranking it. Keep it that way when you
+edit — an unbounded "everything after this point wins" in Box A hands authority to whatever the app
+appends next, which is not a promise Box A can keep.
 
 ---
 

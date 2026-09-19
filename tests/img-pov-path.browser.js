@@ -86,16 +86,22 @@ const {chromium}=require('playwright');
   // ---- the path helper and the writer block
   const guide=await pg.evaluate(()=>({
     on:rulePov({pov:true}), off:rulePov({pov:false}), missing:rulePov({}), none:rulePov(null),
-    g:IMG_WRITER_POV_GUIDE
+    g:up("imgPovGuide")
   }));
   ok("rulePov reads the switch and defaults to third person",
      guide.on===true&&guide.off===false&&guide.missing===false&&guide.none===false, JSON.stringify(guide).slice(0,120));
+  /* v71.1 — it still reverses the gaze, but it no longer does so by citing "characters never look
+     at the camera" as a rule stated elsewhere: no layer of this stack says that, so the override
+     was arguing with a phantom. The positive statement carries it. */
   ok("the POV block reverses the gaze rule explicitly",
-     /THE GAZE RULE IS REVERSED HERE/.test(guide.g)&&/she looks INTO the lens/.test(guide.g), "");
+     /LOOK STRAIGHT INTO THE LENS/.test(guide.g)&&/looking at the viewer's eyes/.test(guide.g), guide.g.slice(0,160));
   ok("it bars the player from the frame but allows his hands",
      /no mirror, no reflection/.test(guide.g)&&/HIS HANDS ARE THE ONE EXCEPTION/.test(guide.g), "");
+  /* v71.1 — the contract, not the sentence that used to carry it. The rule's own template assigns
+     the IMAGE slots (that is its section on who is in frame); what this layer has to guarantee is
+     that the viewer is never given one, however the rule numbers the rest. */
   ok("and it stops the writer giving him an IMAGE slot",
-     /never write "the man in IMAGE 2" for him/.test(guide.g), "");
+     /takes no IMAGE slot/i.test(guide.g), guide.g.slice(0,160));
 
   // ---- whose photographs go up
   const refs=await pg.evaluate(async()=>{
@@ -285,6 +291,76 @@ const {chromium}=require('playwright');
   ok("a POV rule hands the writer the POV block",
      /THIS IS A POV FRAME/.test((await shot({msgs:M,pov:true})).sys), "");
   ok("a third-person rule does not", !/THIS IS A POV FRAME/.test(w.sys), "");
+
+  /* v71.1 — THE UNEDITABLE LAYERS WERE THE STALE ONES. An image request is assembled from the
+     universal prompt, then (for an old-style rule) the foundation, then the routed rule's own
+     promptStyle, then a frame note, then a POV note. The last three lived in code as string
+     constants — so the one part of the stack nobody could reach was also the part that had gone
+     stale: it still explained how to fill a [bracket] template in a stack whose rule templates had
+     stopped having brackets, still called the wardrobe a menu to pick from after the outfit became
+     a decided fact, and still overrode a "characters never look at the camera" rule that is not in
+     the prompt at all. It also shipped with its newlines escaped, so it arrived as one unbroken
+     line with the characters \n visible in it. */
+  console.log("\n[every layer of the image request is editable]");
+  {
+    const LAYERS=["imgFoundation","imgFrameGuide","imgPovGuide"];
+    ok("all three are registered prompts", await pg.evaluate(L=>{
+        const miss=L.filter(k=>!(PROMPT_REGISTRY||[]).some(e=>e&&e.key===k));
+        return miss.length===0?true:"not registered: "+miss.join(", "); },LAYERS));
+    ok("each one loads with real text", await pg.evaluate(L=>{
+        const thin=L.filter(k=>!(up(k)||"").trim() || up(k).length<80);
+        return thin.length===0?true:"empty or stub: "+thin.join(", "); },LAYERS));
+    ok("none of them is still a constant in the code", (()=>{
+        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const left=["IMG_WRITER_FOUNDATION","IMG_WRITER_FRAME_GUIDE","IMG_WRITER_POV_GUIDE"]
+          .filter(n=>new RegExp("const "+n+"\\s*=").test(src));
+        return left.length===0?true:"still in code: "+left.join(", "); })());
+    ok("the request reads them through the registry", (()=>{
+        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const n=(src.match(/up\("imgFrameGuide"\)/g)||[]).length;
+        return n===2?true:"frame guide read at "+n+" of the 2 image paths"; })());
+    ok("no layer ships its newlines escaped into visible text", await pg.evaluate(L=>{
+        const bad=L.concat("narrateVerbatim").filter(k=>/\\n/.test(up(k)));
+        return bad.length===0?true:"literal \\n inside: "+bad.join(", "); },LAYERS));
+    ok("no refresh pipe stood down", await pg.evaluate(()=>{
+        const sp=window.__stalePipes||[];
+        return sp.length===0?true:"stale: "+sp.join(", "); }));
+  }
+
+  console.log("\n[the remnants of the old design are gone]");
+  {
+    const dead=await pg.evaluate(()=>{
+      const all=["imgFoundation","imgFrameGuide","imgPovGuide"].map(k=>up(k)).join("\n");
+      return [
+        [/\[bracket|DROP THE BRACKETS/i, "instructions for filling a [bracket] template"],
+        [/WARDROBE|DRESSING CONTEXT/i,    "the wardrobe as a menu to pick from"],
+        [/never look at the camera|characters never look/i, "an override of a rule that is not there"],
+        [/tripod across the room/i,       "a distance rule that fought the shot section"],
+      ].filter(([rx])=>rx.test(all)).map(([,n])=>n);
+    });
+    ok("nothing left over from the template design", dead.length===0?true:"still there: "+dead.join("; "));
+  }
+
+  console.log("\n[and each layer says only what is its own to say]");
+  ok("the frame note defers to the scene-type block", await pg.evaluate(()=>
+      /the block wins/.test(up("imgFrameGuide"))));
+  ok("it explains the continuity reference and the decided outfit", await pg.evaluate(()=>{
+      const t=up("imgFrameGuide");
+      return /CONTINUITY REFERENCE/.test(t) && /already decided/.test(t)
+        ? true : "the frame note no longer covers the two blocks only it can explain"; }));
+  ok("the POV note owns the viewpoint but not the framing", await pg.evaluate(()=>{
+      const t=up("imgPovGuide");
+      return /his head and only his head/.test(t)
+          && /belongs to the scene-type block above/.test(t)
+        ? true : "the POV note still decides how tight the shot is"; }));
+  ok("it still reverses the gaze, without citing a rule that is not there", await pg.evaluate(()=>{
+      const t=up("imgPovGuide");
+      return /LOOK STRAIGHT INTO THE LENS/.test(t) && !/never look at the camera/i.test(t)
+        ? true : "the gaze override is missing or still cites the phantom rule"; }));
+  ok("the spoken-input rule is a prompt now, not a call-site string", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /\(\(opts&&opts\.verbatim\)\?"\\n\\n"\+up\("narrateVerbatim"\):""\)/.test(src)
+        ? true : "the auto-RP narrator still builds it inline"; })());
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");

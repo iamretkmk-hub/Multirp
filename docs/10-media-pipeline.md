@@ -463,3 +463,52 @@ and inlined into exports (`inlineStaticImages`).
   video; the option set in Settings is the whole surface.
 - Sending an option a model doesn't accept is a hard 400 (the `1080p` case). Add new options
   behind the same "only when set" rule that `generateVideo` uses.
+
+## v71.1 — the layers nobody could edit were the stale ones
+
+An image request is assembled from five layers, in order:
+
+1. `rewritePrompt` — the universal prompt (registry, editable)
+2. `imgFoundation` — base rules, **only** when the routed rule has no `# OUTPUT STRUCTURE` of its own
+3. the routed rule's `promptStyle` — the scene-type block (Image Settings, editable)
+4. `imgFrameGuide` — the frame note, on every image
+5. `imgPovGuide` — added when the rule is a POV rule
+
+Layers 2, 4 and 5 lived in code as `IMG_WRITER_*` string constants. That made the one part of the
+stack nobody could reach also the part that had gone stale, and it had gone stale in four specific
+ways — all of them visible in a live payload:
+
+- **Bracket-template instructions.** The frame note still said *"follow its template exactly: write
+  the fixed wording as-is, and fill ONLY the dedicated [bracket] areas"* and *"CRITICAL — DROP THE
+  BRACKETS"*, in a stack whose rule templates had stopped having brackets. The scene-type block
+  directly above it now opens *"Nothing below is fixed wording to copy out"* — the two layers
+  contradicted each other in the same request.
+- **The wardrobe as a menu.** It described a three-step outfit authority ending in *"pick ONE outfit
+  from the WARDROBE … the entry that suits the DRESSING CONTEXT"*, after v48.2 had made the outfit a
+  decided fact and stopped sending the dressing context with it. The user message says *"already
+  decided, not a list to choose from"* while this layer was still telling the model to choose.
+- **A phantom rule.** The POV note overrode *"elsewhere in these instructions characters never look
+  at the camera"* — an instruction that is in none of these layers. It was arguing with a rule that
+  no longer exists.
+- **A distance rule that fought the shot section.** *"The distance is conversational … her upper
+  body and face carry the frame … nothing implies a tripod across the room"* contradicted the rule's
+  own shot-selection section, which picks Close-up / Waist-up / Full-body / Wide from the actual
+  distance. The POV layer owns **where the viewpoint is** (his head, its height, its angle); **how
+  tight the frame is** belongs to the scene-type block, and it says so now.
+
+The frame note also shipped with its newlines escaped (`\\n` in the template literal produced a
+literal backslash-n), so the whole block arrived as one unbroken line with the characters `\n`
+visible inside it.
+
+All three are registry prompts now, editable in Settings → Payloads, and rewritten to say only what
+is theirs to say: the frame note explains the continuity reference and the decided outfit — the two
+blocks in the message that no rule template can know about — and defers to the scene-type block
+where they disagree; the POV note owns the viewpoint and the reversed gaze and nothing else.
+
+`tests/no-code-prompts.test.js` was widened to catch what let them hide: its patterns only matched
+strings opening with *"You are…"*, and these opened with a markdown heading. It now also matches a
+heading followed by an instruction, allows a prompt that is a registered `DEFAULT_*` constant, and
+allows a shared constant **only while every one of its uses is a `${NAME}` expansion inside one**
+(that is `CARD_VOICE_RULE`, whose text always ends up inside an editable default). The widened guard
+immediately found one more: the Auto-RP narrator's spoken-input rule, built inline at the call site,
+now the `narrateVerbatim` prompt.

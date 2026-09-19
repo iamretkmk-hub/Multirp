@@ -22,13 +22,46 @@ ok("the prompt tables are where this test thinks they are",
    The body may not contain its own delimiter, so a short toast cannot run on into a later quote. */
 const PATTERNS=[
   /`(You (?:are|write|design|judge|build|assign|repair|revise|condense|flesh|narrate|split|decide|maintain|run|score|track)\b[^`]{150,})`/g,
-  /"(You (?:are|write|design|judge|build|assign|repair|revise|condense|flesh|narrate|split|decide|maintain|run|score|track)\b[^"]{150,})"/g
+  /"(You (?:are|write|design|judge|build|assign|repair|revise|condense|flesh|narrate|split|decide|maintain|run|score|track)\b[^"]{150,})"/g,
+  /* v71.1 — AND THE ONES THAT OPEN WITH A HEADING INSTEAD OF "You are". Three layers of the image
+     writer hid here for their whole lives: IMG_WRITER_FOUNDATION, IMG_WRITER_FRAME_GUIDE and
+     IMG_WRITER_POV_GUIDE opened "# FOUNDATION", "## THIS FRAME" and "## THIS IS A POV FRAME", so
+     the patterns above never saw them — and the one part of the image stack nobody could edit was
+     also the part that had gone stale, still explaining how to fill a [bracket] template that the
+     rule templates had stopped having. A markdown heading followed by an instruction is a prompt. */
+  /`(#{1,3} [A-Z][^`\n]{4,80}\n[^`]{150,})`/g,
+  /`(\\n\\n#{1,3} [A-Z][^`]{150,})`/g
 ];
+/* A prompt is also allowed to be the value of a `const DEFAULT_… =` — that IS the registry's
+   store, and every entry in PROMPT_REGISTRY points at one. What is never allowed is a prompt-shaped
+   string anywhere else: assigned to some other constant, or built inline at the call site. */
+const declBefore=i=>{
+  const head=src.lastIndexOf("const ",i);
+  if(head<0||i-head>60) return false;
+  return /^const DEFAULT_[A-Z_0-9]+\s*=\s*$/.test(src.slice(head,i).replace(/`$/,"").trim());
+};
+/* And a constant whose text only ever EXPANDS INSIDE an allowed prompt — `${CARD_VOICE_RULE}`
+   written into five DEFAULT_… literals — is a source-level way of not repeating yourself, not a
+   prompt hidden in code: what the user edits in the registry is the expanded text. Exempt, but
+   only while that stays true. The moment such a constant is concatenated at a call site instead,
+   it is reachable prompt text nobody can edit, and it is reported like anything else. */
+const codeOnly=src.replace(/\/\*[\s\S]*?\*\//g," ")            // block comments
+                  .replace(/^[ \t]*\/\/.*$/gm," ");               // whole-line // comments
+const sharedOK=new Set();
+for(const m of src.matchAll(/^const ([A-Z][A-Z_0-9]*)=`/gm)){
+  const name=m[1];
+  const all=[...codeOnly.matchAll(new RegExp("\\b"+name+"\\b","g"))];
+  const interp=[...codeOnly.matchAll(new RegExp("\\$\\{"+name+"\\}","g"))].length;
+  // one mention is the declaration itself; the rest must all be ${NAME} expansions
+  if(interp>0 && all.length===interp+1) sharedOK.add(m.index);
+}
 const strays=[];
 PATTERNS.forEach(re=>{
   let m;
   while((m=re.exec(src))){
     if(m.index>=tableStart&&m.index<=fragEnd) continue;   // the prompt tables themselves
+    if(declBefore(m.index)) continue;                     // a registered default's own constant
+    if(sharedOK.has(src.lastIndexOf("const ",m.index))) continue;   // expands only inside one
     const line=src.slice(0,m.index).split("\n").length;
     strays.push("line "+line+": "+m[1].replace(/\s+/g," ").slice(0,90)+"…");
   }

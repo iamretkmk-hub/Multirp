@@ -181,6 +181,62 @@ const {chromium}=require('playwright');
       return (/already happened/.test(t)&&/Brewing/.test(t)&&/living universe/.test(t))
         ? true : "sections present: "+/already happened/.test(t)+"/"+/Brewing/.test(t)+"/"+/living universe/.test(t); }));
 
+  /* v73.1 — ONE TABLE FROM A CLOCK TO A PERIOD. A period used to be read off whichever WORD a
+     character happened to use, so "akşamüstü, saat beş gibi" was filed by matching "akşam" and the
+     stated hour was never looked at. Two consumers reading one sentence could land in different
+     slots, and a meeting scheduled by period then happens at the wrong time of day. */
+  console.log("\n[a stated clock time decides the period, not the word]");
+  ok("the boundaries are a single declared table", await pg.evaluate(()=>{
+      const want={0:"Night",5:"Night",6:"Morning",10:"Morning",11:"Midday",13:"Midday",
+                  14:"Afternoon",16:"Afternoon",17:"Evening",20:"Evening",21:"Night",23:"Night"};
+      const bad=Object.keys(want).filter(h=>periodForHour(+h)!==want[h]);
+      return bad.length===0?true:"wrong for hour(s): "+bad.map(h=>h+"->"+periodForHour(+h)).join(", "); }));
+  ok("an out-of-range or absent hour cannot produce a period", await pg.evaluate(()=>
+      periodForHour(null)===null && periodForHour("x")===null && periodForHour(24)==="Night" ? true
+      : "null="+periodForHour(null)+" 24="+periodForHour(24)));
+  ok("the hour is read from the forms a line actually uses", await pg.evaluate(()=>{
+      const want={"17.00'de buluşalım":17,"17:00":17,"at 5pm":17,"at 9 am":9,
+                  "sabah saat yedide":7,"gece saat on birde":23,"yarın görüşürüz":null};
+      const bad=Object.keys(want).filter(t=>statedHour(t)!==want[t]);
+      return bad.length===0?true:"wrong for: "+bad.map(t=>t+"->"+statedHour(t)).join(" | "); }));
+  ok("the words around a bare hour place it in the right half of the day", await pg.evaluate(()=>
+      statedHour("akşamüstü, saat beş gibi")===17 && statedHour("sabah saat beşte")===5
+        ? true : "akşamüstü->"+statedHour("akşamüstü, saat beş gibi")+" sabah->"+statedHour("sabah saat beşte")));
+  ok("and the clock beats the word when both are present", await pg.evaluate(()=>{
+      const r=_calInferDayPeriod("akşamüstü saat beş gibi buluşalım",3);
+      return r.period==="Evening"?true:JSON.stringify(r); }));
+  ok("a line with no hour still falls back to the word", await pg.evaluate(()=>{
+      const r=_calInferDayPeriod("yarın sabah",3);
+      return (r.period==="Morning"&&r.day===4)?true:JSON.stringify(r); }));
+
+  /* v73.1 — one agreed meeting was filed by four consumers at three different places, because the
+     model answered the free text "salon" and each reader resolved that word for itself. */
+  console.log("\n[a meeting never keeps an unregistered place name]");
+  ok("a known place matches, by name and by near-name", await pg.evaluate(()=>{
+      const u=(state.universes||[])[0];
+      u.locations=u.locations||[];
+      u.locations.push({id:"loc_sf",name:"Site Fitness Centre",sublocations:[]});
+      const chat={universeId:u.id};
+      const exact=_matchKnownPlace(chat,"Site Fitness Centre");
+      const near =_matchKnownPlace(chat,"site fitness centre!");
+      return (exact&&exact.id==="loc_sf"&&near&&near.id==="loc_sf")
+        ? true : "exact="+(exact&&exact.name)+" near="+(near&&near.name); }));
+  ok("an unregistered name matches nothing and creates nothing", await pg.evaluate(()=>{
+      const u=(state.universes||[])[0];
+      const before=(u.locations||[]).length;
+      const hit=_matchKnownPlace({universeId:u.id},"salon");
+      const after=(u.locations||[]).length;
+      return (!hit && before===after)?true:"hit="+(hit&&hit.name)+" created="+(after-before); }));
+  ok("the meeting record keeps the resolved name and flags an unresolved one", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /where:_where, locationId:loc\?loc\.id:null, whereRaw:\(loc\?"":_rawWhere\)/.test(src)
+          && /const _where=loc\?loc\.name:"";/.test(src)
+        ? true : "the raw free text is still persisted as the place"; })());
+  ok("a later-day meeting in the room they are standing in is not asserted", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /if\(loc && day!=null && day>today && chat\.locationId && loc\.id===chat\.locationId\) loc=null;/.test(src)
+        ? true : "the current location is still asserted for a future meeting"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

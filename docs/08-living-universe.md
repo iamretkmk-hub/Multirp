@@ -469,3 +469,58 @@ share.
 feed the Gamemaster's staging; char→char quests have their own day-end stepper
 (`runCharQuestPursuit`). The `ask` field is already stored only for user quests
 (`ask: targetId==="__user__" ? … : ""`), so nothing is being carried that nothing reads.
+
+## v73.1 — the same beat, resolved twice and remembered twice
+
+Traced from one debug export, these turned out to be one failure with several exits.
+
+**A satisfied ask could not end its event.** `runSceneWriter` resolved on
+`resolved && ev.turn>=ev.minTurns`. The player granted the want on his first opportunity; the writer
+returned `resolved: true` on turn 2 of 3; the engine discarded it because the floor had not been
+reached; turn 3 fired forty-three seconds later and resolved the same tension again with a
+near-duplicate narration. The minimum is a floor on *premature* resolution, and it belongs in the
+prompt — which now says outright that a granted want ends the event on that turn and that
+re-confirming something already agreed is not a beat. The engine honours an explicit `resolved` at
+any turn index. The judged kinds (confrontation, overture) are untouched: they decide from where
+conviction landed and keep their own `minTurns` thresholds. A turn requested for an event already
+flagged resolved is refused and logged.
+
+**The same beat was written to the bank twice.** The arc tracker answered `finished` three times
+inside one scene, all three summaries describing the same agreement, and the guard at the end of
+`commitMemoryArc` only caught a *literal* repeat. `memNearDuplicate` compares word overlap against
+what this character already holds from the same day and part of the day, with an overlapping-people
+check; the first telling stands and the second is dropped and logged.
+
+**A period came from a word, not a clock.** `_calInferDayPeriod` matched "akşam" inside "akşamüstü"
+and never read the stated hour. `periodForHour` declares the boundaries once (Morning 06–11, Midday
+11–14, Afternoon 14–17, Evening 17–21, Night 21–06) and `statedHour` reads the forms a line actually
+uses — `17.00`, `17:00`, `saat 5`, `at 5pm`, `saat beşte` — with the surrounding words deciding
+which half of the day a bare hour belongs to. A stated clock beats the word wherever both appear.
+
+**A meeting kept an unregistered place name.** One agreement was filed at three different places
+because each consumer resolved the free text "salon" for itself. `_matchKnownPlace` is the
+read-only half of `_ensureLocationByName` — the same Turkish-aware near-match, but it never creates
+a location — and only a match is stored as the place. An unmatched name is kept as `whereRaw` for
+the binder, never as a location. A place equal to the room the characters are standing in, for a
+meeting on a *later* day, is dropped to unresolved rather than asserted: that is almost always the
+model repeating the scene heading instead of reading the dialogue.
+
+**A decision was stored in the second person.** The reckoning is written *at* the character because
+that is what her payload block needs; the memory bank is first person. `toFirstPerson()` converts on
+the way in, so one list no longer holds two grammatical persons.
+
+**A foreign word reached the player.** "Duygu slow bir nefes verdi." Detecting this by "ASCII-only
+token" does not work for Turkish, where most of the language is ASCII; `foreignWordHits` uses a
+curated set of English words of four letters or more with no Turkish homograph, lowercase only so
+proper nouns are exempt. A hit buys exactly one retry, through the editable `sceneLangRetry` prompt,
+and every hit is logged.
+
+**Per-call timing.** `dbg()` stamps its log timestamp before walking the payload to estimate tokens,
+and a caller can await between logging and dispatching. `dbgDispatched()` re-stamps at the fetch,
+per attempt, and `dbgDone` measures from there.
+
+**The chronicle day boundary is correct** — checked, not changed. `runUniverseChronicler` is called
+from `endDayBackground` with the just-ended day, captured in `endDay` before `gameDay` advances, and
+it filters its evidence strictly (`m.gameDay!==day` → skip, `p.day===day`). Seeing it run for day 3
+while the scene shows day 4 is the end-of-day rollup firing after the boundary, as designed; a day-4
+memory cannot enter the day-3 record.

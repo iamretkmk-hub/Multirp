@@ -198,6 +198,115 @@ const {chromium}=require('playwright');
        /\)\?_t:"environment"/.test(src)?true:"unknown types do not default safely");
   }
 
+  /* v73.1 — THE MINIMUM WAS SWALLOWING A SATISFIED ASK. The engine read
+     `resolved && ev.turn>=ev.minTurns`, so a writer returning "resolved": true before the floor had
+     its answer discarded and the event stayed open. In a traced scene the player granted the want
+     on his first opportunity, the writer resolved on turn 2 of 3, the engine dropped it, and turn 3
+     fired forty-three seconds later and resolved the same tension a second time with a
+     near-duplicate narration. */
+  console.log("\n[a satisfied ask closes the event, whatever the turn]");
+  {
+    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    ok("the resolve branch no longer gates on the minimum",
+       /\n    if\(resolved\)\{\n      \/\/ For a confrontation/.test(src)
+         ? true : "the min gate is still in front of resolveActiveEvent");
+    ok("the judged kinds keep their own thresholds",
+       (src.match(/if\(ev\.turn>=ev\.minTurns && c<=0\.2[85]\)/g)||[]).length===2
+         ? true : "the confrontation/overture thresholds changed");
+    ok("a turn asked of an already-resolved event is refused and logged",
+       /a turn was requested for an already-resolved event/.test(src)
+         ? true : "a resolved event can still be asked for another beat");
+    ok("the early-turn note no longer tells it to fill turns", await pg.evaluate(()=>
+        !/may NOT resolve yet/.test(document.documentElement.innerHTML)));
+    ok("and the prompt states the win condition", await pg.evaluate(()=>{
+        const t=up("sceneWriter");
+        return /IF THE WANT IS GRANTED, THE EVENT RESOLVES ON THAT TURN/.test(t)
+            && /re-confirming something already agreed is not a beat/.test(t)
+          ? true : "the granted-want rule is not in the shipped default"; }));
+    ok("no refresh pipe stood down", await pg.evaluate(()=>{
+        const sp=window.__stalePipes||[];
+        return sp.length===0?true:"stale: "+sp.join(", "); }));
+  }
+
+  /* v73.1 — the arc tracker can answer "finished" more than once inside one scene; each close wrote
+     its own memory, and the exact-text guard never caught them because two accounts of one event
+     are near-duplicates rather than identical. */
+  console.log("\n[the same beat is not written to the bank twice]");
+  {
+    const setup=()=>pg.evaluate(()=>{
+      state.memory=(state.memory||[]).filter(m=>m&&m.ownerId!=="o_dup");
+      state.memory.push({id:"md_1",ownerId:"o_dup",character:"O",
+        content:"We agreed to meet at five in the salon after she finishes at the gym.",
+        gameDay:4,gamePeriod:"Evening",people:["Emre"],importance:0.6,date:Date.now()});
+      return true; });
+    await setup();
+    const q=(c,d,p,pe)=>pg.evaluate(o=>!!memNearDuplicate("o_dup",o.c,o.d,o.p,o.pe),{c,d,p,pe});
+    ok("a second account of the same beat is recognised",
+       await q("She agreed to meet me at five in the salon once she finishes at the gym.",4,"Evening",["Emre"]));
+    ok("a different beat in the same stretch is not",
+       await q("He shouted at his brother about the boat and walked out.",4,"Evening",["Emre"])===false);
+    ok("the same words on a different day are not",
+       await q("We agreed to meet at five in the salon after she finishes at the gym.",5,"Evening",["Emre"])===false);
+    ok("and a different part of the same day is not",
+       await q("We agreed to meet at five in the salon after she finishes at the gym.",4,"Morning",["Emre"])===false);
+    ok("the arc commit consults it before writing", (()=>{
+        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        return /const _dup=memNearDuplicate\(p\.id,mem\.content,day,period,mem\.people\);/.test(src)
+          ? true : "commitMemoryArc still only checks for an exact repeat"; })());
+  }
+
+  /* v73.1 — a reckoning is written AT the character; the memory bank is first person. */
+  console.log("\n[a decision is not stored in the second person]");
+  ok("second person becomes first, capitals intact", await pg.evaluate(()=>{
+      const got=toFirstPerson("You told yourself she was the danger and you would never be alone with her again. Your hands were shaking.");
+      return got==="I told myself she was the danger and I would never be alone with her again. My hands were shaking."
+        ? true : got; }));
+  ok("it leaves text that has no second person alone", await pg.evaluate(()=>{
+      const t="She left before the rain started.";
+      return toFirstPerson(t)===t?true:toFirstPerson(t); }));
+  ok("the decision memory goes through it", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /content:toFirstPerson\(text\), type:"DECISION"/.test(src)
+        ? true : "the reckoning is still stored verbatim"; })());
+
+  /* v73.1 — "Duygu slow bir nefes verdi": one English word inside Turkish prose, which the player
+     reads. ASCII-only is not the test — most of Turkish is ASCII — so a curated set of English
+     words four letters or longer carries it. */
+  console.log("\n[a foreign word in the narration earns one retry]");
+  ok("an English word inside story-language prose is caught", await pg.evaluate(()=>{
+      const h=foreignWordHits("Duygu slow bir nefes verdi.");
+      return (h.length===1&&h[0]==="slow")?true:JSON.stringify(h); }));
+  ok("ordinary Turkish is not flagged", await pg.evaluate(()=>{
+      const h=foreignWordHits("Duygu derin bir nefes verdi, sonra kapıya yöneldi ve bir şey söylemedi.");
+      return h.length===0?true:"false positives: "+h.join(", "); }));
+  ok("a proper noun is not flagged", await pg.evaluate(()=>
+      foreignWordHits("Emre Tokmak içeri girdi, Hakan arkasından geldi.").length===0));
+  ok("nothing is flagged when the story is written in English", await pg.evaluate(()=>{
+      const was=state.storyLang; state.storyLang="en";
+      const h=foreignWordHits("She took a slow breath with that look in her eyes.");
+      state.storyLang=was;
+      return h.length===0?true:"flagged in an English story: "+h.join(", "); }));
+  ok("the scene writer retries once and keeps the first answer if the retry fails", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /Scene writer: advance \(language retry\)/.test(src)
+          && /if\(_j2&&_j2\.narration!=null\) out=_again;/.test(src)
+        ? true : "the retry is missing or replaces the answer unconditionally"; })());
+
+  /* v73.1 — a duration measured from the log timestamp folded the payload walk into every call. */
+  console.log("\n[each call times itself, from dispatch]");
+  ok("an entry carries its own dispatch clock", await pg.evaluate(()=>{
+      const e=dbg("probe","svc","ep",{a:1});
+      return typeof e.sentAt==="number"?true:"no sentAt on the entry"; }));
+  ok("and the duration is measured from it", await pg.evaluate(()=>{
+      const e=dbg("probe2","svc","ep",{a:1});
+      dbgDispatched(e); const t0=e.sentAt;
+      dbgDone(e,"ok","r");
+      return (e.ms===e.done-t0 && t0>=e.t)?true:"ms="+e.ms+" t="+e.t+" sentAt="+t0+" done="+e.done; }));
+  ok("the request re-stamps it per attempt", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /dbgDispatched\(entry\);\s+\/\/ v73\.1/.test(src)
+        ? true : "the dispatch clock is not re-stamped on a retry"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

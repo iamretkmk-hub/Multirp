@@ -190,6 +190,35 @@ const {chromium}=require('playwright');
       return (afterAllReconciled===0 && afterFreshArrived===1)
         ? true : "collapsed-again="+afterAllReconciled+" fresh="+afterFreshArrived; }));
 
+  /* v84.1 — a memory of talking is what it did, not the order it was said in. Three traces came
+     back as "he said, I said, he said", which is the scroll-back, and the scroll-back is stored. */
+  console.log("\n[the builder refuses a transcript]");
+  ok("the rule is there, with the mechanism that makes it matter", await pg.evaluate(()=>{
+      const t=up("memBuild");
+      return /A CONVERSATION IS NOT ITS TRANSCRIPT/.test(t)
+        && /Quoted lines get re-said/.test(t)
+        && /what was established, what was refused, what changed/.test(t)
+        ? true : "memBuild still has no rule against a transcript"; }));
+  ok("one kept line is still allowed, when the saying was the event", await pg.evaluate(()=>{
+      const t=up("memBuild");
+      return /ONLY when the saying of it WAS the event/.test(t) && /One line at most/.test(t)
+        ? true : "it now forbids quoting outright, which is too far"; }));
+  ok("a worked example of a talking-only scene closes the examples", await pg.evaluate(()=>{
+      const t=up("memBuild");
+      const i=t.indexOf("A scene that was nothing but talking");
+      return i>0 && i>t.indexOf("## EXAMPLES") && i<t.indexOf("A CONVERSATION IS NOT ITS TRANSCRIPT")
+        ? true : "the example is missing or in the wrong place"; }));
+  ok("the content field binds it", await pg.evaluate(()=>
+      /what it settled — not what was said, in what order/.test(up("memBuild"))));
+  ok("both lineages are piped, and neither pipe is stale", await pg.evaluate(()=>{
+      const src=null;
+      return (window.__stalePipes||[]).length===0 ? true : "stale: "+(window.__stalePipes||[]).join(", "); }));
+  ok("the audited copy in the pack is reached too", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const a=/_refreshPipe\("memBuild","Capture the CONCRETE, referenceable substance","A CONVERSATION IS NOT ITS TRANSCRIPT"/.test(src);
+      const b=/_refreshPipe\("memBuild","format demonstrations from other households","A CONVERSATION IS NOT ITS TRANSCRIPT"/.test(src);
+      return (a&&b) ? true : `shipped lineage:${a} pack lineage:${b}`; })());
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

@@ -208,6 +208,45 @@ const {chromium}=require('playwright');
       const i=src.indexOf("async function repairCardVoice");
       const fn=src.slice(i,i+3600);
       return /lines\.length===live\.length/.test(fn) ? true : "the want-list length is not checked"; })());
+  /* v80.1 — the pursuits print on the same card and carried the same defect. They live on the
+     universe rather than the persona, so they are stashed and committed by the same Save. */
+  ok("a live pursuit is repaired and committed by the same Save", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const uni=state.universes[0];
+      if(!state.personas.some(p=>p.id==="p_q")) state.personas.push({id:"p_q",name:"Özlem",universeId:uni.id});
+      const all=_charQuests(uni);
+      all.length=0;
+      all.push({id:"q_1",holderId:"p_q",status:"active",title:"Cut Emre off",
+                desc:"Özlem must get Emre to sever contact.",ask:"never contact me again",motive:"She is starting treatment."});
+      editPersona("p_q");
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("pePersonality").value="I am warm.";
+      const real=window.chatCompletion;
+      window.chatCompletion=async(msgs)=>{
+        if(!/## pursuits/.test(msgs[1].content)) return "{}";
+        if(!/id: q_1/.test(msgs[1].content)) return "{}";
+        return JSON.stringify({personality:"You are warm.",pursuits:[
+          {id:"q_1",desc:"You must get Emre to sever contact.",ask:"for him to stop contacting you",motive:"You are starting treatment."},
+          {id:"q_INVENTED",desc:"nonsense"}]});
+      };
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const beforeSave=all[0].desc;
+      savePersona();
+      const q=_charQuests(uni).find(x=>x.id==="q_1");
+      state.key=hadKey;
+      if(beforeSave!=="Özlem must get Emre to sever contact.") return "the pursuit was written before Save";
+      if(!/^You must get Emre/.test(q.desc)) return "desc not repaired: "+q.desc;
+      if(!/stop contacting you/.test(q.ask)) return "ask not repaired: "+q.ask;
+      if(q.title!=="Cut Emre off") return "the title was changed";
+      if(_charQuests(uni).some(x=>x.id==="q_INVENTED")) return "an invented pursuit was written";
+      return true; }));
+  ok("only the ids that were sent can be written", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function repairCardVoice");
+      const fn=src.slice(i,i+5200);
+      return /const q=r&&byId\.get\(String\(r\.id\|\|""\)\); if\(!q\)return;/.test(fn)
+        ? true : "a returned pursuit id is not checked against the ones sent"; })());
+
   ok("savePersona re-applies the repaired want-list after the stale-list rule", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       const i=src.indexOf("function savePersona");

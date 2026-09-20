@@ -2213,7 +2213,7 @@
     <div class="card" id="peVoiceBox" style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <div style="min-width:0"><b>The voice of this card</b>
-          <div class="desc" style="margin:2px 0 0">This card is read to the character as “You are …”, so their own fields belong in the second person. Fixing the voice changes only the PERSON — “I grew up…” or “She grew up…” becomes “You grew up…” — and leaves the facts, the language and the length exactly as they are. The director notes are not touched: they are third person on purpose.</div>
+          <div class="desc" style="margin:2px 0 0">This card is read to the character as “You are …”, so their own fields belong in the second person. Fixing the voice changes only the PERSON — “I grew up…” or “She grew up…” becomes “You grew up…” — and leaves the facts, the language and the length exactly as they are. Their live pursuits are repaired with it, since they print on this card too. The director notes are not touched: they are third person on purpose.</div>
         </div>
         <button class="btn sec small" type="button" id="peVoiceFix" onclick="repairCardVoice()">Fix the voice</button>
       </div>
@@ -3204,8 +3204,10 @@ A card that has been edited by hand often changes person mid-sentence: "I am the
 
 You may also be given "goals_live" — the maintained want-list, one want per line. Repair it the same way and return it as an array of the SAME number of lines, in the same order. It is not a rewrite of what they want: a want does not change here, only who it is addressed to.
 
+You may also be given "pursuits" — the character's live pursuits, each with an id. Each has a "desc" (what they are after and why now) and sometimes an "ask" (what they want from another person). Both are printed on this same card, so both are repaired the same way and returned under the SAME id. The "ask" is the thing they want FROM somebody: the character is "you" and that somebody stays in the third person — "never contact me again" becomes "for him to stop contacting you". Never change a pursuit's title, and never return an id you were not given.
+
 Return ONLY strict JSON with the fields you were given, and nothing else:
-{"personality":"…","backstory":"…","traits":"…","goals":"…","style":"…","goals_live":["…","…"]}`},
+{"personality":"…","backstory":"…","traits":"…","goals":"…","style":"…","goals_live":["…","…"],"pursuits":[{"id":"…","desc":"…","ask":"…","motive":"…"}]}`},
 
   x_prompt_reviser:{label:"Prompt reviser (image / video)",json:false,
     hint:"Behind the “revise this prompt” box in the playground and in image→video.",
@@ -19945,7 +19947,7 @@ async function generateBatchBios(brief,count,opts){
    The curated want-list has no editor field of its own, so it is repaired alongside and stashed;
    savePersona applies it after the rule that drops a stale list, which would otherwise throw the
    repair away with it. */
-let _peGoalsLive=null;
+let _peGoalsLive=null, _peQuestFix=null;
 async function repairCardVoice(){
   const btn=document.getElementById('peVoiceFix');
   const gv=id=>{const el=document.getElementById(id);return el?el.value.trim():"";};
@@ -19956,11 +19958,24 @@ async function repairCardVoice(){
   if(!state.key){ toast("No API key set"); return; }
   const live=(editingPersona&&editingPersona.goalsLive&&Array.isArray(editingPersona.goalsLive.lines))
     ? editingPersona.goalsLive.lines.filter(l=>String(l||"").trim()) : [];
+  /* The live pursuits print on this same card, under YOUR OWN PURSUIT, and they carry the same
+     defect for the same reason: desc and ask were written before the quest designer named a
+     person. They live on the universe, not the persona, so they are stashed like the want-list
+     and committed by the same Save — one button, one commit point. */
+  const quests=(()=>{ try{
+    if(!editingPersona||!editingPersona.universeId)return [];
+    const uni=universeById(editingPersona.universeId); if(!uni)return [];
+    return _charQuests(uni).filter(q=>q&&q.holderId===editingPersona.id&&q.status==="active")
+      .filter(q=>String(q.desc||"").trim()||String(q.ask||"").trim()).slice(0,3);
+  }catch(e){ return []; } })();
   if(btn){ btn.disabled=true; btn.textContent="Fixing…"; }
   try{
     const name=gv('peName')||"this character";
     const body=present.map(k=>`## ${k}\n${fields[k]}`).join("\n\n")
-      +(live.length?`\n\n## goals_live\nOne want per line; keep the count and the order:\n${live.map(l=>"- "+l).join("\n")}`:"");
+      +(live.length?`\n\n## goals_live\nOne want per line; keep the count and the order:\n${live.map(l=>"- "+l).join("\n")}`:"")
+      +(quests.length?`\n\n## pursuits\n${quests.map(q=>
+          `- id: ${q.id}\n  title (do not change): ${q.title||""}\n  desc: ${q.desc||""}`
+          +(q.ask?`\n  ask: ${q.ask}`:"")+(q.motive?`\n  motive: ${q.motive}`:"")).join("\n")}`:"");
     const out=await chatCompletion([
       {role:"system",content:up("x_card_voice")},
       {role:"user",content:`THE CHARACTER IS ${name}.\n\n${body}\n\nReturn the JSON.`}
@@ -19986,6 +20001,21 @@ async function repairCardVoice(){
         if(lines.length===live.length){ _peGoalsLive=lines; n++; }
         else try{ console.warn("[card voice] want-list came back with",lines.length,"of",live.length,"lines — kept as it was"); }catch(_){}
       }
+    }
+    /* Matched back by id, and only for ids we sent — a pursuit the model invented, or one it
+       renamed, is dropped rather than written over somebody's quest. */
+    if(quests.length && Array.isArray(j.pursuits)){
+      const byId=new Map(quests.map(q=>[q.id,q]));
+      const fixes=[];
+      j.pursuits.forEach(r=>{
+        const q=r&&byId.get(String(r.id||"")); if(!q)return;
+        const f={id:q.id};
+        if(typeof r.desc==="string"&&r.desc.trim())f.desc=r.desc.trim();
+        if(q.ask&&typeof r.ask==="string"&&r.ask.trim())f.ask=r.ask.trim();
+        if(q.motive&&typeof r.motive==="string"&&r.motive.trim())f.motive=r.motive.trim();
+        if(f.desc||f.ask||f.motive)fixes.push(f);
+      });
+      if(fixes.length){ _peQuestFix={universeId:editingPersona.universeId,fixes}; n+=fixes.length; }
     }
     toast(n?`Voice fixed in ${n} field${n>1?"s":""} — review & save`:"Nothing changed");
   }catch(e){ toast("Repair failed — the card is untouched"); }
@@ -20295,6 +20325,21 @@ function savePersona(){
     obj.goalsLive={...editingPersona.goalsLive,lines:_peGoalsLive};
   else if(_peGoalsLive) obj.goalsLive={lines:_peGoalsLive};
   _peGoalsLive=null;
+  /* The pursuits live on the universe, so they are written here rather than through obj — but by
+     the same Save, so the author commits the whole repair in one act or none of it. */
+  if(_peQuestFix){
+    try{
+      const uni=universeById(_peQuestFix.universeId);
+      if(uni){
+        const all=_charQuests(uni);
+        let n=0;
+        _peQuestFix.fixes.forEach(f=>{ const q=all.find(x=>x&&x.id===f.id); if(!q)return;
+          if(f.desc)q.desc=f.desc; if(f.ask)q.ask=f.ask; if(f.motive)q.motive=f.motive; n++; });
+        if(n)persistUniverses();
+      }
+    }catch(e){ try{ console.warn("[card voice] the pursuit repair could not be applied:",e&&e.message||e); }catch(_){} }
+    _peQuestFix=null;
+  }
   if(editingPersona)Object.assign(editingPersona,obj);else state.personas.push(obj);
   persistPersonas();
   // Auto-generate a daily schedule in the background (if this universe has locations and the

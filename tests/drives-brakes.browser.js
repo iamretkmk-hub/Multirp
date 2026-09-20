@@ -260,6 +260,29 @@ const {chromium}=require('playwright');
       const t=clipWords("Quietly, you also want to be seen as more than the family's fixer — to be chosen",60);
       return (!/ ch…$/.test(t) && /…$/.test(t) && t.length<=62) ? true : "got: "+t; }));
 
+  /* v77.1 — an empty answer must not be cached as fresh, and thinking must get room. */
+  console.log("\n[nothing is not an answer to cache]");
+  ok("an empty pair leaves the previous record and its older sig", await pg.evaluate(async()=>{
+      const chat=curChat(); const p=curCast()[0]; if(!p) return "no cast";
+      chat._psyche={}; chat._psyche[p.id]={sig:"OLD",toward:"a real pull",against:"a real brake",at:1};
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>'{"toward":"","against":""}';
+      try{ await _writePsyche(chat,p,null,state.user,"NEW"); } finally { window.chatCompletion=real; }
+      const r=chat._psyche[p.id];
+      return (r.sig==="OLD" && r.toward==="a real pull") ? true : JSON.stringify(r); }));
+  ok("a real answer still writes, with the new sig", await pg.evaluate(async()=>{
+      const chat=curChat(); const p=curCast()[0];
+      chat._psyche={}; chat._psyche[p.id]={sig:"OLD",toward:"x",against:"y",at:1};
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>'{"toward":"she wants it said out loud","against":""}';
+      try{ await _writePsyche(chat,p,null,state.user,"NEW"); } finally { window.chatCompletion=real; }
+      const r=chat._psyche[p.id];
+      return (r.sig==="NEW" && /said out loud/.test(r.toward) && r.against==="") ? true : JSON.stringify(r); }));
+  ok("thinking room scales with the effort asked for", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /_room=\{low:1200,medium:2400,high:4800\}/.test(src)
+        ? true : "the reasoning headroom is still a flat +1200"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

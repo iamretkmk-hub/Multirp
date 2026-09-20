@@ -225,6 +225,26 @@ const {chromium}=require('playwright');
            && !re.test("Skip the rest of the evening; a car door closes in the street below.")
            && !re.test("Nothing in the room moves, but two floors down a key turns.")) ? true : "the guard is too greedy"; }));
 
+  /* v77.1 — a turn that opens and closes on dialogue keeps its quotes. */
+  console.log("\n[unwrapping a quoted answer never eats real dialogue]");
+  ok("the Auto-RP line from the debug trace survives intact", await pg.evaluate(()=>{
+      const line='"Ne zaman baktım ben sonrasına?" *Bir adım atıyorum, sesim yükselmiyor ama içinde bir sitem var.* "Şu an önümüzde bir problem var ve onu çözmeye çalışıyorum. Sen de biliyorsun bunu."';
+      return unquoteWrap(line)===line ? true : unquoteWrap(line); }));
+  ok("a genuinely wrapped answer is still unwrapped", await pg.evaluate(()=>
+      unquoteWrap('  "She turns away from the door."  ')==="She turns away from the door." ));
+  ok("a single-quoted wrapper too", await pg.evaluate(()=>
+      unquoteWrap("'he said nothing'")==="he said nothing" ));
+  ok("an unpaired mark is left alone", await pg.evaluate(()=>
+      unquoteWrap('"unterminated')==='"unterminated' ));
+  ok("empty and tiny inputs do not throw", await pg.evaluate(()=>
+      unquoteWrap("")==="" && unquoteWrap(null)==="" && unquoteWrap('"')==='"' ));
+  ok("no story-text site still strips quotes by regex", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf("async function narratePlayerTurn")>=0
+        ? src.indexOf("async function narratePlayerTurn") : 0);
+      const near=src.match(/dbg:"Auto-RP player narrator"\}\);\s*\n\s*const clean=unquoteWrap\(out\);/);
+      return near ? true : "the narrator still post-processes with the old regex"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

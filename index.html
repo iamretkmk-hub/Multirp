@@ -4780,9 +4780,10 @@ Both arrays may be empty.`;
 
 const DEFAULT_PROMISE_PURGE=`You are auditing a roleplay's ledger of open COMMITMENTS. Each entry was recorded by an earlier, looser pass, and some of them are not commitments at all. Your job is to keep the real ones, fix how they are written, and delete the rest.
 
-## KEEP an entry only if BOTH are true
+## KEEP an entry only if ALL THREE are true
 1. Somebody is BOUND by it — a person undertook to DO something, or not to do something, in the future. Name who, in your head, before you decide.
 2. You can name the later MOMENT where keeping or breaking it would be visible.
+3. That moment could arrive on ANOTHER DAY, in a scene that has not started yet. This is the test that does the work. An arrangement inside the activity people were already doing is not a commitment, however clearly you can name its moment: "you will put sunscreen on his back after he does yours" is the next minute, "you will keep your hand on the bar while spotting her" is this set, "you will call out if your form breaks" is this session. All three name a moment and all three are DELETE. Ask whether the holder could still be living under this next week, somewhere else, with the other person not there — if not, it ended where it started.
 
 ## DELETE an entry when it is any of these
 - NARRATION OF AN ACT. "He does not stop when she lets go of his wrist", "she gets on the couch" — a description of what someone did, in the present or past tense. Nothing was undertaken.
@@ -4790,6 +4791,7 @@ const DEFAULT_PROMISE_PURGE=`You are auditing a roleplay's ledger of open COMMIT
 - AN ANSWER OR A STATEMENT OF FACT. What was said about something is not a promise about it.
 - A DEMAND THAT WAS NOT ACCEPTED, a wish, a hope, a threat, a prediction.
 - Anything that was over the moment it happened, or that names no future moment at all ("always", "from now on", with nothing concrete attached).
+- A REFUSAL RECORDED AS A PROMISE. If the entry's wording is the OPPOSITE of what the "asked" line says was wanted, somebody declined a demand and the ledger filed the decline as a word given. Keep it only if it reads as a standing position the holder now lives under; never keep it beside an entry that says the same thing the other way round. A person cannot be bound by a thing and by its negation at once, and both will be read back to them as current.
 
 ## REWRITE every entry you keep
 - SECOND PERSON, from the holder's side: "you will not tell Hakan", never "she will not tell Hakan" or "Burcu will not tell Hakan". The card this lands in is written to the character as "you".
@@ -7562,6 +7564,10 @@ function loadState(){
   /* v63.1 — the fast read and the psyche writer both receive the SETTLED view now, and the note is
      scoped to the body: no names, no actions, a lean rather than a decision. */
   _refreshPipe("relShortPrompt","IMMEDIATE emotional reaction of one character","IT IS THE BODY, AND ONLY THE BODY",DEFAULT_REL_SHORT);
+  /* v77.1 — the purge kept an arrangement that was over in the next minute, because a nameable
+     moment was the whole of the second test and "after he does yours" names one. The third test
+     asks whether the moment could arrive on another day at all. */
+  _refreshPipe("promisePurge","You are auditing a roleplay's ledger of open COMMITMENTS","KEEP an entry only if ALL THREE are true",DEFAULT_PROMISE_PURGE);
   _refreshPipe("psychePrompt","what is pushing {{self}} toward what they want","The SETTLED view of {{target}}",DEFAULT_PSYCHE);
   _refreshPipe("bioPrompt","You are a character-card writer for an adult roleplay app","Ten lines IN THE SECOND PERSON",DEFAULT_BIO);
   _refreshPipe("psychePrompt","what is pushing {{self}} toward what they want","Keep each side under 70 words",DEFAULT_PSYCHE);
@@ -8786,7 +8792,13 @@ async function chatCompletion(messages,model,opts={}){
        The cap is raised to leave the configured budget for the ANSWER and give the thinking a
        floor of its own. Only when thinking is actually on, and never lowered — a call site that
        already asked for more keeps it. */
-    body.max_tokens=Math.max(+body.max_tokens||0, (+body.max_tokens||0)+1200, 2000);
+    /* (!) v77.1 — AND THE ROOM SCALES WITH THE EFFORT. A flat +1200 is about right for "low" and
+       nowhere near enough for "high": a real trace has the drives writer at effort high spending
+       all 3500 on thought, returning finish_reason=length with no text, and the recovery below
+       paying for a second call that came back with both fields empty. 62 seconds for nothing.
+       The floor now follows what was asked for. */
+    const _room={low:1200,medium:2400,high:4800}[String(body.reasoning.effort||"").toLowerCase()] ?? 2400;
+    body.max_tokens=Math.max(+body.max_tokens||0, (+body.max_tokens||0)+_room, 2000+_room);
   }else{
     body.reasoning={enabled:false, exclude:true};
   }
@@ -14176,13 +14188,20 @@ function promiseContextForNames(chat,names){
    somebody BOUND, and can the moment it shows be named — and the survivors are rewritten in the
    second person, which is the register the card they land in is written in. Deletions are real:
    an entry that fails is not a commitment and never was.
-   Runs once per chat (`_prPurged`), bounded, best-effort, and never blocks a turn. */
+   Runs once per chat per rule version (`_prPurged`), bounded, best-effort, never blocks a turn. */
+/* Bumped whenever the purge's KEEP/DELETE rules change, so chats already audited under an
+   older version get one more pass instead of keeping what the old rules let through. */
+const PROMISE_PURGE_RULES=2;
 async function runPromisePurge(chat){
   try{
     if(state.promiseOn===false||!chat||!state.key)return;
-    if(chat._prPurged)return;
+    /* (!) v77.1 — ONCE PER CHAT, PER VERSION OF THE RULES. The marker was a bare 1, so a chat
+       purged under the old rules was purged forever: tightening the audit reached new chats and
+       nothing else, which is the same trap the purge itself exists to escape. It carries the
+       rule version now, and a chat purged under an older one gets exactly one more pass. */
+    if(chat._prPurged===PROMISE_PURGE_RULES)return;
     const open=livePromises(chat);
-    if(!open.length){ chat._prPurged=1; return; }
+    if(!open.length){ chat._prPurged=PROMISE_PURGE_RULES; return; }
     const list=open.slice(0,24).map(pr=>
       `- [${pr.id}] holder: ${pr.holderName}${pr.toName?` → ${pr.toName}`:""} | ${pr.promise}${pr.ask?` (asked: ${pr.ask})`:""}`).join("\n");
     const msgs=[{role:"system",content:up("promisePurge")+"\n\n"+engineLangDirective()},
@@ -14205,7 +14224,7 @@ async function runPromisePurge(chat){
       if(chat.promises.length!==before)touched=true;
       try{ console.log(`[promises] purge dropped ${before-chat.promises.length} of ${before}`); }catch(e){}
     }
-    chat._prPurged=1;
+    chat._prPurged=PROMISE_PURGE_RULES;
     if(touched){ markChatDirty(chat); persistChats(); }
   }catch(e){/* best-effort, exactly like the extractor */}
 }
@@ -15515,8 +15534,21 @@ async function _writePsyche(chat,p,targetId,targetName,sig){
     state.gmModel||state.rewriter,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",400),dbg:"Drives & brakes (id / superego)"});
   let j=null; try{ j=JSON.parse(String(out).replace(/^[^{]*/,"").replace(/[^}]*$/,"")); }catch(e){}
   if(!j||typeof j!=="object")return;
+  const _toward=String(j.toward||"").trim(), _against=String(j.against||"").trim();
+  /* (!) v77.1 — NOTHING IS NOT AN ANSWER TO CACHE. The record is keyed by the situation
+     signature, and psycheRefreshIfStale returns early whenever the stored sig matches the
+     current one. So writing an empty pair did two things at once: it wiped whatever was there
+     before, and it stamped the current situation as already answered — the character then
+     carried no drives and no brakes, and nothing retried until the situation itself moved. A
+     real trace has exactly this, after the model spent its whole budget on thinking and the
+     recovery call came back with two empty strings. Leave the previous record and its older
+     sig in place; the next turn tries again. */
+  if(!_toward && !_against){
+    try{ _alog("psyche.empty","the drives writer returned nothing for "+p.name+" — keeping the last one and retrying next turn"); }catch(_){}
+    return;
+  }
   chat._psyche=chat._psyche||{};
-  chat._psyche[p.id]={sig,toward:String(j.toward||"").trim(),against:String(j.against||"").trim(),at:Date.now()};
+  chat._psyche[p.id]={sig,toward:_toward,against:_against,at:Date.now()};
   markChatDirty(chat); persistChats();
 }
 
@@ -25686,7 +25718,7 @@ async function maybeShowRecap(chat){
   try{
     const convo=msgs.slice(-16).map(m=>`${m.role==='user'?state.user:(m.speaker||'Narrator')}: ${m.content}`).join("\n");
     const out=await chatCompletion(epSend("x_scene_recap",up("x_scene_recap")+"\n\n"+langDirective(),{convo}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",80),dbg:"Scene recap"});
-    const txt=(out||"").trim().replace(/^["']|["']$/g,"");
+    const txt=unquoteWrap(out);
     if(txt){
       bn.innerHTML=`<div class="recap"><span class="recapTag">Previously…</span> ${esc(txt)} <button class="recapX" onclick="document.getElementById('recapBanner').classList.add('hide')"><svg class="ic"><use href="#i-x"/></svg></button></div>`;
     }else{ bn.classList.add('hide'); }
@@ -25990,7 +26022,7 @@ async function narrateCharMove(chat,mover,opts){
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
     const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
-    let beat=(out||"").trim().replace(/^["']|["']$/g,"");
+    let beat=unquoteWrap(out);
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     const pref=mover.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
@@ -26024,7 +26056,7 @@ async function narrateCharMoveGroup(chat,movers,opts){
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt"),{user:state.user});
     const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
-    let beat=(out||"").trim().replace(/^["']|["']$/g,"");
+    let beat=unquoteWrap(out);
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     return beat;
   }catch(e){ return ""; }
@@ -27281,7 +27313,7 @@ async function narratePlayerTurn(rawText,chat,opts){
   const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
   try{
     const out=await chatCompletion(epSend("playerNarratePrompt",sys,{recent:recent||"",typed:`${state.user} just typed (rewrite this as their turn):\n${rawText}`}),model,{fn:"narrate",temp:fnTemp("narrate",0.6),max:fnTok("narrate",200),dbg:"Auto-RP player narrator"});
-    const clean=(out||"").trim().replace(/^["']|["']$/g,"").trim();
+    const clean=unquoteWrap(out);
     return clean||rawText;   // fall back to raw text if the model returns nothing
   }catch(e){ return rawText; }   // never block the turn — fall back to what they typed
 }
@@ -32756,6 +32788,23 @@ function pinVideoPlaylist(){
 
 /* ---- memory ---- */
 /* ========== MEMORY SYSTEM (SkyrimAI-style, DeepSeek-powered) ========== */
+/* (!) v77.1 — STRIPPING A QUOTE THAT WAS DIALOGUE. Every story-text call site ended with
+   .replace(/^["']|["']$/g,"") to undo a model that wrapped its whole answer in quotes. That is the
+   right instinct and the wrong test: in this app a turn very often BEGINS and ENDS with spoken
+   dialogue, and those quotes are the format. The Auto-RP narrator showed it first — it returned
+   `"Ne zaman baktım ben sonrasına?" *Bir adım atıyorum…* "Şu an önümüzde bir problem var."` and
+   what reached the transcript was that line missing its first and last quote mark, so the player's
+   own turn sat in the history with unbalanced quotes, and every character read it that way on
+   every later turn. Models imitate the punctuation they are shown.
+   A wrapping pair is only a wrapper when nothing inside it uses the same mark. */
+function unquoteWrap(t){
+  const s=String(t==null?"":t).trim();
+  if(s.length<2)return s;
+  const q=s[0];
+  if((q!=='"'&&q!=="'")||s[s.length-1]!==q)return s;
+  const inner=s.slice(1,-1);
+  return inner.indexOf(q)>=0 ? s : inner.trim();
+}
 function parseJSON(raw){
   if(raw==null)return null;
   let t=String(raw).trim();
@@ -32815,7 +32864,7 @@ async function endDay(){
         .map(m=>`${m.role==='user'?state.user:(m.speaker||fallbackName)}: ${m.content}`).join("\n");
       const nsys=up("x_day_transition_narration")+"\n\n"+langDirective();
       const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{temp:0.8,max:160,dbg:"Day transition narration"});
-      if(nout&&nout.trim())narration=nout.trim().replace(/^["']|["']$/g,"");
+      if(nout&&nout.trim())narration=unquoteWrap(nout);
     }catch(e){/* keep default */}
   }
 
@@ -37042,7 +37091,7 @@ async function maybeGamemaster(chat,force){
         {scene:ctx,cast:castSheet,memories:memBlock,director_log:logBlock,world:worldRaw,
          exchange:since,staging:staging}),
       state.gmModel,{fn:"gm",temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
-    const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
+    const clean=unquoteWrap(nudge);
     if(!clean)return;
     /* (!) v76.1 — DECLINING IS AN ANSWER. A Gamemaster prompt that offers the author a way to say
        "nothing happens here" is the right prompt — a monitor notices a stall but cannot tell a
@@ -37063,7 +37112,7 @@ async function maybeGamemaster(chat,force){
 async function playGamemasterBeat(chat,nudge){
   if(chat._gmBusy)return;chat._gmBusy=true;
   try{
-    const text=(nudge||"").trim().replace(/^["']|["']$/g,"");
+    const text=unquoteWrap(nudge);
     if(!text){chat._gmBusy=false;return;}
     chat.pendingGmNudge=null;
     // Post the event as a NARRATOR line everyone present can see.
@@ -37495,12 +37544,13 @@ async function runSceneWriter(chat){
     // Decide the visible beat text. Prefer the model's narration; if it's missing
     // or empty, fall back to the raw reply with any reasoning/code fences stripped,
     // so the Scene Writer is NEVER silent (mirrors how the Gamemaster always posts).
-    let beat=(j.narration!=null?String(j.narration):"").trim().replace(/^["']|["']$/g,"");
+    let beat=unquoteWrap(j.narration!=null?String(j.narration):"");
     if(!beat){
       beat=String(out||"")
         .replace(/<think>[\s\S]*?<\/think>/gi,"")   // drop reasoning blocks
         .replace(/```(?:json)?/gi,"")               // drop code fences
-        .trim().replace(/^["']|["']$/g,"");
+        .trim();
+      beat=unquoteWrap(beat);
     }
     // Post the writer's beat as a narrator-event line (same rendering as the Gamemaster).
     if(beat){

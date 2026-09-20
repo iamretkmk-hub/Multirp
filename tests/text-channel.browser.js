@@ -245,6 +245,37 @@ const {chromium}=require('playwright');
       const near=src.match(/dbg:"Auto-RP player narrator"\}\);\s*\n\s*const clean=unquoteWrap\(out\);/);
       return near ? true : "the narrator still post-processes with the old regex"; })());
 
+  /* v79.1 — the underscore prefix meant two things and the persist layer only served one.
+     A busy flag must die on reload; a "this has already been done" marker must not. */
+  console.log("\n[durable chat markers survive a reload, busy flags do not]");
+  ok("the purge marker, the text gates and the drives cache are kept", await pg.evaluate(()=>{
+      const c={id:"x",messages:[],_prPurged:2,_cqTextDay:5,_cqApproachDay:5,_cqTextPeriod:"Evening",
+               _afterHeatMid:"m9",_heatRanMid:"m9",_psyche:{p1:{sig:"s",toward:"t",against:"a"}},
+               _presenceLastRun:12,_textTickPeriod:"Evening",_lastPlacementDay:5,_wpKey:"5"};
+      const sc=_slimChat(c);
+      const missing=["_prPurged","_cqTextDay","_cqApproachDay","_cqTextPeriod","_afterHeatMid",
+        "_heatRanMid","_psyche","_presenceLastRun","_textTickPeriod","_lastPlacementDay","_wpKey"]
+        .filter(k=>!(k in sc));
+      return missing.length?("dropped "+missing.join(", ")):true; }));
+  ok("in-flight flags are still stripped", await pg.evaluate(()=>{
+      const sc=_slimChat({id:"x",messages:[],_gmBusy:true,_finalBuf:"half a line",
+                          _dgRetries:3,_capTries:2,_sysPrompt:"x",_rev:7});
+      const kept=["_gmBusy","_finalBuf","_dgRetries","_capTries","_sysPrompt","_rev"].filter(k=>k in sc);
+      return kept.length?("persisted a transient flag: "+kept.join(", ")):true; }));
+  ok("a message's own underscore flags are still stripped", await pg.evaluate(()=>{
+      const sc=_slimChat({id:"x",messages:[{mid:"m1",content:"hi",_reveal:true}]});
+      return !("_reveal" in sc.messages[0]) ? true : "_reveal survived on the message"; }));
+  ok("an unlisted chat flag defaults to transient", await pg.evaluate(()=>{
+      const sc=_slimChat({id:"x",messages:[],_somethingNew:1});
+      return !("_somethingNew" in sc) ? true : "a new underscore field was persisted by default"; }));
+  ok("the purge persists its marker even when it rewrote nothing", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function runPromisePurge");
+      const fn=src.slice(i,i+3000);
+      return /chat\._prPurged=PROMISE_PURGE_RULES;[\s\S]{0,260}markChatDirty\(chat\); persistChats\(\);/.test(fn)
+        && !/if\(touched\)\{ markChatDirty/.test(fn)
+        ? true : "the purge still only persists when it changed some wording"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -7722,6 +7722,23 @@ function _chatSig(c){
   // _rev is bumped by markChatDirty() on any in-place message edit (img/video/text/state changes).
   return msgs.length+"|"+(last?last.mid:"")+"|"+(c._rev||0)+"|"+(c.location||"")+"|"+(c.gameDay||0)+"|"+(c.presentIds?c.presentIds.join(","):"");
 }
+/* Per-chat fields that begin with "_" but are NOT in-flight state: each one records that
+   something has already happened, and losing it on reload makes the app do that thing again.
+   Every entry has been checked against its call site; anything not listed is treated as
+   transient and stripped, which is the right default. */
+const DURABLE_CHAT_KEYS=new Set([
+  "_prPurged",          // the promise ledger has been audited under this rule version
+  "_psyche",            // the drives/brakes passages, keyed by the situation they were written for
+  "_cqTextDay",         // a character has already texted about their pursuit today
+  "_cqTextPeriod",      // …and the per-period tick has already run
+  "_cqApproachDay",     // …and already approached in person today
+  "_afterHeatMid",      // the last heat beat the reckoning has already read
+  "_heatRanMid",        // the heat pass has already run on this tail
+  "_lastPlacementDay",  // the day the companion locks were last reset
+  "_presenceLastRun",   // the turn count the presence check last ran at
+  "_textTickPeriod",    // the period the proactive-text tick last ran for
+  "_wpKey"              // the day the cached world positions were computed for
+]);
 function _slimChat(c){
   const sc={...c,messages:(c.messages||[]).map(m=>{
     const o={...m};
@@ -7743,7 +7760,21 @@ function _slimChat(c){
   })};
   // Never persist transient in-flight flags (e.g. _gmBusy); a reload mid-beat
   // would otherwise leave them stuck true and dead-lock the gamemaster.
-  Object.keys(sc).forEach(k=>{if(k[0]==="_")delete sc[k];});
+  /* (!) v79.1 — EXCEPT THE ONES THAT ARE NOT IN-FLIGHT FLAGS. The underscore meant two different
+     things and only one of them was being served. A busy flag must die on reload, and this strip
+     is what makes that true. But the same prefix had accumulated a second kind of field — the
+     durable "this has already been done" marker — and those were thrown away with it, so every
+     one of them re-fired on the next load.
+     The cost is visible in a real trace: the promise purge is gated by chat._prPurged and is
+     meant to run once per chat per rule version. It ran twice in nine minutes with a reload
+     between — 35 and 53 seconds of model time re-auditing a ledger it had already audited, and
+     rewriting the survivors' wording a little differently each pass. Worse than the cost:
+     _cqTextDay and _cqApproachDay are the gates that stop a character raising the same ask twice
+     in a day, and _afterHeatMid is what stops the reckoning re-reading beats it has already read.
+     A reload reopened all of them.
+     Named explicitly, so the default for a new underscore field stays "transient" and promoting
+     one is a decision somebody made on purpose. */
+  Object.keys(sc).forEach(k=>{if(k[0]==="_"&&!DURABLE_CHAT_KEYS.has(k))delete sc[k];});
   return sc;
 }
 // Call after mutating a message in place (image arrived, text edited, status stamped) so the
@@ -14251,7 +14282,9 @@ async function runPromisePurge(chat){
       try{ console.log(`[promises] purge dropped ${before-chat.promises.length} of ${before}`); }catch(e){}
     }
     chat._prPurged=PROMISE_PURGE_RULES;
-    if(touched){ markChatDirty(chat); persistChats(); }
+    /* Always persist: the flag itself is the thing worth saving, even on a pass that changed no
+       wording — otherwise the next load audits the same ledger again. */
+    markChatDirty(chat); persistChats();
   }catch(e){/* best-effort, exactly like the extractor */}
 }
 /* The extractor. Runs on the calendar's cadence but half as often — commitments are rarer than

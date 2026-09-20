@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v89.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v89.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6988,6 +6988,40 @@ function loadState(){
       });
       if(fixed)persistChats();
       store.setRaw("sm_textlabel_v1","done");
+    }
+  }catch(e){}
+  /* ---- JUST ENDED moves to the tail (v89.1, runs once) ---------------------------------------
+     `promise_ended` is its own payload block now, and the GENERATED template puts it in the tail,
+     directly above WHAT YOU DECIDED. A template somebody wrote themselves is not regenerated, so
+     the block split alone would leave their {{call//promise_ended}} exactly where it has always
+     been: in the pre-dialogue message, ~15,000 characters from generation, while the decision it
+     contradicts sits closest to it. That is the whole defect, so the line is moved for them.
+     Conservative on purpose: only a call sitting alone on its own line is touched, only into the
+     paragraph that holds {{call//after_heat}}, and a template with neither is left alone. */
+  try{
+    if(!store.raw("sm_prended_tail_v1","")){
+      const all=Object.assign({},state.payloadTemplates||{}); let moved=0;
+      Object.keys(all).forEach(k=>{
+        const t=String(all[k]||"");
+        const lone=/(^|\n)[ \t]*\{\{call\/\/promise_ended\}\}[ \t]*(?=\n|$)/;
+        if(!lone.test(t))return;
+        const ah=t.indexOf("{{call//after_heat}}");
+        if(ah<0)return;                                  // nothing to sit above — leave it be
+        const lifted=t.replace(lone,"");
+        const at=lifted.indexOf("{{call//after_heat}}");
+        if(at<0)return;
+        // the start of the paragraph after_heat lives in: the last blank line before it
+        const before=lifted.slice(0,at);
+        const br=before.lastIndexOf("\n\n");
+        const cut=br<0?0:br+2;
+        const out=lifted.slice(0,cut)+"{{call//promise_ended}}\n\n"+lifted.slice(cut);
+        /* {{gap}} is how this system asks for a blank line, so collapsing the seam the
+           lifted call left behind cannot change what renders. */
+        all[k]=out.replace(/\n{3,}/g,"\n\n"); moved++;
+      });
+      if(moved){ state.payloadTemplates=all; store.set(K.payloadTemplates,all);
+        try{ console.log("[migrate] moved JUST ENDED into the tail in "+moved+" payload template(s)"); }catch(_){} }
+      store.setRaw("sm_prended_tail_v1","done");
     }
   }catch(e){}
   /* ---- Social-graph discoveries migration (v30.3, runs once) ---------------------------------
@@ -14369,7 +14403,13 @@ function promiseContextFor(chat,selfId,selfName,outParts){
     /* v38.1 — outParts, when handed one, collects each section under its own prompt name so the
        payload template can call them individually (the heading above them is template prose). */
     const op=outParts||{};
-    const parts=[blkTpl("promise_header")];
+    /* (!) v89.1 — JUST ENDED LEAVES THIS BLOB. It is its own payload block now (`promises_ended`,
+       placed in the tail beside the decision it contradicts), so returning it here as well would
+       send it twice. It is still written onto `op` — that is how the caller gets it. The heading
+       goes with the two STANDING lists, because that is what it heads: a word that has stopped
+       binding is not a commitment still in force, and JUST ENDED introduces itself. */
+    const parts=[];
+    if(mine.length||owed.length) parts.push(blkTpl("promise_header"));
     if(mine.length){ op.promise_yours=blkTpl("promise_yours")+"\n"+mine.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n");
                      parts.push(op.promise_yours); }
     if(owed.length){ op.promise_owed=fillTpl(blkTpl("promise_owed"),{self:selfName||"you"})+"\n"+owed.slice(-6).map(pr=>_prRender(pr,selfId)).join("\n");
@@ -14378,7 +14418,7 @@ function promiseContextFor(chat,selfId,selfName,outParts){
       const verb=pr.status==="broken"?"BROKEN":(pr.status==="released"?"let go of":"kept");
       const who=pr.holderId===selfId?"you":pr.holderName;
       return `- ${verb}: ${who} — ${pr.promise}${pr.note?` (${pr.note})`:""}`;
-    }).join("\n");    parts.push(op.promise_ended); }
+    }).join("\n"); }
     return parts.join("\n\n");
   }catch(e){ return ""; }
 }
@@ -21663,7 +21703,7 @@ const REPLY_ORDER=["task","world","format",
      the body (a lean) · the two forces (decide nothing) · a live aim · a decision already being
      acted on. The only move from the old order is `private_intent`, which sat ahead of the body:
      an aim outranks a force, and a decision outranks both. */
-  "feelings_now","drives","private_intent","after_heat","response_guidance","final_guardrails","resistance","spoken_delivery"];
+  "feelings_now","drives","private_intent","promises_ended","after_heat","response_guidance","final_guardrails","resistance","spoken_delivery"];
 /* Fragments that belong to a CALLABLE rather than to a block. text_timing is called by name in the
    text template but is not one of the ordered blocks, so its two sentences have no block to hang
    under — declared here so the drift guard counts them as claimed and the editor can find them. */
@@ -21695,6 +21735,7 @@ const REPLY_BLOCKS={
   privacy:{label:"Privacy — who can hear you",kind:"dyn",desc:"Everything about who can actually hear this: alone with someone, in front of an audience, or apart from everyone; who is elsewhere in the building and could walk in; how exposed this place is, and the one sub-area worth moving to if something must not carry. In the TEXT payload it carries the channel's privacy instead — nobody overhears a text, but a text is written down and keeps."},
   trackers:{label:"Your trackers",kind:"dyn",desc:"The conditions that are true of this character right now — story-wide trackers, anything of theirs that has become publicly visible, and their own private ones. Split out of the scene block in v30.3."},
   promises:{label:"Your word (promises & commitments)",kind:"dyn",desc:"Open-ended commitments with no date on them: what this character swore and is bound by, what was sworn to them, and anything broken, kept or released in the last couple of days. Extracted from play by the promises engine."},
+  promises_ended:{label:"A word just broken, kept or let go",kind:"dyn",desc:"Anything on the promise ledger that STOPPED being in force in the last couple of days \u2014 broken, kept, or released. Split out of \u201cYour word\u201d in v89.1 so it can sit in the tail, next to the decision it usually contradicts, instead of riding pre-dialogue with the commitments that are still standing."},
   calendar:{label:"Calendar line",kind:"dyn",desc:"Plans due now/soon for this character."},
   calendar_done:{label:"What already happened",kind:"dyn",desc:"The last few calendar entries this character was actually part of, with the recorded outcome of each — meetings with the player, group meetings, and plans that ran offstage without them. A finished plan used to leave a character's head entirely the moment it completed; this is what stops them forgetting an evening they spent. How many is set in Settings → Roleplay."},
   quests:{label:"Quest awareness",kind:"dyn",desc:"Active quests this character is named in (key figure, listed cast, or named in the quest text) — so the people a quest is about actually know their part of it."},
@@ -22297,7 +22338,17 @@ const OP_ORDER=["others_list","others_footer"];
 const SS_ORDER=["style_body","style_notes"];
 const LL_ORDER=["last_line_header","heat_self_header","last_line_body","last_line_footer","heat_self_footer"];
 const AS_ORDER=["already_said_continues","already_said_lines","already_said_stalled","already_said_thought_stuck"];
-const PR_ORDER=["promise_yours","promise_owed","promise_ended"];
+const PR_ORDER=["promise_yours","promise_owed"];
+/* (!) v89.1 — JUST ENDED IS ITS OWN BLOCK NOW, AND THE REASON IS PLACEMENT. It calls itself "the
+   loudest thing in any room", and it was riding with the two standing-commitment lists, which most
+   layouts put in the pre-dialogue message. So the freshest fact in the payload — a word broken
+   yesterday — sat ~15,000 characters from generation, while WHAT YOU DECIDED ("not up for debate")
+   sat in the tail. When the two disagreed, and they disagree exactly when it matters, position
+   settled it and position picked the older one. A broken word is not a standing commitment: the
+   other two say what still binds, this one says what just stopped binding, and it belongs beside
+   the decision it contradicts. Split out so it can be placed on its own, and placed in the tail,
+   directly above `after_heat`. */
+const PRE_ORDER=["promise_ended"];
 const MEM_FRAGS=["mem_recent_entries","mem_distant_entries","mem_latest_entries"];
 /* v38.1 — step 4: the blocks that never rendered in the old fixture, so nobody had looked at them.
    Several turned out to be whole prompts written in code — STORY THREADS and the rumor label had
@@ -22333,10 +22384,10 @@ const RAIL_KEYS=[...new Set([].concat(RAIL_ORDER_TEXT,RAIL_ORDER_HEAT,RAIL_ORDER
   ["rail_single_solo"]))];
 /* Every name a producer may hand over on one of those maps, and the maps themselves. */
 const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS,
-  YB_ORDER,OP_ORDER,SS_ORDER,LL_ORDER,AS_ORDER,PR_ORDER,MEM_FRAGS,
+  YB_ORDER,OP_ORDER,SS_ORDER,LL_ORDER,AS_ORDER,PR_ORDER,PRE_ORDER,MEM_FRAGS,
   PL_ORDER,SI_ORDER,SD_ORDER,PI_ORDER,FE_ORDER,FN_ORDER,RU_ORDER,QU_ORDER,WN_ORDER,TT_ORDER,
   LY_ORDER))];
-const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives","_yb","_op","_ss","_ll","_as","_pr","_mem",
+const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives","_yb","_op","_ss","_ll","_as","_pr","_pre","_mem",
   "_pl","_si","_sd","_pi","_fe","_fn","_ru","_qu","_la","_wn","_tt"];
 /* Which whole block each map splits, and where to put it if the map never arrived (see ptSources).
    `head`/`tail` name the fragments the template prints as its own prose, so they can be taken off
@@ -22351,6 +22402,7 @@ const PT_FRAG_FALLBACK={
   _ll:{block:"last_line",carry:"last_line_header"},
   _as:{block:"already_said",carry:"already_said_lines",head:"already_said_header"},
   _pr:{block:"promises",carry:"promise_yours",head:"promise_header"},
+  _pre:{block:"promises_ended",carry:"promise_ended"},
   _pl:{block:"player",carry:"player_intro"},
   _si:{block:"situation",carry:"situation_leaving"},
   _sd:{block:"spoken_delivery",carry:"voice_delivery"},
@@ -22487,7 +22539,8 @@ function ptPieceTemplate(id,kind){
       +"\n{{gap}}\n{{call//already_said_stalled}}\n{{gap}}\n{{call//already_said_thought_stuck}}";
   if(id==="promises")
     return _ptProse("promise_header")+"{{gap}}\n"
-      +"{{call//promise_yours}}\n{{gap}}\n{{call//promise_owed}}\n{{gap}}\n{{call//promise_ended}}";
+      +"{{call//promise_yours}}\n{{gap}}\n{{call//promise_owed}}";
+  if(id==="promises_ended") return "{{call//promise_ended}}";
   if(id==="recent_memories")
     return _ptProse("mem_recent_header")+_ptProse("mem_recent_instr")+"{{gap}}\n{{call//mem_recent_entries}}";
   if(id==="distant_memories")
@@ -25523,8 +25576,13 @@ function buildTailBlocks(opts){
     try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)B.trackers=`${blkTpl("trackers_header")}\n${tc}`; }catch(e){}
 
     // PROMISES — the open-ended words this character gave, and the ones given to them.
+    /* v89.1 — and, separately, the one that has just stopped being in force. Built in the same
+       pass (one walk of the ledger) and handed over as two blocks, so a layout can put the
+       standing commitments where it likes and still keep a broken word next to generation. */
     try{ const _po={}; const pr=promiseContextFor(chat,selfId,selfName,_po);
-         if(pr){ B.promises=pr; B._pr=_po; } }catch(e){}
+         if(pr){ B.promises=pr; B._pr={promise_yours:_po.promise_yours||"",promise_owed:_po.promise_owed||""}; }
+         if(_po.promise_ended){ B.promises_ended=_po.promise_ended; B._pre={promise_ended:_po.promise_ended}; }
+    }catch(e){}
 
     {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true}):"";
      if(cl)B.calendar=`${blkTpl("calendar_header")}\n${cl}`;}
@@ -40667,6 +40725,7 @@ function ptCatalog(){
     _fragIn(YB_ORDER,"Who you are"),_fragIn(OP_ORDER,"Others present"),
     _fragIn(SS_ORDER,"How you speak"),_fragIn(LL_ORDER,"The line you are answering"),
     _fragIn(AS_ORDER,"What you already said"),_fragIn(PR_ORDER,"Promises"),
+    _fragIn(PRE_ORDER,"A word just broken"),
     _fragIn(MEM_FRAGS,"Memories"),_fragIn(PL_ORDER,"The player"),
     _fragIn(SI_ORDER,"Entering or leaving"),_fragIn(SD_ORDER,"Spoken delivery"),
     _fragIn(PI_ORDER,"What you privately want"),_fragIn(FE_ORDER,"How you feel about them"),

@@ -361,10 +361,78 @@ const {chromium}=require('playwright');
       chat.promises=[{id:"pq",status:"broken",statusDay:chat.gameDay||1,day:chat.gameDay||1,
         holderId:"x_other",holderName:"Emre Tokmak",toId:"t_self",toName:"Özlem",
         promise:"you will wait for her call"}];
-      const t=promiseContextFor(chat,"t_self","Özlem")||"";
+      const po={}; promiseContextFor(chat,"t_self","Özlem",po);
+      const t=po.promise_ended||"";
       return /Emre Tokmak — you will wait for her call/.test(t)
           && /is THEM, not you/.test(t)
         ? true : t.slice(0,300); }));
+
+  /* v89.1 — the broken word sits next to the decision it contradicts, not 15k characters away. */
+  console.log("\n[JUST ENDED is its own block, and it is in the tail]");
+  ok("it is no longer part of the standing-commitments blob", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.promises=[{id:"pq",status:"broken",statusDay:chat.gameDay||1,day:chat.gameDay||1,
+        holderId:"t_self",holderName:"Özlem",toId:"x_other",toName:"Emre",
+        promise:"you will return to Berker"}];
+      const po={}; const blob=promiseContextFor(chat,"t_self","Özlem",po);
+      /* the only entry is an ended one, so the standing block is empty and its heading with it */
+      return blob==="" && /JUST ENDED/.test(po.promise_ended||"")
+        ? true : "blob="+JSON.stringify(blob.slice(0,120)); }));
+  ok("the standing heading still rides with the standing lists", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.promises=[{id:"po",status:"open",holderId:"t_self",holderName:"Özlem",
+        toId:"x_other",toName:"Emre",promise:"you will be there for him"}];
+      const po={}; const blob=promiseContextFor(chat,"t_self","Özlem",po);
+      return /YOUR WORD/.test(blob) && /WHAT YOU SWORE/.test(blob) && !po.promise_ended
+        ? true : blob.slice(0,200); }));
+  ok("it is a block of its own, known to the layout", await pg.evaluate(()=>
+      REPLY_ORDER.indexOf("promises_ended")>=0 && !!REPLY_BLOCKS.promises_ended ));
+  ok("placed after the dialogue, and directly above the decision", await pg.evaluate(()=>{
+      const o=REPLY_ORDER, h=o.indexOf("__history__"),
+            e=o.indexOf("promises_ended"), a=o.indexOf("after_heat");
+      return (e>h && a===e+1) ? true : "history="+h+" ended="+e+" after_heat="+a; }));
+  ok("a saved layout that never heard of it gets it in the tail too", await pg.evaluate(()=>{
+      /* payloadOrder re-inserts an unknown default block after its nearest known neighbour */
+      const was=state.payloadLayouts;
+      state.payloadLayouts={solo:REPLY_ORDER.filter(id=>id!=="promises_ended")};
+      const o=payloadOrder("solo");
+      state.payloadLayouts=was;
+      return (o.indexOf("promises_ended")>o.indexOf("__history__")
+           && o.indexOf("promises_ended")<o.indexOf("after_heat"))
+        ? true : o.slice(o.indexOf("drives")).join(" · "); }));
+  ok("the generated template calls it once, in the tail", await pg.evaluate(()=>{
+      const t=ptDefaultTemplate("solo");
+      const n=(t.match(/\{\{call\/\/promise_ended\}\}/g)||[]).length;
+      const H=t.search(/\{\{\s*history\s*\}\}/i);
+      return (n===1 && t.indexOf("{{call//promise_ended}}")>H
+              && t.indexOf("{{call//promise_ended}}")<t.indexOf("{{call//after_heat}}"))
+        ? true : "count="+n+" hist="+H
+                 +" ended="+t.indexOf("{{call//promise_ended}}")
+                 +" ah="+t.indexOf("{{call//after_heat}}"); }));
+  ok("a template written by hand has the line moved for them, once", await pg.evaluate(()=>{
+      const hand="A\n\n{{call//promise_ended}}\n\n{{history}}\n\n# DECIDED\nprose\n{{call//after_heat}}\n";
+      const all={solo:hand}; let moved=0;
+      Object.keys(all).forEach(k=>{
+        const t=String(all[k]||"");
+        const lone=/(^|\n)[ \t]*\{\{call\/\/promise_ended\}\}[ \t]*(?=\n|$)/;
+        if(!lone.test(t))return;
+        if(t.indexOf("{{call//after_heat}}")<0)return;
+        const lifted=t.replace(lone,"");
+        const at=lifted.indexOf("{{call//after_heat}}"); if(at<0)return;
+        const br=lifted.slice(0,at).lastIndexOf("\n\n"); const cut=br<0?0:br+2;
+        all[k]=(lifted.slice(0,cut)+"{{call//promise_ended}}\n\n"+lifted.slice(cut))
+                 .replace(/\n{3,}/g,"\n\n"); moved++;
+      });
+      const out=all.solo||"";
+      const n=(out.match(/\{\{call\/\/promise_ended\}\}/g)||[]).length;
+      return (moved===1 && n===1
+           && out.indexOf("{{call//promise_ended}}")>out.indexOf("{{history}}")
+           && out.indexOf("{{call//promise_ended}}")<out.indexOf("# DECIDED"))
+        ? true : JSON.stringify(out); }));
+  ok("and the migration is in the source, gated on its own key", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /sm_prended_tail_v1/.test(src) && /moved JUST ENDED into the tail/.test(src)
+        ? true : "the one-off is not wired"; })());
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

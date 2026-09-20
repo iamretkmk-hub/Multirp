@@ -194,6 +194,37 @@ const {chromium}=require('playwright');
       return /open_intents:holderIntentRecord\(chat,holderId,nameById,day\)/.test(src)
         ? true : "intentForm still sends no open_intents"; })());
 
+  /* v76.1 — a phone-thread memory survives the shape its own note asks for.
+     The note appended after memBuild is user-editable, and an edit that asked for
+     {"memories":[…]} made _commitTextArc read j.content off an object that had none,
+     so it returned without writing and no text thread ever remembered anything. */
+  console.log("\n[a text memory is read out of whatever sane shape comes back]");
+  ok("a wrapped {memories:[…]} answer is still a memory", await pg.evaluate(()=>{
+      const j=parseJSON('{"memories":[{"content":"We argued about the money by text.","importance":0.6,"emotion":"tense","people":["Hakan"],"tags":["money"]}]}');
+      const l=_memReconcileList(j);
+      return (l.length===1 && l[0].content==="We argued about the money by text.") ? true : JSON.stringify(j); }));
+  ok("a flat answer is unchanged by the same read", await pg.evaluate(()=>{
+      const j=parseJSON('{"content":"He never replied.","importance_score":0.4}');
+      const l=_memReconcileList(j);
+      return ((l.length?l[0]:j).content==="He never replied.") ? true : JSON.stringify(j); }));
+  ok("the text builder reads through that helper, not off the top level", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf("async function _commitTextArc"),src.indexOf("async function _commitTextArc")+2600);
+      return /_memReconcileList\(raw\)/.test(fn) && /typeof j\.importance==="number"/.test(fn)
+        ? true : "_commitTextArc still reads j.content off the raw answer"; })());
+
+  /* v76.1 — the Gamemaster is allowed to decline, and declining must not be narrated. */
+  console.log("\n[a Gamemaster that declines the turn says nothing]");
+  ok("a bare refusal never reaches the story", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const m=src.match(/if\(\/\^\(skip\|none\|nothing\|no\[\\s-\]\?event\|pass\)\[\.!\]\?\$\/i\.test\(clean\)\)\{/);
+      return m ? true : "a Gamemaster answering SKIP is still posted as a Narrator line"; })());
+  ok("only a bare refusal is swallowed", await pg.evaluate(()=>{
+      const re=/^(skip|none|nothing|no[\s-]?event|pass)[.!]?$/i;
+      return (re.test("SKIP") && re.test("skip.") && re.test("nothing")
+           && !re.test("Skip the rest of the evening; a car door closes in the street below.")
+           && !re.test("Nothing in the room moves, but two floors down a key turns.")) ? true : "the guard is too greedy"; }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

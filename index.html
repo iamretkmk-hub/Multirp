@@ -27772,9 +27772,18 @@ async function _commitTextArc(chat,p,span){
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
       "\n\n"+fillTpl(up("x_membuild_text_note"),{char:p.name,user:state.user})+"\n\n"+engineLangDirective();
     const out=await chatCompletion(epSend("memBuild",sys,{convo},{who:p.name}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
-    const j=parseJSON(out);
+    /* (!) v76.1 — THE SAME TRAP THE RECONCILER FELL INTO IN v56.1, one engine over. This read
+       j.content off the top level and nothing else, so a phone-thread note that asks for
+       {"memories":[…]} — the reconciler's contract, and the obvious thing to write when editing
+       the note beside it — produced a perfectly good memory that was dropped on the floor. No
+       error, no log, no memory: the text thread simply never remembered anything. Both this
+       prompt and its note are user-editable by design, so the engine reads whatever sane shape
+       comes back, and takes `importance` beside `importance_score` for the same reason. */
+    const j=(function(){ const raw=parseJSON(out); const l=_memReconcileList(raw);
+      return l.length?l[0]:raw; })();
     if(!j||!j.content)return;
-    const importance=typeof j.importance_score==="number"?j.importance_score:0.4;
+    const importance=typeof j.importance_score==="number"?j.importance_score
+                    :typeof j.importance==="number"?j.importance:0.4;
     if(importance<(state.memMinImp||0))return;
     const mem={
       id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
@@ -37035,6 +37044,15 @@ async function maybeGamemaster(chat,force){
       state.gmModel,{fn:"gm",temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=(nudge||"").trim().replace(/^["']|["']$/g,"");
     if(!clean)return;
+    /* (!) v76.1 — DECLINING IS AN ANSWER. A Gamemaster prompt that offers the author a way to say
+       "nothing happens here" is the right prompt — a monitor notices a stall but cannot tell a
+       stall from a silence that is doing work. The engine had no way to hear it, so the refusal
+       was posted to the story as a Narrator line reading SKIP, and the Scene Writer then built an
+       event out of it. A bare refusal now ends the window quietly, which is what it meant. */
+    if(/^(skip|none|nothing|no[\s-]?event|pass)[.!]?$/i.test(clean)){
+      try{ _alog("gm.skip","the Gamemaster looked and left the scene alone"); }catch(_){}
+      return;
+    }
     chat.pendingGmNudge=clean;persistChats();
     // Play the beat out immediately so the story screen visibly reacts.
     await playGamemasterBeat(chat,clean);

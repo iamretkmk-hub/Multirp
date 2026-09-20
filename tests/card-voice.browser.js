@@ -255,6 +255,28 @@ const {chromium}=require('playwright');
       const applyAt=fn.indexOf("_peGoalsLive && editingPersona");
       return (dropAt>0 && applyAt>dropAt) ? true : "the stash is applied before the drop, or not at all"; })());
 
+  /* v80.2 — the two halves that the author's layout had no line for. Both live in shipped
+     fragments their template already calls, so they arrive without an import and without a paste. */
+  console.log("\n[the format block sets a count, and saying no has a second half]");
+  ok("rp_format caps narration and thought at one each", await pg.evaluate(()=>{
+      const t=blkTpl("rp_format");
+      return /At most ONE narration and ONE thought in a reply/.test(t)
+        && /only speech is\s+the normal one/.test(t) ? true : "rp_format still sets no count"; }));
+  ok("the count is stated before the worked example, not after it", await pg.evaluate(()=>{
+      const t=blkTpl("rp_format");
+      return t.indexOf("At most ONE narration") < t.indexOf("Çantayı")
+        ? true : "the example comes first, so it demonstrates nothing"; }));
+  ok("rp_say_no covers shattering, not only folding", await pg.evaluate(()=>{
+      const t=blkTpl("rp_say_no");
+      return /AND IF YOU DO CROSS IT/.test(t) && /you COPE with it/.test(t)
+        && /do NOT permanently break/.test(t) && /somebody with a secret/.test(t)
+        ? true : "rp_say_no still guards only the refusal"; }));
+  ok("both are fragments the layout already calls, so nothing needs importing", await pg.evaluate(()=>{
+      const solo=(state.payloadTemplates&&state.payloadTemplates.solo)||"";
+      const t=solo||"{{call//rp_format}} {{call//rp_say_no}}";
+      return /call\/\/rp_format/.test(t) && /call\/\/rp_say_no/.test(t)
+        ? true : "the default layout no longer calls one of them"; }));
+
   console.log("\n[nothing downstream broke]");
   ok("the prompts still resolve through the registry", ALL.every(k=>texts[k].length>300));
   ok("no page errors", errs.length===0?true:errs.join(" | "));

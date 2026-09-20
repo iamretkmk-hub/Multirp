@@ -434,6 +434,29 @@ const {chromium}=require('playwright');
       return /sm_prended_tail_v1/.test(src) && /moved JUST ENDED into the tail/.test(src)
         ? true : "the one-off is not wired"; })());
 
+  /* v90.1 — the four promise fragments, reset to the shipped wording on request. */
+  console.log("\n[the promise fragments are back on the shipped wording]");
+  ok("the one-off is in the source, gated on its own key", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /sm_prfrag_reset_v1/.test(src)
+        && /reset "\+had\.length\+" promise fragment/.test(src)
+        ? true : "the reset is not wired"; })());
+  ok("it names exactly the four, and nothing else", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const m=src.match(/const _pk=\[([^\]]*)\]/);
+      return m && m[1]==='"promise_header","promise_yours","promise_owed","promise_ended"'
+        ? true : "the list is "+(m?m[1]:"missing"); })());
+  ok("it photographs the set first, so Undo this reset works", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf('sm_prfrag_reset_v1');
+      const fn=src.slice(i,i+900);
+      return /_tplSnapshot\(/.test(fn) && fn.indexOf("_tplSnapshot")<fn.indexOf("delete state.blockTpls")
+        ? true : "the snapshot is missing or taken after the delete"; })());
+  ok("and the shipped wording they get back carries both clauses", await pg.evaluate(()=>{
+      const owed=blkTpl("promise_owed");
+      return /not a word you are owed/.test(owed) && /is THEM, not you/.test(owed)
+        ? true : owed.slice(0,200); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

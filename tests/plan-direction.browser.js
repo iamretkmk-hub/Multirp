@@ -127,15 +127,30 @@ const {chromium}=require('playwright');
      /HAPPENING NOW/.test(late.now), late.now.slice(0,240));
 
   // ---- the purpose is cut on a word, not through one
-  const cut=await pg.evaluate(()=>{
+  /* v92.2 — the cap moved from 120 to 400. 120 characters is about where a reason stops being one,
+     and a character handed half a sentence at the hour is the "I wanted to talk to you" / "about
+     what?" loop this release exists to close. The purpose the writers are now asked for is two or
+     three sentences, so the test asserts BOTH: a real one arrives whole, and a runaway one is
+     still cut on a word boundary rather than through the middle of one. */
+  const purpose=async detail=>await pg.evaluate(d=>{
     const chat=curChat(); const her=state.personas[0];
-    chat.calendar[0].detail="to ask him directly why he never came to the pool after saying he would, and to hear what he actually has to say about it before deciding anything";
+    chat.calendar[0].detail=d;
     const line=calendarContextLine(chat,her.name,her.id)||"";
     const m=line.match(/— for: ([^—]+)/);
     return m?m[1].trim():"";
-  });
-  ok("a long purpose ends on a whole word", /…$/.test(cut)&&!/\s\w{1,2}…$/.test(cut), cut);
-  ok("and it is still capped", cut.length<=125, cut.length+" chars");
+  },detail);
+  const real="to ask him directly why he never came to the pool after saying he would, and to hear what he actually has to say about it before deciding anything";
+  const kept=await purpose(real);
+  ok("a purpose of the length now asked for arrives whole", kept===real, kept);
+  const cut=await purpose(real+" "+real+" "+real);
+  ok("a runaway one ends on a whole word", /…$/.test(cut)&&!/\s\w{1,2}…$/.test(cut), cut);
+  ok("and it is still capped", cut.length<=405, cut.length+" chars");
+  ok("a plan with no recorded reason says so instead of going quiet", await pg.evaluate(()=>{
+      const chat=curChat(); const her=state.personas[0];
+      chat.calendar[0].detail="";
+      const line=calendarContextLine(chat,her.name,her.id)||"";
+      return /you genuinely do not know what it is about/.test(line) && !/— for:/.test(line)
+        ? true : line.slice(0,260); }));
 
   // ---- the proactive-text memory is hers, not the engine's
   const mem=await pg.evaluate(async()=>{

@@ -457,6 +457,50 @@ const {chromium}=require('playwright');
       return /not a word you are owed/.test(owed) && /is THEM, not you/.test(owed)
         ? true : owed.slice(0,200); }));
 
+  /* v91.1 — the person rule covered social_fact and the payload read description. */
+  console.log("\n[both fields the relationship judge writes are second person]");
+  ok("the description is asked for as \"you\", where it is asked for", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("Judge the LASTING relationship as a whole");
+      const msg=src.slice(i,i+2600);
+      return /1-2 sentence "description"[\s\S]{0,140}?written TO \$\{fromP\.name\} as "you"/.test(msg)
+        ? true : "the description ask still names her in the third person"; })());
+  ok("the rule names BOTH fields, not social_fact alone", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("Judge the LASTING relationship as a whole");
+      const msg=src.slice(i,i+2600);
+      return /BOTH of those fields are written in the SECOND PERSON/.test(msg)
+          && !/Write the social_fact in the\s+SECOND PERSON too/.test(msg)
+        ? true : "the rule is still scoped to one field"; })());
+  ok("and its worked example is the failure that happened", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("Judge the LASTING relationship as a whole");
+      const msg=src.slice(i,i+2600);
+      return /"She has cut him off" is WRONG/.test(msg) ? true : "the example was not updated"; })());
+  ok("the system prompt's own rule on description still stands", await pg.evaluate(()=>{
+      const t=up("relPrompt")||"";
+      return /WRITE IT IN THE SECOND PERSON/.test(t) && /never "he", "she", "they", or their name/.test(t)
+        ? true : "DEFAULT_REL lost the rule the user message now agrees with"; }));
+
+  /* v91.1 — bed-talk is not a vow. */
+  console.log("\n[a word given mid-act is weighted for what it is]");
+  ok("the extractor weights it soft, never binding", await pg.evaluate(()=>{
+      const t=up("promisePrompt")||"";
+      return /A word given DURING sex is never "binding"/.test(t) && /"soft" at most/.test(t)
+        ? true : "the weight rule says nothing about it"; }));
+  ok("it is weighted, not discarded — the other person may still hold them to it", await pg.evaluate(()=>{
+      const t=up("promisePrompt")||"";
+      return /the other person may well hold them to it/.test(t)
+        ? true : "the rule reads as a delete rather than a weight"; }));
+  ok("the act rule it leans on is still there", await pg.evaluate(()=>{
+      const t=up("promisePrompt")||"";
+      return /what a person does or allows in the moment binds nothing/.test(t)
+        ? true : "the ACT rule the new clause refers to is gone"; }));
+  ok("a stored copy of the old default is refreshed", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /_refreshPipe\("promisePrompt","open-ended COMMITMENTS people make","A word given DURING sex is never/.test(src)
+        ? true : "no pipe — a saved override keeps the old rule forever"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

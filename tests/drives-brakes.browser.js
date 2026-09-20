@@ -283,6 +283,44 @@ const {chromium}=require('playwright');
       return /_room=\{low:1200,medium:2400,high:4800\}/.test(src)
         ? true : "the reasoning headroom is still a flat +1200"; })());
 
+  /* (!) v87.1 — the conscience was being handed the director's ledger: every open commitment in
+     the world, under a heading written for the Gamemaster. A live payload gave this character two
+     promises Duygu made to Emre about accepting his gym feedback. */
+  console.log("\n[the words that bind are this character's, both directions, nobody else's]");
+  ok("only promises this character gave or was given are sent", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.promises=[
+        {id:"p1",status:"open",holderName:"Özlem",toName:"Emre",promise:"you will call him first"},
+        {id:"p2",status:"open",holderName:"Emre",toName:"Özlem",promise:"you will wait for her call"},
+        {id:"p3",status:"open",holderName:"Duygu",toName:"Emre",promise:"you will accept his feedback"},
+        {id:"p4",status:"open",holderName:"Berker",toName:"Buket",promise:"you will not tell her"}
+      ];
+      const t=promiseContextForNames(chat,["Özlem"])||"";
+      if(!/call him first/.test(t)) return "the character's own promise is missing";
+      if(!/wait for her call/.test(t)) return "a promise owed to them is missing";
+      if(/Duygu/.test(t)) return "somebody else's promise leaked in";
+      if(/Berker/.test(t)) return "an unrelated pair leaked in";
+      return true; }));
+  ok("the drives writer asks for that list, not the director's", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function _writePsyche");
+      const fn=src.slice(i,src.indexOf("\nasync function",i+10));
+      return /bits\.promises=promiseContextForNames\(chat,\[p\.name\]\)/.test(fn)
+        && !/bits\.promises=promiseDirectorBlock/.test(fn)
+        ? true : "it still sends promiseDirectorBlock"; })());
+  ok("the director's heading no longer rides into the payload", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.promises=[{id:"p1",status:"open",holderName:"Özlem",toName:"Emre",promise:"you will call him first"}];
+      const t=promiseContextForNames(chat,["Özlem"])||"";
+      return !/STANDING COMMITMENTS/.test(t) && !/never write a beat/.test(t)
+        ? true : "the Gamemaster's heading is still inside the value"; }));
+  ok("the section label matches what is now under it", await pg.evaluate(()=>{
+      const def=epDef("psychePrompt");
+      const part=(def&&def.parts||[]).find(x=>x.name==="promises");
+      const t=JSON.stringify(part||"");
+      return /THE WORDS THAT BIND/.test(t) && /Nobody else/.test(t)
+        ? true : "the separator still says only what they have GIVEN"; }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -109,7 +109,7 @@ const {chromium}=require('playwright');
       "THE CHARACTER: Ayse\n\nWHO THEY ARE: Wry\n\nWHAT THEY WANT OUT OF THEIR LIFE: Find the shop"
       +"\n\nWHERE THEY CAME FROM: Left at 19\n\nTHEY ARE WITH: Kemal"
       +"\n\nEVERY TIE THEY HAVE (the people a conscience is made of):\nTIES"
-      +"\n\nWHAT THEY HAVE GIVEN THEIR WORD TO:\nPROM"
+      +"\n\nTHE WORDS THAT BIND — what they have given, and what was given to them. Nobody else's:\nPROM"
       +"\n\nTRUE OF THEM RIGHT NOW:\nTRK"
       +"\n\nWHERE THEY ARE AND WHO CAN SEE:\nSCENE"
       +"\n\nWHAT HAS JUST BEEN HAPPENING:\nEX"

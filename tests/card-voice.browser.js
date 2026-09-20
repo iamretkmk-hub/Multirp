@@ -331,6 +331,40 @@ const {chromium}=require('playwright');
       return /call\/\/rp_format/.test(t) && /call\/\/rp_say_no/.test(t)
         ? true : "the default layout no longer calls one of them"; }));
 
+  /* v83.1 — rp_format asks for at most ONE narrated beat; the thing that enforces it defaulted to
+     three, so a reply could break the stated rule twice over and still pass. */
+  console.log("\n[the narration threshold matches the rule it enforces]");
+  ok("the default trips on the second span", await pg.evaluate(()=>{
+      const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
+      state.narrRetryOn=true; state.narrMaxSpans=undefined;
+      const two=`*She steps back.* "Don't." *She does not move.*`;
+      const one=`*She steps back.* "Don't. I mean it, and you know I do."`;
+      const a=overNarrated(two), b=overNarrated(one);
+      state.narrMaxSpans=had; state.narrRetryOn=hadOn;
+      if(!a) return "two spans did not trip it";
+      if(b) return "one span tripped it";
+      return true; }));
+  ok("loadState and the number field agree on 2", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const load=/narrMaxSpans:store\.get\(K\.narrMaxSpans,2\)/.test(src);
+      const field=/id="setNarrMaxSpans"[^>]*value="2"/.test(src);
+      const save=/setNarrMaxSpans'\)\.value\|\|2\)/.test(src);
+      return (load&&field&&save) ? true
+        : `loadState:${load} field:${field} saveSettings:${save}`; })());
+  ok("a value set by hand still wins", await pg.evaluate(()=>{
+      const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
+      state.narrRetryOn=true; state.narrMaxSpans=4;
+      const three=`*A.* "one." *B.* "two." *C.*`;
+      const hit=overNarrated(three);
+      state.narrMaxSpans=had; state.narrRetryOn=hadOn;
+      return !hit ? true : "a hand-set cap of 4 was ignored"; }));
+  ok("the switch is still off by default, because it costs a call", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /function narrRetryOn\(\)\{ return state\.narrRetryOn===true; \}/.test(src)
+        ? true : "the narration retry is no longer opt-in"; })());
+  ok("the note it sends still says ONE", await pg.evaluate(()=>
+      /allow ONE short narrated beat in a whole turn/.test(overNarratedNote({spans:2,narr:30,said:10}))));
+
   console.log("\n[nothing downstream broke]");
   ok("the prompts still resolve through the registry", ALL.every(k=>texts[k].length>300));
   ok("no page errors", errs.length===0?true:errs.join(" | "));

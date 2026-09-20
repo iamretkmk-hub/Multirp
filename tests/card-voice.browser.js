@@ -331,39 +331,48 @@ const {chromium}=require('playwright');
       return /call\/\/rp_format/.test(t) && /call\/\/rp_say_no/.test(t)
         ? true : "the default layout no longer calls one of them"; }));
 
-  /* v83.1 — rp_format asks for at most ONE narrated beat; the thing that enforces it defaulted to
-     three, so a reply could break the stated rule twice over and still pass. */
-  console.log("\n[the narration threshold matches the rule it enforces]");
-  ok("the default trips on the second span", await pg.evaluate(()=>{
+  /* v85.1 — v83.1 moved this to 2 to match rp_format's "at most ONE beat". Right about the
+     letter, wrong about the outcome: at a cap of 2 the balance test is dead code, guarded by
+     cap>2, so the change deleted the smarter rule rather than tightening a count. The two replies
+     below are the real ones from the trace that settled it. */
+  console.log("\n[the narration guard catches a pile-up, not a balanced turn]");
+  ok("three spans fire at any balance", await pg.evaluate(()=>{
       const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
       state.narrRetryOn=true; state.narrMaxSpans=undefined;
-      const two=`*She steps back.* "Don't." *She does not move.*`;
-      const one=`*She steps back.* "Don't. I mean it, and you know I do."`;
-      const a=overNarrated(two), b=overNarrated(one);
+      const hit=overNarrated(`*A.* "one." *B.* "two." *C.*`);
       state.narrMaxSpans=had; state.narrRetryOn=hadOn;
-      if(!a) return "two spans did not trip it";
-      if(b) return "one span tripped it";
-      return true; }));
-  ok("loadState and the number field agree on 2", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
-      const load=/narrMaxSpans:store\.get\(K\.narrMaxSpans,2\)/.test(src);
-      const field=/id="setNarrMaxSpans"[^>]*value="2"/.test(src);
-      const save=/setNarrMaxSpans'\)\.value\|\|2\)/.test(src);
-      return (load&&field&&save) ? true
-        : `loadState:${load} field:${field} saveSettings:${save}`; })());
-  ok("a value set by hand still wins", await pg.evaluate(()=>{
+      return !!hit ? true : "a three-span reply passed"; }));
+  ok("a lopsided two-span reply fires — 29 words of description against 13 spoken", await pg.evaluate(()=>{
       const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
-      state.narrRetryOn=true; state.narrMaxSpans=4;
-      const three=`*A.* "one." *B.* "two." *C.*`;
-      const hit=overNarrated(three);
+      state.narrRetryOn=true; state.narrMaxSpans=undefined;
+      const real=`*Parmaklarım onunkilere değmeden geri çekiliyorum, elimi kendi bacağımın üstüne koyuyorum. Gözlerim hâlâ Emre'de ama bakışlarım biraz geride.* "Kimse bilmek zorunda değil, hep öyle oluyor zaten." *Kısa bir sessizlik, sonra alçak bir gülümsemeyle başımı iki yana sallıyorum.* "Ama ben biliyorum. O yetiyor."`;
+      const L=narrationLoad(real), hit=overNarrated(real);
       state.narrMaxSpans=had; state.narrRetryOn=hadOn;
-      return !hit ? true : "a hand-set cap of 4 was ignored"; }));
-  ok("the switch is still off by default, because it costs a call", (()=>{
+      return (hit && L.spans===2 && L.narr>L.said) ? true : JSON.stringify(L); }));
+  ok("a balanced two-span reply is left alone — 18 against 15", await pg.evaluate(()=>{
+      const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
+      state.narrRetryOn=true; state.narrMaxSpans=undefined;
+      const real=`*Elimi kaldırmıyorum. Parmaklarım onunkilere değmeden, avucumu kapının serin mermerine yaslıyorum.* "Kimse bilmek zorunda değil, değil mi?" *Sesim sakin ama gözlerim Emre'de, kırpık değil.* "Her şeyin cevabı hep bu cümle oluyor senin için."\n\n_Bu gece dışarı taşarsa, artık hiçbir kapı beni içeri almaz._`;
+      const L=narrationLoad(real), hit=overNarrated(real);
+      state.narrMaxSpans=had; state.narrRetryOn=hadOn;
+      return (!hit && L.spans===2) ? true : "it re-asked on a balanced turn: "+JSON.stringify(L); }));
+  ok("at a cap of 2 the balance test is unreachable, which is why 3 is the default", await pg.evaluate(()=>{
+      const had=state.narrMaxSpans, hadOn=state.narrRetryOn;
+      state.narrRetryOn=true; state.narrMaxSpans=2;
+      const balanced=`*Elimi kaldırmıyorum. Parmaklarım onunkilere değmeden, avucumu kapının serin mermerine yaslıyorum.* "Kimse bilmek zorunda değil, değil mi?" *Sesim sakin ama gözlerim Emre'de, kırpık değil.* "Her şeyin cevabı hep bu cümle oluyor senin için."`;
+      const hitAt2=!!overNarrated(balanced);
+      state.narrMaxSpans=had; state.narrRetryOn=hadOn;
+      return hitAt2 ? true : "a cap of 2 no longer fires on two spans, so the revert was pointless"; }));
+  ok("loadState, the field and saveSettings all say 3", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const load=/narrMaxSpans:store\.get\(K\.narrMaxSpans,3\)/.test(src);
+      const field=/id="setNarrMaxSpans"[^>]*value="3"/.test(src);
+      const save=/setNarrMaxSpans'\)\.value\|\|3\)/.test(src);
+      return (load&&field&&save) ? true : `loadState:${load} field:${field} saveSettings:${save}`; })());
+  ok("the switch is still off by default", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       return /function narrRetryOn\(\)\{ return state\.narrRetryOn===true; \}/.test(src)
         ? true : "the narration retry is no longer opt-in"; })());
-  ok("the note it sends still says ONE", await pg.evaluate(()=>
-      /allow ONE short narrated beat in a whole turn/.test(overNarratedNote({spans:2,narr:30,said:10}))));
 
   console.log("\n[nothing downstream broke]");
   ok("the prompts still resolve through the registry", ALL.every(k=>texts[k].length>300));

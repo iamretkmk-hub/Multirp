@@ -1563,8 +1563,8 @@
           <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20 — note that this counts MESSAGES, so in a scene with two characters twenty of them is only six or seven exchanges. Debug shows what share of each payload was the scene rather than instructions; if that number is low, this is the knob.</div>
           <div class="kvline"><span>Re-ask when a reply is mostly narration</span>
             <label class="switchLbl"><input type="checkbox" id="setNarrRetryOn"><span class="sl"></span></label></div>
-          <div><label>…at this many *narrated spans* or more</label><input type="number" id="setNarrMaxSpans" min="1" max="12" step="1" value="2"></div>
-          <div class="desc"><b>Costs a second model call on every reply that trips it.</b> It enforces the narration limit written in your Response Format Rules, which ask for <b>at most one</b> narrated beat — so 2 is the number that matches them, and it is the default: one beat passes, a second trips the re-ask. If you rewrite that prompt to allow more narration, raise this to match or leave the switch off, otherwise every single turn is generated twice. The switch is off by default. The repeat detector (a character re-saying a line) is separate and always on; it fires rarely. Debug logs every time this one spends a call.</div>
+          <div><label>…at this many *narrated spans* or more</label><input type="number" id="setNarrMaxSpans" min="1" max="12" step="1" value="3"></div>
+          <div class="desc"><b>Costs a second model call on every reply that trips it.</b> This is a <b>stack</b> guard, not a counter: at 3 it fires on three narrated passages always, and on two only when the description has run away with the turn — more words of stage direction than of speech, and at least 25 of them. Your Response Format Rules ask for one beat, and that is what shapes the writing; this catches the replies that ignore it badly, and leaves a balanced two-beat turn alone. Setting it to <b>2</b> turns off that judgement and re-asks on every second span, which on a normal turn means paying twice for a tighter, flatter reply — a real trace had it rewriting the best line in the scene. The switch is off by default. The repeat detector (a character re-saying a line) is separate and always on; it fires rarely. Debug logs every time this one spends a call.</div>
           <div><label>How much of the relationship sheet each reply carries</label>
             <select id="setRelScope">
               <option value="present">Summary + the people actually here (recommended)</option>
@@ -6740,13 +6740,19 @@ function loadState(){
     /* v36.9 — default OFF: see overNarrated(). Anyone who had the old behaviour keeps whatever
        they now choose here; nobody keeps paying for it silently. */
     narrRetryOn:store.get(K.narrRetryOn,false),
-    /* (!) v83.1 — TWO, BECAUSE THE FORMAT RULE SAYS ONE. This defaulted to 3 while rp_format
-       asked for "at most ONE narration", so the prompt and the thing that enforces it disagreed
-       by two whole spans: a reply could break the stated rule twice over and still sail through.
-       The number is the threshold that TRIPS, so one narrated beat is allowed and the second is
-       what fires — which is what "at most one" means. Anyone who set it by hand keeps their
-       value; the switch above it is still off by default, because this costs a second call. */
-    narrMaxSpans:store.get(K.narrMaxSpans,2),
+    /* (!) v85.1 — BACK TO 3, AND THIS TIME WITH THE EVIDENCE. v83.1 moved this to 2 to match
+       rp_format's "at most ONE narrated beat", which was right about the letter and wrong about
+       the outcome, for a reason that is only visible in the code: at a cap of 2 the balance test
+       below is DEAD, because it is guarded by cap>2. So "aligning" did not tighten a count, it
+       deleted the smarter rule and replaced it with a blunter one.
+       A live trace settles it. Two replies, both two spans: 29 narration words against 13 spoken,
+       and 18 against 15. The first is genuinely lopsided and both settings catch it. The second is
+       balanced, carries a thought, and is the best writing in the trace — and a cap of 2 would
+       have spent a second model call rewriting it.
+       So the number stays a STACK guard (three spans is a pile-up, always), the balance test
+       catches the two-span replies where description has run away with the turn, and the prompt
+       goes on asking for one, which is what shapes the writing in the first place. */
+    narrMaxSpans:store.get(K.narrMaxSpans,3),
     calDoneN:store.get(K.calDoneN,3),
     relScope:store.raw(K.relScope,"present"),
     narrPrivacy:store.get(K.narrPrivacy,true),
@@ -21330,8 +21336,8 @@ function narrRetryOn(){ return state.narrRetryOn===true; }
 function overNarrated(text){
   if(!narrRetryOn())return null;
   const L=narrationLoad(text);
-  const cap=Math.max(1,+state.narrMaxSpans||2);
-  if(L.spans>=cap)return L;                                 // the format rule allows ONE; two trips it
+  const cap=Math.max(1,+state.narrMaxSpans||3);
+  if(L.spans>=cap)return L;                                 // three spans is a pile-up at any balance
   /* Two spans fire as soon as the description OUTWEIGHS the speech. The first cut of this needed 60+
      narration words as well, which was too generous by half: a live reply came back at two spans,
      35 words of narration against 17 spoken — more than two thirds stage direction, breaking the
@@ -41894,7 +41900,7 @@ function saveSettings(notify){
   state.autoCharDelay=Math.max(1,+document.getElementById('setAutoCharDelay').value||5);
   state.stripNarr=document.getElementById('setStripNarr').checked;
   state.narrRetryOn=document.getElementById('setNarrRetryOn').checked;
-  state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||2));
+  state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||3));
   {const v=+document.getElementById('setCalDoneN').value; state.calDoneN=Math.max(0,Math.min(10,isNaN(v)?3:v));}
   {const v=document.getElementById('setRelScope').value; state.relScope=["present","brief","everyone"].indexOf(v)>=0?v:"present";}
   {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'spoken';}

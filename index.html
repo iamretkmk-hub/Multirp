@@ -2210,6 +2210,14 @@
         <div class="desc" id="peAiHint">Fills the fields below — you can edit anything before saving.</div>
       </div>
     </div>
+    <div class="card" id="peVoiceBox" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="min-width:0"><b>The voice of this card</b>
+          <div class="desc" style="margin:2px 0 0">This card is read to the character as “You are …”, so their own fields belong in the second person. Fixing the voice changes only the PERSON — “I grew up…” or “She grew up…” becomes “You grew up…” — and leaves the facts, the language and the length exactly as they are. The director notes are not touched: they are third person on purpose.</div>
+        </div>
+        <button class="btn sec small" type="button" id="peVoiceFix" onclick="repairCardVoice()">Fix the voice</button>
+      </div>
+    </div>
     <div><label>Name</label><input type="text" id="peName" placeholder="Seraphina"></div>
     <div><label>Universe</label><select id="peUniverse"></select>
       <div class="desc">Which world this character belongs to. The universe's setting is added to their stories.</div></div>
@@ -3165,6 +3173,39 @@ VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you 
   x_call_fallback:{label:"Voice call — fallback persona",json:false,
     hint:"Used only when a call starts without a character's own prompt built yet.",
     def:`You are a friend talking with the user. Reply briefly in their language.`},
+
+  /* v79.2 — a card written in the wrong person is not fixable from a prompt pack: it is authored
+     data. This is the repair. It changes the PERSON and nothing else — the facts, the order, the
+     language and the line count all survive, because a card is the one thing in the app a user has
+     really written and a "tidy-up" that quietly reinterprets it is worse than the defect. */
+  x_card_voice:{label:"Card voice repair (to the second person)",json:true,
+    hint:"Rewrites a character's own fields into the card voice — \u201cYou are…\u201d — changing the person and nothing else. Behind “Fix the voice” in the character editor.",
+    def:`You repair the VOICE of a roleplay character's identity card. The card is injected into the model that plays them under a heading that opens "You are <name>", so every field that is the character's OWN must address them directly as "you" / "your". A card written as "I" or as "she/he" teaches the model to speak as a narrator about the character instead of as the character, which is the single thing the card exists to prevent.
+
+You are given some of these fields: personality, backstory, traits, goals, style. Return the same fields, in the SECOND PERSON.
+
+# CHANGE THE PERSON. CHANGE NOTHING ELSE.
+This is the whole job, and the hardest part is leaving everything alone.
+- Every fact, name, place, date, number, relationship and judgement stays exactly as it is. You are not improving the writing, not tightening it, not making it vivid, not fixing its opinions.
+- Keep the LANGUAGE exactly as you found it. A Turkish card comes back in Turkish. Do not translate.
+- Keep the length. A four-sentence backstory comes back as four sentences.
+- Keep the structure. "traits" is a fixed list of "State: trigger → behavior" lines — keep every line, in its order, with its state label untouched, and rewrite only the words inside.
+- Keep the register and the rhythm. If a line is blunt, it stays blunt.
+- A field you were not given does not appear in your answer. Never invent one.
+
+# WHO BECOMES "YOU"
+- The character themselves: "I grew up in a crowded house" and "Özlem grew up in a crowded house" both become "You grew up in a crowded house".
+- EVERYONE ELSE STAYS IN THE THIRD PERSON. "my marriage to Berker" becomes "your marriage to Berker", never "your marriage to you". The other people in the card are still he, she and they.
+- Where the original already says "you" about the character, leave it.
+- Where the original says "you" about somebody ELSE — it happens in a card that has drifted — that is the one place you change more than the person: make it name them, or make it "them", so that "you" means the character everywhere.
+
+# WATCH FOR THE HALF-SWITCHED SENTENCE
+A card that has been edited by hand often changes person mid-sentence: "I am the one who remembers everyone's birthday, because you genuinely want to know." Both halves are about the character. Both become "you".
+
+You may also be given "goals_live" — the maintained want-list, one want per line. Repair it the same way and return it as an array of the SAME number of lines, in the same order. It is not a rewrite of what they want: a want does not change here, only who it is addressed to.
+
+Return ONLY strict JSON with the fields you were given, and nothing else:
+{"personality":"…","backstory":"…","traits":"…","goals":"…","style":"…","goals_live":["…","…"]}`},
 
   x_prompt_reviser:{label:"Prompt reviser (image / video)",json:false,
     hint:"Behind the “revise this prompt” box in the playground and in image→video.",
@@ -19892,6 +19933,64 @@ async function generateBatchBios(brief,count,opts){
     routine:clean(c.routine), socialGraph:clean(c.socialGraph)||clean(c.relationships)||clean(c.ties)
   })).filter(c=>c.name);
 }
+/* v79.2 — FIX THE VOICE. Five prompts mint character cards and all five now write in the second
+   person, but a card authored before that — or edited by hand since — keeps whatever person it was
+   written in, and no prompt pack can reach it: it is the author's own data. A live payload had
+   "What follows is you, seen from the inside" sitting directly above "I grew up in a lively,
+   crowded household", with one sentence switching person mid-clause. This repairs that in place.
+   It touches only the fields that are the character's OWN. The director notes (instructions,
+   interject) are third person BY DESIGN — they are notes to the app about the character — so they
+   are not sent and cannot be damaged. The look stays out for the same reason: it is an English
+   visual sheet for the image layer, not prose anyone reads as the character.
+   The curated want-list has no editor field of its own, so it is repaired alongside and stashed;
+   savePersona applies it after the rule that drops a stale list, which would otherwise throw the
+   repair away with it. */
+let _peGoalsLive=null;
+async function repairCardVoice(){
+  const btn=document.getElementById('peVoiceFix');
+  const gv=id=>{const el=document.getElementById(id);return el?el.value.trim():"";};
+  const fields={personality:gv('pePersonality'),backstory:gv('peBackstory'),
+                traits:gv('peTraits'),goals:gv('peGoals'),style:gv('peStyle')};
+  const present=Object.keys(fields).filter(k=>fields[k]);
+  if(!present.length){ toast("Nothing to fix — the card is empty"); return; }
+  if(!state.key){ toast("No API key set"); return; }
+  const live=(editingPersona&&editingPersona.goalsLive&&Array.isArray(editingPersona.goalsLive.lines))
+    ? editingPersona.goalsLive.lines.filter(l=>String(l||"").trim()) : [];
+  if(btn){ btn.disabled=true; btn.textContent="Fixing…"; }
+  try{
+    const name=gv('peName')||"this character";
+    const body=present.map(k=>`## ${k}\n${fields[k]}`).join("\n\n")
+      +(live.length?`\n\n## goals_live\nOne want per line; keep the count and the order:\n${live.map(l=>"- "+l).join("\n")}`:"");
+    const out=await chatCompletion([
+      {role:"system",content:up("x_card_voice")},
+      {role:"user",content:`THE CHARACTER IS ${name}.\n\n${body}\n\nReturn the JSON.`}
+    ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",1800),dbg:"Card voice repair · "+name});
+    const j=parseJSON(out);
+    if(!j||typeof j!=="object"){ toast("Repair failed — the card is untouched"); return; }
+    let n=0;
+    const set=(id,v)=>{const el=document.getElementById(id);
+      if(el&&typeof v==="string"&&v.trim()){ el.value=v.trim(); n++; } };
+    if(present.includes("personality")) set('pePersonality',j.personality);
+    if(present.includes("backstory"))   set('peBackstory',j.backstory);
+    if(present.includes("traits"))      set('peTraits',j.traits);
+    if(present.includes("goals"))       set('peGoals',j.goals);
+    if(present.includes("style"))       set('peStyle',j.style);
+    /* The want-list comes back either as an array or as the same newline block it went out as;
+       either is fine, and a count that does not match the one we sent is rejected rather than
+       silently dropping or inventing a want. */
+    if(live.length){
+      let lines=Array.isArray(j.goals_live)?j.goals_live
+               :(typeof j.goals_live==="string"?j.goals_live.split(/\n+/):null);
+      if(lines){
+        lines=lines.map(l=>String(l||"").replace(/^[-•\s]+/,"").trim()).filter(Boolean);
+        if(lines.length===live.length){ _peGoalsLive=lines; n++; }
+        else try{ console.warn("[card voice] want-list came back with",lines.length,"of",live.length,"lines — kept as it was"); }catch(_){}
+      }
+    }
+    toast(n?`Voice fixed in ${n} field${n>1?"s":""} — review & save`:"Nothing changed");
+  }catch(e){ toast("Repair failed — the card is untouched"); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="Fix the voice"; } }
+}
 async function generateBioIntoEditor(){
   const brief=document.getElementById('peAiBrief').value.trim();
   const btn=document.getElementById('peAiGo'); if(btn){btn.disabled=true;btn.textContent="Generating…";}
@@ -20189,6 +20288,13 @@ function savePersona(){
   // The maintained want-list was grown from the OLD foundation; if the author rewrote it, the list
   // is stale by definition. Drop it and let the curator re-seed from what they just wrote.
   if(editingPersona && String(editingPersona.goals||"")!==String(obj.goals||"")) delete editingPersona.goalsLive;
+  /* v79.2 — a voice repair rewrote the want-list too, and the rule above would have dropped it:
+     rewriting `goals` into the second person changes the string, which is what that rule watches.
+     The repair is not a rewrite of what they want, so the list survives it. */
+  if(_peGoalsLive && editingPersona && editingPersona.goalsLive)
+    obj.goalsLive={...editingPersona.goalsLive,lines:_peGoalsLive};
+  else if(_peGoalsLive) obj.goalsLive={lines:_peGoalsLive};
+  _peGoalsLive=null;
   if(editingPersona)Object.assign(editingPersona,obj);else state.personas.push(obj);
   persistPersonas();
   // Auto-generate a daily schedule in the background (if this universe has locations and the
@@ -23172,7 +23278,7 @@ const X_PROMPT_CARDS=[
   /* The last of the prompts that lived in code: four helpers that never went through epSend at all,
      so the engine audit could not even see them. */
   {key:"helpers",label:"Helpers",desc:"The small jobs the app runs around a scene: revising an image prompt, compressing an old chronicle, keeping a rolling recap, repairing what a voice call mis-heard, and asking a tracker which way it moved.",
-   keys:["x_prompt_reviser","x_chronicle_condense","x_rolling_recap","x_stt_repair","x_tracker_ask"]},
+   keys:["x_prompt_reviser","x_chronicle_condense","x_rolling_recap","x_stt_repair","x_tracker_ask","x_card_voice"]},
   /* v39.4 — the visual director needs its own card or _enginePayloadCoverage sweeps it into the
      "Other prompts" bucket the registry test forbids. routerPrompt keeps it company: they are the
      two halves of one decision (whether to render, then which rule renders it). */

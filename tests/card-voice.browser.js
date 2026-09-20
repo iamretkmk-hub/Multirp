@@ -136,6 +136,86 @@ const {chromium}=require('playwright');
         && typeof BLOCK_TPL_DEFAULTS[k]==="string" && FP.test(BLOCK_TPL_DEFAULTS[k]));
       return bad.length?("first person in "+bad.join(", ")):true; }));
 
+  /* v79.2 — the repair. A card written in the wrong person is authored data, so no prompt pack
+     reaches it; this is the one path that can. It must change the person and nothing else, and it
+     must not be able to damage the director notes, which are third person by design. */
+  console.log("\n[fix the voice repairs a card in place]");
+  ok("the prompt is registered and asks for the person only", await pg.evaluate(()=>{
+      const t=up("x_card_voice");
+      return /SECOND PERSON/.test(t) && /CHANGE THE PERSON\. CHANGE NOTHING ELSE/.test(t)
+        && /EVERYONE ELSE STAYS IN THE THIRD PERSON/.test(t) ? true : "x_card_voice is not what it should be"; }));
+  ok("the button is in the editor and calls it", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /id="peVoiceFix"[^>]*onclick="repairCardVoice\(\)"/.test(src)
+        ? true : "no Fix the voice button wired to repairCardVoice"; })());
+  /* It first landed inside the collapsed "Create with AI" panel, where it measured 0×0 — a repair
+     for an existing card has no business behind a create-a-character disclosure. */
+  ok("it is visible without opening anything, and fits a phone", await pg.evaluate(()=>{
+      const uni=state.universes[0];
+      if(!state.personas.some(p=>p.id==="p_voicechk"))
+        state.personas.push({id:"p_voicechk",name:"Test",universeId:uni.id,personality:"I am warm."});
+      editPersona("p_voicechk");
+      const el=document.getElementById('peVoiceFix'); if(!el) return "the button is not in the DOM";
+      const r=el.getBoundingClientRect();
+      if(r.width<40||r.height<20) return "the button measures "+Math.round(r.width)+"x"+Math.round(r.height)+" — it is inside something collapsed";
+      if(r.left<0||r.right>window.innerWidth) return "the button overflows the viewport";
+      return true; }));
+  ok("the director notes are never sent, so they cannot be rewritten", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function repairCardVoice");
+      const fn=src.slice(i,i+3200);
+      return (!/peInstructions/.test(fn) && !/peInterject/.test(fn))
+        ? true : "repairCardVoice reads a director-note field"; })());
+  ok("a repaired card lands in the editor fields", await pg.evaluate(async()=>{
+      const ids=["pePersonality","peBackstory","peTraits","peGoals","peStyle","peName"];
+      const had={}; ids.forEach(i=>{const el=document.getElementById(i); had[i]=el?el.value:null;});
+      const el=id=>document.getElementById(id);
+      if(!el("pePersonality")) return "the editor is not in the DOM";
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("peName").value="Özlem"; el("pePersonality").value="I am warm the way a crowded kitchen is warm.";
+      el("peBackstory").value="I grew up in a lively household and brought that into my marriage to Berker.";
+      el("peTraits").value=""; el("peGoals").value=""; el("peStyle").value="";
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>JSON.stringify({
+        personality:"You are warm the way a crowded kitchen is warm.",
+        backstory:"You grew up in a lively household and brought that into your marriage to Berker."});
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const got=[el("pePersonality").value,el("peBackstory").value];
+      ids.forEach(i=>{ if(had[i]!=null) el(i).value=had[i]; }); state.key=hadKey;
+      return (/^You are warm/.test(got[0]) && /^You grew up/.test(got[1]) && /your marriage to Berker/.test(got[1]))
+        ? true : JSON.stringify(got); }));
+  ok("a field that was empty is left empty", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const had=el("peStyle")?el("peStyle").value:null;
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("peName").value="Özlem"; el("pePersonality").value="I am blunt."; el("peStyle").value="";
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>JSON.stringify({personality:"You are blunt.",style:"You speak in long loops."});
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const got=el("peStyle").value; if(had!=null) el("peStyle").value=had; state.key=hadKey;
+      return got==="" ? true : "an empty field was filled in: "+got; }));
+  ok("a malformed answer leaves the card untouched", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("peName").value="Özlem"; el("pePersonality").value="I am blunt.";
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>"sorry, I cannot do that";
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const okk=el("pePersonality").value==="I am blunt."; state.key=hadKey;
+      return okk ? true : "the card was damaged by a bad answer"; }));
+  ok("a want-list that comes back the wrong length is rejected", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function repairCardVoice");
+      const fn=src.slice(i,i+3600);
+      return /lines\.length===live\.length/.test(fn) ? true : "the want-list length is not checked"; })());
+  ok("savePersona re-applies the repaired want-list after the stale-list rule", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("function savePersona");
+      const fn=src.slice(i,i+6000);
+      const dropAt=fn.indexOf("delete editingPersona.goalsLive");
+      const applyAt=fn.indexOf("_peGoalsLive && editingPersona");
+      return (dropAt>0 && applyAt>dropAt) ? true : "the stash is applied before the drop, or not at all"; })());
+
   console.log("\n[nothing downstream broke]");
   ok("the prompts still resolve through the registry", ALL.every(k=>texts[k].length>300));
   ok("no page errors", errs.length===0?true:errs.join(" | "));

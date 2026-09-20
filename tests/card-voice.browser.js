@@ -320,10 +320,14 @@ const {chromium}=require('playwright');
       const t=blkTpl("rp_format");
       return t.indexOf("At most ONE narration") < t.indexOf("Çantayı")
         ? true : "the example comes first, so it demonstrates nothing"; }));
+  /* v93.1 — rp_say_no went from 322 words to 183. Every rule in it survives; the epigrams that
+     carried them do not. Asserted by substance: there is still an aftermath section, it still says
+     you feel it and then cope, and it still refuses the permanent break. */
   ok("rp_say_no covers shattering, not only folding", await pg.evaluate(()=>{
       const t=blkTpl("rp_say_no");
-      return /AND IF YOU DO CROSS IT/.test(t) && /you COPE with it/.test(t)
-        && /do NOT permanently break/.test(t) && /somebody with a secret/.test(t)
+      return /AND IF YOU DO CROSS IT/.test(t)
+        && /(shame|guilt)/i.test(t) && /get on with your life/i.test(t)
+        && /does not break\s+you/i.test(t) && /turn you into somebody else/i.test(t)
         ? true : "rp_say_no still guards only the refusal"; }));
   ok("both are fragments the layout already calls, so nothing needs importing", await pg.evaluate(()=>{
       const solo=(state.payloadTemplates&&state.payloadTemplates.solo)||"";

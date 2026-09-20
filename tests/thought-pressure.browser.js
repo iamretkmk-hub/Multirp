@@ -149,9 +149,12 @@ const {chromium}=require('playwright');
      on narrating the weighing stays in `drive_ego`, where it belongs. */
   const ego=await pg.evaluate(()=>blkTpl("drive_ego"));
   const thc=await pg.evaluate(()=>blkTpl("rails_header"));
+  /* v93.1 — same rule, said in four fewer lines. The old wording spelled out HOW an unspoken
+     weighing shows on the page, which was a list of indirection techniques, and the model was
+     copying the list rather than obeying the rule. */
   ok("the weighing is banned only where people can see it",
-     /Do not narrate this weighing where anyone can see it/.test(ego)
-     &&/in speech and in what your body does/.test(ego), "");
+     /nobody watches you deliberate/i.test(ego)
+     &&/part of me wants to/i.test(ego), ego.slice(0,200));
   ok("and drive_ego no longer carries the thought rules itself",
      !/AND IT DOES NOT EXPIRE WHEN THE TURN DOES/.test(ego)
      &&!/A THOUGHT POINTS SOMEWHERE/.test(ego), ego.slice(0,200));

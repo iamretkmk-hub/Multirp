@@ -117,9 +117,12 @@ const {chromium}=require('playwright');
       const B=buildTailBlocks({chat,selfP:D,selfId:D.id,selfName:D.name,targetName:"Emre",
         targetId:"p_e",multi:false,injected:{recent:[],diary:[],longterm:[]}});
       return /\d/.test(String(B.drives||"")) ? "digits present" : true; }));
+  /* v93.1 — asserted case-insensitively: drive_ego was rewritten plain and the clause now opens
+     a sentence. The rule is the same one. */
   ok("the block forbids stating the outcome", await pg.evaluate(()=>
       /decides anything/.test(BLOCK_TPL_DEFAULTS.drive_header)
-   && BLOCK_TPL_DEFAULTS.drive_ego.indexOf("do not invent a struggle")>-1));
+   && /do not invent a struggle/i.test(BLOCK_TPL_DEFAULTS.drive_ego)
+   && /do not invent permission/i.test(BLOCK_TPL_DEFAULTS.drive_ego)));
 
   console.log("\n[the engine]");
   ok("the prompt is registered and editable", await pg.evaluate(()=>
@@ -323,17 +326,26 @@ const {chromium}=require('playwright');
 
   /* v88.1 — the two pulls used to hand the thought the one shape the guardrails forbid. */
   console.log("\n[the weighing and the thought agree about what a thought is]");
-  ok("the weighing is still barred from speech and from the body", await pg.evaluate(()=>{
+  /* v93.1 — the ban survives; the menu of oblique techniques that used to illustrate it does not.
+     That list ("a pause in the wrong place, a sentence that changes direction halfway…") was itself
+     teaching the allusive register this release is cutting, so the rule is asserted by what it
+     forbids rather than by how it used to illustrate it. */
+  ok("the weighing is still barred from being performed", await pg.evaluate(()=>{
       const t=blkTpl("drive_ego");
-      return /Do not narrate this weighing/.test(t) && /Nobody SAYS "part of me wants to"/.test(t)
+      return /nobody watches you deliberate/i.test(t) && /part of me wants to/i.test(t)
         ? true : t.slice(0,200); }));
+  ok("and the technique menu that taught the register is gone", await pg.evaluate(()=>{
+      const t=blkTpl("drive_ego");
+      return !/a sentence that changes direction halfway/.test(t)
+          && !/an answer to a question nobody asked/.test(t)
+          && t.split(/\s+/).length<90 ? true : t.length+" chars: "+t.slice(0,160); }));
   ok("the thought is given ONE side, decided — not the weighing", await pg.evaluate(()=>{
       const t=blkTpl("drive_ego");
       return /ONE SIDE of it, already chosen/.test(t) && !/allowed to happen is your thought/.test(t)
         ? true : "the two pulls still send the weighing itself into the thought"; }));
   ok("and it no longer contradicts the rail that lands last", await pg.evaluate(()=>{
       const ego=blkTpl("drive_ego"), rail=blkTpl("rails_header")||"", last=up("rp_last_before")||"";
-      const bans=/ends where it began|not a thought|lands back where it started/;
+      const bans=/ends where it began|not a thought|ends where it started|never the weighing/;
       /* the rail and the closing block both forbid the shape; the ego block must not permit it */
       return bans.test(ego) && (bans.test(rail)||bans.test(last))
         ? true : "ego="+bans.test(ego)+" rail="+bans.test(rail)+" last="+bans.test(last); }));

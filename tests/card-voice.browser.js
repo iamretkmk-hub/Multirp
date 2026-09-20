@@ -93,6 +93,42 @@ const {chromium}=require('playwright');
      && !/Five \\n-separated lines, one per axis/.test(texts.batchBioPrompt),
      "still asks for five axes");
 
+  /* v78.1 — ONE VOICE IN THE REPLY PAYLOAD. Every writer whose output lands in a character's own
+     card must say so. The card opens "You are <name>", so anything arriving in it that speaks
+     about the character from outside — or as them — teaches the actor the wrong person. This is
+     the list; a new writer that feeds the card belongs on it. */
+  console.log("\n[every writer that feeds the card states its voice]");
+  {
+    const FEEDS=["psychePrompt","goalsCurator","relPrompt","relShortPrompt","promisePurge",
+                 "promisePrompt","socialGraphPrompt","relGenPrompt","afterHeatPrompt",
+                 "calReconcile","goalPursuit","intentForm","x_outfits_generator"];
+    const said=await pg.evaluate(ks=>ks.map(k=>{
+      const t=(up(k)||"");
+      return [k, /SECOND PERSON|second person|2nd person|written to them as "you"|addressed to \{\{char\}\}|as "you"/.test(t)];
+    }),FEEDS);
+    said.forEach(([k,okk])=>ok(k+" names its voice", okk===true?true:"no second-person rule in "+k));
+  }
+  ok("the drives writer is no longer clinical third person", await pg.evaluate(()=>{
+      const t=up("psychePrompt");
+      return /VOICE — SECOND PERSON/.test(t) && !/Write ABOUT \{\{self\}\} in the third person/.test(t)
+        ? true : "psychePrompt still asks for third person"; }));
+  ok("the goals rule no longer demonstrates what it forbids", await pg.evaluate(()=>{
+      const t=up("goalsCurator");
+      return !/look at me the way he used to/.test(t) && /pronoun INSIDE the line is SECOND PERSON/i.test(t)
+        ? true : "goalsCurator still shows a first-person example"; }));
+
+  console.log("\n[the shipped block templates carry no stray first person]");
+  ok("only quoted examples use I/me/my", await pg.evaluate(()=>{
+      // Lines that legitimately quote speech, a thought, or a forbidden form.
+      const EXEMPT=new Set(["head_format","head_emotion","rp_last_before","head_format_heat",
+        "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other",
+        "bio_wardrobe_other","quest_intro","last_line_footer","drive_ego","heat_breaks_voiced",
+        "heat_breaks_silent","resistance_body","rails_header"]);
+      const FP=/(?<![A-Za-z])(I|I'm|I've|my|My|MY|me|Me|mine|myself)(?![A-Za-z])/;
+      const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!EXEMPT.has(k)
+        && typeof BLOCK_TPL_DEFAULTS[k]==="string" && FP.test(BLOCK_TPL_DEFAULTS[k]));
+      return bad.length?("first person in "+bad.join(", ")):true; }));
+
   console.log("\n[nothing downstream broke]");
   ok("the prompts still resolve through the registry", ALL.every(k=>texts[k].length>300));
   ok("no page errors", errs.length===0?true:errs.join(" | "));

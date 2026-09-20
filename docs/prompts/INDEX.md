@@ -10,6 +10,7 @@ source, verified.
 |---|---|
 | [`README.md`](README.md) | **The machinery.** Placeholders and their two scopes, sections that vanish when empty, output contracts, the three language directives, the ten model buckets, and refresh pipes — the only way a rewritten default reaches a user who has already edited it. Most ways to break a prompt here are ways of breaking one of these, and none is visible from the prompt text. |
 | [`flows.md`](flows.md) | **How they connect.** The four clocks, the turn, the scene loop, the emotional loop, the seventeen-step end of day, the quest loop, the five image layers — and a ranking of what to change first by blast radius. |
+| [`AUDITOR.md`](AUDITOR.md) | **The brief for the auditing model.** Hand this over as the system prompt when you put a prompt in front of another LLM: what this app actually is, which rules are the app's interface and may not be changed, and the two regimes — player-facing prose, where less prompting wins, and engine calls, where the contract wins. |
 
 ## The ten
 

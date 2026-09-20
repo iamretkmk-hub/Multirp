@@ -101,7 +101,9 @@ const {chromium}=require('playwright');
   {
     const FEEDS=["psychePrompt","goalsCurator","relPrompt","relShortPrompt","promisePurge",
                  "promisePrompt","socialGraphPrompt","relGenPrompt","afterHeatPrompt",
-                 "calReconcile","goalPursuit","intentForm","x_outfits_generator"];
+                 "calReconcile","goalPursuit","intentForm","x_outfits_generator",
+                 // v79.1 — the quest designer prints desc and ask under YOUR OWN PURSUIT.
+                 "charQuestGen"];
     const said=await pg.evaluate(ks=>ks.map(k=>{
       const t=(up(k)||"");
       return [k, /SECOND PERSON|second person|2nd person|written to them as "you"|addressed to \{\{char\}\}|as "you"/.test(t)];
@@ -116,6 +118,11 @@ const {chromium}=require('playwright');
       const t=up("goalsCurator");
       return !/look at me the way he used to/.test(t) && /pronoun INSIDE the line is SECOND PERSON/i.test(t)
         ? true : "goalsCurator still shows a first-person example"; }));
+
+  ok("the pursuit block is written to its holder", await pg.evaluate(()=>{
+      const t=up("charQuestGen");
+      return /2-3 sentences IN THE SECOND PERSON/.test(t) && /SECOND PERSON from your side/.test(t)
+        ? true : "charQuestGen still leaves desc/ask unvoiced"; }));
 
   console.log("\n[the shipped block templates carry no stray first person]");
   ok("only quoted examples use I/me/my", await pg.evaluate(()=>{

@@ -1,6 +1,6 @@
 # How the prompts connect
 
-The catalogue describes each prompt alone. This file describes the chains: whose output becomes
+The ten grouped files describe each prompt alone. This file describes the chains: whose output becomes
 whose input, and what breaks downstream when one of them is wrong.
 
 Four clocks drive everything.

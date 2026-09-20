@@ -1,13 +1,14 @@
 # How StoryMind's prompts work
 
-This folder is written for someone — or something — about to rewrite these prompts. It has three
+This folder is written for someone — or something — about to rewrite these prompts. It has four
 parts:
 
 | File | What it is |
 |---|---|
+| `INDEX.md` | the map: which of the ten files holds what, and what to work on first. |
 | `README.md` (this file) | the machinery. The rules that decide whether a prompt works at all. |
-| `catalogue.md` | every prompt: purpose, when it fires, what it is handed, what it must return. |
 | `flows.md` | how they chain. Which prompt's output becomes which prompt's input. |
+| `01-…` … `10-…` | the prompts themselves, grouped — each entry with its contract and full text. |
 
 Read this file first. Most ways to break a prompt here are ways of breaking one of the mechanisms
 below, and none of them is visible from the prompt text on its own.
@@ -38,7 +39,7 @@ So a user's edit is sticky and survives updates. Which creates the single most i
 
 **A reply payload** — the character speaking. Assembled from dozens of small blocks in a
 user-editable order (`REPLY_ORDER` / the layout editor), including several of the prompts in the
-catalogue. Nothing in it is a standalone request; it is one long system message plus the
+ten grouped files. Nothing in it is a standalone request; it is one long system message plus the
 transcript. `baseInstruction`, `formatRules`, `narrationRules`, `heatRules` and `textReplyPrompt`
 are fragments of this, never sent alone.
 
@@ -67,13 +68,13 @@ Two different vocabularies, and confusing them is a classic failure.
 **Reply-scope values** — `{{char}}`, `{{self}}`, `{{npc.name}}`, `{{target}}`, `{{response.target}}`.
 These are filled **only in a reply payload**, because an engine in general has no single character
 writing the turn. An engine that *does* have one — `psychePrompt` is about exactly one person — must
-have its call site pass the value explicitly, and the catalogue's **supplied** row shows whether it
+have its call site pass the value explicitly, and its entry's **supplied** row shows whether it
 does.
 
 > ⚠️ An unfilled placeholder is **left visible on purpose**. `{{self}}` reaches the model as those
 > eight characters. This is deliberate: a bug you can see beats an empty string where a name should
 > be. If you add a `{{placeholder}}` to a prompt, something has to supply it — check the
-> **supplied** row in the catalogue, and `tests/engine-values.test.js` enforces it.
+> **supplied** row in its entry, and `tests/engine-values.test.js` enforces it.
 
 ---
 

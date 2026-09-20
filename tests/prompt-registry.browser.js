@@ -153,6 +153,42 @@ const {chromium}=require('playwright');
       });
       return bad.length?bad.join(", "):true; }));
 
+  /* (!) v86.1 — SAVING SETTINGS USED TO FREEZE THE WHOLE PROMPT CATALOGUE. state[key] loads as
+     store.raw(key, <shipped default>), so a prompt nobody had touched came back as the default and
+     was written to storage as though it were an edit. From then on up() returned that copy and
+     every later improvement to the shipped text was shadowed. It cost three rounds of "reload and
+     try again" to see it. */
+  console.log("\n[saving settings does not freeze prompts nobody edited]");
+  ok("a Save clears every stored copy that matches its default", await pg.evaluate(()=>{
+      PROMPT_REGISTRY.forEach(x=>{ if(K[x.key]&&typeof state[x.key]==="string") store.setRaw(K[x.key],state[x.key]); });
+      const before=PROMPT_REGISTRY.filter(x=>K[x.key]&&localStorage.getItem(K[x.key])!==null).length;
+      if(before<50) return "the freeze could not be reproduced (" + before + " keys)";
+      saveSettings(false);
+      const after=PROMPT_REGISTRY.filter(x=>K[x.key]&&localStorage.getItem(K[x.key])!==null);
+      return after.length===0 ? true : "still shadowing: "+after.map(x=>x.key).join(", ").slice(0,200); }));
+  ok("a prompt the user really edited is still written back", await pg.evaluate(()=>{
+      const was=state.memBuild;
+      state.memBuild="MY OWN BUILDER";
+      saveSettings(false);
+      const kept=localStorage.getItem(K.memBuild)==="MY OWN BUILDER";
+      const resolves=up("memBuild")==="MY OWN BUILDER";
+      state.memBuild=was; store.del(K.memBuild);
+      return (kept&&resolves) ? true : `stored:${kept} resolves:${resolves}`; }));
+  ok("an unedited prompt resolves to the shipped default again", await pg.evaluate(()=>{
+      store.setRaw(K.x_card_voice,"STALE COPY FROZEN BY AN OLD SAVE");
+      state.x_card_voice=X_ENGINE_PROMPTS.x_card_voice.def;
+      saveSettings(false);
+      return (localStorage.getItem(K.x_card_voice)===null
+        && /CHANGE THE PERSON\. CHANGE NOTHING ELSE/.test(up("x_card_voice")))
+        ? true : "the stale copy survived the Save"; }));
+  ok("the sweep runs after the hand-written writes, or it would be undone", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("function saveSettings");
+      const fn=src.slice(i,src.indexOf("\n}",i));
+      const sweep=fn.lastIndexOf("store.del(K[r.key])");
+      const lastHand=fn.lastIndexOf("store.setRaw(K.gmAuthor");
+      return (sweep>0 && sweep>lastHand) ? true : "the sweep is before a hand-written setRaw"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

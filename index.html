@@ -2509,7 +2509,8 @@ const ATLAS="https://api.atlascloud.ai/api/v1/";   // AtlasCloud image/video (as
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v);}catch(e){return d;}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){console.warn("storage set failed",k,e);return false;}},
   raw(k,d){const v=localStorage.getItem(k);return v===null?d:v;},
-  setRaw(k,v){try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}}};
+  setRaw(k,v){try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}},
+  del(k){try{localStorage.removeItem(k);return true;}catch(e){console.warn("storage del failed",k,e);return false;}}};
 
 /* ===== PERF instrumentation (temporary, opt-in) =====
    Disabled by default — zero overhead. Enable from the console with:  __SM_PERF=true
@@ -41959,7 +41960,21 @@ function saveSettings(notify){
   /* v38.5 — every registry prompt is written back, not just the ones somebody remembered to add a
      line for. The hand-written store.setRaw calls below are left alone (they write the same value)
      so the diff stays readable; this loop is what makes the guarantee hold for all of them. */
-  PROMPT_REGISTRY.forEach(r=>{ if(typeof state[r.key]==="string"&&K[r.key]) store.setRaw(K[r.key],state[r.key]); });
+  /* (!) v86.1 — BUT NOT THE ONES NOBODY CHANGED. Writing back every prompt froze the whole
+     catalogue at whatever was shipped the first time anyone pressed Save. state[key] is loaded as
+     store.raw(key, <the shipped default>), so a prompt the user never touched came back as the
+     default, was written to storage as though it were an edit, and from then on up() returned that
+     copy and the shipped text was shadowed for good. Every later improvement to it stopped
+     arriving — and a refresh pipe, the one escape, exists only for the prompts somebody thought to
+     write one for.
+     It cost three rounds to see it: a repair prompt was sharpened, shipped, and the next three
+     traces were still running the old text through reload after reload, because a Save made
+     before the change had frozen it.
+     A prompt identical to its shipped default is not an override, so it stops pretending to be
+     one. The stored key is removed, up() falls through to the default again, and the catalogue
+     unfreezes itself on the next Save — no migration, no pipe. An edited prompt is written back
+     exactly as before. */
+  // (runs at the end of this function — see the prompt sweep below, after the hand-written lines)
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
   store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.relScope,state.relScope||"present");store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.socialGraphPrompt,state.socialGraphPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
@@ -41977,6 +41992,14 @@ function saveSettings(notify){
   store.set(K.blockTpls,state.blockTpls||{});              // v19.2 block template overrides
   store.setRaw(K.style,state.style);store.setRaw(K.ratio,state.ratio);
   store.set(K.imgW,_dimOK(state.imgW)||null);store.set(K.imgH,_dimOK(state.imgH)||null);store.setRaw(K.font,state.font);
+  /* Last, because the hand-written store.setRaw lines above write every prompt unconditionally and
+     would otherwise put back the copies this sweep exists to remove. */
+  PROMPT_REGISTRY.forEach(r=>{
+    if(typeof state[r.key]!=="string"||!K[r.key])return;
+    let def=null; try{ def=r.def(); }catch(e){}
+    if(typeof def==="string" && state[r.key]===def) store.del(K[r.key]);
+    else store.setRaw(K[r.key],state[r.key]);
+  });
   applyTheme();updateChatHeader();
   if(notify)toast("Settings saved");
 }

@@ -106,15 +106,28 @@ const {chromium}=require('playwright');
 
   // ---- the prompt says the given values are the only source
   const pr=await pg.evaluate(()=>({d:DEFAULT_MEMBUILD,stale:(window.__stalePipes||[]).join(" | ")}));
+  /* v92.1 — asserted by the RULE, not by a heading. This checked for a v59.1 heading that a later
+     rewrite replaced with plain prose, so it had been red since without the rule ever going away.
+     A heading is the part most likely to be reworded; the sentences that do the work are not. */
   ok("the shipped builder prompt names the WHEN and WHERE lines as authoritative",
-     /THE DAY, THE PART OF THE DAY AND THE PLACE ARE GIVEN TO YOU/.test(pr.d)
-     &&/an invented date is stored as fact/.test(pr.d), "");
+     /WHEN and WHERE lines at the top of what you were handed are the ONLY\s+source for time and place/.test(pr.d)
+     &&/[Aa]n invented date is stored as fact/.test(pr.d), pr.d.slice(0,400));
+  /* v92.1 — and the other half of the same rule: the memory itself never says "yesterday", because
+     the stamp carries that. It matters more than ever now that the stamp is a PHRASE and not a day
+     number — a memory whose own text says "yesterday" would be frozen wrong the day after. */
+  ok("and forbids the memory text from doing the dating itself",
+     /refer to nothing as "yesterday" or\s+"last week" — the timestamp carries that/.test(pr.d),
+     pr.d.slice(0,400));
   ok("no refresh pipe was left pointing at a marker the default lost",
      !/memBuild/.test(pr.stale), pr.stale);
   const rt=async v=>{ await pg.evaluate(t=>store.setRaw(K.memBuild,t),v);
     await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memBuild); };
-  ok("an older stored builder prompt picks the rule up",
-     /ARE GIVEN TO YOU/.test(await rt("You analyze a complete roleplay event and create one durable, first-person MEMORY. Old body.")));
+  /* v92.1 — assert the REFRESH, not a marker string: an old copy comes back as the current
+     default, whatever that default happens to say today. */
+  ok("an older stored builder prompt picks the rule up", await (async()=>{
+     const got=await rt("You analyze a complete roleplay event and create one durable, first-person MEMORY. Old body.");
+     const def=await pg.evaluate(()=>DEFAULT_MEMBUILD);
+     return got===def ? true : "it was left as "+String(got).slice(0,120); })());
   ok("one the user wrote themselves is left exactly as it is",
      (await rt("My own memory writer."))==="My own memory writer.");
 

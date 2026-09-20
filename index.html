@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v92.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v92.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -12053,6 +12053,61 @@ function directorMemoryDigest(chat,n){
 // Structured in-game time: day (integer) + one of 5 named periods. Travel and End Day
 // advance it; the calendar anchors plans to (day, period).
 const PERIODS=["Morning","Midday","Afternoon","Evening","Night"];
+/* ===== WHEN IT WAS, SAID THE WAY A PERSON SAYS IT (v92.1) ==========================================
+   The app knows exactly what day every memory, plan and outcome belongs to — it stamps them itself,
+   from its own clock. It was still shipping that knowledge to the character as "(Day 5, Afternoon)"
+   and asking the MODEL to do the arithmetic: SCENE RIGHT NOW carried "if it is Day 5 now and it
+   happened on Day 4, that is yesterday — never say a day number out loud." Two instructions in one:
+   subtract, then translate. Models are poor at the first and the payload has no way to check the
+   second, so a memory from the day before got recalled as "the other day", one from a week ago as
+   "yesterday", and day numbers leaked into dialogue.
+   There is nothing to interpret. The gap is a subtraction the app can do, so it does it, and what
+   reaches the page is the phrase itself. The stamp becomes "(yesterday, Afternoon)".
+   The period and the place are untouched: those are facts, not arithmetic.
+   Every phrase is a fragment, so a world that plays in another language can say it in that
+   language, and anyone who wants "the other day" instead of "three days ago" can have it. */
+const WHEN_ORDER=["when_today","when_yesterday","when_days_ago","when_last_week","when_weeks_ago",
+  "when_long_ago","when_later_today","when_tomorrow","when_day_after","when_in_days",
+  "when_next_week","when_weeks_away"];
+const _WHEN_N=["","one","two","three","four","five","six","seven","eight","nine","ten"];
+/* Spelled out, because the rule the payload has always carried is "never say a day number", and a
+   numeral in the stamp is the thing most likely to come back out as one. */
+function _numWord(n){ return _WHEN_N[n]||String(n); }
+/* The ladder, from a gap in whole days. Exact while a person would be exact (a week is still
+   countable), vague after that — nobody says "nineteen days ago". */
+function _whenPhrase(gap,future){
+  const g=Math.round(+gap);
+  if(!isFinite(g))return "";
+  const F=(k,n)=>{ const t=blkTpl(k); return t?fillTpl(t,{n:_numWord(n||0),days:String(n||0)}):""; };
+  if(future){
+    if(g<=0)  return F("when_later_today");
+    if(g===1) return F("when_tomorrow");
+    if(g===2) return F("when_day_after");
+    if(g<=6)  return F("when_in_days",g);
+    if(g<=13) return F("when_next_week");
+    return F("when_weeks_away");
+  }
+  if(g<=0)  return F("when_today");
+  if(g===1) return F("when_yesterday");
+  if(g<=6)  return F("when_days_ago",g);
+  if(g<=13) return F("when_last_week");
+  if(g<=27) return F("when_weeks_ago");
+  return F("when_long_ago");
+}
+/* A stamped day against the day it is now. Day 0/absent means the record predates day stamping —
+   it gets no phrase rather than a wrong one. */
+function relWhen(day,today,future){
+  const d=+day, t=+today;
+  /* Both halves have to be known. A caller that does not know what day it is now cannot be given a
+     gap, and "earlier today" computed against a zero is the confident wrong answer this exists to
+     stop. Day numbering starts at 1, so 0 always means "not stamped". */
+  if(!d||!t||!isFinite(d)||!isFinite(t))return "";
+  return _whenPhrase(future?(d-t):(t-d),!!future);
+}
+/* The same ladder for the callers that already hold a gap rather than a day. */
+function relGapWhen(gap,future){
+  return (gap==null||gap==="")?"":_whenPhrase(gap,!!future);
+}
 function chatPeriodIndex(chat){
   const c=chat||curChat(); if(!c)return 0;
   let i=PERIODS.indexOf(c.period);
@@ -14213,11 +14268,16 @@ function calendarContextLine(chat,selfName,selfId,opts){
   const parts=[];
   // UNKEPT goes FIRST and is framed with weight — the character felt the meeting not happen, and it
   // colours how they treat whoever missed it.
-  if(overdue.length) parts.push("UNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): "+overdue.map(e=>`${e.title}${_others(e)?" with "+_others(e):""} — was for Day ${e.day}, never happened`).join("; "));
+  /* v92.1 — "was for Day 4" made the character do the arithmetic to know how stale the sting is.
+     The app knows; it says so. */
+  if(overdue.length) parts.push("UNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): "+overdue.map(e=>`${e.title}${_others(e)?" with "+_others(e):""} — was for ${relWhen(e.day,today,false)||"an earlier day"}, never happened`).join("; "));
   if(dueNow.length)    parts.push("⏰ HAPPENING NOW: "+dueNow.map(e=>fmt(e,true)).join("; "));
   if(lateToday.length) parts.push("ITS HOUR HAS PASSED TODAY, and it has not happened — you are either about to keep it late or it is slipping away, and you know which: "+lateToday.map(e=>fmt(e,false)).join("; "));
   if(todayPlans.length)parts.push("TODAY: "+todayPlans.map(e=>fmt(e,false)).join("; "));
-  if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e,false)} (Day ${e.day})`).join("; "));
+  /* v92.1 — and the future half of the same ladder: "(tomorrow)", "(in three days)". The
+     detector still writes an exact day; turning it into a word a person would use is this side's
+     job, not the roleplay model's. */
+  if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e,false)} (${relWhen(e.day,today,true)||`Day ${e.day}`})`).join("; "));
   if(!parts.length)return "";
   // v30.3 — opts.bare returns just the entries: the reply payload wraps them in its own MEETINGS
   // heading (blkTpl("calendar_header")) so the block is a section of its own rather than a sentence
@@ -14269,10 +14329,13 @@ function calendarDoneLine(chat,selfName,selfId,opts){
   done.sort((a,b)=>atIdx(b)-atIdx(a));
   const lines=done.slice(0,n).map(e=>{
     const d=when(e), per=donePeriod(e);
-    const ago=d>=today?"earlier today":(d===today-1?"yesterday":(d>0?`Day ${d}`:"a while back"));
+    /* v92.1 — the same ladder as the memories, so a finished plan and a memory of it agree about
+       how long ago it was. This used to fall back to a bare "Day 4" past yesterday. */
+    const ago=relWhen(d,today,false);
     const others=planOtherNames(e,selfName);
     const place=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
-    return `- ${e.title}${others.length?` — with ${others.join(", ")}`:""} (${ago}${per?`, ${per}`:""}${place?`, ${place}`:""})`
+    const tail=[ago,per,place].filter(Boolean).join(", ");
+    return `- ${e.title}${others.length?` — with ${others.join(", ")}`:""}${tail?` (${tail})`:""}`
          + (e.result?`\n  How it went: ${String(e.result).trim()}`:"");
   });
   if(opts&&opts.bare)return lines.join("\n");
@@ -20943,7 +21006,8 @@ function memoryBlocks(injectedMemories,which){
      information — tagging every memory with the room the character is standing in does not. */
   const _hereNow=(()=>{ try{ return String((curChat()||{}).location||"").trim().toLowerCase(); }catch(e){ return ""; } })();
   const _where=m=>{ const l=String(m.location||"").trim(); return (l && l.toLowerCase()!==_hereNow)?` [${l}]`:""; };
-  const fmt=(m,i)=>{const d=_memWhen(m);return `Memory ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
+  const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
+  const fmt=(m,i)=>{const d=_memWhen(m,_today);return `Memory ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
   const out=[];
   // v38.1 — outParts, when handed one, collects the numbered entries on their own (no heading, no
   // instruction) so the payload template can print those two as its own prose and call just this.
@@ -20968,7 +21032,8 @@ function latestArcsBlock(ownerId,injectedMemories){
   if(!arcs.length)return "";
   const _hereNow=(()=>{ try{ return String((curChat()||{}).location||"").trim().toLowerCase(); }catch(e){ return ""; } })();
   const _where=m=>{ const l=String(m.location||"").trim(); return (l && l.toLowerCase()!==_hereNow)?` [${l}]`:""; };
-  const fmt=(m,i)=>{const d=_memWhen(m);return `Latest ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
+  const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
+  const fmt=(m,i)=>{const d=_memWhen(m,_today);return `Latest ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
   // v38.1 — outParts, when handed one, collects the numbered entries on their own; see memoryBlocks.
   const op=arguments.length>2&&arguments[2]?arguments[2]:{};
   op.mem_latest_entries=arcs.map(fmt).join("\n");
@@ -21577,9 +21642,13 @@ function _lineReachable(m,selfP,textMode){
    stamped the same day cannot tell this morning from ten minutes ago, and the payload was asking
    them to judge exactly that ("if it happened on Day 4 that is yesterday"). The part of the day was
    already being stored; it just was not being shown. */
-function _memWhen(m){
+/* v92.1 — the day is now a phrase, computed here rather than asked for. The part of the day is
+   untouched: "(yesterday, Afternoon)". A record with no day stamp still gets its period. */
+function _memWhen(m,today){
   if(!m||!m.gameDay)return "";
-  return ` (Day ${m.gameDay}${m.gamePeriod?`, ${m.gamePeriod}`:""})`;
+  const t=(today!=null?today:((curChat()||{}).gameDay||0));
+  const bits=[relWhen(m.gameDay,t,false),String(m.gamePeriod||"").trim()].filter(Boolean);
+  return bits.length?` (${bits.join(", ")})`:"";
 }
 function lastDialogueLine(chat,selfP,textMode){
   try{
@@ -21758,6 +21827,9 @@ const REPLY_ORDER=["task","world","format",
    text template but is not one of the ordered blocks, so its two sentences have no block to hang
    under — declared here so the drift guard counts them as claimed and the editor can find them. */
 const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"],
+  /* v92.1 — how long ago / how far off. Written into memory stamps and calendar lines by code,
+     the way the whisper wordings are, so there is no block to hang them under. */
+  when:WHEN_ORDER,
   /* v50.1 — the aside wordings. castHistory writes them rather than a payload block assembling
      them, so they have no block to hang under either. */
   whisper:["whisper_to_you","whisper_back_guidance"]};
@@ -22435,7 +22507,7 @@ const RAIL_KEYS=[...new Set([].concat(RAIL_ORDER_TEXT,RAIL_ORDER_HEAT,RAIL_ORDER
 /* Every name a producer may hand over on one of those maps, and the maps themselves. */
 const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS,
   YB_ORDER,OP_ORDER,SS_ORDER,LL_ORDER,AS_ORDER,PR_ORDER,PRE_ORDER,MEM_FRAGS,
-  PL_ORDER,SI_ORDER,SD_ORDER,PI_ORDER,FE_ORDER,FN_ORDER,RU_ORDER,QU_ORDER,WN_ORDER,TT_ORDER,
+  PL_ORDER,SI_ORDER,SD_ORDER,PI_ORDER,FE_ORDER,FN_ORDER,RU_ORDER,QU_ORDER,WN_ORDER,TT_ORDER,WHEN_ORDER,
   LY_ORDER))];
 const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives","_yb","_op","_ss","_ll","_as","_pr","_pre","_mem",
   "_pl","_si","_sd","_pi","_fe","_fn","_ru","_qu","_la","_wn","_tt"];
@@ -24335,11 +24407,28 @@ What you must not do is put it where the others can reach it: do not say it out 
   bio_wearing_self:`What you have on right now, already decided by where you are and what hour it is:`,
   bio_wearing_other:`What {{char}} is wearing right now, so you can see {{char}} as {{char}} is. This line is {{char}}'s own sheet, written TO {{char}}: its "you" means {{char}}, never you:`,
   bio_wardrobe_other:`What {{char}} usually wears — picture {{char}} plausibly from this, fitting the scene and the time of day. This is {{char}}'s own sheet, written TO {{char}}: wherever it says "you" (or "I"), it means {{char}}, never you:`,
+  /* v92.1 — HOW LONG AGO, AND HOW FAR OFF. The app computes the gap and picks one of these; the
+     model is never asked to subtract. {{n}} is the count spelled out ("three"), {{days}} the
+     numeral, for anyone who prefers it. Rewrite one and that rung of the ladder says what you
+     wrote — including in another language, which is the point of them being fragments. Clearing a
+     box restores the shipped word, as it does everywhere except a layout heading. */
+  when_today:`earlier today`,
+  when_yesterday:`yesterday`,
+  when_days_ago:`{{n}} days ago`,
+  when_last_week:`last week`,
+  when_weeks_ago:`a couple of weeks ago`,
+  when_long_ago:`a while back`,
+  when_later_today:`later today`,
+  when_tomorrow:`tomorrow`,
+  when_day_after:`the day after tomorrow`,
+  when_in_days:`in {{n}} days`,
+  when_next_week:`next week`,
+  when_weeks_away:`in a couple of weeks`,
   // --- tail: scene ---
   scene_header:`# SCENE RIGHT NOW`,
   // Opening brief: how to READ the rest of this block. Rendered as the "scene" part.
   scene_intro:`This is your live situation. Do not recite it — let it shape what you do.
-- CURRENT DAY is your anchor for time. Judge how long ago a memory or event was and refer to it the way a person would: if it is Day 5 now and it happened on Day 4, that is "yesterday"; a few days back is "the other day"; long ago is "a while ago". Never say a day number out loud.
+- CURRENT DAY is your anchor for time. You never have to work out how long ago anything was: every memory, plan and outcome you have been handed already says so in words — "yesterday", "three days ago", "tomorrow". Take those at face value and never say a day number out loud.
 - The hour named beside it is what is plausible right now — who is awake, what is open, what fits the time. Let it bound what you suggest and what you do.
 - YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.
 - Who can hear you is covered under PRIVACY below, and it sets how freely you speak — read it before you decide what to say out loud.`,
@@ -24359,7 +24448,7 @@ What you must not do is put it where the others can reach it: do not say it out 
 What a text has that a room does not: it is WRITTEN DOWN. It stays on two phones, it can be read over a shoulder, scrolled back through weeks later, or found by somebody looking. If you are careful about something, be careful in the way a person is careful in writing — say less, leave the name out, keep it deniable — rather than by refusing to say it at all.`,
   // The scene brief for a text: the same time anchoring, none of the earshot.
   scene_intro_text:`Where you are and what time it is, so the message fits your actual day. Do not recite any of it.
-- CURRENT DAY is your anchor for time. Refer to when things happened the way a person does — "yesterday", "the other day" — and never say a day number.
+- CURRENT DAY is your anchor for time. Everything you have been handed already says how long ago it was, in words — "yesterday", "three days ago". Take those as given and never say a day number.
 - TIME OF DAY decides what you are plausibly doing while you type this, and how much attention you have to give it. A message written at work is not the message written at midnight.`,
   scene_loc_text:`WHERE YOU ARE right now, while you type this: {{where}}. You are NOT with them — this is your own day, somewhere else.`,
   scene_privacy:`How exposed this place is: {{label}}.`,
@@ -28583,7 +28672,8 @@ async function maybeProactiveText(chat,opts){
     // of firing off feelings-and-memories alone as if the scene never happened.
     const scene=(()=>{ try{ return recentSceneMsgsFor(chat,p,10).map(m=>`${m.name}: ${String(m.content).slice(0,400)}`).join("\n"); }catch(_){ return ""; } })();
     const li=(()=>{ try{ return _lastInPersonInfo(chat,p); }catch(_){ return null; } })();
-    const seenLine=li?`You last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""}.`:"";
+    // v92.1 — one ladder for every "how long ago" in the app, so nothing disagrees with anything.
+    const seenLine=li?`You last saw ${state.user} in person ${relGapWhen(li.gap,false)||"some time back"}${li.location?` at ${li.location}`:""}.`:"";
     // v28.6 — the character writing this text is the same one who speaks in the scene, so give the
     // composer the real reply payload as its context instead of a hand-rolled subset of it. The judge
     // prompt (does she text at all, and what does she type) rides on top and still returns its JSON.
@@ -37208,7 +37298,7 @@ async function maybeCharQuestText(chat){
       // Continuity: if they saw the player in person recently, the text should read like it comes from
       // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
       const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
-        return li?`${holder.name} last saw ${state.user} in person ${li.gap===0?"earlier today":li.gap===1?"yesterday":li.gap!=null?`${li.gap} days ago`:"some time back"}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
+        return li?`${holder.name} last saw ${state.user} in person ${relGapWhen(li.gap,false)||"some time back"}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
       /* v70.3 — WHAT HAS ALREADY BEEN SAID ABOUT THIS. The follow-up rule ("a considered follow-up
          that moves the matter forward, NOT a nag") was being asked of a model that could see only a
          COUNT — "they have raised it before (2x)" — and not one word of what those two messages
@@ -40762,6 +40852,7 @@ function ptCatalog(){
   });
   out.push({name:"language_rule",label:"The story-language rule (write in Turkish, etc.)",desc:"Normally rides inside the formatting rules. Call it on its own if you have written your own format rules but still want the language enforced."});
   out.push({name:"text_timing",label:"How long the text sat unanswered",desc:"Text payload only — how much game time passed before this reply."});
+  out.push({name:"when",label:"How long ago / how far off",desc:"The words the app puts on a memory, a finished plan or an upcoming one once it has worked out the gap itself — “yesterday”, “three days ago”, “tomorrow”. The character is never asked to subtract one day number from another; these are what it reads instead. Blank a rung and that gap says nothing but the part of the day."});
   out.push({name:"whisper",label:"Asides — whispers and concealed acts",desc:"What /whisper looks like to the person it is for and to everybody else, said or done, plus the note telling the answering character their reply is private too. Written into the transcript by castHistory rather than assembled as a block, so it is not one of the ordered pieces."});
   /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
      them or it flags its own default in red; and they are worth listing anyway — this is the list
@@ -40782,6 +40873,7 @@ function ptCatalog(){
     _fragIn(FN_ORDER,"What you feel right now"),_fragIn(RU_ORDER,"Rumors"),
     _fragIn(QU_ORDER,"Story threads"),_fragIn(WN_ORDER,"What is on screen"),
     _fragIn(TT_ORDER,"How long the text sat"),
+    _fragIn(WHEN_ORDER,"How long ago / how far off"),
     _fragIn(LY_ORDER,"Layout heading")];
   const _fragGroup=k=>{
     for(const g of _fragGroups) if(g.arr.indexOf(k)>=0) return g.label;

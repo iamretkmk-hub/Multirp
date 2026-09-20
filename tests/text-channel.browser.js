@@ -213,17 +213,27 @@ const {chromium}=require('playwright');
       return /_memReconcileList\(raw\)/.test(fn) && /typeof j\.importance==="number"/.test(fn)
         ? true : "_commitTextArc still reads j.content off the raw answer"; })());
 
-  /* v76.1 — the Gamemaster is allowed to decline, and declining must not be narrated. */
+  /* v76.1 — the Gamemaster is allowed to decline, and declining must not be narrated.
+     v88.1 — and the beat is written in the story language now, so the refusal may arrive in
+     that language too. The guard tests the English sentinels the prompt asks for AND any bare
+     one-word answer, because a Gamemaster BEAT is always a sentence and never one short token. */
   console.log("\n[a Gamemaster that declines the turn says nothing]");
   ok("a bare refusal never reaches the story", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
-      const m=src.match(/if\(\/\^\(skip\|none\|nothing\|no\[\\s-\]\?event\|pass\)\[\.!\]\?\$\/i\.test\(clean\)\)\{/);
+      const m=src.match(/const _bare=clean\.replace\([^\n]*\n\s*if\(\/\^\(skip\|none\|nothing\|no\[\\s-\]\?event\|pass\)\$\/i\.test\(_bare\)/);
       return m ? true : "a Gamemaster answering SKIP is still posted as a Narrator line"; })());
   ok("only a bare refusal is swallowed", await pg.evaluate(()=>{
-      const re=/^(skip|none|nothing|no[\s-]?event|pass)[.!]?$/i;
-      return (re.test("SKIP") && re.test("skip.") && re.test("nothing")
-           && !re.test("Skip the rest of the evening; a car door closes in the street below.")
-           && !re.test("Nothing in the room moves, but two floors down a key turns.")) ? true : "the guard is too greedy"; }));
+      const swallow=t=>{ const b=String(t).replace(/[.!…]+$/,"").trim();
+        return /^(skip|none|nothing|no[\s-]?event|pass)$/i.test(b) || (b.length<=16 && !/\s/.test(b)); };
+      return (swallow("SKIP") && swallow("skip.") && swallow("nothing")
+           && !swallow("Skip the rest of the evening; a car door closes in the street below.")
+           && !swallow("Nothing in the room moves, but two floors down a key turns.")) ? true : "the guard is too greedy"; }));
+  ok("a refusal in the story language is swallowed too", await pg.evaluate(()=>{
+      const swallow=t=>{ const b=String(t).replace(/[.!…]+$/,"").trim();
+        return /^(skip|none|nothing|no[\s-]?event|pass)$/i.test(b) || (b.length<=16 && !/\s/.test(b)); };
+      /* Turkish, Spanish, German: one word, no sentence. */
+      return (swallow("Yok.") && swallow("Atla") && swallow("ninguno") && swallow("nichts")
+           && !swallow("Özlem'in çantasındaki telefon iki kez çaldı, sonra sustu.")) ? true : "a non-English refusal is still narrated"; }));
 
   /* v77.1 — a turn that opens and closes on dialogue keeps its quotes. */
   console.log("\n[unwrapping a quoted answer never eats real dialogue]");

@@ -321,6 +321,51 @@ const {chromium}=require('playwright');
       return /THE WORDS THAT BIND/.test(t) && /Nobody else/.test(t)
         ? true : "the separator still says only what they have GIVEN"; }));
 
+  /* v88.1 — the two pulls used to hand the thought the one shape the guardrails forbid. */
+  console.log("\n[the weighing and the thought agree about what a thought is]");
+  ok("the weighing is still barred from speech and from the body", await pg.evaluate(()=>{
+      const t=blkTpl("drive_ego");
+      return /Do not narrate this weighing/.test(t) && /Nobody SAYS "part of me wants to"/.test(t)
+        ? true : t.slice(0,200); }));
+  ok("the thought is given ONE side, decided — not the weighing", await pg.evaluate(()=>{
+      const t=blkTpl("drive_ego");
+      return /ONE SIDE of it, already chosen/.test(t) && !/allowed to happen is your thought/.test(t)
+        ? true : "the two pulls still send the weighing itself into the thought"; }));
+  ok("and it no longer contradicts the rail that lands last", await pg.evaluate(()=>{
+      const ego=blkTpl("drive_ego"), rail=blkTpl("rails_header")||"", last=up("rp_last_before")||"";
+      const bans=/ends where it began|not a thought|lands back where it started/;
+      /* the rail and the closing block both forbid the shape; the ego block must not permit it */
+      return bans.test(ego) && (bans.test(rail)||bans.test(last))
+        ? true : "ego="+bans.test(ego)+" rail="+bans.test(rail)+" last="+bans.test(last); }));
+
+  /* v88.1 — one promise string, read by four different people. */
+  console.log("\n[the ledger says whose \"you\" each line is in]");
+  ok("the holder's own block needs no such note", await pg.evaluate(()=>
+      !/the \"you\" inside it is THEM/.test(blkTpl("promise_yours")) ));
+  ok("what was sworn TO you names the giver's voice", await pg.evaluate(()=>{
+      const t=blkTpl("promise_owed");
+      return /names the person who GAVE the word/.test(t) && /is THEM, not you/.test(t)
+        ? true : t.slice(-160); }));
+  ok("so does JUST ENDED, where the broken word may be anyone's", await pg.evaluate(()=>{
+      const t=blkTpl("promise_ended");
+      return /names the person who GAVE the word/.test(t) && /is THEM, not you/.test(t)
+        ? true : t.slice(-160); }));
+  ok("both still end on the colon that introduces their bullets", await pg.evaluate(()=>
+      blkTpl("promise_owed").trim().endsWith(":") && blkTpl("promise_ended").trim().endsWith(":") ));
+  ok("the engine is still told to write the holder's own second person", await pg.evaluate(()=>{
+      const t=up("promisePrompt")||"";
+      return /SECOND PERSON, addressed to the holder/.test(t)
+        ? true : "the promises engine changed contract without the ledger being told"; }));
+  ok("and a line whose holder is somebody else still arrives verbatim", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.promises=[{id:"pq",status:"broken",statusDay:chat.gameDay||1,day:chat.gameDay||1,
+        holderId:"x_other",holderName:"Emre Tokmak",toId:"t_self",toName:"Özlem",
+        promise:"you will wait for her call"}];
+      const t=promiseContextFor(chat,"t_self","Özlem")||"";
+      return /Emre Tokmak — you will wait for her call/.test(t)
+          && /is THEM, not you/.test(t)
+        ? true : t.slice(0,300); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

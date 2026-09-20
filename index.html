@@ -3204,7 +3204,18 @@ A card that has been edited by hand often changes person mid-sentence: "I am the
 
 You may also be given "goals_live" — the maintained want-list, one want per line. Repair it the same way and return it as an array of the SAME number of lines, in the same order. It is not a rewrite of what they want: a want does not change here, only who it is addressed to.
 
-You may also be given "pursuits" — the character's live pursuits, each with an id. Each has a "desc" (what they are after and why now) and sometimes an "ask" (what they want from another person). Both are printed on this same card, so both are repaired the same way and returned under the SAME id. The "ask" is the thing they want FROM somebody: the character is "you" and that somebody stays in the third person — "never contact me again" becomes "for him to stop contacting you". Never change a pursuit's title, and never return an id you were not given.
+# PURSUITS
+You may also be given "pursuits" — the character's live pursuits, each with an id, a "desc" (what they are after and why now), often an "ask" (what they want from another person) and a "motive". All of them print on this same card, so all of them are repaired, and returned under the SAME id. Never change a pursuit's title, and never return an id you were not given.
+
+**The "ask" is the field that gets skipped, so read this twice.** It is stored as a STATEMENT OF WHAT YOU WANT, not as the words you would say. It arrives written as speech aimed at the other person, and speech is first person, so it looks like it is already correct. It is not. Rewrite it as the want, from your side:
+
+- was: "Keep the night we spent together completely secret, never contact me again — no calls, no coming to the house — because I'm starting treatment with Berker and this has to end here."
+- becomes: "For him to keep the night the two of you spent together completely secret and stop contacting you — no calls, no coming to the house — because you are starting treatment with Berker and it has to end here."
+
+Returning an "ask" byte-for-byte as you received it is a failure of this job. If it contains "me", "my" or "I" about the character after you are finished, you have not done it.
+
+# A POSSESSIVE THAT COVERED TWO PEOPLE
+"their night", "their secret", "the affair they had" — where the third person covered the character AND somebody else, the character half becomes yours and the other half stays theirs: "the night the two of you spent", "what the two of you did". Never leave a bare "their" standing for something you were part of.
 
 Return ONLY strict JSON with the fields you were given, and nothing else:
 {"personality":"…","backstory":"…","traits":"…","goals":"…","style":"…","goals_live":["…","…"],"pursuits":[{"id":"…","desc":"…","ask":"…","motive":"…"}]}`},
@@ -14300,6 +14311,14 @@ async function runPromisePurge(chat){
        nothing else, which is the same trap the purge itself exists to escape. It carries the
        rule version now, and a chat purged under an older one gets exactly one more pass. */
     if(chat._prPurged===PROMISE_PURGE_RULES)return;
+    /* (!) v82.1 — AND ONCE AT A TIME. The marker is only set when a pass finishes, so two turns
+       firing while the first call is still out both saw an unset gate and both went. A real trace
+       has the purge dispatched twice thirty-six seconds apart, each taking sixty-two — a hundred
+       and twenty-five seconds spent auditing the same three-entry ledger twice, concurrently, with
+       the second write landing on top of the first. The durable marker fixed the reload; this is
+       the same gate for the seconds before a pass comes back. */
+    if(chat._prPurgeBusy)return;
+    chat._prPurgeBusy=1;
     const open=livePromises(chat);
     if(!open.length){ chat._prPurged=PROMISE_PURGE_RULES; return; }
     const list=open.slice(0,24).map(pr=>
@@ -14329,6 +14348,7 @@ async function runPromisePurge(chat){
        wording — otherwise the next load audits the same ledger again. */
     markChatDirty(chat); persistChats();
   }catch(e){/* best-effort, exactly like the extractor */}
+  finally{ if(chat)delete chat._prPurgeBusy; }
 }
 /* The extractor. Runs on the calendar's cadence but half as often — commitments are rarer than
    meetings and the same call also settles the open ones, which is what keeps the ledger from
@@ -19982,7 +20002,7 @@ async function repairCardVoice(){
     ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",1800),dbg:"Card voice repair · "+name});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Repair failed — the card is untouched"); return; }
-    let n=0;
+    let n=0, stubborn=0;
     const set=(id,v)=>{const el=document.getElementById(id);
       if(el&&typeof v==="string"&&v.trim()){ el.value=v.trim(); n++; } };
     if(present.includes("personality")) set('pePersonality',j.personality);
@@ -20016,8 +20036,22 @@ async function repairCardVoice(){
         if(f.desc||f.ask||f.motive)fixes.push(f);
       });
       if(fixes.length){ _peQuestFix={universeId:editingPersona.universeId,fixes}; n+=fixes.length; }
+      /* (!) v82.1 — A HALF-REPAIRED PURSUIT MUST NOT LOOK LIKE A WHOLE ONE. In a real run the
+         model rewrote desc and motive and handed the ask straight back, unchanged — the ask is
+         stored as speech aimed at the other person, so it reads as already-correct first person.
+         The prompt now argues that case at length; this is the net under it. An ask that came
+         back identical AND still speaks of the character as "me" is named, so pressing the button
+         again is an informed choice rather than a guess. */
+      stubborn=j.pursuits.filter(r=>{
+        const q=r&&byId.get(String(r.id||"")); if(!q||!q.ask)return false;
+        return String(r.ask||"").trim()===String(q.ask).trim()
+            && /(^|[^a-zçğıöşü])(me|my|I|I'm)([^a-zçğıöşü]|$)/i.test(String(q.ask));
+      }).length;
     }
-    toast(n?`Voice fixed in ${n} field${n>1?"s":""} — review & save`:"Nothing changed");
+    toast(n
+      ? `Voice fixed in ${n} field${n>1?"s":""} — review & save`
+        +(stubborn?` · ${stubborn} ask${stubborn>1?"s":""} came back unchanged, press again`:"")
+      : "Nothing changed");
   }catch(e){ toast("Repair failed — the card is untouched"); }
   finally{ if(btn){ btn.disabled=false; btn.textContent="Fix the voice"; } }
 }

@@ -257,6 +257,60 @@ const {chromium}=require('playwright');
 
   /* v80.2 — the two halves that the author's layout had no line for. Both live in shipped
      fragments their template already calls, so they arrive without an import and without a paste. */
+  /* v82.1 — the ask is the field that gets skipped, because it is stored as speech aimed at the
+     other person and speech is legitimately first person. A real run had it handed straight back. */
+  console.log("\n[the ask is argued for, and a skipped one is reported]");
+  ok("the prompt makes the case for the ask specifically", await pg.evaluate(()=>{
+      const t=up("x_card_voice");
+      return /read this twice/i.test(t) && /STATEMENT OF WHAT YOU WANT/.test(t)
+        && /byte-for-byte as you received it is a failure/.test(t) ? true : "the ask is still one clause in a paragraph"; }));
+  ok("a possessive that covered two people is covered", await pg.evaluate(()=>{
+      const t=up("x_card_voice");
+      return /A POSSESSIVE THAT COVERED TWO PEOPLE/.test(t) && /the night the two of you spent/.test(t)
+        ? true : "\"their night\" has no rule"; }));
+  ok("an ask returned unchanged and still first person is named", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const uni=state.universes[0];
+      if(!state.personas.some(p=>p.id==="p_stub")) state.personas.push({id:"p_stub",name:"Özlem",universeId:uni.id});
+      const all=_charQuests(uni); all.length=0;
+      all.push({id:"q_s",holderId:"p_stub",status:"active",title:"T",
+                desc:"Özlem must end it.",ask:"never contact me again — I'm starting treatment"});
+      editPersona("p_stub");
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("pePersonality").value="I am warm.";
+      const seen=[]; const realToast=window.toast; window.toast=t=>seen.push(String(t));
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>JSON.stringify({personality:"You are warm.",
+        pursuits:[{id:"q_s",desc:"You must end it.",ask:"never contact me again — I'm starting treatment"}]});
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; window.toast=realToast; state.key=hadKey; }
+      return /came back unchanged, press again/.test(seen.join(" | ")) ? true : "toast said: "+seen.join(" | "); }));
+  ok("a properly repaired ask is not flagged", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const uni=state.universes[0];
+      const all=_charQuests(uni); all.length=0;
+      all.push({id:"q_ok",holderId:"p_stub",status:"active",title:"T",
+                desc:"Özlem must end it.",ask:"never contact me again"});
+      editPersona("p_stub");
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("pePersonality").value="I am warm.";
+      const seen=[]; const realToast=window.toast; window.toast=t=>seen.push(String(t));
+      const real=window.chatCompletion;
+      window.chatCompletion=async()=>JSON.stringify({personality:"You are warm.",
+        pursuits:[{id:"q_ok",desc:"You must end it.",ask:"for him to stop contacting you"}]});
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; window.toast=realToast; state.key=hadKey; }
+      return !/came back unchanged/.test(seen.join(" | ")) ? true : "a good ask was flagged: "+seen.join(" | "); }));
+
+  /* The purge could be dispatched twice before the first came back — 62s each, in one session. */
+  ok("the purge cannot be dispatched twice at once", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("async function runPromisePurge");
+      const fn=src.slice(i,i+3400);
+      return /if\(chat\._prPurgeBusy\)return;\s*\n\s*chat\._prPurgeBusy=1;/.test(fn)
+        && /finally\{ if\(chat\)delete chat\._prPurgeBusy; \}/.test(fn)
+        ? true : "no in-flight guard, or it is never released"; })());
+  ok("the busy flag is transient, unlike the done marker", await pg.evaluate(()=>
+      !DURABLE_CHAT_KEYS.has("_prPurgeBusy") && DURABLE_CHAT_KEYS.has("_prPurged")));
+
   console.log("\n[the format block sets a count, and saying no has a second half]");
   ok("rp_format caps narration and thought at one each", await pg.evaluate(()=>{
       const t=blkTpl("rp_format");

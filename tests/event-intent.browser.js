@@ -180,6 +180,68 @@ const {chromium}=require('playwright');
       return !sp.some(x=>/^goalsCurator/.test(x))
         ? true : "stale: "+sp.filter(x=>/^goalsCurator/.test(x)).join(" | "); }));
 
+  /* v106.1 — and the writer the errand came from. The calendar executor carried an unconditional
+     novelty mandate ("The result must matter: someone now knows, owes, fears, wants, or plans
+     something they didn't before"), so a meeting that simply SUCCEEDED — two friends signing the
+     partnership they met to sign — had no truthful way to be written. It grew a complication: a
+     fitness centre this world does not have (the setting lists a pool, a beach, a restaurant and a
+     cafe), and a treadmill problem in it. Invention was not closed, and unlike both its siblings it
+     was never told which places exist. */
+  console.log("\n[a plan is allowed to simply succeed]");
+  ok("the unconditional novelty mandate is gone", await pg.evaluate(()=>{
+      const t=up("calExec")||"";
+      return !/The result must matter/.test(t)
+        ? true : "every resolution still owes the world something new"; }));
+  ok("and plain success is named as the common case", await pg.evaluate(()=>{
+      const t=up("calExec")||"";
+      return /ALLOWED TO RESOLVE PLAINLY/.test(t)
+        && /may simply sign it and be pleased/.test(t)
+        && /the commonest one/.test(t) ? true : "the replacement lost its point"; }));
+  ok("manufacturing a snag is refused by name, with the reason", await pg.evaluate(()=>{
+      const t=up("calExec")||"";
+      return /Never manufacture a complication, a condition or a snag/.test(t)
+        && /becomes true in this world/.test(t) ? true : "the snag rule is missing"; }));
+  ok("but the purpose still has to land — it is not licence to write nothing", await pg.evaluate(()=>{
+      const t=up("calExec")||"";
+      return /the purpose landing one way or the other/.test(t)
+        && /Resolve the plan concretely/.test(t) ? true : "the pressure was removed, not redirected"; }));
+
+  console.log("\n[invention is closed, on both offstage writers]");
+  ok("the executor may not invent a person, a place or a side-issue", await pg.evaluate(()=>
+      /Never invent a person, a place, an institution or a side-issue you were not given/.test(up("calExec")||"") ));
+  ok("its sibling carries the same closure", await pg.evaluate(()=>
+      /Never invent a person, a place, an institution or a side-issue you were not given/.test(up("offstageEvent")||"") ));
+  ok("and the round's own wording is untouched", await pg.evaluate(()=>
+      /Never invent a secret, a betrayal, a confession, an accident or a person/.test(up("worldRound")||"") ));
+
+  console.log("[and it is finally told which places exist]");
+  ok("the executor asks for the list its siblings already get", await pg.evaluate(()=>
+      /KNOWN PLACES in this world: \{\{places\}\}/.test(DEFAULT_CAL_EXEC) ));
+  ok("and the call fills it, so the rule is checkable", await pg.evaluate(()=>{
+      const uni=state.universes[0];
+      uni.locations=[{id:"l_cafe",name:"Site Coffee House",description:"c",residents:[],sublocations:[]}];
+      const t=fillTpl(up("calExec"),{title:"T",who:"A, B",place:"",day:"4",period:"Evening",
+        origin:"O",sheets:"S",ties:"T",knows:"K",user:"Emre",world:"W",places:_pulsePlaces(curChat())});
+      if((t.match(/\{\{\w+\}\}/g)||[]).length) return "unfilled: "+t.match(/\{\{\w+\}\}/g).join(", ");
+      return /KNOWN PLACES in this world: Site Coffee House/.test(t)
+        ? true : "places arrives empty at the call site"; }));
+  ok("the fill is wired in the resolver, not only in this test", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf('fillTpl(up("calExec")'));
+      return /places:_pulsePlaces\(chat\)/.test(fn.slice(0,600))
+        ? true : "the resolver does not pass places"; })());
+
+  console.log("[the player-facing half is deliberately left alone]");
+  ok("the result is still written in the story language, because the calendar shows it", await pg.evaluate(()=>{
+      const t=up("calExec")||"";
+      return /"event": "<3-6 sentences, Turkish/.test(t) ? true : "the event language changed"; }));
+  ok("while the memories it plants stay English, like every other memory", await pg.evaluate(()=>
+      /ENGLISH memory in THEIR perspective/.test(up("calExec")||"") ));
+
+  ok("neither offstage pipe fires against its own shipped default", await pg.evaluate(()=>{
+      const sp=(window.__stalePipes||[]).filter(x=>/^(calExec|offstageEvent)/.test(x));
+      return sp.length===0 ? true : "stale: "+sp.join(" | "); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -108,9 +108,14 @@ const {chromium}=require('playwright');
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       return /if\(presentCast\(chat\)\.length===0\) every=Math\.min\(every,2\)/.test(src)
         ? true : "being alone no longer speeds the Gamemaster up"; })());
+  /* v96.1 — assert the GATE, not the absence of the word "period": the pulse now also kicks off a
+     whole-cast round, whose own comment says "once per period", and a comment is not a gate. What
+     matters here is unchanged — the pulse's own cadence counts TURNS, which a solo turn moves. */
   ok("and the world pulse ticks per turn, not per period", await pg.evaluate(()=>{
       const src=String(maybeWorldPulse);
-      return /chat\.pulseTurns=\(chat\.pulseTurns\|\|0\)\+1/.test(src) && !/period/.test(src)
+      return /chat\.pulseTurns=\(chat\.pulseTurns\|\|0\)\+1/.test(src)
+          && /chat\.pulseTurns<every/.test(src)
+          && !/chatPeriod\(chat\)!==|pulsePeriod/.test(src)
         ? true : "the pulse is gated on something a solo turn cannot move"; }));
 
   console.log("\n[the one-off that frees what is already stuck]");

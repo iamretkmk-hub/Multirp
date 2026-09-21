@@ -216,6 +216,55 @@ const {chromium}=require('playwright');
       return /THE TWO ENGINES HAVE OPPOSITE JOBS AND BOTH ARE RIGHT/.test(src)
         ? true : "nothing stops a later reader levelling them"; })());
 
+  console.log("\n[the plan-made memory is one language and one person]");
+  ok("the wrapper is English, and a fragment rather than a string in code", await pg.evaluate(()=>
+      /I settled on something I mean to do/.test(blkTpl("mem_plan_self"))
+   && /and I agreed on it/.test(blkTpl("mem_plan_with")) ));
+  ok("no Turkish wrapper prose survives in the code", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8')
+        .replace(/\/\*[\s\S]*?\*\//g," ");
+      return !/Kendime bir plan koydum|Sebebim:|Derdi \u015fu/.test(src)
+        ? true : "the hand-written Turkish memory is still built in code"; })());
+  ok("it carries no date — the calendar holds that and renders it live", await pg.evaluate(()=>{
+      const t=blkTpl("mem_plan_self")+blkTpl("mem_plan_with")+blkTpl("mem_plan_asked");
+      return !/\{\{day\}\}|\{\{period\}\}|g\u00fcn/.test(t) ? true : t; }));
+  ok("but it keeps the place, which does not move", await pg.evaluate(()=>
+      /\{\{place\}\}/.test(blkTpl("mem_plan_at")) ));
+  ok("the title is quoted, so a story-language name sits inside an English record",
+     await pg.evaluate(()=>/"\{\{title\}\}"/.test(blkTpl("mem_plan_self")) ));
+  ok("the reason is turned to the first person on the way in", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /const _why=toFirstPerson\(String\(why\|\|""\)\.trim\(\)\)/.test(src)
+        ? true : "a second-person reason still lands in a first-person memory"; })());
+  ok("the companion records only that it was arranged, not the other's private reason",
+     await pg.evaluate(()=>{
+      const t=blkTpl("mem_plan_asked");
+      return !/\{\{why\}\}/.test(t) && /I said yes/.test(t) ? true : t; }));
+  ok("the emotions are ones the vocabulary actually knows", await pg.evaluate(()=>
+      normalizeEmotion("determined")!=="neutral" && normalizeEmotion("concerned")!=="neutral" ));
+
+  console.log("\n[toFirstPerson knows object case]");
+  ok("\"the two of you\" is not \"the two of I\"", await pg.evaluate(()=>
+      /the two of us/.test(toFirstPerson("something that belongs to the two of you")) ));
+  ok("a you after a preposition is me", await pg.evaluate(()=>
+      toFirstPerson("It is between you and Berker.")==="It is between me and Berker." ));
+  ok("a you taken as an object is me", await pg.evaluate(()=>
+      /gave me his word and I believed/.test(toFirstPerson("He gave you his word and you believed him.")) ));
+  ok("and the subject case still becomes I", await pg.evaluate(()=>
+      /^I am the one who wanted this; my name/.test(toFirstPerson("You are the one who wanted this; your name is on it.")) ));
+
+  console.log("\n[the pursuit writer asks for one player-facing field]");
+  ok("the title is asked for in the story language, not in Turkish by name", await pg.evaluate(()=>{
+      const t=up("goalPursuit")||"";
+      return /IN THE STORY LANGUAGE/.test(t) && !/max 10 words, Turkish/.test(t)
+        ? true : "the title is still pinned to one language"; }));
+  ok("and everything else it returns is named an engine record", await pg.evaluate(()=>
+      /Everything else you return is an engine record and is plain English/.test(up("goalPursuit")||"") ));
+  ok("the call sends the mixed directive, not the all-English one", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /epSend\("goalPursuit",tpl\+"\\n\\n"\+mixedLangDirective\(\["title"\]\)/.test(src)
+        ? true : "the directive still contradicts the prompt"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

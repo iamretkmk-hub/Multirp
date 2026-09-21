@@ -112,9 +112,15 @@ const {chromium}=require('playwright');
     ok('"'+fn+'" reaches its call sites ('+tagged+")", tagged>0?true:"no tagged call site");
   }
   /* "call" is the exception, and deliberately so: the live call never goes through
-     chatCompletion, so its card reaches exactly one place — the streamed request body. */
+     chatCompletion, so its card reaches exactly one place — the streamed request body.
+     v107.1 — and now by two routes, because that body is built for whichever provider the call
+     card names: OpenRouter's reasoning object, or the portable reasoning_effort elsewhere. Both
+     read the same "call" bucket, which is what this is really asserting. */
   ok('"call" reaches the streamed request body instead',
-     /reasoning:vcReasoning\(\)/.test(src)?true:"the voice-call body still hardcodes reasoning");
+     /reqBody\.reasoning=vcReasoning\(\)/.test(src)?true:"the voice-call body no longer uses the call card");
+  ok('"call" still reaches it on a non-OpenRouter provider',
+     /fnReason\("call"\)===true/.test(src) && /fnEffort\("call"\)/.test(src)
+       ?true:"the portable path ignores the call card's thinking switch");
   ok("no call site passes a bucket the overrides don't know", (()=>{
       const keys=new Set((src.match(/\{fn:"([a-z]+)",/g)||[]).map(m=>m.slice(5,-2)));
       /* "rp" (arrival lines, proactive texts) and "reply" (the A/B tester) share the roleplay

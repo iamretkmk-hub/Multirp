@@ -129,6 +129,57 @@ const {chromium}=require('playwright');
       return /ALWAYS name them/.test(t) && /A real, completed entrance/.test(t)
           && /A mention is NOT a summons/.test(t) ? true : "move 3 lost a rule"; }));
 
+  /* v105.1 — the same hole one level up. An offstage event's result carried a throwaway
+     condition ("fine, but first let's sort out the treadmills at the gym"), and the goals curator
+     promoted it to a standing ambition for BOTH men in the deal. It survived every nightly rewrite
+     afterwards, so two engineers spent a dinner party arguing about gym equipment.
+     The section had a floor for vagueness and none for triviality — and "concrete and gettable",
+     the rule meant to stop moods, was exactly what let an errand win a slot. */
+  console.log("\n[a want is not an errand]");
+  ok("the bar has two ends now, not one", await pg.evaluate(()=>{
+      const t=up("goalsCurator")||"";
+      if(/Concrete and gettable, or concretely dreaded/.test(t))
+        return "the old one-ended rule is still there";
+      return /Big enough to carry, small enough to act on/.test(t)
+        && /A mood is too vague to be one; an errand is too small/.test(t)
+        ? true : "the floor is missing"; }));
+  ok("and it is worked through on the case that found it", await pg.evaluate(()=>{
+      const t=up("goalsCurator")||"";
+      return /treadmills at the gym/.test(t) && /is an errand/.test(t)
+        && /Thursday table/.test(t) && /is a want/.test(t)
+        ? true : "the WRONG/RIGHT pair did not survive"; }));
+  ok("a detail dropped inside something that happened is named as not a want", await pg.evaluate(()=>{
+      const t=up("goalsCurator")||"";
+      return /a snag, a chore, a condition somebody attached to a yes — is NOT a want/.test(t)
+        && /not to be mined for lines/.test(t) ? true : "the mining rule is missing"; }));
+  ok("with a test the model can actually apply", await pg.evaluate(()=>
+      /still be carrying this a week from now, with nobody reminding them/.test(up("goalsCurator")||"") ));
+
+  console.log("\n[and it cleans out what is already in the section]");
+  ok("an errand already written in is a DROP, not a KEEP", await pg.evaluate(()=>{
+      const t=up("goalsCurator")||"";
+      return /it was never a want at all — a chore or an errand that got written in/.test(t)
+        ? true : "the drop rule still only covers finished and stale wants"; }));
+  ok("the bar is stated to cover kept lines, not only added ones", await pg.evaluate(()=>
+      /applies to every line you keep, not only to lines you add/.test(up("goalsCurator")||"") ));
+  ok("the settled calendar is for closing wants, not opening them", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /Read these to CLOSE wants, not to find new ones/.test(src)
+        ? true : "the WHAT THEY ALREADY DID label still reads as a source"; })());
+
+  console.log("\n[the new bar reaches an edited copy]");
+  ok("a stored copy written before this is refreshed", await pg.evaluate(()=>{
+      const old=String(DEFAULT_GOALS_CURATOR).replace(
+        /- Big enough to carry[^\n]*\n/,
+        "- Concrete and gettable, or concretely dreaded. Not a mood.\n");
+      if(old===DEFAULT_GOALS_CURATOR) return "could not build a pre-v105.1 copy to test with";
+      return old.indexOf("WHAT THEY ARE AFTER")>-1 && old.indexOf("an errand is too small")<0
+        ? true : "the pipe's fingerprint or marker would not match a real old copy"; }));
+  ok("and the pipe is not firing against the shipped default", await pg.evaluate(()=>{
+      const sp=window.__stalePipes||[];
+      return !sp.some(x=>/^goalsCurator/.test(x))
+        ? true : "stale: "+sp.filter(x=>/^goalsCurator/.test(x)).join(" | "); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

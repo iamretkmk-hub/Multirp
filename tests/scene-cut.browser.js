@@ -150,6 +150,67 @@ const {chromium}=require('playwright');
   ok("the engine has its own Settings card", await pg.evaluate(()=>
       (ENGINE_PAYLOAD_DEFS||[]).some(d=>d&&d.key==="scene_cut") ));
 
+  console.log("\n[a request that never answers cannot hang for ever]");
+  ok("a stalled fetch is aborted and reported AS a timeout", await pg.evaluate(async()=>{
+      state.key="k";
+      const real=window.fetch;
+      window.fetch=(u,o)=>new Promise((res,rej)=>{ if(o&&o.signal)o.signal.addEventListener("abort",()=>{
+        const e=new Error("aborted"); e.name="AbortError"; rej(e); }); });
+      let msg="";
+      try{ await chatCompletion([{role:"user",content:"x"}],"m",{timeoutMs:5000,retries:0,dbg:"t"}); }
+      catch(e){ msg=(e&&e.friendly)||String(e); } finally{ window.fetch=real; }
+      return /did not answer within 5 seconds/.test(msg) ? true : msg; }));
+  ok("and the debug row says so, with a duration instead of a null", await pg.evaluate(()=>{
+      const e=dbgLog.slice(-1)[0];
+      return (e&&e.status==="error"&&e.ms>0&&/Timed out after 5s/.test(e.result))
+        ? true : JSON.stringify(e&&{s:e.status,ms:e.ms,r:e.result}); }));
+  ok("a timeout is told apart from a network error", await pg.evaluate(async()=>{
+      const real=window.fetch;
+      window.fetch=async()=>{ throw new Error("dns"); };
+      let msg=""; try{ await chatCompletion([{role:"user",content:"x"}],"m",{retries:0,dbg:"n"}); }
+      catch(e){ msg=(e&&e.friendly)||String(e); } finally{ window.fetch=real; }
+      return /Can't reach the internet/.test(msg) ? true : msg; }));
+  ok("a good response is untouched", await pg.evaluate(async()=>{
+      const real=window.fetch;
+      window.fetch=async()=>({ok:true,status:200,json:async()=>({choices:[{message:{content:"hi"}}]})});
+      let out=""; try{ out=await chatCompletion([{role:"user",content:"x"}],"m",{retries:0,dbg:"g"}); }
+      finally{ window.fetch=real; }
+      return out==="hi" ? true : JSON.stringify(out); }));
+  ok("an HTTP error still reports its status", await pg.evaluate(async()=>{
+      const real=window.fetch;
+      window.fetch=async()=>({ok:false,status:401,json:async()=>({})});
+      try{ await chatCompletion([{role:"user",content:"x"}],"m",{retries:0,dbg:"h"}); }
+      catch(e){} finally{ window.fetch=real; }
+      return dbgLog.slice(-1)[0].result==="HTTP 401"; }));
+  ok("the ceiling is generous by default, tight where it blocks the UI", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /opts\.timeoutMs!=null\)\?opts\.timeoutMs:180000/.test(src)
+          && /timeoutMs:75000,retries:1,dbg:"Drop me into a scene/.test(src)
+        ? true : "the ceilings are not set"; })());
+
+  console.log("\n[the cut says what actually went wrong]");
+  ok("a failing call surfaces its reason instead of swallowing it", await pg.evaluate(async()=>{
+      const chat=curChat();
+      const real=window.chatCompletion; const toasts=[]; const rt=window.toast;
+      window.toast=t=>toasts.push(String(t));
+      window.chatCompletion=async()=>{ throw {friendly:"API key invalid or unauthorized. Check Settings."}; };
+      try{ await runSceneCut(chat); } finally { window.chatCompletion=real; window.toast=rt; }
+      return toasts.some(t=>/API key invalid/.test(t)) ? true : JSON.stringify(toasts); }));
+  ok("an unparseable answer is named as that, not as silence", await pg.evaluate(async()=>{
+      const chat=curChat();
+      const real=window.chatCompletion; const toasts=[]; const rt=window.toast;
+      window.toast=t=>toasts.push(String(t));
+      window.chatCompletion=async()=>"I'm sorry, I can't help with that.";
+      try{ await runSceneCut(chat); } finally { window.chatCompletion=real; window.toast=rt; }
+      return toasts.some(t=>/answered but not in the shape/.test(t)) ? true : JSON.stringify(toasts); }));
+  ok("an empty answer is named as that", await pg.evaluate(async()=>{
+      const chat=curChat();
+      const real=window.chatCompletion; const toasts=[]; const rt=window.toast;
+      window.toast=t=>toasts.push(String(t));
+      window.chatCompletion=async()=>"";
+      try{ await runSceneCut(chat); } finally { window.chatCompletion=real; window.toast=rt; }
+      return toasts.some(t=>/returned nothing at all/.test(t)) ? true : JSON.stringify(toasts); }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

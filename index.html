@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v99.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v99.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -9182,16 +9182,37 @@ async function chatCompletion(messages,model,opts={}){
   // Retry transient failures (rate-limit 429 / 5xx) a couple of times with backoff. This is what
   // turned a burst of schedule calls into "Network error" rows — too many requests at once.
   const maxTry=(opts.retries!=null?opts.retries:2);
-  let res, lastStatus=0;
+  /* (!) v99.1 — A REQUEST THAT NEVER ANSWERS USED TO WAIT FOR EVER. Every failure path here calls
+     dbgDone, so an entry left at status "sent" with a null `ms` means the fetch neither resolved
+     nor rejected — and with no AbortController there was nothing to make it. Reported exactly that
+     way: a Drop-me-into-a-scene call still outstanding six minutes later, no error, no row in the
+     log, and the button stuck on "opening…" because the await never returned.
+     The retries made it worse rather than better: three attempts that each hang for ever is not
+     three chances, it is one hang. Every call now has a ceiling, and a timeout is reported AS a
+     timeout so it can be told apart from a refusal, a rate limit or a bad key. The default is
+     deliberately generous — the drives writer has legitimately taken 62 seconds — and a call site
+     that blocks the UI passes something tighter. */
+  const _tmo=Math.max(5000,+((opts.timeoutMs!=null)?opts.timeoutMs:180000));
+  let res, lastStatus=0, _timedOut=false;
   for(let attempt=0;attempt<=maxTry;attempt++){
     dbgDispatched(entry);                 // v73.1 — this attempt's own clock
+    const _ctrl=(typeof AbortController!=="undefined")?new AbortController():null;
+    const _timer=_ctrl?setTimeout(()=>{ _timedOut=true; try{ _ctrl.abort(); }catch(_){} },_tmo):null;
     try{res=await fetch(OR+"/chat/completions",{method:"POST",
       headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-      body:JSON.stringify(body)});}
+      body:JSON.stringify(body),signal:_ctrl?_ctrl.signal:undefined});}
     catch(e){
+      const _wasTimeout=_timedOut||(e&&(e.name==="AbortError"||e.name==="TimeoutError"));
+      _timedOut=false;
       if(attempt<maxTry){ await new Promise(r=>setTimeout(r,600*(attempt+1))); continue; }
+      if(_wasTimeout){
+        const _secs=Math.round(_tmo/1000);
+        dbgDone(entry,"error","Timed out after "+_secs+"s (no response from the provider)");
+        throw{friendly:"The model did not answer within "+_secs+" seconds. The provider may be stalling — try again, or switch the model for this job."};
+      }
       dbgDone(entry,"error","Network error");throw{friendly:"Can't reach the internet. Check your connection."};
     }
+    finally{ if(_timer)clearTimeout(_timer); }
     lastStatus=res.status;
     if(res.ok)break;
     // retry on rate-limit / server errors; fail fast on client errors (auth, bad model, etc.)
@@ -34625,15 +34646,33 @@ async function runSceneCut(chat){
     user_at:(c.location||"somewhere"), places:_pulsePlaces(c),
     day:String(day), period:chatPeriod(c), world:String(curWorldSetting()||"").slice(0,700)
   });
-  let j=null;
+  let j=null, raw="";
   try{
-    const out=await chatCompletion(
+    /* v99.1 — this one BLOCKS the button, so it gets a tighter ceiling than the background
+       engines and only one retry: a person staring at "opening…" will not wait three minutes. */
+    raw=await chatCompletion(
       epSend("sceneCut",tpl+"\n\n"+mixedLangDirective(["narration","line"]),{}),
       state.gmModel||state.memModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",500),
-      dbg:"Drop me into a scene · "+p.name});
-    j=parseJSON(out);
-  }catch(e){}
-  if(!j||!j.narration||!j.line){ toast("Could not open a scene just now"); return false; }
+      timeoutMs:75000,retries:1,dbg:"Drop me into a scene · "+p.name});
+    j=parseJSON(raw);
+  }catch(e){
+    /* (!) v99.1 — this was `catch(e){}`, which threw the reason away and left one useless toast
+       for every possible cause: a stalled provider, a rejected key, a rate limit and unparseable
+       JSON all read the same. Whoever is looking at it cannot tell an app fault from a model
+       fault, which is the question they are actually asking. */
+    const msg=(e&&(e.friendly||e.message))||"the request failed";
+    try{ toast(String(msg).slice(0,140)); }catch(_){}
+    try{ _alog("scene.cut.fail",String(msg).slice(0,200)); }catch(_){}
+    return false;
+  }
+  if(!j||!j.narration||!j.line){
+    const why=raw&&String(raw).trim()
+      ? "The model answered but not in the shape this needs — see Debug for what it sent."
+      : "The model returned nothing at all.";
+    try{ toast(why); }catch(_){}
+    try{ _alog("scene.cut.fail",why+" | "+String(raw||"").slice(0,200)); }catch(_){}
+    return false;
+  }
   // ---- apply: move the player, put them together, then post the cut.
   const loc=locByName(String(j.place||"").trim())||(pos?locById(pos):null)||(c.locationId?locById(c.locationId):null);
   if(loc){

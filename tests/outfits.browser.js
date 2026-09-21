@@ -174,6 +174,74 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       || _imgOutfitDecided.length===2 ? true : "still takes one argument"));
 
   console.log("\n[nothing else moved]");
+  console.log("\n[v101.1 — the box that asks what you want before it writes]");
+  const brief=await pg.evaluate(async()=>{
+    const uni=state.universes[0];
+    uni.locations=[{id:"l_a",name:"Cafe",description:"c",residents:[],sublocations:[]},
+                   {id:"l_b",name:"Gym",description:"g",residents:[],sublocations:[]}];
+    editingPersona={id:"p_ob",name:"Duygu",universeId:uni.id,outfitBrief:"earth tones only, no black"};
+    if(!document.getElementById('peName')){
+      const inp=document.createElement('input'); inp.id="peName"; inp.value="Duygu"; document.body.appendChild(inp); }
+    openOutfitBrief(true);
+    const m=document.getElementById('outfitBriefModal');
+    const t=document.getElementById('outfitBriefText');
+    const r={open:!!m, prefilled:t?t.value:"", title:m?m.querySelector('h3').textContent:""};
+    t.value="only navy and cream, long sleeves in public";
+    let sent="";
+    const real=window.chatCompletion;
+    window.chatCompletion=async(msgs)=>{
+      sent=String(((msgs||[]).filter(x=>x&&x.role==="user").pop()||{}).content||""); return "{}"; };
+    try{ await _outfitBriefGo(true); } finally { window.chatCompletion=real; }
+    r.closed=!document.getElementById('outfitBriefModal');
+    r.saved=editingPersona.outfitBrief;
+    r.data=sent;
+    return r;
+  });
+  ok("both buttons open it instead of firing straight away", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /onclick="openOutfitBrief\(false\)"/.test(src) && /onclick="openOutfitBrief\(true\)"/.test(src)
+          && !/onclick="generateOutfits\(true\)"/.test(src)
+        ? true : "a button still calls the generator directly"; })());
+  ok("it opens, and says which job it is about to do", brief.open===true&&/Rewrite all outfits — Duygu/.test(brief.title), brief.title);
+  ok("it comes back prefilled with what was asked for last time",
+     brief.prefilled==="earth tones only, no black", brief.prefilled);
+  ok("confirming closes it", brief.closed===true);
+  ok("and keeps the new brief on that character's card",
+     brief.saved==="only navy and cream, long sleeves in public", brief.saved);
+  ok("the brief reaches the generator, in the data it sends",
+     /WHAT THE PLAYER ASKED FOR/.test(brief.data) && /only navy and cream, long sleeves in public/.test(brief.data),
+     brief.data.slice(-300));
+  ok("and it is placed last, after the character card, so it wins",
+     brief.data.lastIndexOf("WHAT THE PLAYER ASKED FOR")>brief.data.lastIndexOf("CHARACTER:"), "order wrong");
+  ok("the prompt says it outranks the card", await pg.evaluate(()=>{
+      const t=up("x_outfits_generator")||"";
+      return /IT OUTRANKS EVERYTHING ELSE HERE, INCLUDING THE CHARACTER'S OWN TASTE/.test(t)
+          && /a named colour is that colour and not a cousin of it/.test(t)
+        ? true : "the prompt does not honour the brief"; }));
+  ok("with the one exception that a slot can physically refuse", await pg.evaluate(()=>{
+      const t=up("x_outfits_generator")||"";
+      return /nobody swims in a wool coat/.test(t) ? true : "no physical-impossibility carve-out"; }));
+  /* the DATA message only: the system prompt's own rule quotes the marker by name, so matching
+     across every message finds it whether or not a brief was sent. */
+  ok("an empty brief sends no block at all", await pg.evaluate(async()=>{
+      editingPersona.outfitBrief="";
+      let data="";
+      const real=window.chatCompletion;
+      window.chatCompletion=async(msgs)=>{
+        data=String(((msgs||[]).filter(x=>x&&x.role==="user").pop()||{}).content||""); return "{}"; };
+      try{ await generateOutfits(true,""); } finally { window.chatCompletion=real; }
+      return !/WHAT THE PLAYER ASKED FOR/.test(data) ? true : "an empty brief still ships a block"; }));
+  ok("it is saved with the rest of the card", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /outfitBrief:\(editingPersona&&editingPersona\.outfitBrief\)\|\|undefined/.test(src)
+        ? true : "savePersona drops it"; })());
+  ok("a world with nowhere to be is refused before the box opens", await pg.evaluate(()=>{
+      const uni=state.universes[0]; const was=uni.locations; uni.locations=[];
+      _outfitBriefClose(); openOutfitBrief(true);
+      const shown=!!document.getElementById('outfitBriefModal');
+      uni.locations=was; _outfitBriefClose();
+      return !shown ? true : "it asked for a brief it cannot use"; }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

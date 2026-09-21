@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v101.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v101.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2272,8 +2272,8 @@
       <button class="btn sec small" type="button" id="peGenLook" style="margin-top:10px;width:auto" onclick="generateAppearance()"><svg class="ic"><use href="#i-sparkle"/></svg> Generate appearance</button>
       <details style="margin-top:10px"><summary style="cursor:pointer"><b>What they wear, place by place</b></summary>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sec small" type="button" id="peGenOutfits" style="width:auto" onclick="generateOutfits(false)"><svg class="ic"><use href="#i-sparkle"/></svg> Generate outfits</button>
-          <button class="btn sec small" type="button" style="width:auto" onclick="generateOutfits(true)">Rewrite all</button>
+          <button class="btn sec small" type="button" id="peGenOutfits" style="width:auto" onclick="openOutfitBrief(false)"><svg class="ic"><use href="#i-sparkle"/></svg> Generate outfits</button>
+          <button class="btn sec small" type="button" style="width:auto" onclick="openOutfitBrief(true)">Rewrite all</button>
         </div>
         <div id="peOutfits"></div>
       </details>
@@ -2977,6 +2977,7 @@ You are given the character's card, the world setting, the list of LOCATIONS in 
 }
 
 RULES
+- IF THE REQUEST CARRIES "WHAT THE PLAYER ASKED FOR", IT OUTRANKS EVERYTHING ELSE HERE, INCLUDING THE CHARACTER'S OWN TASTE AND THE WARDROBE NOTE ON THEIR CARD. Apply it to every slot you write, exactly as written \u2014 a named colour is that colour and not a cousin of it, a named fabric is that fabric, a thing to avoid never appears. The only slot it may bend in is one where it is physically impossible (nobody swims in a wool coat), and then you keep as much of it as the slot allows.
 - ONE outfit per slot, not a menu. This is what they ARE wearing there, not what they own. No "or", no alternatives, no "depending on".
 - Write every entry in the SECOND PERSON, addressed to the character, like the rest of their card: "You wear the emerald wrap dress with nude heels." Never "she wears", never "I wear".
 - Name real garments WITH colours, concrete enough to draw: "You wear a faded denim shirt over a white vest, sleeves pushed to the elbow." Not "something casual".
@@ -18797,6 +18798,9 @@ function editPersona(id){
   });
   fillLookEditor(p.look);
   {const e=document.getElementById('peWardrobe'); if(e)e.value=p.wardrobe||"";}
+  /* v101.1 — the outfit brief rides on editingPersona rather than on a field of its own: the box
+     that collects it reads it back from there, so opening a saved character shows what was asked
+     for last time. */
   try{ renderOutfitEditor(); }catch(e){}
   {const e=document.getElementById('peTraits'); if(e)e.value=p.traits||"";}
   {const e=document.getElementById('peGoals'); if(e)e.value=p.goals||"";}
@@ -20638,11 +20642,53 @@ async function generateAppearance(){
   finally{ if(btn){btn.disabled=false;btn.innerHTML=icon("sparkle")+" Generate appearance";} }
 }
 
+/* ===== v101.1 — SAY WHAT YOU WANT BEFORE IT WRITES =============================================
+   Both buttons used to fire straight at the generator, so the only way to steer the result was to
+   write every slot by hand afterwards or keep pressing Rewrite all and hoping. They ask first now:
+   one box for the colours, the style, the fabrics, the things to avoid — whatever should hold for
+   THIS character. It is kept on the card (`outfitBrief`), so it is per person, it comes back the
+   next time the box opens, and re-running a slot later still honours what you asked for. */
+function _outfitBriefClose(){ const m=document.getElementById('outfitBriefModal'); if(m)m.remove(); }
+function openOutfitBrief(all){
+  const uni=curUniverseObj();
+  const gv=id=>{const e=document.getElementById(id);return e?String(e.value||"").trim():"";};
+  const nm=gv('peName')||((editingPersona&&editingPersona.name)||"this character");
+  /* Refuse early rather than after the box: pressing Generate in a world with nowhere to be, or
+     Fill-empty with nothing empty, has always been a no-op and should not cost a dialogue. */
+  const p=Object.assign({},editingPersona||{},{id:(editingPersona&&editingPersona.id)||"__new__",name:nm});
+  const slots=outfitSlots(p,uni);
+  if(!slots.locations.length){ toast("This universe has no locations yet — add some first"); return; }
+  if(!all && !missingOutfitSlots(p,uni).length){
+    toast("Every slot already has an outfit — use \u201cRewrite all\u201d to redo them"); return; }
+  const prev=(editingPersona&&editingPersona.outfitBrief)||"";
+  _outfitBriefClose();
+  const m=document.createElement('div'); m.id="outfitBriefModal"; m.className="modal show";
+  m.innerHTML=`<button class="x" onclick="_outfitBriefClose()">\u00d7</button>
+   <div class="card editCard"><h3>${all?"Rewrite all outfits":"Write the empty outfits"} \u2014 ${esc(nm)}</h3>
+   <div class="desc">Anything these outfits should follow: colours, a style, fabrics, a silhouette, things to keep away from. It applies to every slot written this time, and it is remembered for ${esc(nm)}.</div>
+   <textarea class="fld" id="outfitBriefText" style="min-height:92px" placeholder="e.g. earth tones only, no black; long skirts and covered shoulders in public; soft knits at home; nothing branded">${esc(prev)}</textarea>
+   <div class="desc" style="margin:6px 0 10px">Leave it empty to let the character's own taste decide, as before.</div>
+   <div class="kvline" style="padding:0;gap:8px">
+     <button class="btn small" onclick="_outfitBriefGo(${all?"true":"false"})">${all?"Rewrite all":"Write them"}</button>
+     <button class="btn sec small" onclick="_outfitBriefClose()">Cancel</button>
+   </div></div>`;
+  m.addEventListener('click',e=>{if(e.target===m)_outfitBriefClose();});
+  document.body.appendChild(m);
+  try{ const t=document.getElementById('outfitBriefText'); if(t){ t.focus(); t.selectionStart=t.value.length; } }catch(e){}
+}
+function _outfitBriefGo(all){
+  const t=document.getElementById('outfitBriefText');
+  const brief=t?String(t.value||"").trim():"";
+  editingPersona=editingPersona||{};
+  editingPersona.outfitBrief=brief;          // kept on the card, so it survives and comes back
+  _outfitBriefClose();
+  generateOutfits(all,brief);
+}
 /* v48.2 — GENERATE THE OUTFIT TABLE. One outfit per place this character can be, written from the
    card plus the universe's own location list, so the payload never has to choose. Editing an
    existing character fills only the slots that are EMPTY unless `all` is true, so adding a
    location later costs one small call and does not rewrite the outfits you already liked. */
-async function generateOutfits(all){
+async function generateOutfits(all,brief){
   const btn=document.getElementById('peGenOutfits');
   try{
     if(btn){btn.disabled=true;btn.innerHTML=icon("sparkle")+" Writing…";}
@@ -20653,6 +20699,8 @@ async function generateOutfits(all){
     const slots=outfitSlots(p,uni);
     if(!slots.locations.length){ toast("This universe has no locations yet — add some first"); return; }
     const have=(editingPersona&&editingPersona.outfits)||{};
+    // v101.1 — the brief the box collected, or the one already on the card when called directly.
+    const _brief=String((brief!=null?brief:((editingPersona&&editingPersona.outfitBrief)||""))).trim().slice(0,600);
     const want=all?null:missingOutfitSlots(p,uni);
     if(want && !want.length){ toast("Every slot already has an outfit — use “Rewrite all” to redo them"); return; }
     const card=[
@@ -20669,7 +20717,10 @@ async function generateOutfits(all){
       "TIMES OF DAY: "+slots.periods.join(", "),
       slots.home?`THEIR OWN HOME: ${slots.home.name} (${slots.home.id}) — write the "home" object`:`THEY HAVE NO HOME HERE — return "home": {}`,
       slots.userHome?`THE PLAYER'S HOUSE: ${slots.userHome.name} (${slots.userHome.id}) — write the "userHome" object`:`THE PLAYER HAS NO HOUSE HERE — return "userHome": {}`,
-      (want&&want.length)?("ONLY THESE SLOTS ARE MISSING — write exactly these and leave every other key out:\n"+want.map(x=>"- "+x).join("\n")):""
+      (want&&want.length)?("ONLY THESE SLOTS ARE MISSING — write exactly these and leave every other key out:\n"+want.map(x=>"- "+x).join("\n")):"",
+      /* v101.1 — what the player asked for, last and loudest. It is placed after the card on
+         purpose: where the two disagree, this wins, and the block says so. */
+      _brief?("WHAT THE PLAYER ASKED FOR — THIS OVERRIDES THE CHARACTER'S OWN TASTE WHERE THEY DISAGREE.\nEvery outfit you write this time obeys it, in every slot, unless a slot physically cannot (you do not put a wool coat in the swimming pool). Follow it exactly — a named colour is that colour, a named fabric is that fabric — and do not widen it into something merely similar:\n"+_brief):""
     ].filter(Boolean).join("\n\n———\n\n");
     const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data:data}),
       authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),dbg:"Outfit generator"});
@@ -20828,6 +20879,8 @@ function savePersona(){
     look:readLookEditor(),
     wardrobe:(document.getElementById('peWardrobe')?document.getElementById('peWardrobe').value.trim():((editingPersona&&editingPersona.wardrobe)||"")),
     outfits:(editingPersona&&editingPersona.outfits)||undefined,
+    // v101.1 — the standing brief for this character's outfits, set in the Generate box.
+    outfitBrief:(editingPersona&&editingPersona.outfitBrief)||undefined,
     // Per-character Inworld voice for voice calls (Stage 2). Optional; absent = default call voice.
     voiceId:(document.getElementById('peVoiceId')?document.getElementById('peVoiceId').value.trim():((editingPersona&&editingPersona.voiceId)||"")),
     interject:document.getElementById('peInterject').value.trim(),

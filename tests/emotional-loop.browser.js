@@ -293,6 +293,38 @@ const {chromium}=require('playwright');
        await pick(legacy,"Emre")==="LEGACY"?true:"legacy saves lost their decision");
     ok("and it is still never shown to the wrong person",
        await pick(legacy,"Hakan")===""?true:"a decision leaked to someone it was not about");
+    /* v94.1 — AND IT BELONGS TO ONE STORY. The record was the only piece of story state living on
+       the PERSONA rather than the chat — relationships are chat.rel, promises are chat.promises,
+       a memory carries chatId — so a reckoning from one playthrough shipped into every later one
+       with that character. A live payload caught it: Day 1 / Night, one coffee memory between
+       them, and the tail opened with "you will not let a single word spoken while Emre was inside
+       you count for anything". Starting a new session is the documented way out of that, and it
+       did not work. */
+    console.log("\n[a decision belongs to the story that earned it]");
+    const block=(rec,chatId)=>pg.evaluate(o=>{
+      const chat=curChat(); chat.id=o.cid;
+      const uni=state.universes[0];
+      const her={id:"p_ah",name:"Ozlem",universeId:uni.id,instructions:"x",personality:"x",
+        backstory:"x",style:"x",goals:"x",look:{},afterHeatBy:{Emre:o.rec}};
+      state.personas=[her];
+      chat.gameDay=1; chat.presentIds=[her.id]; chat.messages=[];
+      const B=buildTailBlocks({chat,selfP:her,selfId:her.id,selfName:her.name,
+        targetName:"Emre",targetId:"__user__",multi:false,
+        injected:{recent:[],diary:[],longterm:[]}});
+      return String(B.after_heat||"");
+    },{rec,cid:chatId});
+
+    const mine={text:"DECIDED_HERE",withName:"Emre",chatId:"c_this"};
+    ok("a decision taken in this story still ships",
+       /DECIDED_HERE/.test(await block(mine,"c_this")) ? true : "it was dropped from its own chat");
+    ok("one taken in a different story does not",
+       (await block(mine,"c_other"))==="" ? true : "a previous playthrough reached this one");
+    const unstamped={text:"NO_STAMP",withName:"Emre"};
+    ok("and one that predates the stamp cannot be placed, so it is not asserted",
+       (await block(unstamped,"c_this"))==="" ? true : "an unplaceable decision is still asserted");
+    ok("nothing is deleted from the card either way", await pg.evaluate(()=>
+       !!(state.personas[0].afterHeatBy&&state.personas[0].afterHeatBy.Emre)));
+
     const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
     ok("the engine reads the per-person record first",
        /const byName=\(p\.afterHeatBy&&p\.afterHeatBy\[otherName\]\)/.test(src)
@@ -303,6 +335,9 @@ const {chromium}=require('playwright');
     ok("both stores are written, so nothing already saved breaks",
        /p\.afterHeat=_rec;/.test(src) && /p\.afterHeatBy\[otherName\]=_rec;/.test(src)
          ? true : "one of the two stores is not written");
+    ok("and the record now carries the story it was taken in",
+       /chatId:c\.id\|\|null,universeId:c\.universeId\|\|null/.test(src)
+         ? true : "the reckoning still writes a record with no story on it");
     ok("the reckoning is told which moment it is being taken in",
        /WHEN THIS IS BEING DECIDED/.test(src) && /You are still in the room with them/.test(src)
          ? true : "the moment never reaches the prompt");

@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v104.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v104.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14564,8 +14564,13 @@ function calendarDoneLine(chat,selfName,selfId,opts){
   const donePeriod=e=>(e.completedPeriod||(e.completedDay==null?e.period:"")||"");
   const nowIdx=(today*10)+chatPeriodIndex(c);
   const atIdx=e=>{ const per=donePeriod(e); const pi=PERIODS.indexOf(per); return (when(e)*10)+(pi<0?0:pi); };
-  // Nothing may be reported as lived before it has happened.
-  done=done.filter(e=>atIdx(e)<=nowIdx);
+  /* Nothing may be reported as lived before it has happened — and nothing stamped HERE, NOW may
+     be reported as lived either. v104.1: `<=` let an entry completed at this exact day and period
+     through, so a meeting the characters were in the middle of came back to them under "These are
+     done. You lived them" while they were still in the room for it. Three men at a dinner were
+     each told the dinner had already happened. This is the same rule the memory tier has kept
+     since v36.4 — the now is not a memory, because the transcript already carries it in full. */
+  done=done.filter(e=>atIdx(e)<nowIdx);
   if(!done.length)return "";
   done.sort((a,b)=>atIdx(b)-atIdx(a));
   const lines=done.slice(0,n).map(e=>{
@@ -21659,6 +21664,11 @@ function charBioBlock(c,opts){
      .quietWant — a standing aim (target absent, or the player). Goes in the bio, under the goals.
      .coloring  — a this-turn coloring toward someone who is IN the room. Goes in the tail.
    Exactly one is ever set, so a scheme is never stated twice in one payload. */
+/* "a ambition" reached the page because the kind was pasted after a hardcoded "a"; and an aim
+   already ending in a full stop met the template's own, so a motive read "...of my own..". */
+function _aKind(kind){ const k=String(kind||"motive").trim()||"motive";
+  return (/^[aeiou]/i.test(k)?"an ":"a ")+k; }
+function _aimText(aim){ return String(aim||"").trim().replace(/[.!?;,]+$/,""); }
 function intentParts(chat,selfId,addresseeId,addresseeName){
   const out={quietWant:"",coloring:""};
   try{
@@ -21675,9 +21685,17 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
       const _who=addresseeName||(addresseeId==="__user__"?state.user:"");
       const _aside=(addresseeId&&addresseeId!==it.targetId&&_who)
         ? fillTpl(blkTpl("intent_side"),{addressee:_who,target:it.targetName||"them"}) : "";
-      out.coloringKey=it.valence==="warm"?"intent_warm":"intent_hostile";
+      /* (!) v104.1 — THERE ARE THREE VALENCES AND THERE WERE TWO BLOCKS. The schema writes
+         warm | hostile | self_serving, and an unrecognised kind normalises to self_serving — so
+         "ambition", the commonest motive between two people building something together, fell down
+         the else and was played as a grudge. Both halves of a marina partnership were told, at a
+         friendly dinner in a third friend's house, to hold "a cooler tone, a guarded distance, a
+         barbed remark held just beneath courtesy" toward the other. Wanting something out of
+         someone is not being against them: it steers what you push for, not how warm you are. */
+      out.coloringKey=it.valence==="warm"?"intent_warm"
+                     :it.valence==="hostile"?"intent_hostile":"intent_self";
       out.coloring=fillTpl(blkTpl(out.coloringKey),
-        {target:it.targetName||"them",kind:it.kind,aim:it.aim,aside:_aside});
+        {target:it.targetName||"them",kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim),aside:_aside});
       return out;
     }
     /* No present-target coloring, but they may still be nursing a plan (target absent, or the
@@ -21693,8 +21711,10 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
       const _selfP=(state.personas||[]).find(x=>x&&x.id===selfId);
       const _wants=_selfP?liveGoalsLines(_selfP):[];
       if(!_wants.some(w=>_prSameThing(String(it.aim||""),w)||_prSameThing(w,String(it.aim||""))))
-        out.quietWant=fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm":"intent_aim_cool"),
-          {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),kind:it.kind,aim:it.aim});
+        out.quietWant=fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm"
+                                     :it.valence==="hostile"?"intent_aim_cool":"intent_aim_self"),
+          {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),
+           kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)});
     }
   }catch(e){}
   return out;
@@ -22780,7 +22800,7 @@ const MEM_FRAGS=["mem_recent_entries","mem_distant_entries","mem_latest_entries"
 const PL_ORDER=["player_intro","player_bg","player_look"];
 const SI_ORDER=["situation_leaving","situation_arriving","situation_brief"];
 const SD_ORDER=["voice_delivery","heat_delivery","voice_format_reset"];
-const PI_ORDER=["intent_warm","intent_hostile"];
+const PI_ORDER=["intent_warm","intent_hostile","intent_self"];
 const FE_ORDER=["feel_header","feel_lasting","feel_lasting_alt"];
 const FN_ORDER=["feel_now_header","feel_now_body"];
 const RU_ORDER=["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_stake_text",
@@ -23879,7 +23899,7 @@ function epSend(key,systemText,parts,vars){
 (function _attachBlockTpls(){
   const T={
     task:["task","gm_private_lock"],world:["world_header"],format:["format_header","narr_shape","heat_format","heat_breaks_voiced","heat_breaks_silent","heat_narr_superego","heat_narr_physical","heat_more_yes","heat_more_no","text_format"],
-    your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","bio_wearing_self","bio_wearing_other","intent_aim_warm","intent_aim_cool"],
+    your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","bio_wearing_self","bio_wearing_other","intent_aim_warm","intent_aim_cool","intent_aim_self"],
     relationships:["rel_header","rel_learned","rel_elsewhere"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
     response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
@@ -23897,7 +23917,7 @@ function epSend(key,systemText,parts,vars){
     whereabouts:["whereabouts_header","whereabouts_line","whereabouts_with"],
     calendar:["calendar_header","calendar_no_reason"],calendar_done:["calendar_done_header"],
     watching_now:["watching_now"],
-    private_intent:["intent_warm","intent_hostile","intent_side"],
+    private_intent:["intent_warm","intent_hostile","intent_self","intent_side"],
     latest_arcs:["mem_latest_header","mem_latest_instr","query_lang"],
     quests:["quest_header","quest_intro","quest_me_note"],
     recent_memories:["mem_recent_header","mem_recent_instr"],distant_memories:["mem_distant_header","mem_distant_instr"],
@@ -24822,16 +24842,21 @@ What a text has that a room does not: it is WRITTEN DOWN. It stays on two phones
   quest_header:`# STORY THREADS YOU ARE PART OF`,
   quest_intro:`You are named in the current story thread{{s}} below — this is happening in your life right now, and you know your own part of it.{{me}} Let it color your goals, moods and conversation naturally.`,
   quest_me_note:` These are written from outside, the way the story is tracked rather than the way you would tell it — so you appear in them BY NAME and in the third person. Where you read "{{self}}", that is you.`,
-  intent_warm:`# WHAT YOU ARE QUIETLY AFTER WITH {{target}}\nYou privately hold a growing warmth toward {{target}}, who is here now — a {{kind}}, and what you actually want out of it is this: {{aim}}. You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.{{aside}}`,
-  intent_hostile:`# WHAT YOU ARE QUIETLY AFTER WITH {{target}}\nYou privately hold a {{kind}} toward {{target}}, who is here now — what you want out of it: {{aim}}. You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.{{aside}}`,
+  intent_warm:`# WHAT YOU ARE QUIETLY AFTER WITH {{target}}\nYou privately hold a growing warmth toward {{target}}, who is here now — {{a_kind}}, and what you actually want out of it is this: {{aim}}. You are NOT declaring it. But let it quietly tint how you treat {{target}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.{{aside}}`,
+  intent_hostile:`# WHAT YOU ARE QUIETLY AFTER WITH {{target}}\nYou privately hold {{a_kind}} toward {{target}}, who is here now — what you want out of it: {{aim}}. You are NOT revealing it openly. But let it edge how you treat {{target}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.{{aside}}`,
   // v22 — SELF-AWARENESS of a plan whose target isn't in the room (or is the player). Keeps the holder
   // goal-driven and consistent with their own intent across scenes and texts, without exposing a scheme.
   // (!) Rendered into {{aside}} when the intent's target is NOT the person this turn is aimed at.
   // Without it the payload asked for a warmer Burcu inside a turn addressed to Duygu, with nothing
   // saying which one owns the reply — so the side-current could quietly take over the whole turn.
   intent_side:`\nThis turn is aimed at {{addressee}}, not at {{target}} — so keep it small: a glance, half a sentence. It does not become what the turn is about.`,
-  intent_aim_warm:`Privately, you are working toward something with {{target}}: {{aim}} (a {{kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
-  intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} (a {{kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
+  intent_aim_warm:`Privately, you are working toward something with {{target}}: {{aim}} ({{a_kind}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.`,
+  intent_aim_cool:`Privately, you are set on something concerning {{target}}: {{aim}} ({{a_kind}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.`,
+  /* v104.1 — the third valence. A self-serving motive wants something FROM someone; it is not
+     warmth and it is not a grudge, and playing it as either is what broke the scene. */
+  intent_self:`# WHAT YOU ARE QUIETLY AFTER WITH {{target}}
+You want something out of {{target}}, who is here now — {{a_kind}}, and what you are after is this: {{aim}}. You are not saying so. Nothing turns cold: you treat them exactly as you always have. It shows only in what you steer toward and what you let pass.{{aside}}`,
+  intent_aim_self:`Privately, you want something out of {{target}}: {{aim}} ({{a_kind}}). You do not raise it. It shows in what you steer toward, not in how you treat them.`,
   // --- tail: memory headers (rendered by memoryBlocks for ALL paths) ---
   mem_recent_header:`# ⚠️ THESE ARE YOUR RECENT MEMORIES ⚠️`,
   /* v30.4 — the last two paragraphs of this were a third statement of the no-fabricated-past
@@ -25507,7 +25532,15 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
 
   if(others&&others.length){
-    const _op={others_list:others.map(o=>`- ${o.name}${o.personality?`: ${briefDesc(o.personality,110)}`:""}`).join("\n"),
+    /* (!) v104.1 — A CARD IS WRITTEN TO ITS OWN CHARACTER, SO IT CANNOT BE LENT OUT. This pasted
+       the OTHER person's `personality` field into this character's payload, and that field is
+       authored in the second person: Hakan's roster read "- Burak Atan: You are Burak Atan, a man
+       who turns small worries into full-scale operations", and Burak's read back "- Hakan Akbaba:
+       You are the grown-up version of the boy who skipped school". Each man was handed the other's
+       identity, addressed as himself, in the block whose only job is naming who is in the room.
+       Who these people ARE is already stated, correctly and in the third person, by the
+       relationship sheet a few blocks up. This is the list of who is within earshot. */
+    const _op={others_list:others.map(o=>`- ${o.name}`).join("\n"),
                others_footer:fillTpl(blkTpl("others_footer"),{user:state.user,char:p.name})};
     B.others_present=`${blkTpl("others_header")}\n${_op.others_list}\n${_op.others_footer}`;
     B._op=_op;

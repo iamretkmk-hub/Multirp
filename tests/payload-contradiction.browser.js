@@ -386,6 +386,75 @@ const {chromium}=require('playwright');
       !/the narrator's/.test(blkTpl("rails_header"))
    && /never put words in .*mouth/.test(blkTpl("rails_header"))));
 
+  /* v104.1 — a second audit of two live payloads, from the same scene: three men at a dinner.
+     Each of these had the payload telling a character something that was not true. */
+  console.log("\n[a card is written to its own character, so it cannot be lent out]");
+  ok("the roster names who is in the room and nothing else", await pg.evaluate(()=>{
+      const line=(String(buildCharPromptBlocks).match(/others_list:others\.map[^\n]*/)||[""])[0];
+      if(!line) return "the roster line is no longer where this test looks";
+      return !/personality/.test(line)
+        ? true : "the roster still pastes the other person's own card into this one:\n"+line; }));
+  ok("so a second-person card cannot arrive addressed to the wrong man", await pg.evaluate(()=>{
+      // the exact shape that shipped: Burak's payload read "- Hakan Akbaba: You are the grown-up…"
+      const others=[{name:"Hakan",personality:"You are the grown-up version of the boy who skipped school."}];
+      const line=others.map(o=>`- ${o.name}`).join("\n");
+      return !/You are/.test(line) ? true : line; }));
+
+  console.log("\n[the scene you are standing in is not one you already lived]");
+  ok("an entry completed at this exact day and period is withheld", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.gameDay=4; chat.period="Evening"; chat.timeOfDay="Evening";
+      chat.calendar=[{id:"c_now",kind:"meeting",title:"Emre ile akşam buluşması",who:"Burak, Hakan",
+        day:4,period:"Evening",done:true,completedDay:4,completedPeriod:"Evening",result:"",outcome:null}];
+      const out=calendarDoneLine(chat,"Burak","p_k")||"";
+      return !/akşam buluşması/.test(out)
+        ? true : "the dinner they are sitting at came back as already lived:\n"+out; }));
+  ok("but the same entry an hour earlier is still theirs to carry", await pg.evaluate(()=>{
+      const chat=curChat();
+      chat.calendar=[{id:"c_pre",kind:"meeting",title:"Öğle yemeği",who:"Burak, Hakan",
+        day:4,period:"Midday",done:true,completedDay:4,completedPeriod:"Midday",result:"It went well.",outcome:null}];
+      const out=calendarDoneLine(chat,"Burak","p_k")||"";
+      return /Öğle yemeği/.test(out) ? true : "an earlier period stopped arriving:\n"+out; }));
+
+  console.log("\n[three valences, three registers — an ambition is not a grudge]");
+  ok("self_serving has its own block instead of falling down the hostile else", await pg.evaluate(()=>
+      ("intent_self" in BLOCK_TPL_DEFAULTS) && ("intent_aim_self" in BLOCK_TPL_DEFAULTS)
+      && /intent_self/.test(String(intentParts)) ? true : "self_serving still renders as hostile"));
+  ok("and it does not ask for coldness toward someone you are building with", await pg.evaluate(()=>{
+      const t=blkTpl("intent_self")||"";
+      return !/cooler tone|guarded distance|barbed/.test(t) && /Nothing turns cold/.test(t)
+        ? true : t.slice(0,200); }));
+  ok("the hostile register is still hostile, for the motives that earn it", await pg.evaluate(()=>
+      /cooler tone/.test(blkTpl("intent_hostile")||"") ));
+  ok("routing reads all three, not warm-or-else", await pg.evaluate(()=>{
+      const src=String(intentParts);
+      return /valence==="hostile"\?"intent_hostile":"intent_self"/.test(src)
+        && /valence==="hostile"\?"intent_aim_cool":"intent_aim_self"/.test(src)
+        ? true : "one of the two routes still collapses three valences into two"; }));
+
+  console.log("\n[the small fills that reached the page raw]");
+  ok("an ambition is \"an ambition\", not \"a ambition\"", await pg.evaluate(()=>
+      _aKind("ambition")==="an ambition" && _aKind("grievance")==="a grievance" ));
+  ok("an aim that already ends in a full stop does not get a second one", await pg.evaluate(()=>{
+      const t=fillTpl(blkTpl("intent_self"),{target:"Burak",kind:"ambition",a_kind:_aKind("ambition"),
+        aim:_aimText("to build something of my own."),aside:""});
+      return !/\.\./.test(t) ? true : t.slice(0,220); }));
+  ok("every intent fragment is declared, so Settings can reach it", await pg.evaluate(()=>{
+      // intent_self is a payload fragment, so it rides PT_FRAG_KEYS like intent_warm/_hostile.
+      if(!PT_FRAG_KEYS.includes("intent_self")) return "intent_self is not in PT_FRAG_KEYS";
+      // the intent_aim_* family is reached through the your_bio block's own extras instead —
+      // none of the three is in PT_FRAG_KEYS, so the new one must be declared the same way.
+      if(["intent_aim_warm","intent_aim_cool","intent_aim_self"].some(k=>PT_FRAG_KEYS.includes(k)))
+        return "the intent_aim family changed how it registers";
+      return PI_ORDER.includes("intent_self")
+        && blkTpl("intent_self")===BLOCK_TPL_DEFAULTS.intent_self
+        && blkTpl("intent_aim_self")===BLOCK_TPL_DEFAULTS.intent_aim_self
+        ? true : "a new fragment does not resolve to its shipped default"; }));
+  ok("and the aim fragment is listed beside its two siblings", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /"intent_aim_warm","intent_aim_cool","intent_aim_self"\]/.test(src)
+        ? true : "intent_aim_self is not on the your_bio extras list"; })());
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

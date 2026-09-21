@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v103.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v103.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3179,6 +3179,18 @@ VOICE DELIVERY (steering) — your speech is performed by a TTS voice actor you 
   x_membuild_text_note:{label:"Memory builder — the phone-thread note",json:false,
     hint:"Added to the memory builder when the thing being remembered is a text conversation rather than a scene, so it is recorded as texting rather than as words spoken in a room.",
     def:`This was a PHONE TEXT conversation between {{char}} and {{user}} — typed messages, not a scene spoken in person. Record it as {{char}}'s memory of texting with {{user}}.`},
+
+  x_call_scene:{label:"Voice call — where you are",json:false,
+    hint:"Opens the call's grounding: the day, the part of the day, the place, and who else is within earshot. {{others}} is empty when the two of you are alone.",
+    def:`# WHERE YOU ARE RIGHT NOW
+It is {{when}}, and you are at {{place}}.{{others}}`},
+
+  x_call_recent:{label:"Voice call — what was happening just before",json:false,
+    hint:"The last few lines of the scene the call interrupts, so the conversation continues instead of restarting.",
+    def:`# WHAT WAS HAPPENING JUST BEFORE THIS
+{{lines}}
+
+This is where the two of you left off. Carry on from it — do not start over, and do not recap it back.`},
 
   x_call_fallback:{label:"Voice call — fallback persona",json:false,
     hint:"Used only when a call starts without a character's own prompt built yet.",
@@ -23963,8 +23975,8 @@ const X_PROMPT_CARDS=[
      two halves of one decision (whether to render, then which rule renders it). */
   {key:"what_you_see",label:"What you see",desc:"Whether a beat has earned a new picture, or has reached one of that character's video scenes — and, once it is being drawn, which image rule renders the frame.",
    keys:["visualDirector","routerPrompt"]},
-  {key:"voice_call",label:"Voice call",desc:"The live spoken conversation: who the character is in it, how they speak it, what the transcript repair fixes, and the stand-in persona when a call starts with nothing built.",
-   keys:["x_call_role","x_call_delivery","x_stt_repair","x_call_fallback"]}
+  {key:"voice_call",label:"Voice call",desc:"The live spoken conversation: who the character is in it, where and when it is happening, what it interrupted, how they speak it, what the transcript repair fixes, and the stand-in persona when a call starts with nothing built.",
+   keys:["x_call_role","x_call_scene","x_call_recent","x_call_delivery","x_stt_repair","x_call_fallback"]}
 ];
 const ENGINE_PAYLOAD_DEFS=[
   {key:"turn_router",label:"Turn Router (who speaks)",desc:"Decides who replies to the player (router 1) and whether another character chains in (router 2). Both return JSON the app parses — keep the schemas intact.",blocks:[
@@ -44251,18 +44263,87 @@ async function endVoiceCall(){
   try{ if(transcript.length>=2) await commitCallMemory(callee, transcript); }catch(e){}
 }
 
-/* ---- payload: face-to-face call instructions for a callee ---- */
+/* ---- payload: face-to-face call instructions for a callee ----
+   (!) THE CALL IS THE ONE PAYLOAD BUILT BY HAND. Every other path goes through REPLY_ORDER and
+   buildTailBlocks; this one assembles its own system prompt once, at pick-up, and reuses it for
+   every turn of the call. So each block below is a DELIBERATE borrow from the reply payload's
+   producers, not a parallel implementation — edit the producer and the call follows.
+
+   v103.1 — it used to carry the world, the bio, the relationship sheet and four diary entries, and
+   nothing else: no date, no place, no memory of today, no promises, no meetings, and no idea what
+   scene it had just interrupted. A character you had been standing next to a moment ago answered
+   the phone as though you had not spoken in a week.
+
+   What is deliberately NOT here: drives, feelings_now and private_intent. Those came out of the
+   reply payload because they made replies fancy and philosophical, and a spoken line has even less
+   room to survive them. The call gets FACTS — where, when, what happened, what is owed, what is
+   booked — and works out its own feelings, the way it already did.
+
+   Everything is synchronous on purpose. This runs while the caller is watching "Connecting…", and
+   an embedding round-trip for relevance-ranked recall would buy a better memory order at the cost
+   of a call that takes seconds to pick up. Recency is the honest ordering for a conversation whose
+   topic nobody knows yet. */
 function buildCallInstructions(callee, chat){
   const uni=curUniverseObj(); const blocks=[];
+  const push=b=>{ if(b&&String(b).trim()) blocks.push(b); };
   blocks.push(fillTpl(up("x_call_role"),{char:callee.name,user:state.user}));
   if(uni&&uni.setting&&uni.setting.trim()) blocks.push(`# WORLD\n${uni.setting.trim()}`);
   blocks.push(`# YOU\n<character_you_play>\n${charBioBlock(callee,{self:true})}\n</character_you_play>`);
   {const sheet=relSheetBlockFull(callee); if(sheet) blocks.push(`# WHO THESE PEOPLE ARE TO ${callee.name.toUpperCase()}\n${sheet}`);}
   {let pb=`# WHO YOU ARE TALKING TO\n${state.user} is here with you.`; if(state.userBio&&state.userBio.trim()) pb+=`\nBackground: ${state.userBio.trim()}`; blocks.push(pb);}
+
+  /* WHEN AND WHERE. The call had no clock and no map at all, so "see you tomorrow" and "I'll walk
+     you home" were guesses. Who else is within earshot matters more on a call than in a reply:
+     this is a spoken conversation and the room can hear it. */
   try{
-    const mems=memoriesOf(callee.id).filter(m=>m.type==="DIARY").sort((a,b)=>(b.gameDay||0)-(a.gameDay||0)||(b.date||0)-(a.date||0)).slice(0,4);
-    if(mems.length){ const lines=mems.map(m=>`- ${(typeof memInjectText==='function'?memInjectText(m):(m.content||''))}`).filter(Boolean); if(lines.length) blocks.push(`# YOUR RECENT DIARY (background — shapes how you act; do NOT recite)\n${lines.join("\n")}`); }
+    const per=chatPeriod(chat), day=(chat&&chat.gameDay)||1;
+    const loc=locById(chat&&chat.locationId);
+    const sub=(typeof curSubId==="function")?subById(chat,curSubId(chat)):null;
+    const place=loc?(sub?`${loc.name} — ${sub.name}`:loc.name):(chat&&chat.location)||"where you were";
+    const others=(presentIds(chat)||[]).filter(id=>id&&id!==callee.id)
+      .map(id=>((state.personas||[]).find(x=>x.id===id)||{}).name).filter(Boolean);
+    push(fillTpl(up("x_call_scene"),{
+      when:`Day ${day}, ${per}`, place,
+      others:others.length?` ${others.join(" and ")} ${others.length>1?"are":"is"} within earshot — they can hear your side of this.`:""
+    }));
   }catch(e){}
+
+  /* WHAT THEY HAVE ALREADY DONE TODAY — the v96.1 day ledger. "What have you been up to?" is the
+     single most likely opening line of a call, and it was the one question the payload could not
+     answer. Plain fact, from the app's own record, not something for the model to invent. */
+  try{ push(whereaboutsBlock(chat,callee.id,{})); }catch(e){}
+
+  /* MEMORY, both tiers, through the same producer the reply uses — so the numbering, the "(two
+     days ago, Evening)" stamps and the headers are the ones the model already reads everywhere
+     else. Recent first: what they did earlier today, which is what a call most often follows. */
+  try{
+    const own=memoriesOf(callee.id)||[];
+    const today=(chat&&chat.gameDay)||1;
+    const recent=own.filter(m=>m&&m.type!=="DIARY"&&m.gameDay===today)
+      .sort((a,b)=>(b.date||0)-(a.date||0)).slice(0,6);
+    const diary=own.filter(m=>m&&m.type==="DIARY")
+      .sort((a,b)=>(b.gameDay||0)-(a.gameDay||0)||(b.date||0)-(a.date||0)).slice(0,4);
+    memoryBlocks({recent,diary,longterm:diary},"recent").forEach(push);
+    memoryBlocks({recent,diary,longterm:diary},"longterm").forEach(push);
+  }catch(e){}
+
+  /* WHAT IS OWED AND WHAT IS BOOKED. A promise given face to face an hour ago did not survive into
+     the call, and a meeting agreed ON the call already becomes a calendar entry (see the calendar
+     pass in commitCallMemory) — so the one direction that was missing was the calendar reaching
+     the call in the first place. */
+  try{ push(promiseContextFor(chat,callee.id,callee.name,{})); }catch(e){}
+  try{ const cl=calendarContextLine(chat,callee.name,callee.id,{bare:true});
+       if(cl)push(`${blkTpl("calendar_header")}\n${cl}`); }catch(e){}
+  try{ push(calendarDoneLine(chat,callee.name,callee.id)); }catch(e){}
+
+  /* AND WHAT THE CALL INTERRUPTED. Last, because it is the freshest thing and the thing the first
+     spoken line has to follow on from. */
+  try{
+    const lines=castConvoText(chat,6,callee.id);
+    if(lines&&lines.trim())push(fillTpl(up("x_call_recent"),{lines:lines.trim()}));
+  }catch(e){}
+
+  // The delivery contract stays LAST: it is how to say whatever all of the above produced.
   blocks.push(fillTpl(up("x_call_delivery"),{lang:storyLangName()}));
   return blocks.join("\n\n");
 }

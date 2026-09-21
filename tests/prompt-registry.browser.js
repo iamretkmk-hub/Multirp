@@ -123,6 +123,13 @@ const {chromium}=require('playwright');
       "You build a believable daily schedule for a roleplay character across 5 periods: Morning, Midday, Afternoon, Evening, Night.\n\nFor EACH period, distribute 100 points across the available locations to represent how likely this character is to be at each one during that period. You don't have to use every location, and the points per period don't have to sum to exactly 100 — leftover means \"somewhere else / not around\". Make it reflect who they are (a workaholic is at work midday, home at night; a socialite is out in the evening; a homebody mostly home). Their home is \"Emre's Home\".\n\nReturn ONLY strict JSON mapping each period to {locationName: points}:\n{\"Morning\":{\"Name\":40,...},\"Midday\":{...},\"Afternoon\":{...},\"Evening\":{...},\"Night\":{...}}\nUse EXACT location names from the list. No commentary."],
     ["x_location_request",{request:"a rooftop bar"},
       "USER'S REQUEST — prioritize creating the places they describe (adapt them to fit the world, keep the exact JSON shape, never recreate an existing place):\na rooftop bar"],
+    ["x_call_scene",{when:"Day 4, Evening",place:"Coffee House",others:" Hakan is within earshot."},
+      "# WHERE YOU ARE RIGHT NOW\nIt is Day 4, Evening, and you are at Coffee House. Hakan is within earshot."],
+    // alone with the player, {{others}} is empty and the line simply ends at the place
+    ["x_call_scene",{when:"Day 1, Morning",place:"the harbour",others:""},
+      "# WHERE YOU ARE RIGHT NOW\nIt is Day 1, Morning, and you are at the harbour."],
+    ["x_call_recent",{lines:"Emre: I thought you'd left.\nDuygu: Not yet."},
+      "# WHAT WAS HAPPENING JUST BEFORE THIS\nEmre: I thought you'd left.\nDuygu: Not yet.\n\nThis is where the two of you left off. Carry on from it — do not start over, and do not recap it back."],
     ["x_char_quest_reconcile",{user:U},null]  // long; checked for its opening line only, below
   ];
   for(const [key,vals,want] of CASES){
@@ -145,7 +152,8 @@ const {chromium}=require('playwright');
       const known=new Set(["user","char","self","target","place","situation","also","lang","sheet",
         "extra","about","task","outcome","fail_note","home_note","cast","world","count","places",
         "request","json_rule","ph_rule","seconds","beats","tracker","name","owner","gist",
-        "title","who","days"]);   // v63.1 — x_unkept_meeting / x_neglect, filled by their planters
+        "title","who","days",      // v63.1 — x_unkept_meeting / x_neglect, filled by their planters
+        "when","others","lines"]); // v103.1 — x_call_scene / x_call_recent, filled by buildCallInstructions
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
         (String(X_ENGINE_PROMPTS[k].def).match(/\{\{(\w+)\}\}/g)||[]).forEach(t=>{

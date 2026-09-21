@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v95.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v95.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -6994,6 +6994,25 @@ function loadState(){
       });
       if(fixed)persistChats();
       store.setRaw("sm_textlabel_v1","done");
+    }
+  }catch(e){}
+  /* ---- un-stick meetings a crashed attempt tombstoned (v95.1, runs once) ---------------------
+     `prompted` was set when a due meeting was FOUND, persisted at once, and never cleared. Any
+     attempt that threw before reaching an outcome left the entry prompted-but-not-done, which the
+     due-meeting finder skips forever. Those are releasable now, so release the ones already stuck:
+     an entry that is prompted and NOT done has, by definition, no outcome recorded, so there is
+     nothing to lose by letting it be tried again when its hour is next read. Entries that are
+     `done` are untouched — those genuinely happened, or were genuinely missed. */
+  try{
+    if(!store.raw("sm_calprompted_v1","")){
+      let freed=0;
+      Object.values(state.chats||{}).forEach(c=>{
+        if(!c||!Array.isArray(c.calendar))return;
+        c.calendar.forEach(e=>{ if(e&&e.prompted&&!e.done){ e.prompted=false; freed++; } });
+      });
+      if(freed){ persistChats();
+        try{ console.log("[migrate] released "+freed+" meeting(s) a crashed attempt had tombstoned"); }catch(_){} }
+      store.setRaw("sm_calprompted_v1","done");
     }
   }catch(e){}
   /* ---- JUST ENDED moves to the tail (v89.1, runs once) ---------------------------------------
@@ -14023,7 +14042,26 @@ async function resolveDueMeetings(chat){
   // world-pulse executor.
   const e=chatCalendar(chat).find(x=>!x.done && !x.prompted && planDueNow(chat,x) && _planIncludesUser(x));
   if(!e)return false;
+  /* (!) v95.1 — `prompted` IS A RE-ENTRY GUARD, NOT A TOMBSTONE. It was set the instant a due
+     meeting was FOUND and persisted immediately, and nothing ever cleared it. Every branch below
+     that reaches a real outcome sets `done` itself — so the only states that leave `done` false are
+     the ones where the attempt never finished: a throw in travelTo, in narrateCharMove, in the
+     reply that follows an arrival, a network error mid-flight. postTurn catches that throw and
+     moves on, and the meeting is left prompted-but-not-done: invisible to this finder forever,
+     with no way to make it fire again short of editing the calendar by hand. Reported exactly that
+     way — "X will come on Day 2 midday, I am there, it doesn't trigger, and now I can't retry".
+     The guard is still needed (it stops a second pass inside the same turn re-entering a meeting
+     that is mid-confirm), so it stays — and it is released in a finally when the attempt did not
+     reach an outcome, which makes the next turn try again. */
   e.prompted=true; persistChats();
+  try{
+    return await _resolveDueMeeting(chat,e);
+  } finally {
+    if(!e.done){ e.prompted=false; try{ persistChats(); }catch(_){} }
+  }
+}
+async function _resolveDueMeeting(chat,e){
+  const here=chat.locationId||null;
   const p=meetingCounterpart(chat,e);                               // the character party (may be null)
   const locId=e.locationId||null;
   const locObj=locId?locById(locId):null;

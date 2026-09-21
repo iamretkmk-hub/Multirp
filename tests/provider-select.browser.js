@@ -14,6 +14,14 @@ const {chromium}=require('playwright');
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const reqs=[];
+  let nanoCatFails=false;
+  await pg.route('**/api/v1/models*',r=>{
+    const u=r.request().url(), nano=/nano-gpt/.test(u);
+    if(nano&&nanoCatFails){ r.fulfill({status:500,body:"boom"}); return; }
+    r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({data:
+      nano?[{id:"chatgpt-4o-latest"},{id:"shared/model"}]
+          :[{id:"anthropic/claude-3.5-sonnet"},{id:"shared/model"}]})});
+  });
   await pg.route('**/chat/completions',r=>{
     const q=r.request();
     reqs.push({url:q.url(),auth:q.headers()['authorization']||'',ref:q.headers()['http-referer']||null,
@@ -146,6 +154,98 @@ const {chromium}=require('playwright');
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       return /if\(_cOR\)\{ reqBody\.reasoning=vcReasoning\(\); reqBody\.provider=\{sort:"latency"\}; \}/.test(src)
         ? true : "latency routing is unconditional again"; })());
+
+  /* v108.1 — the model fields are free text and every agent now picks its own API, so a datalist
+     that only knew OpenRouter meant a NanoGPT agent had to be typed from memory. */
+  console.log("\n[the datalist carries both catalogues]");
+  const cat=()=>pg.evaluate(()=>[...document.querySelectorAll('#modelList option')]
+      .map(o=>({id:o.value,tag:o.textContent})));
+  const reload=(cfg)=>pg.evaluate(async o=>{
+      state.nanoKey=o.key; state.fnCfg=o.fn;
+      localStorage.removeItem("sm_modelcache"); localStorage.removeItem("sm_modelcache_nano");
+      await loadModels(true); },cfg);
+
+  await reload({key:"",fn:{}});
+  ok("an install that never touched the picker sees only OpenRouter, as before", await (async()=>{
+      const c=await cat();
+      return c.every(o=>o.tag==="OpenRouter") && c.some(o=>o.id==="anthropic/claude-3.5-sonnet")
+        && !c.some(o=>o.id==="chatgpt-4o-latest")
+        ? true : JSON.stringify(c); })());
+
+  await reload({key:"nano-key",fn:{}});
+  ok("setting the key pulls NanoGPT's catalogue in", await (async()=>{
+      const c=await cat();
+      return c.some(o=>o.id==="chatgpt-4o-latest") ? true : JSON.stringify(c); })());
+  ok("each entry is tagged with the service that serves it", await (async()=>{
+      const c=await cat(), f=id=>(c.find(o=>o.id===id)||{}).tag;
+      return f("anthropic/claude-3.5-sonnet")==="OpenRouter" && f("chatgpt-4o-latest")==="NanoGPT"
+        ? true : JSON.stringify(c); })());
+  ok("a model both of them serve is listed once, tagged with both", await (async()=>{
+      const c=await cat(), rows=c.filter(o=>o.id==="shared/model");
+      return rows.length===1 && rows[0].tag==="OpenRouter · NanoGPT" ? true : JSON.stringify(rows); })());
+  ok("the id stays the option's value — the tag is only a hint", await (async()=>{
+      const c=await cat();
+      return c.every(o=>o.id && !/·|OpenRouter|NanoGPT/.test(o.id)) ? true : JSON.stringify(c.slice(0,3)); })());
+
+  await reload({key:"",fn:{mem:{prov:"nano"}}});
+  ok("an agent already pointed there is reason enough, with no key yet", await (async()=>{
+      const c=await cat();
+      return c.some(o=>o.id==="chatgpt-4o-latest") ? true : "the catalogue was skipped"; })());
+  ok("and the key is sent only when there is one", await pg.evaluate(async()=>{
+      const seen=[]; const real=window.fetch;
+      window.fetch=async(u,i)=>{ if(/\/models/.test(String(u)))seen.push({u:String(u),a:!!(i&&i.headers&&i.headers.Authorization)}); return real(u,i); };
+      state.nanoKey=""; localStorage.removeItem("sm_modelcache_nano"); await loadModels(true);
+      state.nanoKey="k"; localStorage.removeItem("sm_modelcache_nano"); await loadModels(true);
+      window.fetch=real;
+      const n=seen.filter(x=>/nano-gpt/.test(x.u));
+      return (n.length===2 && n[0].a===false && n[1].a===true) ? true : JSON.stringify(seen); }));
+
+  console.log("\n[one catalogue failing never costs you the other]");
+  ok("a stale catalogue is kept rather than dropped", await (async()=>{
+      await reload({key:"k",fn:{}});
+      nanoCatFails=true;
+      await pg.evaluate(async()=>{ await loadModels(true); });
+      const c=await cat();
+      return c.some(o=>o.id==="chatgpt-4o-latest") && c.some(o=>o.id==="anthropic/claude-3.5-sonnet")
+        ? true : "a 500 emptied the list: "+JSON.stringify(c); })());
+  ok("and with no cache to fall back on, the other still populates", await (async()=>{
+      await pg.evaluate(async()=>{ localStorage.removeItem("sm_modelcache_nano"); await loadModels(true); });
+      const c=await cat();
+      nanoCatFails=false;
+      return c.length>0 && c.every(o=>o.tag==="OpenRouter")
+        ? true : "OpenRouter did not survive alone: "+JSON.stringify(c); })());
+  ok("an empty catalogue is treated as a failure, not as an answer", await pg.evaluate(async()=>{
+      const real=window.fetch;
+      window.fetch=async(u,i)=>/nano-gpt.*models/.test(String(u))
+        ? {ok:true,status:200,json:async()=>({data:[]})} : real(u,i);
+      state.nanoKey="k"; localStorage.removeItem("sm_modelcache_nano");
+      await loadModels(true);
+      window.fetch=real;
+      return localStorage.getItem("sm_modelcache_nano")===null
+        ? true : "an empty list was cached for a day"; }));
+
+  console.log("\n[the list refreshes when it would otherwise be wrong]");
+  ok("there is finally a way to reach the force path", await pg.evaluate(()=>{
+      const b=document.getElementById('refreshModelsBtn');
+      return !!b && /loadModels\(true\)/.test(b.getAttribute('onclick')||""); }));
+  ok("saving the key reloads it, so the models appear without a restart", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf('store.setRaw(K.nanoKey');
+      return /loadModels\(false\)/.test(src.slice(i,i+400)) ? true : "saving does not reload the list"; })());
+  ok("so does switching a card to a provider whose catalogue is not loaded", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf('state.fnCfg[fn].prov = sel.value');
+      return /loadModels\(false\)/.test(src.slice(i,i+300)) ? true : "the picker does not reload the list"; })());
+  ok("and the count is shown, so a half-loaded list is visible", await pg.evaluate(async()=>{
+      state.nanoKey="k"; localStorage.removeItem("sm_modelcache"); localStorage.removeItem("sm_modelcache_nano");
+      await loadModels(true);
+      const t=document.getElementById('modelListCount').textContent;
+      return /\d+ models — OpenRouter \+ NanoGPT/.test(t) ? true : t; }));
+  ok("a legacy flat array still fills the list", await pg.evaluate(()=>{
+      fillModels(["x/one","x/two"]);
+      const c=[...document.querySelectorAll('#modelList option')];
+      return c.length===2 && c[0].value==="x/one" && c[0].textContent==="OpenRouter"
+        ? true : JSON.stringify(c.map(o=>o.value+":"+o.textContent)); }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v108.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v108.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1102,6 +1102,9 @@
         <div class="card">
           <h3><svg class="ic"><use href="#i-masks"/></svg> Roleplay (main character replies)</h3>
           <div><label>Model</label><input type="text" id="setModel" list="modelList" placeholder="anthropic/claude-3.5-sonnet"><datalist id="modelList"></datalist></div>
+          <div class="kvline" style="padding:4px 0 0"><span class="desc" id="modelListCount">&nbsp;</span>
+            <button class="btn sec" id="refreshModelsBtn" style="padding:3px 10px" onclick="loadModels(true)"><svg class="ic"><use href="#i-refresh"/></svg> Refresh models</button></div>
+          <div class="desc" style="margin:2px 0 0">Every model field on this screen shares this list. Entries are tagged with the service that serves them — set a NanoGPT key above and its catalogue is fetched too.</div>
           <div class="ovr" style="margin:6px 0"><div data-ovr="rp" data-kind="prov"></div></div>
           <div style="margin-top:8px"><label><svg class="ic"><use href="#i-refresh"/></svg> Model rotation <span class="desc" style="display:inline">(optional — comma-separated; each reply uses the next one)</span></label>
             <input type="text" id="setRpRotation" placeholder="e.g. deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash, anthropic/claude-3.5-sonnet"></div>
@@ -11360,15 +11363,78 @@ function httpMsg(s,api){
   return"Something went wrong (code "+s+").";
 }
 
-/* ---- models ---- */
-async function loadModels(force){
-  const c=store.get("sm_modelcache",null);
-  if(c&&!force&&Date.now()-c.t<864e5){fillModels(c.list);return;}
-  try{const r=await fetch(OR+"/models");const d=await r.json();const list=(d.data||[]).map(m=>m.id).sort();
-    store.set("sm_modelcache",{t:Date.now(),list});fillModels(list);if(force)toast("Models updated");}
-  catch(e){if(c)fillModels(c.list);if(force)toast("Couldn't refresh — using cache");}
+/* ---- models ----
+   v108.1 — TWO CATALOGUES IN ONE DATALIST. The model fields are free text and every agent now
+   picks its own API, so a list that only knew OpenRouter meant a NanoGPT agent had to be typed
+   from memory. Both are fetched, cached separately (one failing never costs you the other), and
+   merged into the same datalist — tagged, because the only thing worse than not knowing a model
+   exists is not knowing which service serves it.
+   NanoGPT's catalogue is pulled in only when it is wanted: a key is set, or some agent already
+   points there. Nobody who never touched the picker sees their list change. */
+const MODEL_CACHE={or:"sm_modelcache", nano:"sm_modelcache_nano"};
+function _nanoWanted(){
+  if(String(state.nanoKey||"").trim())return true;
+  const c=state.fnCfg||{};
+  return Object.keys(c).some(k=>c[k]&&c[k].prov==="nano");
 }
-function fillModels(list){const dl=document.getElementById('modelList');dl.innerHTML="";list.forEach(id=>{const o=document.createElement('option');o.value=id;dl.appendChild(o);});}
+async function _fetchCatalogue(id){
+  const P=PROVIDERS[id]; if(!P)return null;
+  /* Both serve OpenAI's shape — {data:[{id}]}. NanoGPT takes the key as optional (it only changes
+     the pricing detail we do not ask for), so it is sent when present and skipped when not. */
+  const key=String(state[P.keyState]||"").trim();
+  const r=await fetch(P.base+"/models",{headers:key?{"Authorization":"Bearer "+key}:{}});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  const d=await r.json();
+  const list=(d.data||[]).map(m=>m&&m.id).filter(Boolean).sort();
+  if(!list.length)throw new Error("empty catalogue");
+  return list;
+}
+async function loadModels(force){
+  const want=["or"].concat(_nanoWanted()?["nano"]:[]);
+  const fresh=Date.now()-864e5;
+  const got={}; let fetched=0, failed=0;
+  await Promise.all(want.map(async id=>{
+    const c=store.get(MODEL_CACHE[id],null);
+    if(c&&c.list&&!force&&c.t>fresh){ got[id]=c.list; return; }
+    try{
+      const list=await _fetchCatalogue(id);
+      store.set(MODEL_CACHE[id],{t:Date.now(),list}); got[id]=list; fetched++;
+    }catch(e){
+      if(c&&c.list){ got[id]=c.list; }            // a stale catalogue beats an empty one
+      failed++;
+    }
+  }));
+  fillModels(got);
+  if(force)toast(failed?(fetched?"Some models refreshed — one provider failed":"Couldn't refresh — using cache")
+                       :"Models updated");
+}
+/* Accepts either the old flat array (so a call site that still passes one keeps working) or a
+   {provider: [ids]} map. An id both services carry is listed once, tagged with both. */
+function fillModels(byProv){
+  const dl=document.getElementById('modelList'); if(!dl)return;
+  const map=Array.isArray(byProv)?{or:byProv}:(byProv||{});
+  const tags=new Map();
+  Object.keys(map).forEach(id=>{
+    const label=(PROVIDERS[id]&&PROVIDERS[id].label)||id;
+    (map[id]||[]).forEach(m=>{ if(!tags.has(m))tags.set(m,[]); const a=tags.get(m); if(!a.includes(label))a.push(label); });
+  });
+  const frag=document.createDocumentFragment();
+  [...tags.keys()].sort().forEach(m=>{
+    const o=document.createElement('option');
+    o.value=m;
+    /* textContent, never the `label` attribute: Chrome shows it as a grey hint beside the id,
+       while Firefox and Safari show the id alone. Setting `label` would hide the model id in the
+       browsers that honour it, which is the one thing that must always be readable. */
+    o.textContent=tags.get(m).join(" · ");
+    frag.appendChild(o);
+  });
+  dl.innerHTML=""; dl.appendChild(frag);
+  try{
+    const el=document.getElementById('modelListCount');
+    if(el){ const names=Object.keys(map).map(k=>(PROVIDERS[k]&&PROVIDERS[k].label)||k);
+      el.textContent=tags.size?`${tags.size} models — ${names.join(" + ")}`:"No models loaded"; }
+  }catch(_){}
+}
 
 /* ---- characters ---- */
 function curPersona(){return state.personas.find(p=>p.id===state.curPersona)||state.personas[0];}
@@ -41133,6 +41199,7 @@ function renderProvField(host,fn,cfg){
     if(!state.fnCfg[fn])state.fnCfg[fn]={};
     state.fnCfg[fn].prov = sel.value==='or' ? null : sel.value;
     paint();
+    try{ loadModels(false); }catch(_){}    // this card now wants that catalogue
   });
   paint();
 }
@@ -43128,7 +43195,11 @@ function saveSettings(notify){
   store.set(K.streamReveal,state.streamReveal);
   {const rc=document.getElementById('setRevealCps'); if(rc){const v=+rc.value; state.revealCps=(v>=8&&v<=80)?v:REVEAL_CPS_DEFAULT; store.set(K.revealCps,state.revealCps);}}
   {const us=document.getElementById('setUiScale'); if(us){const pct=+us.value; const v=(pct>=70&&pct<=130)?pct/100:1; state.uiScale=v; store.setRaw(K.uiScale,String(v)); applyUiScale();}}
-  store.setRaw(K.key,state.key);store.setRaw(K.nanoKey,state.nanoKey||"");store.setRaw(K.segkey,state.segkey);store.setRaw(K.atlasKey,state.atlasKey||"");store.setRaw(K.model,state.model);
+  store.setRaw(K.key,state.key);store.setRaw(K.nanoKey,state.nanoKey||"");store.setRaw(K.segkey,state.segkey);
+  /* v108.1 — pasting the key is the moment the list is wrong: without this you would set it, see
+     no NanoGPT models, and reasonably conclude it had not worked. Cached, so this is free after
+     the first pull. */
+  try{ loadModels(false); }catch(_){}store.setRaw(K.atlasKey,state.atlasKey||"");store.setRaw(K.model,state.model);
   store.setRaw(K.ttsSpeed,String(state.ttsSpeed||1));store.setRaw(K.lipsyncModel,state.lipsyncModel||"kwaivgi/kling-lipsync/audio-to-video");store.setRaw(K.autoSpeak,state.autoSpeak?"1":"");store.setRaw(K.falKey,state.falKey||"");store.setRaw(K.falModel,state.falModel||"fal-ai/z-image/turbo/lora");store.setRaw(K.falSafety,state.falSafety?"1":"");store.setRaw(K.civitaiKey,state.civitaiKey||"");
   store.setRaw(K.rewriter,state.rewriter);
   store.setRaw(K.imgProvider,state.imgProvider);store.setRaw(K.imgModel,state.imgModel);

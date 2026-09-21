@@ -167,16 +167,54 @@ const {chromium}=require('playwright');
         ? true : "the round can reach the screen"; })());
   ok("it is hooked into the pulse ahead of the single-pair encounter", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      /* the whole function, not a fixed window — its comments grow and a slice that clips the
+         second call reports a false failure. */
       const i=src.indexOf('async function maybeWorldPulse');
-      const fn=src.slice(i,i+1600);
-      return fn.indexOf('runWorldRound')>0 && fn.indexOf('runWorldRound')<fn.indexOf('runOffstageInteraction')
-        ? true : "the round does not run before the pair"; })());
+      const fn=src.slice(i,src.indexOf('\n}\n',i));
+      const a=fn.indexOf('runWorldRound'), b=fn.indexOf('runOffstageInteraction');
+      return (a>0 && b>0 && a<b) ? true : "round at "+a+", pair at "+b; })());
   ok("the engine is registered and editable", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.worldRound && typeof up("worldRound")==="string" && up("worldRound").length>400 ));
   ok("its one hard rule is stated", await pg.evaluate(()=>{
       const t=up("worldRound")||"";
       return /EVERYBODY APPEARS EXACTLY ONCE/.test(t) && /ORDINARY IS THE POINT/.test(t)
         ? true : "the partition or the ordinariness rule is missing"; }));
+
+  console.log("\n[the round does not reach for drama]");
+  ok("ordinary is named the default, not merely permitted", await pg.evaluate(()=>{
+      const t=up("worldRound")||"";
+      return /"ordinary" is the DEFAULT kind and should be nearly all of them/.test(t)
+          && /every single entry is ordinary is a correct answer and the usual one/.test(t)
+        ? true : "ordinary is still only allowed"; }));
+  ok("anything sharper needs a cause already on the page, and is capped at one", await pg.evaluate(()=>{
+      const t=up("worldRound")||"";
+      return /needs a cause already written on this page/.test(t) && /AT MOST ONE entry in the round/.test(t)
+        ? true : "the charge budget is soft"; }));
+  ok("a private want may not be acted on in the background", await pg.evaluate(()=>{
+      const t=up("worldRound")||"";
+      return /A scheme is not carried out in a round/.test(t)
+          && /A grievance is not had out in a round/.test(t)
+          && /The most a private want may do is decide who somebody chose to spend the hour with/.test(t)
+        ? true : "the wants block reads as a to-do list"; }));
+  ok("nothing the player would want to be there for resolves offstage", await pg.evaluate(()=>{
+      const t=up("worldRound")||"";
+      return /nobody confesses, nobody is caught/.test(t)
+          && /scenes belong to the story the player is living/.test(t)
+        ? true : "a scene can still be spent offstage"; }));
+  ok("and it may not invent one either", await pg.evaluate(()=>{
+      const t=up("worldRound")||"";
+      return /Never invent a secret, a betrayal, a confession, an accident or a person/.test(t)
+        ? true : "invention is still open"; }));
+  ok("it runs cooler than the single-pair encounter", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const r=src.slice(src.indexOf('async function runWorldRound'));
+      const o=src.slice(src.indexOf('async function runOffstageInteraction'));
+      const t=x=>{ const m=x.match(/temp:fnTemp\("mem",([\d.]+)\)/); return m?+m[1]:null; };
+      return (t(r)!==null && t(o)!==null && t(r)<t(o)) ? true : "round="+t(r)+" pair="+t(o); })());
+  ok("and the two engines' opposite jobs are written down", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /THE TWO ENGINES HAVE OPPOSITE JOBS AND BOTH ARE RIGHT/.test(src)
+        ? true : "nothing stops a later reader levelling them"; })());
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

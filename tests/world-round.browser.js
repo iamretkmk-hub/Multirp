@@ -265,6 +265,46 @@ const {chromium}=require('playwright');
       return /epSend\("goalPursuit",tpl\+"\\n\\n"\+mixedLangDirective\(\["title"\]\)/.test(src)
         ? true : "the directive still contradicts the prompt"; })());
 
+  console.log("\n[v102.1 — the round is actually reached]");
+  ok("maybeWorldPulse reaches runWorldRound at day end", await pg.evaluate(async()=>{
+      const realR=runWorldRound, realC=runCalendarExecutor;
+      let hit=0;
+      runWorldRound=async()=>{ hit++; return 0; };
+      runCalendarExecutor=async()=>0;
+      state.pulseOn=true; state.key="k";
+      try{ await maybeWorldPulse(curChat(),{dayEnd:true}); }
+      finally{ runWorldRound=realR; runCalendarExecutor=realC; }
+      return hit===1?true:"the day-end pulse called the round "+hit+" times"; }));
+  ok("and on an ordinary turn too", await pg.evaluate(async()=>{
+      const realR=runWorldRound, realC=runCalendarExecutor, realO=runOffstageInteraction;
+      let hit=0;
+      runWorldRound=async()=>{ hit++; return 0; };
+      runCalendarExecutor=async()=>0; runOffstageInteraction=async()=>0;
+      state.pulseOn=true; state.key="k";
+      try{ await maybeWorldPulse(curChat(),null); }
+      finally{ runWorldRound=realR; runCalendarExecutor=realC; runOffstageInteraction=realO; }
+      return hit===1?true:"an ordinary turn called the round "+hit+" times"; }));
+  ok("the call site names nothing that is not in scope there", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf("async function maybeWorldPulse"));
+      const body=fn.slice(0,fn.indexOf("\n}\n"));
+      if(/runWorldRound\(chat,uni\)/.test(body))return "it still passes the undefined `uni`";
+      return /runWorldRound\(chat,null\)/.test(body)?true:"the call site changed shape again"; })());
+
+  console.log("\n[v102.1 — nothing silently starves the round]");
+  ok("the entry cap follows the cast, not a constant", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf("async function runWorldRound"));
+      const body=fn.slice(0,fn.indexOf("\n}\n"));
+      if(/entries\.slice\(0,8\)/.test(body))return "a nine-person cast still loses somebody";
+      return /entries\.slice\(0,Math\.max\(\d+,pool\.length\)\)/.test(body)?true:"the cap is not tied to the pool"; })());
+  ok("the token budget grows with the cast", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const fn=src.slice(src.indexOf("async function runWorldRound"));
+      const body=fn.slice(0,fn.indexOf("\n}\n"));
+      if(/fnTok\("mem",1800\)/.test(body))return "still one flat budget for any size of cast";
+      return /fnTok\("mem",Math\.min\(\d+,\d+\+pool\.length\*\d+\)\)/.test(body)?true:"the budget is not tied to the pool"; })());
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

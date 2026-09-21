@@ -362,6 +362,70 @@ const {chromium}=require('playwright');
       return /\(\(opts&&opts\.verbatim\)\?"\\n\\n"\+up\("narrateVerbatim"\):""\)/.test(src)
         ? true : "the auto-RP narrator still builds it inline"; })());
 
+  console.log("\n[v100.1 — the location is the writer's, and the face is named]");
+  ok("the place is no longer pasted onto the tail", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const i=src.indexOf("const _appC=_imgSpeakerAppearance(speaker,{refDriven:_refDriven});");
+      const blk=src.slice(i,i+1600);
+      return !/const _locC=_imgLocationClause\(chat\)/.test(blk)
+          && /const _det=\[_appC,_litC\]/.test(blk)
+        ? true : "the location clause is still on the deterministic tail"; })());
+  ok("but the lighting still is — it follows the clock, not the room", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /const _litC=_imgLightingClause\(chat\);/.test(src) ? true : "the lighting went too"; })());
+  ok("the writer is handed the place as facts to render", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /WHERE THIS FRAME HAPPENS/.test(src)
+          && /Do not copy the sentence above; it is a description for a reader, not prompt words/.test(src)
+        ? true : "the request does not carry the place"; })());
+  ok("and it is in the user message, before the continuity reference", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /const usr=_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
+  ok("the continuity note no longer claims the location is automatic", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)
+          && /the LOCATION is yours to write/.test(src)
+        ? true : "the continuity note still lies about it"; })());
+  ok("the prompt gives the writer the job, with the reason", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /# WHERE IT HAPPENS — YOURS TO WRITE/.test(t)
+          && /every picture in a room looked like the same picture/.test(t)
+          && /Do not invent a window, a fireplace or a view that nobody mentioned/.test(t)
+        ? true : "the location section is missing"; }));
+  ok("and the auto-injection list no longer names it", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /character appearances and lighting are Auto injected/.test(t)
+          && /The LOCATION is no longer among them/.test(t)
+        ? true : "the tail list still claims the location"; }));
+
+  ok("the face is ONE named feeling plus at most three words", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /NAME THE FEELING/.test(t)
+          && /AT MOST three more words/.test(t)
+          && /Four words in total is the ceiling for the whole face/.test(t)
+        ? true : "the expression rule is still a tag budget"; }));
+  ok("assembling a face out of parts is named as the fault", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /Do NOT assemble a face out of parts/.test(t)
+          && /the generator averages them into nothing/.test(t)
+        ? true : "the failure is not named"; }));
+  ok("with the old shape shown as the wrong one", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /half-lidded eyes, parted lips, flushed cheeks, furrowed brow/.test(t)
+        ? true : "no worked contrast"; }));
+  ok("gaze and head turn are a pose, not part of the budget", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /is a POSE, not an expression, and it does not count against the four/.test(t)
+        ? true : "the pose exemption is missing"; }));
+  ok("the physical-state marker rule survives untouched", await pg.evaluate(()=>{
+      const t=up("rewritePrompt")||"";
+      return /At most ONE physical-state marker where relevant/.test(t)
+          && /NEVER describe streaming tears/.test(t) ? true : "a rule was lost in the rewrite"; }));
+  ok("a stored copy of the old default picks both up", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      return /_refreshPipe\("rewritePrompt","FACIAL EXPRESSION & PHYSICAL STATE","WHERE IT HAPPENS/.test(src)
+        ? true : "no pipe — a saved override keeps the old rules"; })());
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

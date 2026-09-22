@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v110.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v110.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -43421,21 +43421,30 @@ function exportChats(){const blob=new Blob([JSON.stringify({chats:state.chats,me
    memory, universes, personas from IndexedDB) + gallery media (images/videos). This is
    the failsafe before/after big changes, and the unit the auto-backup reuses. */
 const BACKUP_VERSION=1;
-async function buildBackup(){
+/* v110.1 — `opts.noMedia` builds the TEXT-ONLY bundle the rolling snapshots use. The media is
+   base64 in IndexedDB and can run to hundreds of megabytes; three snapshots of it alongside the
+   originals is four copies of every image you have ever generated, which is how the rolling
+   backup came to write nothing at all (see doAutoBackup). Restoring a media-less bundle leaves
+   the image and video stores untouched — applyBackupBundle only replaces them when `media` is
+   present — so a snapshot restores the chats, memories, characters and settings and your gallery
+   simply stays where it is. "Export everything" still carries the media. */
+async function buildBackup(opts){
   // Flush any pending chat write so the bundle is current.
   flushPersistChats();
   const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
+  const b={
+    app:"StoryMind", backupVersion:BACKUP_VERSION, date:Date.now(),
+    localStorage:ls,
+    collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[], gossip:state.gossip||[] }
+  };
+  if(opts&&opts.noMedia) return b;
   const images=await mediaDB.getAll("images");
   const videos=await mediaDB.getAll("videos");
   // v25.3 — static art bytes (portraits/covers/map/locations). The collections may reference them
   // by session-local blob: URLs; these records are what makes the backup carry the actual images.
   const statics=await collectStaticImageRecords();
-  return {
-    app:"StoryMind", backupVersion:BACKUP_VERSION, date:Date.now(),
-    localStorage:ls,
-    collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[], gossip:state.gossip||[] },
-    media:{ images, videos, statics }
-  };
+  b.media={ images, videos, statics };
+  return b;
 }
 async function exportAll(){
   try{
@@ -43452,25 +43461,40 @@ async function exportAll(){
    A safety net that needs no user action: after meaningful changes (debounced) and on
    app-background, snapshot the full bundle into the kv store, keeping the last AUTO_KEEP.
    These never touch the filesystem; use Export everything for an off-device copy. */
-const AUTO_KEEP=3;
+const AUTO_KEEP=6;      // v110.1 — snapshots are text-only now, so more of them cost little
 let _autoBkTimer=null;
 function scheduleAutoBackup(){
   if(_autoBkTimer) return;
   _autoBkTimer=setTimeout(()=>{ _autoBkTimer=null; doAutoBackup(); }, 60000); // at most ~once/min
 }
+/* (!) v110.1 — THIS SAFETY NET SILENTLY NEVER FIRED. It bundled every image and video as base64
+   and stored three copies of that in the same IndexedDB the originals live in. On any real
+   gallery the write blew the quota, kvSet returned false, the throw was swallowed to a
+   console.warn nobody reads — and the Settings list showed "No automatic snapshots yet" forever,
+   which reads as "none needed yet" rather than "this has never worked".
+   Reported by a player who lost a playthrough and found the snapshot list empty.
+   Snapshots are text-only now (see buildBackup), the write is CHECKED, and a failure is said out
+   loud once so a broken safety net cannot pass for a quiet one. */
+let _autoBkWarned=false;
 async function doAutoBackup(){
-  /* (!) v109.1 — only THREE slots are kept, so an auto-backup taken while the collections could
-     not be read would roll a good snapshot off the end and replace it with an empty one. The
-     snapshots are the last line of recovery; they are not written by a session that is unsure. */
+  /* v109.1 — a snapshot is never written by a session that could not read your data: it would
+     roll a good snapshot off the end and replace it with an empty one. */
   if(!collectionsSafe) return;
   try{
-    const bundle=await buildBackup();
+    const bundle=await buildBackup({noMedia:true});
     const slot="autobackup_"+Date.now();
-    await mediaDB.kvSet(slot,bundle);
+    const wrote=await mediaDB.kvSet(slot,bundle);
+    if(!wrote) throw new Error("the snapshot could not be written (storage full?)");
     // Trim old auto-backups beyond AUTO_KEEP.
     const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("autobackup_")===0).sort();
     while(keys.length>AUTO_KEEP){ const old=keys.shift(); await mediaDB.kvDelete(old); }
-  }catch(e){ console.warn("auto-backup failed",e); }
+    _autoBkWarned=false;
+  }catch(e){
+    console.warn("auto-backup failed",e);
+    if(!_autoBkWarned){ _autoBkWarned=true;
+      try{ toast("Automatic snapshots are failing — use Settings → Backup → Export everything"); }catch(_){}
+    }
+  }
 }
 async function listAutoBackups(){
   const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("autobackup_")===0).sort().reverse();
@@ -43961,8 +43985,14 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=
 }
 // Flush any pending (debounced) chat write before the page is backgrounded or closed.
 // pagehide/visibilitychange are the reliable signals on mobile Safari & Chrome-Android.
-window.addEventListener('pagehide',flushPersistChats);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushPersistChats();});
+/* v110.1 — the rolling-backup comment has always claimed it snapshots "after meaningful changes
+   (debounced) AND ON APP-BACKGROUND". Only the first was ever wired: scheduleAutoBackup had
+   exactly one caller, the debounced chat persist. Backgrounding the app on a phone is the moment
+   a snapshot is most worth having, and it is also the moment the tab may not come back. */
+window.addEventListener('pagehide',()=>{ flushPersistChats(); try{ doAutoBackup(); }catch(_){} });
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){ flushPersistChats(); try{ doAutoBackup(); }catch(_){} }
+});
 
 /* ===================== PWA: installable app + persistent storage ===================== */
 (function(){

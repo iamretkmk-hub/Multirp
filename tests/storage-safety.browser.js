@@ -123,6 +123,74 @@ const {chromium}=require('playwright');
       const fn=src.lastIndexOf("async function applyBackupBundle",i);
       return (hits===1 && fn>-1 && i-fn<800) ? true : hits+" call sites"; })());
 
+  /* v110.1 — and the safety net that was supposed to catch all of this had never fired once.
+     Reported by the same player: after losing a playthrough, the snapshot list was EMPTY.
+     doAutoBackup bundled every image and video as base64 and stored three copies of that inside
+     the same IndexedDB the originals live in. On any real gallery the write blew the quota, the
+     throw was swallowed to a console.warn, and Settings showed "No automatic snapshots yet" —
+     which reads as "none needed yet", not "this has never worked". */
+  console.log("\n[the snapshot is small enough to actually be written]");
+  ok("a snapshot carries no media", await pg.evaluate(async()=>{
+      const blob="A".repeat(1024*1024);
+      await mediaDB.putAll("images",[1,2,3,4,5,6].map(i=>({id:"i"+i,data:blob})));
+      const t=await buildBackup({noMedia:true});
+      return t.media===undefined ? true : "the text-only bundle still carries media"; }));
+  ok("and is orders of magnitude smaller than the one that could not be stored", await pg.evaluate(async()=>{
+      const withM=JSON.stringify(await buildBackup()).length;
+      const textM=JSON.stringify(await buildBackup({noMedia:true})).length;
+      return (withM>4e6 && textM<withM/20)
+        ? true : "with="+withM+" text="+textM; }));
+  ok("while still carrying everything the collections bug destroys", await pg.evaluate(async()=>{
+      state.chats={c1:{id:"c1",messages:[{mid:"m",content:"a real playthrough"}]}};
+      state.memory=[{id:"m1",content:"a real memory"}];
+      state.personas=[{id:"p1",name:"Duygu"}];
+      const t=await buildBackup({noMedia:true});
+      const j=JSON.stringify(t.collections);
+      return (j.indexOf("a real playthrough")>-1 && j.indexOf("a real memory")>-1
+              && j.indexOf("Duygu")>-1 && !!t.localStorage)
+        ? true : j.slice(0,200); }));
+  ok("restoring one leaves the gallery alone, because it names no media", await pg.evaluate(()=>{
+      const src=String(applyBackupBundle);
+      return /if\(b\.media\)\{/.test(src)
+        ? true : "applyBackupBundle would wipe the media stores for a media-less bundle"; }));
+
+  console.log("\n[a failed snapshot is said out loud, not logged and forgotten]");
+  ok("the write is checked rather than assumed", await pg.evaluate(async()=>{
+      collectionsSafe=true; _autoBkWarned=false;
+      const real=mediaDB.kvSet;
+      let toasted="";
+      const realToast=window.toast; window.toast=m=>{ toasted=m; };
+      mediaDB.kvSet=async()=>false;               // exactly what a quota failure returns
+      await doAutoBackup();
+      mediaDB.kvSet=real; window.toast=realToast;
+      return /Automatic snapshots are failing/.test(toasted)
+        ? true : "a failed snapshot said nothing: "+JSON.stringify(toasted); }));
+  ok("and it is said once, not on every attempt", await pg.evaluate(async()=>{
+      const real=mediaDB.kvSet; let n=0;
+      const realToast=window.toast; window.toast=()=>{ n++; };
+      mediaDB.kvSet=async()=>false;
+      await doAutoBackup(); await doAutoBackup(); await doAutoBackup();
+      mediaDB.kvSet=real; window.toast=realToast;
+      return n===0 ? true : "warned "+n+" more times after the first"; }));
+
+  console.log("\n[it fires when the comment always said it did]");
+  ok("backgrounding the app takes one — the moment it matters most on a phone", (()=>{
+      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const ph=/addEventListener\('pagehide',\(\)=>\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
+      const vis=/visibilityState==='hidden'\)\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
+      return (ph&&vis) ? true : "pagehide="+ph+" visibilitychange="+vis; })());
+  ok("a real snapshot lands and is listed", await pg.evaluate(async()=>{
+      collectionsSafe=true;
+      for(const k of (await mediaDB.kvKeys()).filter(x=>String(x).indexOf("autobackup_")===0)) await mediaDB.kvDelete(k);
+      await doAutoBackup();
+      const list=await listAutoBackups();
+      if(!list.length) return "nothing was written";
+      const snap=await mediaDB.kvGet(list[0].key);
+      return JSON.stringify(snap.collections.chats).indexOf("a real playthrough")>-1
+        ? true : "the snapshot is empty"; }));
+  ok("more of them are kept, now that each one is text", await pg.evaluate(()=>
+      AUTO_KEEP>=6 ? true : "AUTO_KEEP="+AUTO_KEEP ));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

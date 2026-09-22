@@ -1066,7 +1066,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v109.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v109.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2584,8 +2584,13 @@ const mediaDB=(function(){
   let dbp=null;
   function open(){
     if(dbp) return dbp;
-    dbp=new Promise((res,rej)=>{
+    const p=new Promise((res,rej)=>{
       let req; try{ req=indexedDB.open("storymind_media",2); }catch(e){ return rej(e); }
+      /* (!) v109.1 — AN UPDATE RELOAD IS EXACTLY WHEN THIS GETS BLOCKED. sw.js calls
+         skipWaiting() on install and clients.claim() on activate, so the new worker takes over
+         while the old page may still be tearing down and still holding this database. With no
+         onblocked handler the open never settled at all. */
+      req.onblocked=()=>rej(new Error("IndexedDB is blocked — another tab or the previous page still has it open"));
       req.onupgradeneeded=()=>{ const db=req.result;
         if(!db.objectStoreNames.contains("images")) db.createObjectStore("images",{keyPath:"id"});
         if(!db.objectStoreNames.contains("videos")) db.createObjectStore("videos",{keyPath:"id"});
@@ -2596,6 +2601,9 @@ const mediaDB=(function(){
       req.onsuccess=()=>res(req.result);
       req.onerror=()=>rej(req.error);
     });
+    /* (!) And a REJECTED open is never memoised. `dbp` used to keep the failed promise for the
+       life of the page, so one bad moment at boot made every later read and write fail too. */
+    dbp=p.catch(e=>{ dbp=null; throw e; });
     return dbp;
   }
   function tx(storeName,mode,fn){
@@ -2628,6 +2636,23 @@ const mediaDB=(function(){
       try{ await tx("kv","readwrite",s=>s.put(value,key)); return true; }
       catch(e){ console.warn("idb kvSet failed",key,e); return false; }
     },
+    /* (!) The soft helpers above return null/[] on failure, which is indistinguishable from an
+       empty store. That ambiguity is what cost a playthrough: preloadCollections read "failed"
+       as "never migrated", fell back to a localStorage copy that had been migrated away long
+       ago, and then wrote the empty defaults back over the real data. These two throw instead,
+       and the boot path uses them. */
+    async kvKeysStrict(){
+      return await open().then(db=>new Promise((res,rej)=>{
+        const r=db.transaction("kv","readonly").objectStore("kv").getAllKeys();
+        r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error);
+      }));
+    },
+    async kvGetStrict(key){
+      return await open().then(db=>new Promise((res,rej)=>{
+        const r=db.transaction("kv","readonly").objectStore("kv").get(key);
+        r.onsuccess=()=>res(r.result===undefined?null:r.result); r.onerror=()=>rej(r.error);
+      }));
+    },
     async kvKeys(){
       try{ return await open().then(db=>new Promise((res,rej)=>{
         const r=db.transaction("kv","readonly").objectStore("kv").getAllKeys();
@@ -2645,29 +2670,67 @@ const IDB_COLL_KEYS={chats:"chats",memory:"memory",universes:"universes",persona
 // Load the four growing collections from IndexedDB into _idbColl BEFORE loadState runs.
 // First run after this upgrade: IDB is empty, so we seed it from whatever is still in
 // localStorage (non-destructive migration), then IndexedDB becomes the source of truth.
+/* (!) v109.1 — THIS FUNCTION USED TO DESTROY THE DATA IT WAS MEANT TO LOAD.
+   It read each collection with the soft kvGet, which returns null on ANY exception, and treated
+   null as "this user has never migrated". It then fell back to localStorage — where these
+   collections had been migrated away from versions ago, so it got {} and [] — and, because the
+   fallback set `migrated`, it WROTE THOSE EMPTY DEFAULTS BACK INTO IndexedDB. One failed read at
+   boot was enough to erase a playthrough, and an update reload is the likeliest moment for a
+   failed read (see the onblocked note in open()).
+   Now: the store is proved READABLE first. If it cannot be read, nothing is assumed missing,
+   nothing is seeded, and the session is marked unsafe so persistence refuses to run — a session
+   that could not read your data must never write over it. Seeding happens only for a key that is
+   genuinely absent from a store we can see, and never writes an empty value over a present one. */
+let collectionsSafe=false;     // false until the boot read is known good; persist* checks this
+let collectionsError="";
 async function preloadCollections(){
   _idbColl={};
-  let migrated=false;
   const defs={ chats:{}, memory:[], universes:null, personas:null, gossip:[] };
   const lsKey={chats:K.chats,memory:K.memory,universes:K.universes,personas:K.personas,gossip:K.gossipLedger};
+
+  let keys=null;
+  try{ keys=await mediaDB.kvKeysStrict(); }
+  catch(e){
+    collectionsSafe=false;
+    collectionsError=(e&&e.message)||"IndexedDB could not be read";
+    for(const name in IDB_COLL_KEYS) _idbColl[name]=defs[name];
+    try{ console.error("[storage] collections unreadable — running READ-ONLY:",e); }catch(_){}
+    return;                       // no fallback, no seeding: we do not know what is there
+  }
+  const present=new Set(keys||[]);
+  const seed={};
   for(const name in IDB_COLL_KEYS){
-    let v=await mediaDB.kvGet(IDB_COLL_KEYS[name]);
-    if(v===null||v===undefined){
-      const legacy=store.get(lsKey[name],defs[name]);   // pull from legacy localStorage
-      v=(legacy===null||legacy===undefined)?defs[name]:legacy;
-      migrated=true;
+    const key=IDB_COLL_KEYS[name];
+    if(present.has(key)){
+      try{ _idbColl[name]=await mediaDB.kvGetStrict(key); }
+      catch(e){
+        collectionsSafe=false;
+        collectionsError=(e&&e.message)||("could not read "+key);
+        for(const n2 in IDB_COLL_KEYS) _idbColl[n2]=defs[n2];
+        try{ console.error("[storage] collection read failed — running READ-ONLY:",key,e); }catch(_){}
+        return;
+      }
+      if(_idbColl[name]===null||_idbColl[name]===undefined)_idbColl[name]=defs[name];
+    }else{
+      // Genuinely absent from a store we CAN see — this is the one-time migration it was for.
+      const legacy=store.get(lsKey[name],defs[name]);
+      _idbColl[name]=(legacy===null||legacy===undefined)?defs[name]:legacy;
+      seed[key]=_idbColl[name];
     }
-    _idbColl[name]=v;
   }
-  // Seed IDB from localStorage once. We keep the localStorage copies for now as a silent
-  // fallback for one version; persist* overwrites IDB from here on.
-  if(migrated){
-    await mediaDB.kvSet("chats",_idbColl.chats);
-    await mediaDB.kvSet("memory",_idbColl.memory);
-    await mediaDB.kvSet("gossip",_idbColl.gossip||[]);
-    if(_idbColl.universes!=null) await mediaDB.kvSet("universes",_idbColl.universes);
-    if(_idbColl.personas!=null) await mediaDB.kvSet("personas",_idbColl.personas);
+  collectionsSafe=true;
+  for(const key in seed){ try{ await mediaDB.kvSet(key,seed[key]); }catch(e){} }
+}
+/* One place for every persist* to ask before it writes. A read-only session still plays — it
+   just never commits, and says so once rather than silently discarding the turn. */
+let _roWarned=false;
+function canPersistCollections(){
+  if(collectionsSafe) return true;
+  if(!_roWarned){
+    _roWarned=true;
+    try{ toast("Storage unreadable — NOT saving. Close other tabs and reload before playing."); }catch(_){}
   }
+  return false;
 }
 
 /* ===== EXPORT / IMPORT ===== back up & restore all app data (localStorage) ===== */
@@ -8135,6 +8198,7 @@ function _slimChat(c){
 // slim cache for that chat is invalidated and the next persist re-serializes it.
 function markChatDirty(chat){ if(chat){ chat._rev=(chat._rev||0)+1; } }
 function persistChatsNow(){ return perf("persistChatsNow",()=>{
+  if(!canPersistCollections()) return;   // v109.1 — never write over data we could not read
   // Strip heavy base64 image/video data out of persisted JSON (keep flags only).
   // In-memory state keeps the real data for the session; gallery handles persistence of media metadata.
   const slim={};
@@ -8189,10 +8253,10 @@ function persistChats(){
   _persistChatsTimer=setTimeout(()=>{ _persistChatsTimer=null; persistChatsNow(); scheduleAutoBackup(); }, 400);
 }
 function flushPersistChats(){ if(_persistChatsTimer){ clearTimeout(_persistChatsTimer); _persistChatsTimer=null; } persistChatsNow(); }
-function persistPersonas(){mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
-function persistUniverses(){mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
-function persistMemory(){mediaDB.kvSet("memory",state.memory);}
-function persistGossip(){mediaDB.kvSet("gossip",state.gossip||[]);}
+function persistPersonas(){if(!canPersistCollections())return;mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
+function persistUniverses(){if(!canPersistCollections())return;mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
+function persistMemory(){if(!canPersistCollections())return;mediaDB.kvSet("memory",state.memory);}
+function persistGossip(){if(!canPersistCollections())return;mediaDB.kvSet("gossip",state.gossip||[]);}
 /* ===== v25.11 — DURABLE GALLERY MEDIA =========================================
    Generated images and videos used to be stored as the PROVIDER'S REMOTE URL (fal / AtlasCloud /
    ModelsLab CDN links). Those links expire after a while, so the gallery quietly went blank — the
@@ -43395,6 +43459,10 @@ function scheduleAutoBackup(){
   _autoBkTimer=setTimeout(()=>{ _autoBkTimer=null; doAutoBackup(); }, 60000); // at most ~once/min
 }
 async function doAutoBackup(){
+  /* (!) v109.1 — only THREE slots are kept, so an auto-backup taken while the collections could
+     not be read would roll a good snapshot off the end and replace it with an empty one. The
+     snapshots are the last line of recovery; they are not written by a session that is unsure. */
+  if(!collectionsSafe) return;
   try{
     const bundle=await buildBackup();
     const slot="autobackup_"+Date.now();

@@ -164,6 +164,63 @@ const {chromium}=require('playwright');
        const sel=document.getElementById('setAtlasImgPreset'), fld=document.getElementById('setAtlasImgModel');
        return sel.value==="__custom__" && fld.value==="vendor/some-unreleased-model/edit"; }));
 
+  /* v112.2 — Grok Imagine 2.0 edit: a THIRD dialect of this endpoint. Its references go in
+     `image_urls` rather than `images`, it has no `size` at all (an aspect ratio and a separate
+     resolution band instead), and its `quality` tier is the reason to pick it — low is ~8x faster
+     and cheaper than medium. Any of those sent to the wrong model, or any of the others' fields
+     sent to this one, is a 400. */
+  const GROK="xai/grok-imagine-image-2.0-developer/edit";
+  console.log("\n[grok imagine 2.0 edit]");
+  const gspec=await pg.evaluate(m=>({edit:atlasIsEditModel(m),s:atlasEditSpec(m),
+    refs:editModelMaxRefs(m),listed:ATLAS_IMG_MODELS.some(o=>o.id===m)}),GROK);
+  ok("it is recognised as an edit model, so the references are attached at all",
+     gspec.edit===true && gspec.refs===3, JSON.stringify(gspec.s));
+  ok("and the picker offers it rather than leaving it to be typed", gspec.listed===true);
+
+  const gb=await body(GROK,{w:768,h:1152});
+  ok("the references go in image_urls, not images",
+     Array.isArray(gb.body.image_urls) && gb.body.image_urls.length===2 && gb.body.images===undefined,
+     JSON.stringify(gb.body));
+  ok("the frame is sent as an aspect ratio and never as a size",
+     typeof gb.body.aspect_ratio==="string" && gb.body.size===undefined, JSON.stringify(gb.body));
+  ok("with the quality tier that was asked for", gb.body.quality==="low", JSON.stringify(gb.body));
+  ok("and the cheap resolution band for an ordinary frame", gb.body.resolution==="1k", gb.body.resolution);
+  ok("it still asks for one image", gb.body.num_images===1, JSON.stringify(gb.body));
+  ok("none of the other models' fields ride along", await (async()=>{
+      const bad=["negative_prompt","seed","prompt_extend","thinking","thinking_mode",
+                 "prompt_optimization_mode","output_format","background","n","size","images"]
+        .filter(k=>gb.body[k]!==undefined);
+      return bad.length?("sent: "+bad.join(", ")):true; })());
+
+  ok("the frame the player picked survives as a shape", await pg.evaluate(async m=>{
+      const out={};
+      for(const [key,want] of [["2:3","2:3"],["16:9","16:9"],["1:1","1:1"],["Portrait","2:3"],["Tall","9:16"]]){
+        state.ratio=key; out[key]=_grokRatio(curImgRatioKey())===want;
+      }
+      state.ratio="9:16";
+      const bad=Object.keys(out).filter(k=>!out[k]);
+      return bad.length?("wrong ratio for: "+bad.join(", ")):true; },GROK));
+  ok("every ratio it can send is one the model actually accepts", await pg.evaluate(()=>{
+      const allowed=["auto","1:1","3:4","4:3","9:16","16:9","2:3","3:2","9:19.5","19.5:9","9:20","20:9","1:2","2:1"];
+      const bad=Object.keys(_GROK_AR).filter(k=>allowed.indexOf(_GROK_AR[k])<0);
+      return bad.length?("not in the enum: "+bad.join(", ")):true; }));
+  ok("a deliberately larger frame moves it up to 2k", await pg.evaluate(()=>
+      _grokRes("2048x2048")==="2k" && _grokRes("768x1152")==="1k" && _grokRes("")==="1k" ));
+
+  ok("and its setup note describes only what is sent", await pg.evaluate(m=>{
+      const n=atlasImgSetupNote(m);
+      return /aspect ratio, not a pixel size/.test(n) && /Quality tier: low/.test(n)
+        && /Negative prompt: not supported/.test(n) && /Seed: ignored/.test(n)
+        && !/snaps to the nearest/.test(n)
+        ? true : n; },GROK));
+
+  console.log("\n[and the models beside it are untouched]");
+  ok("seedream 4.5 still posts images, a size and no aspect ratio", await (async()=>{
+      const v=await body(V45);
+      return (Array.isArray(v.body.images) && typeof v.body.size==="string"
+              && v.body.aspect_ratio===undefined && v.body.quality===undefined)
+        ? true : JSON.stringify(v.body); })());
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

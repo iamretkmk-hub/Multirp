@@ -1089,7 +1089,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v112.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v112.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -10031,7 +10031,22 @@ const ATLAS_EDIT_MODELS={
     noPromptExtend:true,noCount:true,noSeed:true,
     sizes:["2048*2048","2304*1728","1728*2304","2848*1600","1600*2848","2496*1664","1664*2496",
            "3136*1344","4096*4096","4704*3520","3520*4704","5504*3040","3040*5504","4992*3328",
-           "3328*4992","6240*2656"]}
+           "3328*4992","6240*2656"]},
+  /* v112.2 — Grok Imagine 2.0 edit. A THIRD dialect of this endpoint, and the one that shares
+     least with the others, which is why every difference is a named field rather than a branch:
+       · the references go in `image_urls`, not `images`          -> refKey
+       · there is no `size` at all. The frame is an ASPECT RATIO from its own enum, and the
+         pixel count is a separate `resolution` band              -> ratioKey + resTier
+       · `quality` picks the render tier, and it is the whole reason to choose this model:
+         low is ~8x faster than medium (~10s against ~84s at 1K) and $0.04 an image against
+         $0.06. Asked for explicitly, so it is pinned here rather than left to a default that
+         would silently cost more and take a minute and a half.
+       · no negative_prompt, no seed, no prompt_extend
+     Three references, 8000 characters of prompt. The output aspect follows the first reference
+     unless aspect_ratio is sent, and it is. */
+  "xai/grok-imagine-image-2.0-developer/edit":{maxRefs:3,promptMax:8000,negMax:0,
+    noPromptExtend:true,noSeed:true,
+    refKey:"image_urls",ratioKey:true,resTier:true,quality:"low"}
 };
 Object.keys(ATLAS_EDIT_MODELS).forEach(function(k){ ATLAS_EDIT_MODELS[k].id=k; });
 // Match on the trimmed, lower-cased id so a stray capital or a pasted trailing space doesn't
@@ -10060,6 +10075,8 @@ const ATLAS_IMG_MODELS=[
    note:"Faces, lighting and colour held across a scene at 2K, or 4K if the frame you pick is large enough. No extra options — it is prompt, pictures and size."},
   {id:"bytedance/seedream-v5.0-pro/edit",label:"Seedream v5.0 Pro Edit — up to 10 people, slowest",
    note:"The best identity and lighting preservation, and the slowest. Its own four options appear below."},
+  {id:"xai/grok-imagine-image-2.0-developer/edit",label:"Grok Imagine 2.0 Edit — up to 3 people, fastest edit",
+   note:"Sent on the LOW quality tier: roughly eight times faster than the others (about ten seconds a picture) and the cheapest edit model here. Takes an aspect ratio rather than a pixel size, so the frame you pick is honoured as a shape."},
   {id:ATLAS_IMG_CUSTOM,label:"Custom — write any model id yourself",
    note:"Anything AtlasCloud will accept. An id this build knows as an edit model gets that model's setup; anything else is sent as plain text-to-image, with the negative prompt and guidance, and no reference pictures."}
 ];
@@ -10082,7 +10099,12 @@ function atlasImgSetupNote(id){
   bits.push("Prompt: trimmed to "+(spec.promptMax||800)+" characters.");
   bits.push(spec.negMax>0?("Negative prompt: up to "+spec.negMax+" characters.")
                          :"Negative prompt: not supported — it is dropped rather than sent.");
-  if(spec.sizeTier) bits.push("Frame: taken from the first reference picture; the "+spec.sizeTier+" quality tier is sent instead of a size.");
+  if(spec.ratioKey){
+    bits.push("Frame: sent as an aspect ratio, not a pixel size, so the shape you pick is kept and the model chooses the pixels.");
+    if(spec.resTier)bits.push("Resolution: 1k normally, 2k only if the frame you set is larger than 1280.");
+    if(spec.quality)bits.push("Quality tier: "+spec.quality+".");
+  }
+  else if(spec.sizeTier) bits.push("Frame: taken from the first reference picture; the "+spec.sizeTier+" quality tier is sent instead of a size.");
   else if(spec.sizes){
     const by=spec.sizes.map(function(x){const p=x.split("*");return {s:x,a:+p[0]*+p[1]};}).sort(function(a,b){return a.a-b.a;});
     bits.push("Frame: snaps to the nearest of "+spec.sizes.length+" presets ("+by[0].s+" … "+by[by.length-1].s+").");
@@ -10117,6 +10139,19 @@ function fitSizeToModel(model,size){
     while(w*h<floor){ w+=8; h=Math.ceil((h*(w/(w-8)))/8)*8; }   // rounding down must not undo it
   }
   return w+"*"+h;
+}
+/* The app's frame keys onto Grok's own enum. Every value below is in that enum, so a frame the
+   player picked is never quietly rounded into a different shape — 2:3 and 3:2 survive here, where
+   the video map collapses them to 9:16 and 16:9. */
+const _GROK_AR={"16:9":"16:9","3:2":"3:2","4:3":"4:3","1:1":"1:1","3:4":"3:4","2:3":"2:3",
+  "9:16":"9:16","Tall":"9:16","Portrait":"2:3","Square":"1:1"};
+function _grokRatio(key){ return _GROK_AR[key]||"9:16"; }
+/* 1k is 1024 square, 2k is 2048. Every frame this app ships is 1152 or under, so this answers 1k
+   unless a deliberately larger size was set — which keeps the cheap, fast tier as the normal one
+   without pretending the choice does not exist. */
+function _grokRes(size){
+  const wh=_wh(size); const big=wh?Math.max(wh[0],wh[1]):0;
+  return big>1280?"2k":"1k";
 }
 function editModelSize(model,size){
   const spec=atlasEditSpec(model); const wh=_wh(size);
@@ -10240,14 +10275,23 @@ async function atlasImage(prompt,negative,rule,opts){
     if(!urls.length) throw{friendly:model+" builds from reference images and none were available. Give the people in this scene a profile picture — the character editor for a character, Settings › You for yourself."};
     // The payload is built from the spec, not hard-coded, because the edit models disagree on the
     // names: qwen/wan-2.6 want num_images + prompt_extend, wan 2.7 wants n and takes neither.
-    const body={model:spec.id||model,images:urls,
+    const body={model:spec.id||model,
       prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length),(built.subjects||[]).slice(0,urls.length))};
+    body[spec.refKey||"images"]=urls;       // grok calls this list image_urls
     if(!spec.noCount)body[spec.countKey||"num_images"]=1;
     if(!spec.noPromptExtend)body.prompt_extend=false;
     if(spec.thinking)body.thinking_mode=true;
     if(negative&&spec.negMax>0)body.negative_prompt=String(negative).slice(0,spec.negMax);
-    const size=editModelSize(model,wanted);
-    if(size)body.size=size;
+    /* A ratio model takes its frame as an aspect ratio and its pixels as a band; there is no
+       size pair to send, and sending one is a 400. */
+    if(spec.ratioKey){
+      body.aspect_ratio=_grokRatio(curImgRatioKey());
+      if(spec.resTier)body.resolution=_grokRes(wanted);
+      if(spec.quality)body.quality=spec.quality;
+    }else{
+      const size=editModelSize(model,wanted);
+      if(size)body.size=size;
+    }
     if(!spec.noSeed && state.imgSeed!=null && state.imgSeed!=="")body.seed=+state.imgSeed;
     // Per-model opt-in fields. Nothing is sent unless this model's spec names it, so pointing the
     // id at a sibling never ships a field that model would reject.

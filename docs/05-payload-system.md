@@ -351,6 +351,26 @@ line is: it was never spoken, so it still stands next turn and either shows or i
 blob by the builder rather than called from the layout — a `{{call//resistance_actions}}` there
 resolves against nothing and the editor correctly flags it as a piece that does not exist.
 
+## v61.1 — the warning that reported the data instead of the template
+
+Ten "names that did not resolve" errors in the debug log, every one blamed on the **Prompt tuner**,
+each listing a different engine's vocabulary (`witness`/`impression`/`charge`, then
+`accuser`/`conviction`/`floor`/`ceiling`, then `a_sheet`/`b_to_a`, …) — plus `placeholder` in all
+ten. None of them was the tuner's template.
+
+`ptExpand` substitutes **calls first** and then ran the `{{value}}` scan over the *result*, so every
+token that arrived inside injected **data** was reported as a name the author had typed and got
+wrong. The tuner is the extreme case: `tuneUniversePrompts` puts the whole prompt being tuned into
+its system text, so a single run reports that prompt's entire placeholder vocabulary — and its own
+instruction *"EVERY {{placeholder}} token must remain exactly as-is"* supplies the tenth name. Every
+one of those placeholders is working exactly as intended; preserving them is what
+`_tunedPromptIsSafe` checks for.
+
+The scan now collects the names the **template itself** carries, before call substitution, and
+reports only those (`unknownVar` and `emptyVar` alike). Substitution is untouched — a known value
+inside injected content still fills, as it always did. Only the warning narrows, to names somebody
+could actually have typed in Settings.
+
 ## Producers & assembly
 
 One content producer per half — **do not reintroduce a per-path producer** (guard #2):

@@ -309,6 +309,29 @@
   .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;box-shadow:0 4px 16px -10px rgba(0,0,0,.5);}
   .card h3{margin:0;font-size:15px;}
   .card .desc{font-size:13px;color:var(--muted);}
+  /* v111.1 — THE HELP DOT. Long explanatory text used to sit between the controls it explained,
+     so every settings screen read as an essay with inputs embedded in it. The text is not
+     deleted — it moves behind this, one dot per card, and opens in a sheet. */
+  .ibtn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+    width:20px;height:20px;margin-left:6px;padding:0;border-radius:50%;cursor:pointer;
+    border:1px solid var(--border);background:var(--surface);color:var(--muted);
+    font-size:12px;font-weight:700;font-style:italic;font-family:Georgia,'Times New Roman',serif;
+    line-height:1;vertical-align:middle;transition:color .15s,border-color .15s,background .15s;}
+  .ibtn:hover,.ibtn:focus-visible{color:var(--text);border-color:var(--accent);background:var(--card);}
+  .ibtn:active{transform:scale(.92);}
+  h3>.ibtn{vertical-align:baseline;}
+  .sgroup>summary .ibtn{margin-left:8px;}
+  /* A card that was nothing but help text is removed outright; this is the row used when a card
+     keeps its controls but has no heading to hang the dot on. */
+  .ibtnRow{display:flex;justify-content:flex-end;margin:-4px 0 -2px;}
+  /* A card with neither a heading nor a bold label: the dot sits in the corner and costs no
+     height at all, rather than taking a line of its own above the first control. */
+  .card.hasHelpCorner{position:relative;}
+  .card.hasHelpCorner>.ibtn{position:absolute;top:10px;right:10px;margin:0;}
+  #infoModal .card{max-width:560px;width:100%;max-height:82vh;overflow:auto;}
+  #infoModal .infoBody{font-size:14px;line-height:1.55;color:var(--text);display:flex;flex-direction:column;gap:10px;}
+  #infoModal .infoBody .desc{font-size:14px;color:var(--text);}
+  #infoModal .infoBody details{border-top:1px solid var(--border);padding-top:8px;}
   label{font-size:13px;color:var(--muted);display:block;margin-bottom:4px;}
   input[type=text],input[type=password],input[type=number],textarea.fld,select{width:100%;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:11px 12px;font-size:15px;font-family:inherit;}
   input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,textarea.fld:focus,select:focus{outline:none;border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12);}
@@ -1066,7 +1089,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v111.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v111.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1946,6 +1969,15 @@
 </div>
 
 <!-- ===== VOICE CALL — callee picker ===== -->
+<!-- v111.1 — where the folded help text is shown. -->
+<div class="modal" id="infoModal" onclick="if(event.target===this)closeModal('infoModal')">
+  <button class="x" onclick="closeModal('infoModal')">&times;</button>
+  <div class="card" onclick="event.stopPropagation()">
+    <h3 id="infoTitle"><svg class="ic"><use href="#i-info"/></svg> <span></span></h3>
+    <div class="infoBody" id="infoBody"></div>
+    <button class="btn sec" onclick="closeModal('infoModal')">Close</button>
+  </div>
+</div>
 <div class="modal" id="callPickerModal">
   <button class="x" onclick="closeModal('callPickerModal')">×</button>
   <div class="card editCard">
@@ -8723,8 +8755,152 @@ function show(s){
   if(s==='personas')showUniverseGrid();
   if(s==='gallery')renderGallery();
   if(s==='debug')renderDebug();
+  // v111.1 — those renderers build cards, so the fold runs after them, not before.
+  try{ foldHelp(document.getElementById('screen-'+s)); }catch(e){}
 }
-function openModal(id){document.getElementById(id).classList.add('show');}
+/* ===================== v111.1 — THE HELP DOT =====================
+   Every settings screen had grown into an essay with inputs embedded in it: long explanatory
+   paragraphs sitting between the controls they explain, so the thing you came to change was
+   three screens down. Reported with a screenshot of the Payloads page, where two paragraphs and
+   a red warning box stand between the heading and the first control.
+
+   Nothing is deleted and nothing is rewritten. One pass folds the long help in each card behind
+   a single dot next to that card's heading, and the dot opens the original markup — bold, code
+   spans, warning boxes, nested <details> and all — in a sheet.
+
+   It runs over the DOM rather than the source for three reasons: it reaches all seven screens
+   without 116 hand edits, it catches help inside content that is rendered at runtime, and the
+   threshold is one number to tune instead of a judgement call repeated a hundred times.
+
+   OPTING OUT: put data-keep on a .desc that must stay visible inline. */
+const HELP_FOLD_MIN=160;          // characters of visible text; shorter hints stay where they are
+const _helpStore=new Map();
+let _helpSeq=0;
+
+function _helpTextLen(el){ return String(el.textContent||"").replace(/\s+/g," ").trim().length; }
+function _helpFoldable(el){
+  if(!el||el.hasAttribute("data-keep")||el.dataset.helpFolded)return false;
+  if(/display\s*:\s*inline/i.test(el.getAttribute("style")||""))return false;   // part of a label
+  if(el.closest("label,summary"))return false;                                   // not a block of help
+  if(el.closest("#infoModal"))return false;                                      // the sheet itself
+  if(el.querySelector("input,select,textarea,button,a[href]"))return false;       // carries controls
+  return _helpTextLen(el)>=HELP_FOLD_MIN;
+}
+function _helpDot(title,id){
+  const b=document.createElement("button");
+  b.type="button"; b.className="ibtn"; b.textContent="i";
+  b.setAttribute("aria-label","About "+(title||"this section"));
+  b.title=title?("About "+title):"What this does";
+  b.dataset.help=id;
+  b.addEventListener("click",e=>{ e.preventDefault(); e.stopPropagation(); showHelp(id); });
+  return b;
+}
+/* One card, one dot. Everything long in it goes into the same sheet, in the order it was written,
+   so a card whose help was three paragraphs and a warning box reads as one explanation. */
+function _foldCard(card,fallbackTitle){
+  if(card.dataset.helpDotted)return null;      // a modal is folded every time it opens
+  /* Descendants, not just direct children: half the long help on the Roleplay card sits inside a
+     bordered sub-group, and a children-only pass walked straight past it. A .desc belonging to a
+     NESTED card is left for that card's own dot. */
+  const parts=[...card.querySelectorAll(".desc")]
+    .filter(el=>el.closest(".card")===card && _helpFoldable(el));
+  if(!parts.length)return null;
+  const h3=card.querySelector(":scope > h3");
+  const title=(h3?h3.textContent:fallbackTitle||"").replace(/\s+/g," ").trim();
+  const id="help_"+(++_helpSeq);
+  const frag=document.createDocumentFragment();
+  parts.forEach(el=>{ el.dataset.helpFolded="1"; frag.appendChild(el); });
+  _helpStore.set(id,{title,frag});
+  /* A card that was ONLY help is now an empty box — it is removed, and its dot goes up to the
+     section header, which is where you would look for "what is this group for" anyway. */
+  /* (!) Is anything of substance left? This decides whether the card is DELETED, so it has to be
+     right: an element counts when it has text, or when it IS a control or picture, or when it
+     CONTAINS one. The first draft only looked at descendants, so a bare <input> — text-less and
+     childless — read as empty and took its whole card down with it. */
+  const _MEAT="input,select,textarea,button,img,svg,canvas,video,audio,details,a[href]";
+  const _meaty=el=>!!el && el.nodeType===1 && el.tagName!=="BR"
+    && (((el.textContent||"").trim()!=="") || el.matches(_MEAT) || !!el.querySelector(_MEAT));
+  const left=[...card.children].filter(_meaty);
+  if(!left.length){
+    const grp=card.closest("details.sgroup");
+    const sum=grp&&grp.querySelector(":scope > summary .sg-meta");
+    card.remove();
+    if(sum){
+      const rec=_helpStore.get(id);
+      if(!rec.title){ const t=(sum.firstChild&&sum.firstChild.textContent||"").trim(); if(t)rec.title=t; }
+      /* Before the subtitle, not after it: appended to .sg-meta the dot landed on its own line
+         underneath, reading as a stray control rather than part of the heading. */
+      const subtitle=sum.querySelector(".sg-sub");
+      const dot=_helpDot(rec.title,id);
+      if(subtitle)sum.insertBefore(dot,subtitle); else sum.appendChild(dot);
+      return id; }
+    return id;                                   // nowhere to hang it; the text simply goes away
+  }
+  card.dataset.helpDotted="1";
+  /* Where the dot goes, in order of how much it looks like it belongs there. A card with no
+     heading used to get a row of its own above the content, which reads as an orphan control —
+     the character editor's voice card was a bare dot floating over an empty line. Most such
+     cards title themselves with a <b>; the rest take a corner dot, which costs no height. */
+  const bold=h3?null:[...card.querySelectorAll("b,strong")].find(el=>
+    !el.closest("label")&&(el.textContent||"").trim().length>2&&!el.querySelector(".ibtn"));
+  if(h3) h3.appendChild(_helpDot(title,id));
+  else if(bold){ if(!_helpStore.get(id).title)_helpStore.get(id).title=bold.textContent.trim();
+                 bold.appendChild(_helpDot(_helpStore.get(id).title,id)); }
+  else { card.classList.add("hasHelpCorner"); card.appendChild(_helpDot(title,id)); }
+  return id;
+}
+/* Help that lives loose on a screen rather than in a card — the Debug log's explanation, the
+   note above the character grid. There is no card heading to hang a dot on, so one dot per
+   SCREEN goes in that screen's own header, beside its title. */
+function _foldLoose(scope){
+  const loose=[...scope.querySelectorAll(".desc")].filter(el=>!el.closest(".card")&&_helpFoldable(el));
+  if(!loose.length)return;
+  const screens=new Map();
+  loose.forEach(el=>{
+    const scr=el.closest(".modal")||el.closest(".screen")||scope;
+    if(!screens.has(scr))screens.set(scr,[]);
+    screens.get(scr).push(el);
+  });
+  screens.forEach((parts,scr)=>{
+    /* A screen puts its title in `header > div`; a modal puts it in an h3. Either way the dot
+       goes beside the title, never floating above the first control. */
+    const head=scr.querySelector(":scope > header");
+    const titleEl=(head&&head.querySelector(":scope > div")) || scr.querySelector("h3");
+    if(titleEl&&titleEl.querySelector(".ibtn"))return;          // this one already has a dot
+    const title=(titleEl?titleEl.textContent:"").replace(/\s+/g," ").trim();
+    const id="help_"+(++_helpSeq);
+    const frag=document.createDocumentFragment();
+    parts.forEach(el=>{ el.dataset.helpFolded="1"; frag.appendChild(el); });
+    _helpStore.set(id,{title,frag});
+    if(titleEl)titleEl.appendChild(_helpDot(title,id));
+    else{ const row=document.createElement("div"); row.className="ibtnRow";
+          row.appendChild(_helpDot(title,id)); scr.insertBefore(row,scr.firstChild); }
+  });
+}
+function foldHelp(root){
+  const scope=root||document;
+  try{
+    /* querySelectorAll never returns the root itself, so folding a node that IS a card used to be
+       a silent no-op — which also made two of this feature's own tests pass without exercising
+       anything. The root is checked first. */
+    if(scope.classList&&scope.classList.contains("card")){ try{ _foldCard(scope); }catch(_){} }
+    scope.querySelectorAll(".card").forEach(c=>{ try{ _foldCard(c); }catch(_){} });
+    _foldLoose(scope);
+  }catch(e){ try{ console.warn("[help] fold failed",e); }catch(_){} }
+}
+function showHelp(id){
+  const rec=_helpStore.get(id); if(!rec)return;
+  const t=document.querySelector("#infoTitle span"), body=document.getElementById("infoBody");
+  if(t)t.textContent=rec.title||"About this";
+  if(body){ body.innerHTML=""; body.appendChild(rec.frag.cloneNode(true)); }
+  openModal("infoModal");
+}
+function openModal(id){
+  const el=document.getElementById(id);
+  // v111.1 — every editor modal carries help too; the character editor alone had twelve blocks.
+  if(id!=="infoModal"){ try{ foldHelp(el); }catch(e){} }
+  el.classList.add('show');
+}
 function closeModal(id){document.getElementById(id).classList.remove('show');}
 function esc(s){return(s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 /* Reusable "instructions" popup for AI generation. Opens a modern, centered modal with a single
@@ -43896,6 +44072,7 @@ async function init(){
 }
 function init2(){
   syncSettingsUI();loadModels(false);
+  try{ foldHelp(document); }catch(e){}     // v111.1 — fold the static help once at boot
   _wireAudioUnlock();   // v20.7 — prime audio playback on first user gesture (TTS autoplay unlock)
   applyUniverseProfile(state.curUniverse);   // resolve per-universe player identity on load
   // Pull full image/video history from IndexedDB (large quota). If legacy localStorage

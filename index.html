@@ -20788,6 +20788,16 @@ const UNI_TUNE_TARGETS=[
    focus:"Adapt the texting voice and register to this world — slang, formality, what people here would plausibly type. The phone-text mechanic itself is the app's side channel and stays even in period settings; keep the no-nag follow-up rule and the JSON contract untouched.",
    mustKeep:['"message"']}
 ];
+/* (!) THE BASE'S PLACEHOLDERS MUST REACH THE MODEL AS PLACEHOLDERS. The tuner request goes through
+   epSend, and with engine payload templates on (the default) the template expander fills every
+   KNOWN {{value}} inside injected data — so {{user}}, {{world}}, {{day}}, {{period}}, {{location}}
+   in the base arrived as "Kaan", the universe name, "" … The model faithfully kept what it was
+   shown, the result no longer carried those tokens, _tunedPromptIsSafe rejected it, and nine of the
+   ten prompts silently stayed on the default ("I tuned the prompts but nothing changed").
+   So the base travels with its tokens written {{:name}} — a form no expander matches (PT_VAR,
+   PT_CALL and fillTpl all reject the colon) — and the reply is mapped back before the safety check. */
+function _tunerShieldPH(s){ return String(s||"").replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g,"{{:$1}}"); }
+function _tunerUnshieldPH(s){ return String(s||"").replace(/\{\{\s*:\s*([a-zA-Z0-9_.]+)\s*\}\}/g,"{{$1}}"); }
 async function tuneUniversePrompts(universe){
   if(!universe||!state.key)return 0;
   if(!universe.prompts||typeof universe.prompts!=="object")universe.prompts={};
@@ -20802,7 +20812,7 @@ async function tuneUniversePrompts(universe){
     try{
       // The per-prompt updater brief rides AFTER the (possibly user-customized) tuner meta-prompt,
       // so custom tuners still get it and a missing {{focus}} token can never be an issue.
-      const sys=fillTpl(up("promptTuner"),{ setting, directing, base })
+      const sys=fillTpl(up("promptTuner"),{ setting, directing, base:_tunerShieldPH(base) })
         +(t.focus?`\n\nFOR THIS PARTICULAR PROMPT — WHAT TO ADAPT (and nothing else):\n${t.focus}`:"");
       const out=await chatCompletion(epSend("promptTuner",sys,{},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),
         // long bases (e.g. the char-quest designer) need more output room than the old flat cap
@@ -20811,6 +20821,7 @@ async function tuneUniversePrompts(universe){
       let cand=stripInlineReasoning(String(out||"")).trim()
         .replace(/^"""\s*/,"").replace(/\s*"""$/,"")
         .replace(/^```[a-z]*\n?/i,"").replace(/\n?```$/,"");
+      cand=_tunerUnshieldPH(cand);
       // Code-evaluated contracts (enums the backend parses) must survive VERBATIM — a tune that
       // drops one is rejected outright, on top of the placeholder/JSON safety net.
       const keepOk=(t.mustKeep||[]).every(s=>cand.indexOf(s)!==-1);

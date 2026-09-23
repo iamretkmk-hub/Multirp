@@ -176,6 +176,77 @@ const {chromium}=require('playwright');
       const gone=!host.querySelector('.card');
       host.remove(); return gone ? true : "an empty box was left behind"; }));
 
+  /* v111.2 — the first pass skipped a .desc inside a <label> as a parenthetical. Half of Game
+     Preferences is a toggle row whose label carries four lines of essay ("World pulse
+     <span class=desc>Characters live offstage AS the day unfolds…</span>"), so most of the worst
+     page in the app went untouched. Length decides now, not the tag it sits in. */
+  console.log("\n[a toggle row is one line again]");
+  ok("a label carrying an essay folds to a dot on that row", await pg.evaluate(()=>{
+      show('settings');
+      document.querySelectorAll('#screen-settings details.sgroup').forEach(d=>d.open=true);
+      foldHelp(document.getElementById('screen-settings'));
+      const lab=[...document.querySelectorAll('#screen-settings label')].find(l=>/World pulse/.test(l.textContent));
+      if(!lab)return "the World pulse row is gone";
+      const dot=lab.querySelector('.ibtn');
+      const gone=!/Characters live offstage/.test(lab.textContent);
+      return (dot&&gone)?true:"dot="+!!dot+" textGone="+gone; }));
+  ok("and the row's own control is untouched", await pg.evaluate(()=>{
+      const cb=document.getElementById('setPulseOn');
+      return (cb&&cb.type==='checkbox')?true:"the toggle did not survive the fold"; }));
+  ok("its sheet still holds the words", await pg.evaluate(()=>{
+      const lab=[...document.querySelectorAll('#screen-settings label')].find(l=>/World pulse/.test(l.textContent));
+      lab.querySelector('.ibtn').click();
+      const t=document.getElementById('infoBody').textContent;
+      closeModal('infoModal');
+      return /Characters live offstage AS the day unfolds/.test(t)?true:t.slice(0,100); }));
+  ok("a SHORT hint in a label is still left inline", await pg.evaluate(()=>{
+      const host=document.createElement('div'); document.body.appendChild(host);
+      host.innerHTML='<label>Thing <span class="desc" style="display:inline">(blank = auto)</span><input type="checkbox"></label>';
+      foldHelp(host);
+      const kept=/blank = auto/.test(host.textContent) && !host.querySelector('.ibtn');
+      host.remove(); return kept?true:"a short label hint was folded"; }));
+  ok("a <summary> is never folded — its text is the disclosure's title", await pg.evaluate(()=>{
+      const host=document.createElement('div'); document.body.appendChild(host);
+      host.innerHTML='<details><summary><span class="desc">'+('s'.repeat(220))+'</span></summary><p>x</p></details>';
+      foldHelp(host);
+      const kept=!!host.querySelector('summary .desc') && !host.querySelector('.ibtn');
+      host.remove(); return kept?true:"a summary lost its own title"; }));
+  ok("one row's dot never swallows the next row's explanation", await pg.evaluate(()=>{
+      const host=document.createElement('div'); document.body.appendChild(host);
+      host.innerHTML='<div class="card"><h3>T</h3>'
+        +'<label>A <span class="desc">'+('a'.repeat(200))+'</span></label>'
+        +'<label>B <span class="desc">'+('b'.repeat(200))+'</span></label></div>';
+      foldHelp(host);
+      const dots=[...host.querySelectorAll('label .ibtn')];
+      if(dots.length!==2){ host.remove(); return dots.length+" row dots"; }
+      dots[0].click(); const one=document.getElementById('infoBody').textContent; closeModal('infoModal');
+      const ok2=/a{50}/.test(one) && !/b{50}/.test(one);
+      host.remove(); return ok2?true:"the first row's sheet carried the second row's text"; }));
+
+  console.log("\n[a screen with a dot already still collects what comes after]");
+  ok("a second loose block joins the sheet instead of being dropped", await pg.evaluate(()=>{
+      /* This RETURNED early when the header already had a dot, silently leaving every later
+         loose block sitting on the page. Built here rather than borrowed from a real screen, so
+         the assertion does not quietly depend on where the app happens to put its help. */
+      const scr=document.createElement('div'); scr.className='screen';
+      scr.innerHTML='<header><div>Made up</div></header>'
+                   +'<div class="desc">'+('P'.repeat(220))+'</div>';
+      document.body.appendChild(scr);
+      foldHelp(scr);
+      const dot=scr.querySelector('header > div .ibtn');
+      if(!dot){ scr.remove(); return "no header dot after the first pass"; }
+      const count=()=>{ const d=document.createElement('div');
+        d.appendChild(_helpStore.get(dot.dataset.help).frag.cloneNode(true));
+        return d.querySelectorAll('.desc').length; };
+      const n0=count();
+      const extra=document.createElement('div'); extra.className='desc';
+      extra.textContent='Q'.repeat(220); scr.appendChild(extra);
+      foldHelp(scr);
+      const grew=count()===n0+1;
+      const offPage=!scr.querySelector('.desc');
+      scr.remove();
+      return (grew&&offPage)?true:"grew="+grew+" offPage="+offPage; }));
+
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

@@ -1089,7 +1089,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v112.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v112.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8781,7 +8781,12 @@ function _helpTextLen(el){ return String(el.textContent||"").replace(/\s+/g," ")
 function _helpFoldable(el){
   if(!el||el.hasAttribute("data-keep")||el.dataset.helpFolded)return false;
   if(/display\s*:\s*inline/i.test(el.getAttribute("style")||""))return false;   // part of a label
-  if(el.closest("label,summary"))return false;                                   // not a block of help
+  /* v111.2 — a LABEL may carry an essay. Half of Game Preferences is a toggle row whose label
+     holds four lines of explanation ("World pulse <span class=desc>Characters live offstage AS
+     the day unfolds…</span>"), and the first pass skipped every one of them as a parenthetical.
+     Length decides; a short inline hint is still short. A <summary> is still off limits — its
+     text IS the disclosure's title. */
+  if(el.closest("summary"))return false;
   if(el.closest("#infoModal"))return false;                                      // the sheet itself
   if(el.querySelector("input,select,textarea,button,a[href]"))return false;       // carries controls
   return _helpTextLen(el)>=HELP_FOLD_MIN;
@@ -8797,13 +8802,32 @@ function _helpDot(title,id){
 }
 /* One card, one dot. Everything long in it goes into the same sheet, in the order it was written,
    so a card whose help was three paragraphs and a warning box reads as one explanation. */
+/* A .desc inside a label explains THAT row, so it folds to a dot on that row rather than joining
+   the card's. The dot takes the span's exact place, which is how "World pulse ⓘ [toggle]" ends up
+   reading as one line instead of five. */
+function _foldLabels(scope){
+  [...scope.querySelectorAll("label .desc")].forEach(el=>{
+    if(!_helpFoldable(el))return;
+    const lab=el.closest("label");
+    if(!lab||lab.querySelector(".ibtn"))return;
+    const title=(lab.textContent||"").replace(el.textContent||"","").replace(/\s+/g," ").trim();
+    const id="help_"+(++_helpSeq);
+    const frag=document.createDocumentFragment();
+    const dot=_helpDot(title,id);
+    el.dataset.helpFolded="1";
+    el.parentNode.insertBefore(dot,el);
+    frag.appendChild(el);
+    _helpStore.set(id,{title,frag});
+  });
+}
 function _foldCard(card,fallbackTitle){
   if(card.dataset.helpDotted)return null;      // a modal is folded every time it opens
   /* Descendants, not just direct children: half the long help on the Roleplay card sits inside a
      bordered sub-group, and a children-only pass walked straight past it. A .desc belonging to a
      NESTED card is left for that card's own dot. */
+  _foldLabels(card);
   const parts=[...card.querySelectorAll(".desc")]
-    .filter(el=>el.closest(".card")===card && _helpFoldable(el));
+    .filter(el=>el.closest(".card")===card && !el.closest("label") && _helpFoldable(el));
   if(!parts.length)return null;
   const h3=card.querySelector(":scope > h3");
   const title=(h3?h3.textContent:fallbackTitle||"").replace(/\s+/g," ").trim();
@@ -8866,7 +8890,14 @@ function _foldLoose(scope){
        goes beside the title, never floating above the first control. */
     const head=scr.querySelector(":scope > header");
     const titleEl=(head&&head.querySelector(":scope > div")) || scr.querySelector("h3");
-    if(titleEl&&titleEl.querySelector(".ibtn"))return;          // this one already has a dot
+    /* (!) This used to RETURN when the header already had a dot, which silently left every later
+       loose block sitting on the page — that is how the arcs note on the characters view survived
+       the first pass. A second batch joins the sheet that is already there. */
+    const existing=titleEl&&titleEl.querySelector(".ibtn");
+    if(existing){
+      const rec=_helpStore.get(existing.dataset.help);
+      if(rec){ parts.forEach(el=>{ el.dataset.helpFolded="1"; rec.frag.appendChild(el); }); return; }
+    }
     const title=(titleEl?titleEl.textContent:"").replace(/\s+/g," ").trim();
     const id="help_"+(++_helpSeq);
     const frag=document.createDocumentFragment();
@@ -8885,6 +8916,7 @@ function foldHelp(root){
        anything. The root is checked first. */
     if(scope.classList&&scope.classList.contains("card")){ try{ _foldCard(scope); }catch(_){} }
     scope.querySelectorAll(".card").forEach(c=>{ try{ _foldCard(c); }catch(_){} });
+    _foldLabels(scope);          // rows that live outside any card
     _foldLoose(scope);
   }catch(e){ try{ console.warn("[help] fold failed",e); }catch(_){} }
 }

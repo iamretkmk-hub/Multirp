@@ -26,6 +26,22 @@ through its `status` stamp, the day, part of the day and place.
   boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
   without CORS cannot be drawn and is left off the page.
 
+## The storyteller (v120.1)
+
+A Story Book chapter played back as a motion comic — **Play** in the book's bar (the whole chapter)
+or **Play from here** under a scene. `bookPlayItems` makes the play list from exactly what the book
+shows: a title card per scene (the editor's title and recap when there are some), then its kept
+panels. Each picture drifts (one of four CSS pan-and-zoom paths, timed to the panel); a panel whose
+message has a clip plays the clip instead (`msgVideoBlobUrl`); a picture whose bytes are gone is
+skipped.
+
+Voices (`state.bookVoice`, default on, needs the Inworld relay): the caption and the recap are read
+in the narrator voice through the narrator effect chain, each bubble in the voice of whoever said it
+(`voiceIdFor`; the player's own lines and anyone without a voice in the default call voice). The
+next item's audio is synthesized while the current one plays (`_mcPrep`). With no relay or the voice
+off it plays silently, each piece held for its reading time (`_mcReadMs`). Pause, back, next, close
+and the voice switch all cancel what is in flight through `_mc.seq` and `_stopDub`.
+
 ## Video model (v39.7)
 
 `VIDEO_MODELS` offers **one** entry — `bytedance/seedance-2.0-mini/reference-to-video`, which is

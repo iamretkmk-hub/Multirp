@@ -78,7 +78,7 @@ const {chromium}=require('playwright');
       return open.length===1 && open[0].id==="cmSec-rp"
         ? true : open.map(v=>v.id).join(","); }));
   ok("Roleplay options carries every playback toggle", JSON.stringify(await rows('#cmSec-rp .modeRow'))===
-      JSON.stringify(["Microphone","Speak replies","Pause images","Heat of the moment","Auto-RP","Autopilot","Suggested replies","Do Not Disturb","Story language"])
+      JSON.stringify(["Microphone","Speak replies","Pause images","Heat of the moment","Auto-RP","Autopilot","Suggested replies","Story mode","Do Not Disturb","Story language"])
       ? true : JSON.stringify(await rows('#cmSec-rp .modeRow')));
   ok("every section has a way back", await pg.evaluate(()=>{
       const secs=[...document.querySelectorAll('#chatMenu .cmView')].filter(v=>v.id!=="cmRoot");

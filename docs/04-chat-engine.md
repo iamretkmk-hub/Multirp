@@ -103,6 +103,31 @@ router model. The chips render in `#autoBar` above the composer and hide while t
 Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention always goes through
 `narratePlayerTurn`, even with Auto-RP off.
 
+## Story mode (v118.1, experimental)
+
+A separate per-chat switch (`chat.storyMode`, Roleplay options), exclusive with Autopilot. Where
+Autopilot keeps the *other* characters moving, Story mode also plays the player's character and
+stops only at turning points. It shares Autopilot's once-a-second tick and holds (`apTick` hands off
+to `smTick`), and uses its own pace (`state.smDelay`, default 8 s) and pause limit (`state.smCap`,
+default 20 moves without a word from the player).
+
+- **Whose move** (`smNextKind`, code): a pending choice waits; a leave or an empty scene moves on;
+  a line said to the player, a one-on-one line with no addressee, a narrator beat, or two character
+  beats in a row → the player's move; otherwise a character answers through `playCharacterTurn`.
+- **The player's move** (`smPlayerMove`): `x_story_player` returns `{intent}`, `{intent, leave}` or
+  `{choice, question, options}`. An intent goes through `_smSend` → `sendMessage` with `_apForceRp`,
+  so the Auto-RP narrator writes it and the ordinary reply pipeline answers it (`_smSending` keeps
+  `apPlayerActed` from treating it as the player's own word). A choice is refused for
+  `SM_CHOICE_GAP` (4) moves after the last one (`x_story_no_choice` tells the model; if it asks
+  anyway its first option is played). After `SM_SCENE_WRAP` (24) lines in a scene,
+  `x_story_wrap_up` tells it to close.
+- **A choice** shows its question and options in `#autoBar`; tapping one (or *You decide*) sends it
+  the same way. Typing your own turn answers it too.
+- **Moving on** (`smMoveOn`): after a leave, the scene's people stay put, `advanceTime(chat,1)`, and
+  `runSceneCut` drops the player into the next scene (Gamemaster arrival as the fallback). Alone
+  without a leave, it only finds a scene. At Night it stops and offers End Day.
+- All three prompts are on the *Story mode (experimental)* card.
+
 ## Auto-RP (player narrator)
 
 `narratePlayerTurn` wraps the player's terse input using the `playerNarratePrompt` engine

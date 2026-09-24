@@ -82,7 +82,8 @@ const {chromium}=require('playwright');
      true: each agent carries its own switch now. It still has to say which calls IT governs, or
      the switch reads as app-wide again, which is the bug this suite exists for. */
   ok("it says roleplay replies only", await pg.evaluate(()=>
-      /roleplay replies only — each background agent has its own switch/.test(document.documentElement.innerHTML)));
+      // v124.0 — the wording moved behind the row's ⓘ; it must still be there, in the page or its help sheet
+      /roleplay replies only — each background agent has its own switch/.test((document.documentElement.innerHTML+[..._helpStore.values()].map(r=>{const d=document.createElement('div'); d.appendChild(r.frag.cloneNode(true)); return d.innerHTML;}).join(' ')))));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

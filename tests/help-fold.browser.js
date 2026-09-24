@@ -23,6 +23,7 @@ const {chromium}=require('playwright');
 
   // the same test the fold itself applies, so the audit cannot disagree with the pass
   const LONG=`d=>{ if(d.closest('#infoModal'))return false;
+    if(d.dataset.helpFolded)return false;       // v124.0 — a note code writes into folds in place, hidden
     if(/display\\s*:\\s*inline/i.test(d.getAttribute('style')||''))return false;
     if(d.closest('label,summary'))return false;
     return String(d.textContent||'').replace(/\\s+/g,' ').trim().length>=160; }`;

@@ -135,7 +135,7 @@ const {chromium}=require('playwright');
   /* ---- HEAT FOLLOWS THE SCENE, BOTH WAYS. Starting a scene raises Heat of the moment; every path
      that stops the scene has to put it back. Two of them used not to: deleting the scene from the
      editor, and syncSceneDock noticing the scene is gone. Both left heat raised with no video. */
-  const heat=await pg.evaluate(()=>{
+  const heat=await pg.evaluate(async()=>{
     const out={}; const chat=curChat();
     state.heatOn=false; state._heatWasOn=undefined; chat.sceneDockId=null;
     state.scenes=[{id:"scn_h",name:"H",characterId:"v_a",characterName:"Ayla",
@@ -151,9 +151,9 @@ const {chromium}=require('playwright');
                    universeId:chat.universeId,clips:[{id:"c1",url:"blob:x"}]}];
     playSceneInChat("scn_h2");
     const raised=state.heatOn;
-    const realConfirm=window.confirm; window.confirm=()=>true;
-    try{ deleteScene("scn_h2"); }catch(e){ out.delErr=String(e); }
-    window.confirm=realConfirm;
+    const realConfirm=window.uiConfirm; window.uiConfirm=async()=>true;
+    try{ await deleteScene("scn_h2"); }catch(e){ out.delErr=String(e); }
+    window.uiConfirm=realConfirm;
     out.onDelete={raisedFirst:raised, heat:state.heatOn, docked:!!chat.sceneDockId};
 
     // the scene vanished from under the dock (syncSceneDock finds no scene)

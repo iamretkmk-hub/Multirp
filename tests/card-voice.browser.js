@@ -130,7 +130,8 @@ const {chromium}=require('playwright');
       const EXEMPT=new Set(["head_format","head_emotion","rp_last_before","head_format_heat",
         "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other",
         "bio_wardrobe_other","quest_intro","last_line_footer","drive_ego","heat_breaks_voiced",
-        "heat_breaks_silent","resistance_body","rails_header"]);
+        "heat_breaks_silent","resistance_body","rails_header",
+        "mem_plan_self","mem_plan_with","mem_plan_asked"]);   // memory text — the memory bank is first person
       const FP=/(?<![A-Za-z])(I|I'm|I've|my|My|MY|me|Me|mine|myself)(?![A-Za-z])/;
       const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!EXEMPT.has(k)
         && typeof BLOCK_TPL_DEFAULTS[k]==="string" && FP.test(BLOCK_TPL_DEFAULTS[k]));

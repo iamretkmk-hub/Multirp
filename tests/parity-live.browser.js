@@ -152,7 +152,8 @@ const {chromium}=require('playwright');
       if(!(B._rt&&B._rt.target_header&&B._rt.target_bg)) miss.push("target fragments");
       if(!(B.drives&&B.drives.indexOf("CAUGHT BETWEEN")>-1)) miss.push("drives block");
       if(!(B._mem&&B._mem.mem_recent_entries&&B._mem.mem_distant_entries)) miss.push("memories");
-      if(!(B._pr&&B._pr.promise_yours&&B._pr.promise_owed&&B._pr.promise_ended)) miss.push("promises");
+      // promise_ended is its own block (_pre) since the split that moved it to the tail
+      if(!(B._pr&&B._pr.promise_yours&&B._pr.promise_owed&&B._pre&&B._pre.promise_ended)) miss.push("promises");
       if(!(B._as&&B._as.already_said_lines)) miss.push("already said");
       if(!(B._ss&&B._ss.style_body&&B._ss.style_notes)) miss.push("speaking style");
       if(!(B._ll&&B._ll.last_line_body)) miss.push("last line");

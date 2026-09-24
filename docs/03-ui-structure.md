@@ -109,6 +109,20 @@ a missing element / silently drop the value.
 - **Toggles**: `<label class="switchLbl"><input type="checkbox"><span class="sl"></span></label>`.
 - **Segmented pickers**: `div.seg` with `button[data-*]`, `.on` marks selection (`seg()` helper).
 - **Feedback**: `toast(msg)` for transient notices; inline `sysError` bubbles for in-chat errors.
+- **Dialogs (v124.0)**: never `confirm()`/`prompt()`/`alert()`. Use the in-app sheets, which are
+  promises: `await uiConfirm(msg,{title,ok,danger})` → bool, `await uiPrompt(msg,{title,value,type})`
+  → string|null, `await uiChoose(msg,[{label,value}],{title})` → value|null. The calling function
+  becomes `async`.
+- **Explanations (v124.0)**: every explanation lives behind an ⓘ dot, never inline. Write help as
+  `div.desc` in the page and the fold does the rest: help under a toggle row or field label gets a
+  dot on that row; the card's general help gets a dot on its `h3`; a long `(…)` in a label is lifted
+  too. Help you render at runtime needs `data-help` (runtime `.desc` is otherwise treated as data —
+  a quest's text, a memory). A `.desc` with an id is a status line and stays visible unless it has
+  `data-help`, in which case it is hidden in place and the dot shows its live text. `data-keep`
+  opts a block out.
+- **Fields**: any text-like `input`, `select` or `textarea` gets the standard field look from CSS —
+  don't inline background/border/padding on a control. Buttons in a `.row` size to their label and
+  wrap as whole buttons. In-card close buttons are `<button class="x xIn">×</button>`.
 - **Escaping**: all user data interpolated into HTML goes through `esc()` — no exceptions.
 - **Theming**: CSS variables (`--bg --surface --card --border --text --muted --accent
   --danger`), switched by `body[data-theme=dark|light]`, `applyTheme()` handles `system`.

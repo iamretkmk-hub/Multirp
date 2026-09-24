@@ -1109,7 +1109,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v117.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v117.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1568,8 +1568,12 @@
           <div><label>Heat length (how many continuation replies, 1–10)</label><input type="number" id="setHeatN" min="1" max="10" step="1" placeholder="5"></div>
           <div class="desc">1 means heat changes the WRITING and not the pacing: one reply, in the heat form and on the heat payload, then the turn is yours again. Above 1 the scene carries itself for that many replies. Playing a clip over the story turns heat on by itself and closing the clip puts it back.</div>
           <div><label><svg class="ic"><use href="#i-play"/></svg> Autopilot — seconds of quiet before the scene carries on (10–300)</label><input type="number" id="setApDelay" min="10" max="300" step="5" placeholder="30"></div>
-          <div><label>Autopilot — beats in a row before it waits for you (1–30)</label><input type="number" id="setApCap" min="1" max="30" step="1" placeholder="6"></div>
-          <div class="desc">Autopilot is switched on per chat from the menu (Roleplay options › Autopilot). While you are quiet, a character in the scene takes the next beat, and the Gamemaster, meetings and the world get their turn as they would after yours. Typing anything holds it; a question put to you doubles the wait. Every beat is a normal reply, so it costs what a reply costs.</div>
+          <div><label>Autopilot — moves in a row before it waits for you (1–30)</label><input type="number" id="setApCap" min="1" max="30" step="1" placeholder="6"></div>
+          <div><label>Autopilot — when nobody is with you</label><select id="setApAlone">
+            <option value="cut">Drop me into a scene with someone</option>
+            <option value="arrive">Let someone come to me here</option>
+            <option value="off">Leave me be</option></select></div>
+          <div class="desc">Autopilot is switched on per chat from the menu (Roleplay options › Autopilot). While you are quiet, a character in the scene takes the next beat, and the Gamemaster, meetings and the world get their turn as they would after yours. If the scene has carried itself for three beats with no word from you, the Gamemaster is asked for something to happen. Alone, it first lets a due meeting or a text reach you, then does what you pick above. Typing anything holds it; a question put to you, or being alone, doubles the wait. Every move is a normal model call, so it costs what a reply costs.</div>
           <div class="kvline"><span><svg class="ic"><use href="#i-sparkle"/></svg> Suggested replies</span>
             <label class="switchLbl"><input type="checkbox" id="setSuggestOn" checked><span class="sl"></span></label></div>
           <div class="desc">When it is your turn, three short ideas appear above the text box; tap one and the Auto-RP narrator writes it as your turn. Costs one small call each time the scene settles.</div>
@@ -2590,7 +2594,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Quality-of-life features
   recapOn:"sm_recapon",
   // v116.0 — Autopilot (the scene carries on while you are quiet) + suggested replies
-  apDelay:"sm_apdelay",apCap:"sm_apcap",suggestOn:"sm_suggeston",
+  apDelay:"sm_apdelay",apCap:"sm_apcap",suggestOn:"sm_suggeston",apAlone:"sm_apalone",
   // Relationships + freeform trackers
   relOn:"sm_relon",relPrompt:"sm_relprompt",relShortPrompt:"sm_relshortprompt",stInterval:"sm_stinterval",trackOn:"sm_trackon",trackPrompt:"sm_trackprompt",voiceCheckOn:"sm_voicecheckon",voiceCheckPrompt:"sm_voicecheckprompt",
   // Locations / travel / calendar
@@ -6986,6 +6990,9 @@ function loadState(){
     apDelay:(()=>{const v=parseInt(store.raw(K.apDelay,"30"),10);return (v>=10&&v<=300)?v:30;})(),
     apCap:(()=>{const v=parseInt(store.raw(K.apCap,"6"),10);return (v>=1&&v<=30)?v:6;})(),
     suggestOn:store.get(K.suggestOn,true),
+    // v117.1 — what Autopilot does when nobody is in earshot: "cut" (drop you into a scene),
+    // "arrive" (somebody comes to you) or "off" (leave you be).
+    apAlone:(()=>{const v=store.raw(K.apAlone,"cut");return ["cut","arrive","off"].indexOf(v)>=0?v:"cut";})(),
     relOn:store.get(K.relOn,true),
     relPrompt:store.raw(K.relPrompt,DEFAULT_REL),
     trackOn:store.get(K.trackOn,true),
@@ -30604,6 +30611,17 @@ async function runMultiCharTurn(chat,playerText,stimulus){
    A QUESTION LEFT HANGING: when the last line put a question to the player, the wait doubles, and if
    the asker is the one who takes the beat they get x_autopilot_silence instead of x_autopilot_beat —
    they react to the silence instead of asking again.
+   v117.1 — THE WORLD COMES TO YOU. A move is not always a character's line:
+     ALONE (nobody in earshot), after twice the wait: a due meeting of the player's resolves first
+     (someone walks in, or the player is called away); failing that a character may text; failing
+     that, per state.apAlone, the player is dropped into a scene already running with someone
+     (runSceneCut — no hello, no arrival), or the Gamemaster brings somebody here. Do Not Disturb
+     leaves an alone player alone.
+     STALE: when a run has carried itself for AP_DIRECTOR_AFTER beats with no word from the player,
+     the next move is the Gamemaster, forced once per quiet stretch — or, if an event is already
+     live, the Scene Writer advancing it. Otherwise the director keeps its own cadence through
+     postTurn, as before.
+   Both count against the same state.apCap budget as the beats.
    SUGGESTED REPLIES (global, state.suggestOn). When the scene settles on someone else's line, one
    small call writes three short intentions. Tapping one sends it through the Auto-RP narrator,
    whether or not Auto-RP is on, because an intention is not a finished turn. "Keep going" plays one
@@ -30661,7 +30679,7 @@ function _apBlocked(chat){
 }
 /* The player just did something: the run counter starts over and old suggestions are stale. */
 function apPlayerActed(chat){
-  if(chat)chat._apBeats=0;
+  if(chat){ chat._apBeats=0; chat._apDirected=false; }
   _apSince=Date.now();
   _sugSeq++; _sugBusy=false; _sugOpts=[]; _sugFor=null;
   renderAutoBar();
@@ -30719,6 +30737,46 @@ async function apBeat(chat){
   }catch(e){ return false; }
   finally{ _apBusy=false; _apSince=Date.now(); renderAutoBar(); }
 }
+const AP_DIRECTOR_AFTER=3;   // beats in one quiet stretch before the Gamemaster is asked in
+/* Should the next move be the director rather than another line? Once per quiet stretch. */
+function _apWantsDirector(chat){
+  if(!chat||chat.dnd||chat._apDirected)return false;
+  if(state.gmOn===false&&!(chat.activeEvent&&!chat.activeEvent.resolved))return false;
+  return (chat._apBeats||0)>=AP_DIRECTOR_AFTER;
+}
+/* A move that is not a character's line: the world reaching an alone player, or the director
+   stepping into a scene that has been carrying itself. Returns true when something happened. */
+async function apWorldMove(chat,kind){
+  if(!chat||_apBusy)return false;
+  _apBusy=true;
+  chat._apBeats=(chat._apBeats||0)+1;
+  _sugSeq++; _sugBusy=false; _sugOpts=[]; renderAutoBar();
+  let moved=false, how="";
+  try{
+    if(kind==="stale"){
+      chat._apDirected=true;
+      how="gamemaster";
+      if(chat.activeEvent&&!chat.activeEvent.resolved&&state.sceneOn) await forceGamemaster();
+      else await maybeGamemaster(chat,true);
+      moved=true;
+    }else{
+      if(state.calOn){ try{ moved=!!(await resolveDueMeetings(chat)); if(moved)how="meeting"; }catch(e){} }
+      if(!moved){ try{ maybeProactiveTextTick(chat); }catch(e){} }
+      if(!moved&&state.apAlone==="cut"){
+        try{ moved=!!(await runSceneCut(chat)); if(moved)how="scene cut"; }catch(e){} }
+      if(!moved&&state.apAlone!=="off"&&!chat.dnd){
+        /* The director was asked for somebody to arrive; what it stages may land a moment later,
+           so asking counts as the move. If nothing came, the next quiet stretch asks again, and the
+           run cap bounds it. */
+        try{ await maybeGamemaster(chat,true); moved=true; how="arrival"; }catch(e){}
+      }
+    }
+    try{ _alog("autopilot.world",kind+" → "+(moved?how:"nothing happened")+" · "+chat._apBeats+"/"+state.apCap); }catch(e){}
+    if(!moved)chat._apBeats=Math.max(chat._apBeats,state.apCap);   // nothing to do — wait for the player
+    return moved;
+  }catch(e){ return false; }
+  finally{ _apBusy=false; _apSince=Date.now(); renderAutoBar(); }
+}
 /* "Keep going" / tapping the Autopilot pill: one beat now, and a fresh run allowance. */
 async function apContinueNow(){
   const chat=curChat(); if(!chat)return;
@@ -30727,6 +30785,7 @@ async function apContinueNow(){
   if(why==="nokey"){ toast("Add your API key first"); return; }
   if(why==="busy"||why==="speaking"){ toast("The scene is still moving — one moment"); return; }
   chat._apBeats=0;
+  if(!_apCast(chat).length){ await apWorldMove(chat,"alone"); return; }
   await apBeat(chat);
 }
 /* ---- suggested replies ---- */
@@ -30799,7 +30858,7 @@ function renderAutoBar(info){
 }
 function _apLabel(chat,why,waitMs,cast){
   if(_apBusy)return "Autopilot · playing…";
-  if(!cast.length)return "Autopilot · nobody here";
+  if(!cast.length&&(state.apAlone==="off"||chat.dnd))return "Autopilot · nobody here";
   if((chat._apBeats||0)>=state.apCap)return "Autopilot · your turn — tap to go on";
   switch(why){
     case "typing":   return "Autopilot · paused while you type";
@@ -30809,6 +30868,7 @@ function _apLabel(chat,why,waitMs,cast){
     case "window":   return "Autopilot · paused";
   }
   const left=Math.max(0,Math.ceil((waitMs-(Date.now()-_apSince))/1000));
+  if(!cast.length)return "Autopilot · the world comes to you in "+left+"s";
   return "Autopilot · next beat in "+left+"s";
 }
 /* Runs once a second. Cheap when idle: a few property reads and one textContent write. */
@@ -30828,12 +30888,15 @@ function apTick(){
     }
     let label="";
     if(chat.autoPlay){
-      const asked=_apAskedPlayer(_apLastLine(chat));
-      const waitMs=state.apDelay*1000*(asked?2:1);
+      const alone=!cast.length;
+      const asked=!alone&&_apAskedPlayer(_apLastLine(chat));
+      const waitMs=state.apDelay*1000*((asked||alone)?2:1);
       label=_apLabel(chat,why,waitMs,cast);
-      if(!why&&!_apBusy&&cast.length&&(chat._apBeats||0)<state.apCap&&Date.now()-_apSince>=waitMs){
-        apBeat(chat);
-        label="Autopilot · playing…";
+      if(!why&&!_apBusy&&(chat._apBeats||0)<state.apCap&&Date.now()-_apSince>=waitMs){
+        if(alone){
+          if(state.apAlone!=="off"&&!chat.dnd){ apWorldMove(chat,"alone"); label="Autopilot · playing…"; }
+        }else if(_apWantsDirector(chat)){ apWorldMove(chat,"stale"); label="Autopilot · playing…"; }
+        else{ apBeat(chat); label="Autopilot · playing…"; }
       }
     }
     renderAutoBar({label});
@@ -43632,6 +43695,7 @@ function syncSettingsUI(){
   document.getElementById('setRecapOn').checked=state.recapOn;
   {const e=document.getElementById('setApDelay'); if(e)e.value=state.apDelay;}
   {const e=document.getElementById('setApCap'); if(e)e.value=state.apCap;}
+  {const e=document.getElementById('setApAlone'); if(e)e.value=state.apAlone;}
   {const e=document.getElementById('setSuggestOn'); if(e)e.checked=!!state.suggestOn;}
   document.getElementById('setLocModel').value=state.locModel||'';
   document.getElementById('setTravelTime').value=state.travelTime;
@@ -43722,6 +43786,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setHeatN'); if(e){let v=parseInt(e.value,10); if(!(v>=1&&v<=10))v=5; state.heatN=v; store.setRaw(K.heatN,String(v));}}
   {const e=document.getElementById('setApDelay'); if(e){let v=parseInt(e.value,10); if(!(v>=10&&v<=300))v=30; state.apDelay=v; store.setRaw(K.apDelay,String(v));}}
   {const e=document.getElementById('setApCap'); if(e){let v=parseInt(e.value,10); if(!(v>=1&&v<=30))v=6; state.apCap=v; store.setRaw(K.apCap,String(v));}}
+  {const e=document.getElementById('setApAlone'); if(e){const v=["cut","arrive","off"].indexOf(e.value)>=0?e.value:"cut"; state.apAlone=v; store.setRaw(K.apAlone,v);}}
   {const e=document.getElementById('setSuggestOn'); if(e){state.suggestOn=e.checked; store.set(K.suggestOn,state.suggestOn);}}
   {const e=document.getElementById('setAnimVoice'); if(e){state.animVoice=e.checked; store.set(K.animVoice,state.animVoice);}}
   {const e=document.getElementById('setPulseOn'); if(e){state.pulseOn=e.checked; store.set(K.pulseOn,state.pulseOn);}}

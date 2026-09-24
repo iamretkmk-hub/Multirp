@@ -84,6 +84,17 @@ Gamemaster, due meetings and the world pulse get their chance too.
   (`apPlayerActed`) resets it. A failed beat also stops the run. A beat in flight when the player
   sends is dropped through `_dirSeq`, the same guard Gamemaster reactions use.
 - Tapping the pill (or **Keep going**) plays one beat now, Autopilot on or off (`apContinueNow`).
+- **The world comes to you (v117.1)** — `apWorldMove(chat, kind)`, a move that is not a line:
+  - *Alone* (nobody in earshot), after twice the wait: `resolveDueMeetings` first (someone walks in,
+    or the player is called away); else `maybeProactiveTextTick`; else, per `state.apAlone`,
+    `runSceneCut` ("cut", the default — dropped into a conversation already running) or
+    `maybeGamemaster(chat, true)` ("arrive" — somebody comes here; also the fallback when nobody is
+    free for a cut). "off" leaves the player be, and so does Do Not Disturb.
+  - *Stale*: after `AP_DIRECTOR_AFTER` (3) beats with no word from the player, the next move is the
+    Gamemaster, forced once per quiet stretch (`chat._apDirected`), or `forceGamemaster` advancing
+    an event that is already live. Kept out by Do Not Disturb, and by `gmOn` off unless an event is
+    live. Otherwise the director keeps its own cadence through `postTurn`.
+  - World moves spend the same `apCap` budget; a move that finds nothing to do ends the run.
 
 **Suggested replies** — global (`state.suggestOn`, default on). When the scene settles on a line
 that is not the player's, `fetchSuggestions` makes one call (`x_reply_suggest`: player profile,

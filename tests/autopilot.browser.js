@@ -150,6 +150,83 @@ const {chromium}=require('playwright');
       _apSince=Date.now()-600000; const n=chat.messages.length; apTick();
       return (chat.autoPlay===false && !_apBusy && chat.messages.length===n && !document.getElementById('apPill')) ? true : "still playing"; }));
 
+  console.log("\n[the world comes to you]");
+  /* The four things a world move can reach for, stubbed so the ORDER is what is checked. */
+  await pg.evaluate(()=>{
+    window.__w=[]; window.__meet=false; window.__cut=true;
+    window.__real={rdm:window.resolveDueMeetings,cut:window.runSceneCut,gm:window.maybeGamemaster,fgm:window.forceGamemaster,txt:window.maybeProactiveTextTick};
+    window.resolveDueMeetings=async()=>{ __w.push("meeting"); return window.__meet; };
+    window.maybeProactiveTextTick=()=>{ __w.push("texts"); };
+    window.runSceneCut=async()=>{ __w.push("cut"); return window.__cut; };
+    window.maybeGamemaster=async(c,force)=>{ __w.push(force?"gm-forced":"gm"); };
+    window.forceGamemaster=async()=>{ __w.push("scene-writer"); };
+    const chat=curChat(); chat.autoPlay=true; chat._apBeats=0; chat._apDirected=false; chat.dnd=false;
+    state.calOn=true; state.gmOn=true; state.apAlone="cut"; state.apCap=6; state.apDelay=10;
+  });
+  const alone=async(ms,setup)=>pg.evaluate(async([ms,setup])=>{
+    const chat=curChat(); window.__w=[];
+    const keep=chat.presentIds; chat.presentIds=[];
+    if(setup) (new Function("chat",setup))(chat);
+    _apLastMid=(_apTail(chat)||{}).mid; _apSince=Date.now()-ms;
+    apTick();
+    for(let i=0;i<40&&_apBusy;i++) await new Promise(r=>setTimeout(r,50));
+    const label=(document.getElementById('apPillTxt')||{}).textContent;
+    chat.presentIds=keep; chat._apBeats=0; chat.dnd=false;
+    return {w:window.__w.join(","), label};
+  },[ms,setup||""]);
+  let r=await alone(15000);
+  ok("alone, it waits twice as long before reaching for anyone", r.w==="" && /world comes to you/.test(r.label), JSON.stringify(r));
+  r=await alone(21000,"window.__meet=true;");
+  ok("a due meeting of the player's goes first, and ends the move", r.w==="meeting", JSON.stringify(r));
+  r=await alone(21000,"window.__meet=false; window.__cut=true;");
+  ok("then a text may come, then the player is dropped into a scene", r.w==="meeting,texts,cut", JSON.stringify(r));
+  r=await alone(21000,"window.__cut=false;");
+  ok("nobody free for a cut → the Gamemaster brings somebody here", r.w==="meeting,texts,cut,gm-forced", JSON.stringify(r));
+  r=await alone(21000,"window.__cut=true; state.apAlone='arrive';");
+  ok("set to 'come to me', it never moves the player", r.w==="meeting,texts,gm-forced", JSON.stringify(r));
+  r=await alone(60000,"state.apAlone='off';");
+  ok("set to 'leave me be', nothing reaches for anyone", r.w==="" && /nobody here/.test(r.label), JSON.stringify(r));
+  r=await alone(60000,"state.apAlone='cut'; chat.dnd=true;");
+  ok("and Do Not Disturb leaves an alone player alone", r.w==="" && /nobody here/.test(r.label), JSON.stringify(r));
+  ok("a world move counts against the run", await pg.evaluate(async()=>{
+      const chat=curChat(); const keep=chat.presentIds; chat.presentIds=[]; chat._apBeats=0; window.__cut=true;
+      await apWorldMove(chat,"alone"); const n=chat._apBeats;
+      window.__cut=false; state.apAlone="off"; chat._apBeats=0;
+      await apWorldMove(chat,"alone"); const capped=chat._apBeats;
+      state.apAlone="cut"; chat.presentIds=keep; chat._apBeats=0;
+      return (n===1 && capped===state.apCap) ? true : JSON.stringify({n,capped}); }));
+  const stale=await pg.evaluate(async()=>{
+    const chat=curChat(); window.__w=[]; chat._apBeats=3; chat._apDirected=false; chat.activeEvent=null;
+    _apLastMid=(_apTail(chat)||{}).mid; _apSince=Date.now()-11000; apTick();
+    for(let i=0;i<40&&_apBusy;i++) await new Promise(r=>setTimeout(r,50));
+    const first=window.__w.join(","), directed=chat._apDirected;
+    window.__w=[]; const real=window.playCharacterTurn; let played=0;
+    window.playCharacterTurn=async()=>{ played++; return true; };
+    _apSince=Date.now()-11000; apTick();
+    for(let i=0;i<40&&_apBusy;i++) await new Promise(r=>setTimeout(r,50));
+    window.playCharacterTurn=real;
+    const second=window.__w.filter(x=>/gm-forced|scene-writer/.test(x)).join(",");   // plain "gm" is postTurn's own cadence check
+    chat._apBeats=3; chat._apDirected=false; chat.activeEvent={summary:"x",resolved:false}; window.__w=[];
+    _apSince=Date.now()-11000; apTick();
+    for(let i=0;i<40&&_apBusy;i++) await new Promise(r=>setTimeout(r,50));
+    const live=window.__w.join(",");
+    chat.activeEvent=null; chat._apBeats=3; chat._apDirected=false; chat.dnd=true; window.__w=[];
+    const wants=_apWantsDirector(chat); chat.dnd=false; chat._apBeats=0;
+    return {first,directed,second,played,live,dndWants:wants};
+  });
+  ok("three beats with no word from the player → the Gamemaster is asked in", stale.first==="gm-forced" && stale.directed===true, JSON.stringify(stale));
+  ok("once per quiet stretch — then the characters carry on", stale.second==="" && stale.played===1, JSON.stringify(stale));
+  ok("with an event already live, the Scene Writer advances it instead", stale.live==="scene-writer", JSON.stringify(stale));
+  ok("Do Not Disturb keeps the director out", stale.dndWants===false, JSON.stringify(stale));
+  ok("the player acting opens a new stretch", await pg.evaluate(()=>{
+      const chat=curChat(); chat._apDirected=true; apPlayerActed(chat);
+      return chat._apDirected===false ? true : "still directed"; }));
+  await pg.evaluate(()=>{
+    const r=window.__real; window.resolveDueMeetings=r.rdm; window.runSceneCut=r.cut; window.maybeGamemaster=r.gm;
+    window.forceGamemaster=r.fgm; window.maybeProactiveTextTick=r.txt;
+    const chat=curChat(); chat.autoPlay=false; state.calOn=false; state.gmOn=false; state.apCap=3;
+  });
+
   console.log("\n[suggested replies]");
   const sug=await pg.evaluate(async()=>{
     const chat=curChat(); window.__calls=[];
@@ -196,10 +273,11 @@ const {chromium}=require('playwright');
   ok("the wait and the cap save, clamped", await pg.evaluate(()=>{
       show('settings'); syncSettingsUI();
       document.getElementById('setApDelay').value="2"; document.getElementById('setApCap').value="12";
+      document.getElementById('setApAlone').value="arrive";
       saveSettings(false);
-      const r={d:state.apDelay,c:state.apCap,sd:store.raw(K.apDelay,null),sc:store.raw(K.apCap,null)};
+      const r={d:state.apDelay,c:state.apCap,sd:store.raw(K.apDelay,null),sc:store.raw(K.apCap,null),a:state.apAlone,sa:store.raw(K.apAlone,null)};
       show('chat');
-      return (r.d===30 && r.c===12 && r.sd==="30" && r.sc==="12") ? true : JSON.stringify(r); }));
+      return (r.d===30 && r.c===12 && r.sd==="30" && r.sc==="12" && r.a==="arrive" && r.sa==="arrive") ? true : JSON.stringify(r); }));
   ok("all three prompts are registry prompts with a card", await pg.evaluate(()=>{
       const bad=["x_autopilot_beat","x_autopilot_silence","x_reply_suggest"].filter(k=>
         !PROMPT_BY_KEY[k]||!K[k]||!ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey===k)));

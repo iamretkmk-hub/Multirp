@@ -26,6 +26,23 @@ through its `status` stamp, the day, part of the day and place.
   boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
   without CORS cannot be drawn and is left off the page.
 
+## The player on the right, the player's voice, and the chat as a comic (v122.1)
+
+- **Sides by speaker**: `bookIsPlayer(name)` decides it — the player's bubbles on the right, everyone
+  else's on the left, in both book layouts, the storyteller, a saved page and the video (the canvas
+  bubble's tail follows its side).
+- **The player's voice**: `state.userVoice` (Settings › Game Preferences › You, and per universe in
+  its editor, resolved by `applyUniverseProfile`); `playerVoiceId()` falls back to the default call
+  voice. With Speak replies on, `speakPlayerTurn` voices a typed turn — the quoted words in the
+  player's voice, the narration in the narrator voice when that is on, an unmarked turn as all
+  speech — queued before the reply. Skipped while the open mic runs (they said it aloud). The
+  storyteller and its video read the player's lines in it.
+- **Comic view** (`state.chatComic`, Roleplay options): `msgBodyHTML` is the one place a bubble's text
+  becomes HTML; with the view on, `comicBodyHTML` splits it (`comicSegments`) into the opening
+  narration (`.cTop`, caption boxes) and the rest (`.cBot`: speech bubbles, thoughts, later
+  narration), and CSS `order` puts the picture between them (`.body` is `display:contents`). The
+  player's bubbles align right. Stored text is untouched; the typewriter reveal renders through it.
+
 ## Save as video (v121.2)
 
 The film button in the storyteller's controls (`bookSaveVideo`) records the same chapter — play

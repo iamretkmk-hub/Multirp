@@ -108,6 +108,39 @@ const {chromium}=require('playwright');
   ok("a picture whose bytes are gone is skipped", R.day2Panels===1, JSON.stringify(R));
   ok("the edited scene shows its title and drops the cut picture", R.title==="The Closed Harbour" && R.panels===2, JSON.stringify(R));
   ok("the pictures load from the transcript", R.loaded===true, JSON.stringify(R));
+  console.log("\n[the panel follows the picture]");
+  const WT=await pg.evaluate(async()=>{
+    state.bookLayout="webtoon"; renderStoryBook(); await new Promise(r=>setTimeout(r,400));
+    const fig=document.querySelector('#bookBody .bkPanel.wt');
+    const kids=fig?[...fig.children].map(c=>c.className.split(" ")[0]):[];
+    const fr=fig&&fig.querySelector('.bkFrame');
+    return {lay:(document.getElementById('bookLayTxt')||{}).textContent,kids,ar:fr&&fr.style.aspectRatio,
+      bubInFrame:!!document.querySelector('#bookBody .bkFrame .bkBub')};
+  });
+  ok("webtoon is the default layout", WT.lay==="Webtoon", JSON.stringify(WT));
+  ok("the caption sits above the picture and the bubble below it, never on it", JSON.stringify(WT.kids)==='["bkCap","bkFrame","bkBubRow"]' && WT.bubInFrame===false, JSON.stringify(WT));
+  ok("the frame takes the picture's own shape (64×48 → 4:3)", Math.abs(parseFloat(WT.ar)-1.333)<0.01, JSON.stringify(WT));
+  const PG=await pg.evaluate(async()=>{
+    toggleBookLayout(); await new Promise(r=>setTimeout(r,400));
+    const figs=[...document.querySelectorAll('#bookBody .bkPanel.pg')];
+    return {lay:(document.getElementById('bookLayTxt')||{}).textContent,saved:store.raw(K.bookLayout,null),
+      wide:figs.every(f=>f.classList.contains('wide')),ar:figs[0]&&figs[0].style.aspectRatio,
+      stacked:!!document.querySelector('#bookBody .bkPanel.pg .bkBubStack .bkBub')};
+  });
+  ok("the comic page layout is a switch that saves", PG.lay==="Comic page" && PG.saved==="page", JSON.stringify(PG));
+  ok("on it a landscape picture gets a full-width frame of its own shape", PG.wide && Math.abs(parseFloat(PG.ar)-1.333)<0.01, JSON.stringify(PG));
+  ok("and its bubbles are stacked at the bottom where they cannot collide", PG.stacked===true, JSON.stringify(PG));
+  ok("a portrait picture gets a half-width frame", await pg.evaluate(()=>{
+      const f=document.querySelector('#bookBody .bkPanel.pg'); const img=f.querySelector('img');
+      Object.defineProperty(img,'naturalWidth',{value:900,configurable:true}); Object.defineProperty(img,'naturalHeight',{value:1600,configurable:true});
+      img.onload(); const half=!f.classList.contains('wide') && Math.abs(parseFloat(f.style.aspectRatio)-0.5625)<0.01;
+      delete _bookAR[f.dataset.mid];
+      return half ? true : f.className+" "+f.style.aspectRatio; }));
+  ok("long lines are cut to comic length, at a word", await pg.evaluate(()=>{
+      const c=curChat(), s=bookStructure(c)[0].scenes[0];
+      c.bookEdits[s.id].panels[s.panels[0].mid].bubbles=[{speaker:"Ayla",text:"They closed the harbour today. Nobody is saying why. ".repeat(4)}];
+      const v=bookPanelView(c,s,s.panels[0]);
+      return (v.bubbles[0].text.length<=BOOK_BUB_MAX+1 && /…$|\.$/.test(v.bubbles[0].text)) ? true : v.bubbles[0].text; }));
   const drag=await pg.$('#bookBody .bkBub');
   const bb=await drag.boundingBox();
   await pg.mouse.move(bb.x+10,bb.y+10); await pg.mouse.down(); await pg.mouse.move(bb.x+60,bb.y-80,{steps:6}); await pg.mouse.up();
@@ -137,6 +170,14 @@ const {chromium}=require('playwright');
     return {panels:r.panels,w:r.canvas.width,h:r.canvas.height,png:url.startsWith("data:image/png;base64,")&&url.length>2000};
   });
   ok("Save page draws the kept panels onto a PNG", P.panels===3 && P.w===1080 && P.h>600 && P.png, JSON.stringify(P));
+  ok("in either layout, and a very tall page is split into parts", await pg.evaluate(async()=>{
+      const c=curChat(), s=bookStructure(c)[0].scenes[0];
+      const a=await bookRenderPageCanvas(c,s,{layout:"webtoon"}), b2=await bookRenderPageCanvas(c,s,{layout:"page"});
+      const was=BOOK_CANVAS_MAX; window.__h=a.canvas.height;
+      const big={...s,panels:[].concat(s.panels,s.panels,s.panels,s.panels,s.panels,s.panels,s.panels,s.panels)};
+      const t=await bookRenderPageCanvas(c,big,{layout:"webtoon"});
+      return (a.layout==="webtoon"&&b2.layout==="page"&&a.canvas.height!==b2.canvas.height&&t.canvases.length>=2&&t.canvases.every(x=>x.height<=BOOK_CANVAS_MAX+200))
+        ? true : JSON.stringify({a:a.canvas.height,b:b2.canvas.height,parts:t.canvases.map(x=>x.height)}); }));
   ok("the menu opens it", await pg.evaluate(()=>{
       closeStoryBook();
       const btn=[...document.querySelectorAll('#cmSec-goto button')].find(x=>/Story Book/.test(x.textContent));

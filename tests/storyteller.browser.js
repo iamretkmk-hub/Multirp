@@ -88,6 +88,25 @@ const {chromium}=require('playwright');
   ok("narration goes through the narrator effect, speech does not", V.played.includes(true) && V.played.includes(false), JSON.stringify(V.played));
   await pg.evaluate(()=>closeBookPlayer());
 
+  console.log("\n[the shot follows the picture]");
+  const F=await pg.evaluate(()=>{
+    const sq=mcShotLayout(412,915,1,74), tall=mcShotLayout(412,915,9/16,74), wide=mcShotLayout(412,915,16/9,74), land=mcShotLayout(1280,720,1,74), short=mcShotLayout(900,300,1,74);
+    return {sq,tall,wide,land,short};
+  });
+  ok("a 9:16 picture fills a phone screen", F.tall.full===true, JSON.stringify(F.tall));
+  ok("a square one is framed whole, with room above for the caption and below for the bubble", F.sq.full===false && !F.sq.overlay && F.sq.frame.w===412 && F.sq.top.h>=70 && F.sq.bot.h>=70, JSON.stringify(F.sq));
+  ok("a landscape one likewise", F.wide.full===false && !F.wide.overlay && Math.abs(F.wide.frame.w/F.wide.frame.h-16/9)<0.02, JSON.stringify(F.wide));
+  ok("a landscape screen still frames it whole, keeping room for the text", F.land.full===false && !F.land.overlay && F.land.top.h>=70, JSON.stringify(F.land));
+  ok("only with no room around the frame does the text sit over it", F.short.full===false && F.short.overlay===true, JSON.stringify(F.short));
+  ok("on screen: a 4:3 picture is framed and its caption sits above the frame", await pg.evaluate(async()=>{
+      state.ttsRelay=''; _mcScale=3; openBookPlayer(); bookPlayerJump(1);   // past the title card
+      for(let i=0;i<60&&!document.querySelector('#mcStage .mcFrame img');i++) await new Promise(r=>setTimeout(r,50));
+      for(let i=0;i<60&&document.querySelector('#mcStage .mcCap[hidden]');i++) await new Promise(r=>setTimeout(r,50));
+      const st=document.getElementById('mcStage'), fr=st.querySelector('.mcFrame').getBoundingClientRect(), cap=st.querySelector('.mcCap').getBoundingClientRect();
+      const framed=st.classList.contains('mcFramed');
+      closeBookPlayer(); _mcScale=0.02;
+      return (framed && cap.bottom<=fr.top+1) ? true : JSON.stringify({framed,cls:st.className,cap:cap.bottom,frame:fr.top}); }));
+
   console.log("\n[controls]");
   ok("pause holds the story where it is", await pg.evaluate(async()=>{
       state.ttsRelay=''; _mcScale=0.2; openBookPlayer();

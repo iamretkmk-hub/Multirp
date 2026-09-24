@@ -26,6 +26,26 @@ through its `status` stamp, the day, part of the day and place.
   boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
   without CORS cannot be drawn and is left off the page.
 
+## The panel follows the picture (v121.1)
+
+Reported with a screenshot of square pictures squeezed into 16:10 and 3:4 frames, half-width panels
+about 200 px wide on a phone, and long bubbles covering the pictures and each other.
+
+- Every frame takes its picture's own shape, read once from the loaded image (`_bookAR`).
+- Two book layouts (`state.bookLayout`, the button in the book's bar): **Webtoon** (default) — one
+  picture per row at full width, the caption in a strip above it and the bubbles below it with
+  their tails pointing up, so nothing covers a face; **Comic page** — frames in the picture's shape,
+  portrait ones paired side by side, the caption as a band across the top and the bubbles stacked at
+  the bottom (text shrinks with its length; bubbles still drag).
+- Shorter text: bubbles at most `BOOK_BUB_MAX` (100) characters, captions `BOOK_CAP_MAX` (130), cut at
+  a word — applied when shown, so scenes edited earlier shrink too; the editor is asked for ~12-word
+  bubbles and 15-word captions.
+- **Save page** draws the chosen layout; a page taller than `BOOK_CANVAS_MAX` is saved in parts.
+- The storyteller frames each shot by the picture (`mcShotLayout`, shared with the video export): a
+  picture within 30% of the screen's shape (a 9:16 on a phone) fills the screen with the caption over
+  the top and the bubble over the lower third; anything else is framed whole with the caption in the
+  space above and the bubble below, falling back to over-the-picture only when there is no room.
+
 ## The storyteller (v120.1)
 
 A Story Book chapter played back as a motion comic — **Play** in the book's bar (the whole chapter)

@@ -113,10 +113,12 @@ const {chromium}=require('playwright');
         ? true : JSON.stringify(m&&{c:m.content,p:m.gamePeriod}); }));
 
   console.log("\n[memories: a part of the day, shown as well as stored]");
+  /* The stamp became relative ("two days ago") when every memory started saying its time in
+     words; what this holds is that the PERIOD still rides along, and is simply absent when unknown. */
   ok("the day stamp carries the period", await pg.evaluate(()=>
-      _memWhen({gameDay:3,gamePeriod:"Evening"})===" (Day 3, Evening)"));
+      _memWhen({gameDay:3,gamePeriod:"Evening"},5)===" (two days ago, Evening)"));
   ok("a memory with no period still reads sensibly", await pg.evaluate(()=>
-      _memWhen({gameDay:3})===" (Day 3)"));
+      _memWhen({gameDay:3},5)===" (two days ago)"));
   ok("and one with no day at all says nothing", await pg.evaluate(()=>_memWhen({})===""));
 
   console.log("\n[text memories are arcs, not a message counter]");
@@ -140,8 +142,11 @@ const {chromium}=require('playwright');
   ok("both are offered in the placeholder picker", await pg.evaluate(()=>{
       const t=promptPlaceholders('psychePrompt');
       return (t.indexOf('self')>-1 && t.indexOf('target')>-1) ? true : JSON.stringify(t); }));
-  ok("it forbids second person", await pg.evaluate(()=>
-      /Never "you"/.test(DEFAULT_PSYCHE)));
+  /* The voice moved to SECOND person on purpose (the note lands in a card written to them as
+     "you"); what must still hold is that it never speaks AS them, and never about them from outside. */
+  ok("it never speaks as them, or about them from the outside", await pg.evaluate(()=>
+      /never "I"/.test(DEFAULT_PSYCHE) && /never "she"\/"he"\/"they" about them/.test(DEFAULT_PSYCHE)
+      && /Second person, but NOT their voice/.test(DEFAULT_PSYCHE)));
   ok("it forbids writing the other person's inner life", await pg.evaluate(()=>
       /wrong subject/.test(DEFAULT_PSYCHE)));
   ok("the payload header says the note is not in the character's voice", await pg.evaluate(()=>

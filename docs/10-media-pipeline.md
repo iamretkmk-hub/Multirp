@@ -2,6 +2,30 @@
 
 
 
+## Story Book (v119.1)
+
+The scene images of a chat, read back as a comic (chat menu › Go to › Story Book; `openStoryBook`).
+Nothing is generated to make it — every scene image is already stored against the message it
+illustrates (`m.img`, or its bytes under `mimg:<mid>`), and the message carries the speaker and,
+through its `status` stamp, the day, part of the day and place.
+
+- `bookStructure(chat)`: **chapters** are days; **scenes** are runs of one (day, period, place),
+  also cut at a travel beat, with unstamped player lines carried into the scene around them;
+  **panels** are the messages with a picture. Scenes with no picture are left out.
+- **In code** (`_bookDefaultPanel`): the bubble is the first thing said aloud in the pictured line,
+  the caption that line's `*narration*`; a narrator beat is a caption alone. Thoughts never appear.
+- **The editor** (`x_book_editor`, one call per scene on the memory model, `state.bookEditor`,
+  default on, toggled in the book's bar): given the numbered lines and which picture was drawn at
+  which line, it returns a title, a recap, and per panel a caption, up to two bubbles and keep/cut.
+  `_bookVerbatim` checks every bubble fragment (split at the editor's `…` cuts) against what that
+  speaker said aloud in the scene and drops anything reworded or misattributed. It never cuts every
+  picture of a scene. Cached in `chat.bookEdits[sceneId]`, signed by the scene's pictures.
+- **Reader**: `#bookModal`, one chapter at a time, every third panel wide. Bubbles drag off a face;
+  the spot is kept in `chat.bookPos`. A picture whose bytes are gone is skipped.
+- **Save page**: `bookRenderPageCanvas` draws the scene (header, panels cover-cropped, caption
+  boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
+  without CORS cannot be drawn and is left off the page.
+
 ## Video model (v39.7)
 
 `VIDEO_MODELS` offers **one** entry — `bytedance/seedance-2.0-mini/reference-to-video`, which is

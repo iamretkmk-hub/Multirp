@@ -92,8 +92,8 @@ const {chromium}=require('playwright');
   ok("Chat & world holds the three rare chat actions", JSON.stringify(await rows('#cmSec-chat button:not(.cmBack)'))===
       JSON.stringify(["Clear chat window","Restart scene","Universe guide"])
       ? true : JSON.stringify(await rows('#cmSec-chat button:not(.cmBack)')));
-  ok("the six screens are still reachable", JSON.stringify(await rows('#cmSec-goto .chatMenuNav button'))===
-      JSON.stringify(["Characters","Gallery","Memory","Diary","Settings","Debug"])
+  ok("the six screens are still reachable, plus the Story Book", JSON.stringify(await rows('#cmSec-goto .chatMenuNav button'))===
+      JSON.stringify(["Characters","Gallery","Memory","Diary","Story Book","Settings","Debug"])
       ? true : JSON.stringify(await rows('#cmSec-goto .chatMenuNav button')));
 
   console.log("\n[the toggles still work now that they moved]");

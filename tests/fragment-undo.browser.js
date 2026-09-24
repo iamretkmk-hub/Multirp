@@ -17,20 +17,20 @@ const {chromium}=require('playwright');
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,600));} };
 
-  // the confirm() in the bulk reset must not stop the test
-  await pg.evaluate(()=>{ window.confirm=()=>true; window.__toasts=[]; const t=window.toast; window.toast=m=>{window.__toasts.push(String(m)); try{t&&t(m);}catch(e){}}; });
+  // the in-app confirm in the bulk reset must not stop the test
+  await pg.evaluate(()=>{ window.uiConfirm=async()=>true; window.__toasts=[]; const t=window.toast; window.toast=m=>{window.__toasts.push(String(m)); try{t&&t(m);}catch(e){}}; });
 
   const keys=await pg.evaluate(()=>Object.keys(BLOCK_TPL_DEFAULTS).slice(0,3));
   const MINE="MY OWN WORDING — ";
 
-  const r=await pg.evaluate(([keys,MINE])=>{
+  const r=await pg.evaluate(async([keys,MINE])=>{
     const out={};
     state.blockTpls={};
     keys.forEach((k,i)=>{ state.blockTpls[k]=MINE+k+" "+i; });
     store.set(K.blockTpls,state.blockTpls);
     out.before=keys.filter(k=>_tplCustomized(k)).length;
     out.snapBefore=!!tplUndoSnapshot();
-    plqTplResetMany();
+    await plqTplResetMany();
     out.afterReset=keys.filter(k=>_tplCustomized(k)).length;
     const snap=tplUndoSnapshot();
     out.snapAfter=snap?Object.keys(snap.tpls).length:0;
@@ -72,7 +72,7 @@ const {chromium}=require('playwright');
   ok("undo restores the single fragment", s.back===MINE+"single", JSON.stringify(s.back));
 
   // the button only appears when there is something to put back
-  const ui=await pg.evaluate(()=>{
+  const ui=await pg.evaluate(async()=>{
     const out={};
     state.blockTpls={}; store.set(K.blockTpls,state.blockTpls); store.setRaw(K.blockTplsUndo,"");
     show('settings');
@@ -80,7 +80,7 @@ const {chromium}=require('playwright');
     out.noUndoBtn=(document.getElementById('payloadTplList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")<0;
     const k=Object.keys(BLOCK_TPL_DEFAULTS)[0];
     state.blockTpls[k]="x-custom"; store.set(K.blockTpls,state.blockTpls);
-    plqTplResetMany();
+    await plqTplResetMany();
     out.undoBtn=(document.getElementById('payloadTplList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")>=0;
     return out;
   });

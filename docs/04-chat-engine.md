@@ -127,6 +127,14 @@ default 20 moves without a word from the player).
   `runSceneCut` drops the player into the next scene (Gamemaster arrival as the fallback). Alone
   without a leave, it only finds a scene. At Night it stops and offers End Day.
 - All three prompts are on the *Story mode (experimental)* card.
+- **What the player knows (v118.2)** — `_playerKnows(chat)` feeds both the move decider and the
+  suggestion writer, so the player's character stays on track: where they were earlier today (read
+  off companions' day-ledger rows, since the ledger keeps none for the player), their tie to each
+  person in earshot (that person's card), memories of scenes the player was in (by `people`; no
+  diaries, decisions or after-heat reckonings, nothing from another chat, one line per scene), their
+  calendar, words given to or by them, and their quests. Private motives, offstage events, rumours
+  and anyone's feelings are deliberately left out.
+
 
 ## Auto-RP (player narrator)
 

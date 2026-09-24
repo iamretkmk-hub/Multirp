@@ -190,6 +190,47 @@ const {chromium}=require('playwright');
       const c=curChat(); c._smSteps=5; _smSending=true; apPlayerActed(c); _smSending=false;
       return c._smSteps===5 ? true : c._smSteps; }));
 
+  console.log("\n[it knows what the player knows, and only that]");
+  const kn=await pg.evaluate(async()=>{
+    const c=curChat(); const uni=state.universes[0];
+    state.mem=true; state.calOn=true; state.promiseOn=true; state.curUniverse=uni.id;
+    c.period="Morning"; noteWhereabouts(c,["p_a","__user__"],{placeId:"l_bar",place:"Harbour Bar"}); c.period="Afternoon";
+    const p=state.personas.find(x=>x.id==="p_a"); p.relationships={"__user__":{tie:"Emre's older sister",relationship:"protective of him"}};
+    const mk=(o)=>Object.assign({id:"m_"+Math.random().toString(36).slice(2),universeId:uni.id,chatId:c.id,gameDay:1,gamePeriod:"Evening",importance:0.7,type:"EVENT",date:Date.now()},o);
+    state.memory=[
+      mk({ownerId:"p_a",character:"Ayla",people:["Emre"],content:"Emre told me he lost the boat money.",location:"Harbour Bar"}),
+      mk({ownerId:"p_b",character:"Berk",people:["Ayla"],content:"SECRET: I watched Ayla meet the smuggler alone."}),
+      mk({ownerId:"p_a",character:"Ayla",people:["Emre"],content:"PRIVATE: I decided I will never forgive him.",type:"DECISION",source:"after_heat"})
+    ];
+    c.calendar=[{id:"c1",kind:"meeting",title:"Dinner with Berk at the harbour",who:"Emre, Berk",day:2,period:"Evening",certainty:"certain",done:false}];
+    c.promises=[]; recordPromise(c,{holder:"Emre",to:"Ayla",promise:"you will pay back the boat money by Friday",kind:"promise",shows_as:"when they next talk about money"},2);
+    c.intents=[{holderId:"p_b",targetId:"__user__",status:"active",aim:"MOTIVE: Berk wants to ruin Emre"}];
+    const k=_playerKnows(c);
+    window.__calls=[]; window.__decide='{"intent":"Bring up the money"}';
+    c._smChoice=null; c._smDayOver=false; c._smLeaving=false; c._smSteps=0;
+    c.messages.push({mid:newMid(),role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"So?"',present:["p_a","p_b"],toId:"__user__"});
+    _apSince=0; _apLastMid=(_apTail(c)||{}).mid; apTick();
+    for(let i=0;i<120&&(_apBusy||document.getElementById('sendBtn').disabled);i++) await new Promise(r=>setTimeout(r,100));
+    const dec=__calls.find(x=>x.dbg==="Story mode · the player's move");
+    const sug=null;
+    return {k, user:dec?dec.messages[1].content:"", sys:dec?dec.messages[0].content:""};
+  });
+  ok("where they were earlier today", /EARLIER TODAY:\n- Morning: Harbour Bar — with Ayla/.test(kn.user), kn.k.today);
+  ok("their tie to the person in front of them", /THE PEOPLE HERE:\n[\s\S]*Ayla: Emre's older sister/.test(kn.user), kn.k.people);
+  ok("what happened in scenes they were in", /lost the boat money/.test(kn.user), kn.k.memories);
+  ok("their plans", /Dinner with Berk/.test(kn.user), kn.k.plans);
+  ok("the words they have given", /pay back the boat money/.test(kn.user), kn.k.promises);
+  ok("but not what somebody else saw without them", kn.user.indexOf("SECRET")<0, kn.k.memories);
+  ok("nor a character's private reckoning", kn.user.indexOf("PRIVATE")<0, kn.k.memories);
+  ok("nor anybody's private motive", kn.user.indexOf("MOTIVE")<0, "motive leaked");
+  ok("and the prompt tells it to stay on track with all of it", /STAY ON TRACK/.test(kn.sys), kn.sys.slice(-300));
+  ok("the suggestion writer is given the same", await pg.evaluate(async()=>{
+      const c=curChat(); c.storyMode=false; state.suggestOn=true; window.__calls=[];
+      await fetchSuggestions(c,(_apTail(c)||{}).mid);
+      const call=__calls.find(x=>x.dbg==="Suggested replies"); const u=call?call.messages[1].content:"";
+      c.storyMode=true; state.suggestOn=false;
+      return (/Dinner with Berk/.test(u)&&/pay back the boat money/.test(u)&&/lost the boat money/.test(u)&&u.indexOf("SECRET")<0) ? true : u.slice(0,400); }));
+
   console.log("\n[settings and prompts]");
   ok("pace and run length save, clamped", await pg.evaluate(()=>{
       show('settings'); syncSettingsUI();

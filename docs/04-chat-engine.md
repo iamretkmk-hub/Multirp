@@ -60,6 +60,38 @@ cleared). Either system message is skipped when the user's payload layout emptie
 | `/whisper Name msg` | Private aside — only that character's payload sees the content |
 | `/go`, `/messages`, `/close` + voice synonyms | Hands-free operator layer (`handsFreeCommand`) |
 
+## Autopilot & suggested replies (v116.0)
+
+Every director hangs off `postTurn`, which only runs after the player sends — so a quiet player used
+to mean a frozen scene. Two additions keep it moving:
+
+**Autopilot** — per chat (`chat.autoPlay`, toggled from Roleplay options like Do Not Disturb).
+`apTick()` runs once a second. When the player has been quiet for `state.apDelay` seconds
+(default 30, doubled when the last line put a spoken question to the player) and nothing is busy,
+`apBeat()` plays one character turn through the ordinary `playCharacterTurn`, then
+`runPresenceTracker` → `maybeBuildMemory` → `postTurn`, exactly like a player turn — so the
+Gamemaster, due meetings and the world pulse get their chance too.
+
+- **Who speaks** (`apPickNext`, code, no model): never the last speaker when anyone else is in
+  earshot; among the rest, whoever has been quiet longest (the heat rule).
+- **The note**: the turn gets `x_autopilot_beat` as its last system line ("take the beat yourself,
+  never speak for {{user}}"), or `x_autopilot_silence` when the chosen speaker is the one whose
+  question was left hanging. Both are registry prompts on the *Autopilot & suggested replies* card.
+- **Holds** (`_apBlocked`): text in the input, a turn/heat/GM beat in flight, the typewriter
+  queue, a voice still speaking, an open modal, a hidden tab, or another screen. The countdown only
+  starts once everything is idle.
+- **Cap**: `state.apCap` beats in a row (default 6), then it waits; the player sending anything
+  (`apPlayerActed`) resets it. A failed beat also stops the run. A beat in flight when the player
+  sends is dropped through `_dirSeq`, the same guard Gamemaster reactions use.
+- Tapping the pill (or **Keep going**) plays one beat now, Autopilot on or off (`apContinueNow`).
+
+**Suggested replies** — global (`state.suggestOn`, default on). When the scene settles on a line
+that is not the player's, `fetchSuggestions` makes one call (`x_reply_suggest`: player profile,
+scene line, last ten lines → `{options:[3]}`) on the player-narrator model, falling back to the
+router model. The chips render in `#autoBar` above the composer and hide while the player types.
+Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention always goes through
+`narratePlayerTurn`, even with Auto-RP off.
+
 ## Auto-RP (player narrator)
 
 `narratePlayerTurn` wraps the player's terse input using the `playerNarratePrompt` engine

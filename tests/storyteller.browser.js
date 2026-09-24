@@ -133,6 +133,38 @@ const {chromium}=require('playwright');
       openBookPlayer(); await new Promise(r=>setTimeout(r,40)); closeStoryBook();
       return (_mc===null && !document.getElementById('bookModal').classList.contains('show')) ? true : "left running"; }));
 
+  console.log("\n[save as video]");
+  const VR=await pg.evaluate(async()=>{
+    state.ttsRelay=''; _mcScale=0.15; openStoryBook();
+    const r=await bookRecordVideo({day:1});
+    return r?{size:r.blob.size,type:r.mime,drawn:r.drawn,voiced:r.voiced}:null;
+  });
+  ok("it records the chapter into a real video file", !!VR && VR.size>1000 && /^video\/(mp4|webm)$/.test(VR.type), JSON.stringify(VR));
+  ok("with the title card, every picture that can be drawn, and an end card", !!VR && VR.drawn.join(",")==="title,panel,panel,panel,end", JSON.stringify(VR&&VR.drawn));
+  ok("silent when there is no relay", !!VR && VR.voiced===0, JSON.stringify(VR));
+  const VV=await pg.evaluate(async()=>{
+    state.ttsRelay='https://relay.example'; state.bookVoice=true; __tts=[];
+    window._inworldFetchPcm=async(text,voice)=>{ __tts.push({text,voice}); return new Float32Array(4800); };
+    const r=await bookRecordVideo({day:1}); state.ttsRelay='';
+    return r?{voiced:r.voiced,size:r.blob.size,tts:__tts.length}:null;
+  });
+  ok("voiced, every caption and bubble is played into the recording", !!VV && VV.voiced>=5 && VV.size>1000, JSON.stringify(VV));
+  ok("a square picture is framed on the 9:16 frame, a 9:16 one fills it", await pg.evaluate(()=>{
+      const cv=document.createElement('canvas'); cv.width=MC_VID_W; cv.height=MC_VID_H; const ctx=cv.getContext('2d');
+      const sq=document.createElement('canvas'); sq.width=sq.height=100; sq.getContext('2d').fillStyle="#00ff00"; sq.getContext('2d').fillRect(0,0,100,100);
+      _mcVidDraw(ctx,{kind:"panel",im:sq,ar:1,t0:0,dur:1000,kb:0,cap:"",bub:null,fade0:-1000},0);
+      const top=ctx.getImageData(540,60,1,1).data, mid=ctx.getImageData(540,960,1,1).data;
+      const tall=document.createElement('canvas'); tall.width=90; tall.height=160; tall.getContext('2d').fillStyle="#0000ff"; tall.getContext('2d').fillRect(0,0,90,160);
+      _mcVidDraw(ctx,{kind:"panel",im:tall,ar:9/16,t0:0,dur:1000,kb:0,cap:"",bub:null,fade0:-1000},0);
+      const top2=ctx.getImageData(540,60,1,1).data;
+      return (top[1]<20 && mid[1]>200 && top2[2]>200) ? true : JSON.stringify({top:[...top],mid:[...mid],top2:[...top2]}); }));
+  ok("cancel stops the recording and hands nothing back", await pg.evaluate(async()=>{
+      _mcScale=0.5; const p=bookRecordVideo({day:1});
+      await new Promise(r=>setTimeout(r,300)); bookCancelVideo();
+      const r=await p; _mcScale=0.02;
+      return (r===null && _mcRec===null) ? true : "got "+JSON.stringify(r&&r.blob&&r.blob.size); }));
+  ok("the player carries a Save as video button", await pg.evaluate(()=>!!document.querySelector('#bookPlayer #mcSaveVid')));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);
   await b.close();

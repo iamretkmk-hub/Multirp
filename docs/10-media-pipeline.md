@@ -26,6 +26,19 @@ through its `status` stamp, the day, part of the day and place.
   boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
   without CORS cannot be drawn and is left off the page.
 
+## Save as video (v121.2)
+
+The film button in the storyteller's controls (`bookSaveVideo`) records the same chapter — play
+list, framing (`mcShotLayout`), drift, captions, bubbles, title and end cards, voices — into a video
+file. `bookRecordVideo` draws each frame on an offscreen 1080×1920 (9:16) canvas (`_mcVidDraw`, ~30
+fps), captures it with `canvas.captureStream`, adds the voices through a `MediaStreamDestination`
+(they also play aloud while recording), and records with `MediaRecorder`: MP4 where the browser can
+write it (Safari, recent Chrome), WebM otherwise. It runs in real time, so a chapter takes as long
+to save as to play; a card shows progress and can cancel. On a phone the finished file goes to the
+share sheet (`navigator.share`), elsewhere it downloads. A clip plays inside its panel; a hosted
+picture that blocks drawing is skipped. The end card is at least 1.5 s so even a very short
+recording is long enough for the muxer to write.
+
 ## The panel follows the picture (v121.1)
 
 Reported with a screenshot of square pictures squeezed into 16:10 and 3:4 frames, half-width panels

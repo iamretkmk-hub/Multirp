@@ -506,7 +506,14 @@
   .mcCtl{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(transparent,rgba(0,0,0,.8));}
   .mcCtl button{width:40px;height:40px;border-radius:20px;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.35);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
   .mcCtl button .ic{margin:0;width:18px;height:18px;}
-  #mcVoice{margin-left:auto;opacity:.55;} #mcVoice.on{opacity:1;border-color:#fff1a8;color:#fff1a8;}
+  #mcSaveVid{margin-left:auto;}
+  #mcVoice{opacity:.55;} #mcVoice.on{opacity:1;border-color:#fff1a8;color:#fff1a8;}
+  #bookRec{position:absolute;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:6;padding:20px;}
+  #bookRec.show{display:flex;}
+  .bookRecCard{background:#1b1b1b;color:#fff;border:1px solid #444;border-radius:16px;padding:20px;max-width:340px;text-align:center;display:flex;flex-direction:column;gap:10px;align-items:center;}
+  .bookRecCard .desc{color:#aaa;font-size:12.5px;}
+  .bookRecCard .btn{width:auto;margin:4px 0 0;}
+  .bookRecDot{width:14px;height:14px;border-radius:50%;background:#e5484d;animation:blink 1.2s infinite;}
   #mcProg{color:#ddd;font-size:13px;margin-left:6px;}
   /* v118.1 — Story mode: a choice wraps onto its own lines under the question. */
   #autoBar.smWrap{flex-wrap:wrap;overflow-x:visible;}
@@ -1210,7 +1217,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v121.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v121.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2159,9 +2166,14 @@
         <button type="button" id="mcPause" onclick="bookPlayerToggle()" aria-label="Pause"><svg class="ic"><use href="#i-pause"/></svg></button>
         <button type="button" onclick="bookPlayerJump(1)" aria-label="Next"><svg class="ic"><use href="#i-arrow-right"/></svg></button>
         <span id="mcProg"></span>
+        <button type="button" id="mcSaveVid" onclick="bookSaveVideo()" aria-label="Save as video" title="Save as video"><svg class="ic"><use href="#i-film"/></svg></button>
         <button type="button" id="mcVoice" onclick="bookPlayerVoice()" aria-label="Voices"><svg class="ic"><use href="#i-volume"/></svg></button>
       </div>
     </div>
+    <!-- v121.2 — recording the chapter into a video file -->
+    <div id="bookRec"><div class="bookRecCard"><div class="bookRecDot"></div><div id="bookRecTxt">Getting ready…</div>
+      <div class="desc">It records in real time — the chapter takes as long to save as to play.</div>
+      <button type="button" class="btn sec small" onclick="bookCancelVideo()">Cancel</button></div></div>
   </div>
 </div>
 <div class="modal" id="callOverlay">
@@ -33378,11 +33390,12 @@ function _bookDrawBub(ctx,b,x,y,maxW,size,tail,draw){
   if(draw){
     ctx.fillStyle="#fff"; ctx.strokeStyle="#111"; ctx.lineWidth=3;
     ctx.beginPath(); if(ctx.roundRect)ctx.roundRect(x,y,w,h,20); else ctx.rect(x,y,w,h); ctx.fill(); ctx.stroke();
+    const k=size/26;   // the tail grows with the text (a 50px video bubble needs a bigger one)
     ctx.beginPath();
-    if(tail==="up"){ ctx.moveTo(x+30,y+2); ctx.lineTo(x+36,y-18); ctx.lineTo(x+52,y+2); }
-    else{ ctx.moveTo(x+30,y+h-2); ctx.lineTo(x+26,y+h+18); ctx.lineTo(x+52,y+h-2); }
+    if(tail==="up"){ ctx.moveTo(x+30*k,y+2); ctx.lineTo(x+36*k,y-18*k); ctx.lineTo(x+52*k,y+2); }
+    else{ ctx.moveTo(x+30*k,y+h-2); ctx.lineTo(x+26*k,y+h+18*k); ctx.lineTo(x+52*k,y+h-2); }
     ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle="#fff"; ctx.fillRect(x+31,tail==="up"?y-1:y+h-5,20,6);
+    ctx.fillStyle="#fff"; ctx.fillRect(x+30*k+1,tail==="up"?y-1:y+h-5,22*k-2,6);
     ctx.textBaseline="top";
     ctx.fillStyle="#b3226f"; ctx.font=`bold ${nameS}px ${BOOK_HAND}`; ctx.fillText(b.speaker,x+pad,y+pad*0.6);
     ctx.fillStyle="#111"; ctx.font=`${size}px ${BOOK_HAND}`; ls.forEach((l,i)=>ctx.fillText(l,x+pad,y+pad*0.6+nameS+6+i*lh));
@@ -33673,6 +33686,182 @@ async function _mcRun(seq){
     _mc.i=_mc.items.length-1; _mc.paused=true; _mcRefreshCtl();
   }
 }
+/* ===== v121.2 — SAVE AS VIDEO: the storyteller recorded into a file ==============================
+   The same play list, framing (mcShotLayout), drift, captions, bubbles, title cards and voices as
+   the player — drawn onto an offscreen 1080×1920 (9:16) canvas and recorded with MediaRecorder
+   together with the voices, routed into the recording through a MediaStreamDestination. It records
+   in real time: a chapter takes as long to save as to play. MP4 where the browser can write it
+   (Safari, recent Chrome), WebM otherwise. A picture whose host blocks drawing is skipped. The
+   screen has to stay open while it records — a hidden tab slows the frames down. */
+const MC_VID_W=1080, MC_VID_H=1920;
+const _MC_KB=[[1.04,0,0,1.16,-0.03,-0.02],[1.16,0.02,0.02,1.04,0,0],[1.06,0.03,0,1.14,-0.03,0.01],[1.12,-0.02,0.02,1.04,0.02,-0.01]];
+let _mcRec=null;   // {cancel:boolean}
+function _mcVidMime(){
+  const c=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+  try{ return c.find(t=>MediaRecorder.isTypeSupported(t))||""; }catch(e){ return ""; }
+}
+/* Draw one frame of the current shot. st: {kind, im|video, ar, t0, dur, kb, cap, bub, bubAlt, title, where, recap, fade0} */
+function _mcVidDraw(ctx,st,now){
+  const W=MC_VID_W, H=MC_VID_H;
+  ctx.save(); ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  const fade=Math.min(1,Math.max(0,(now-(st.fade0||0))/350));
+  ctx.globalAlpha=fade;
+  if(st.kind==="title"||st.kind==="end"){
+    const g=ctx.createRadialGradient(W/2,H*0.4,40,W/2,H*0.4,H*0.7); g.addColorStop(0,"#2a2320"); g.addColorStop(1,"#000");
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    let y=H*0.36;
+    if(st.where){ ctx.fillStyle="rgba(244,239,227,.75)"; ctx.font=`34px ${BOOK_HAND}`; ctx.fillText(String(st.where).toUpperCase(),W/2,y); y+=70; }
+    if(st.title){ ctx.fillStyle="#fff1a8"; ctx.font=`bold 88px ${BOOK_HAND}`; _bookWrap(ctx,st.title,W-160).slice(0,3).forEach(l=>{ ctx.fillText(l,W/2,y); y+=100; }); y+=20; }
+    if(st.recap){ ctx.fillStyle="#f4efe3"; ctx.font=`italic 46px ${BOOK_HAND}`; _bookWrap(ctx,st.recap,W-200).slice(0,5).forEach(l=>{ ctx.fillText(l,W/2,y); y+=58; }); }
+    ctx.restore(); return;
+  }
+  const L=mcShotLayout(W,H,st.ar||1,0), f=L.frame;
+  const src=st.video||st.im;
+  if(src){
+    const sw=st.video?st.video.videoWidth:st.im.width, sh=st.video?st.video.videoHeight:st.im.height;
+    if(sw&&sh){
+      const k=_MC_KB[st.kb%4], p=st.video?0:Math.min(1,Math.max(0,(now-st.t0)/Math.max(1,st.dur)));
+      const e=p<0.5?2*p*p:1-Math.pow(-2*p+2,2)/2;   // ease-in-out, like the player
+      const sc=k[0]+(k[3]-k[0])*e, tx=(k[1]+(k[4]-k[1])*e)*f.w, ty=(k[2]+(k[5]-k[2])*e)*f.h;
+      const cover=Math.max(f.w/sw,f.h/sh)*(st.video?1:sc);
+      ctx.save(); ctx.beginPath(); ctx.rect(f.x,f.y,f.w,f.h); ctx.clip();
+      ctx.drawImage(src,f.x+f.w/2+tx-sw*cover/2,f.y+f.h/2+ty-sh*cover/2,sw*cover,sh*cover);
+      ctx.restore();
+    }
+  }
+  if(!L.full){ ctx.lineWidth=6; ctx.strokeStyle="#111"; ctx.strokeRect(f.x,f.y,f.w,f.h); }
+  const M=48;
+  if(st.cap){
+    const m=_bookDrawCap(ctx,st.cap,0,0,W-M*2,44,false);
+    const y=L.full?70:(L.overlay?f.y+24:Math.max(24,L.top.h-m.h-28));
+    _bookDrawCap(ctx,st.cap,M,y,W-M*2,44,true);
+  }
+  if(st.bub){
+    const tail=(!L.full&&!L.overlay)?"up":"down";
+    const m=_bookDrawBub(ctx,st.bub,0,0,Math.round(W*0.86),50,tail,false);
+    const x=st.bubAlt?W-M-m.w:M;
+    const y=tail==="up"?L.bot.y+40:(L.full?H-m.h-190:f.y+f.h-m.h-40);
+    _bookDrawBub(ctx,st.bub,x,y,Math.round(W*0.86),50,tail,true);
+  }
+  ctx.restore();
+}
+/* Record the chapter (or from one scene on). Resolves to {blob, mime, seconds} or null if cancelled
+   or impossible. opts.onProgress(k, n). */
+async function bookRecordVideo(opts){
+  opts=opts||{};
+  const chat=curChat(); if(!chat)return null;
+  const mime=_mcVidMime();
+  const cv=document.createElement('canvas'); cv.width=MC_VID_W; cv.height=MC_VID_H;
+  if(!mime||typeof MediaRecorder==="undefined"||!cv.captureStream){ toast("This browser cannot record video"); return null; }
+  const items=bookPlayItems(chat,opts.day!=null?opts.day:_bookDay,opts.fromSid);
+  if(!items.some(x=>x.kind==="panel")){ toast("Nothing to record in this chapter"); return null; }
+  try{ await (document.fonts&&document.fonts.load?document.fonts.load('44px "Patrick Hand"'):null); }catch(e){}
+  const ctx=cv.getContext('2d');
+  const ac=new (window.AudioContext||window.webkitAudioContext)();
+  try{ if(ac.state==="suspended")await ac.resume(); }catch(e){}
+  const dest=ac.createMediaStreamDestination();
+  const stream=cv.captureStream(30);
+  dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+  const chunks=[]; const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:6000000});
+  rec.ondataavailable=e=>{ if(e.data&&e.data.size)chunks.push(e.data); };
+  const stopped=new Promise(res=>{ rec.onstop=res; });
+  const job=_mcRec={cancel:false,drawn:[],voiced:0};
+  const st={kind:"title",fade0:0};
+  const tick=()=>{ try{ _mcVidDraw(ctx,st,performance.now()); }catch(e){} };
+  tick(); rec.start(1000);
+  const timer=setInterval(tick,33);
+  const t0=performance.now();
+  const wait=ms=>new Promise(res=>{ const end=performance.now()+ms; const f=()=>{ if(job.cancel||performance.now()>=end)return res(); setTimeout(f,Math.min(50,ms)); }; f(); });
+  const say=async(f32,text)=>{
+    if(job.cancel)return;
+    if(f32&&f32.length){
+      job.voiced++;
+      const buf=ac.createBuffer(1,f32.length,24000); buf.getChannelData(0).set(f32);
+      const node=ac.createBufferSource(); node.buffer=buf; node.connect(dest); node.connect(ac.destination);
+      const ended=new Promise(res=>{ node.onended=res; }); node.start();
+      await Promise.race([ended,wait(buf.duration*1000+400)]);    // a stalled context cannot wedge the recording
+      return;
+    }
+    await wait(_mcReadMs(text));
+  };
+  const nPanels=items.filter(x=>x.kind==="panel").length; let k=0;
+  try{
+    for(let i=0;i<items.length&&!job.cancel;i++){
+      const it=items[i];
+      const prep=_mcPrep(it); _mcPrep(items[i+1]);
+      if(it.kind==="title"){
+        Object.assign(st,{kind:"title",where:it.where,title:it.title,recap:it.recap,fade0:performance.now()});
+        job.drawn.push("title");
+        const a=await prep; await say(a&&a.cap,it.recap||it.title||it.where); await wait(Math.round(700*_mcScale));
+        continue;
+      }
+      const m=(chat.messages||[]).find(x=>x&&x.mid===it.p.mid)||{};
+      let video=null, im=null;
+      try{
+        const vs=(m.video&&typeof m.video==="string")?m.video:((m.hadVideo||m.videoSrc)?await msgVideoBlobUrl(m.mid):"");
+        if(vs){
+          const v=document.createElement('video'); v.muted=true; v.playsInline=true; v.loop=true; if(/^https?:/.test(vs))v.crossOrigin="anonymous"; v.src=vs;
+          const okv=await Promise.race([new Promise(r=>{ v.onloadeddata=()=>r(true); v.onerror=()=>r(false); }),new Promise(r=>setTimeout(()=>r(false),3000))]);
+          if(okv&&v.videoWidth){ try{ await v.play(); }catch(_){} video=v; }
+        }
+      }catch(e){}
+      if(!video)im=await _bookLoadImg(await _bookImgSrc(chat,it.p.mid));
+      if(!video&&!im)continue;                       // bytes gone or host blocks drawing — skip
+      k++; if(opts.onProgress)try{ opts.onProgress(k,nPanels); }catch(e){}
+      const v=it.v, est=_mcReadMs(v.caption)+v.bubbles.reduce((a,b)=>a+_mcReadMs(b.text),0);
+      const ar=video?video.videoWidth/video.videoHeight:im.width/im.height;
+      Object.assign(st,{kind:"panel",im,video,ar,t0:performance.now(),dur:Math.max(4000,est+3000),kb:i,cap:"",bub:null,bubAlt:false,fade0:performance.now()});
+      job.drawn.push("panel");
+      const a=await prep;
+      await wait(Math.round(500*_mcScale));
+      if(v.caption){ st.cap=v.caption; await say(a&&a.cap,v.caption); }
+      for(let bi=0;bi<v.bubbles.length&&!job.cancel;bi++){ st.bub=v.bubbles[bi]; st.bubAlt=bi===1; await say(a&&a.bubs&&a.bubs[bi],v.bubbles[bi].text); }
+      if(!v.caption&&!v.bubbles.length)await wait(Math.round((video?6000:3000)*_mcScale));
+      await wait(Math.round(900*_mcScale));
+      if(video){ try{ video.pause(); }catch(_){} }
+    }
+    if(!job.cancel){ Object.assign(st,{kind:"end",where:"",title:`The end of Day ${opts.day!=null?opts.day:_bookDay}`,recap:"",fade0:performance.now()}); job.drawn.push("end"); await wait(Math.max(1500,Math.round(2200*_mcScale))); }   // never shorter than a muxer can write
+  }finally{
+    clearInterval(timer);
+    try{ rec.stop(); }catch(e){}
+    await stopped;
+    stream.getTracks().forEach(t=>{ try{ t.stop(); }catch(_){} });
+    try{ ac.close(); }catch(e){}
+    if(_mcRec===job)_mcRec=null;
+  }
+  if(job.cancel)return null;
+  const type=mime.split(";")[0];
+  return {blob:new Blob(chunks,{type}),mime:type,seconds:Math.round((performance.now()-t0)/1000),drawn:job.drawn,voiced:job.voiced};
+}
+/* The button: record with a progress card, then hand the file over. */
+async function bookSaveVideo(){
+  if(_mcRec)return;
+  const fromSid=_mc&&_mc.items&&_mc.items[0]&&_mc.items[0].scene?_mc.items[0].scene.id:null;
+  closeBookPlayer();
+  const card=document.getElementById('bookRec'), txt=document.getElementById('bookRecTxt');
+  if(card)card.classList.add('show');
+  const set=t=>{ if(txt)txt.textContent=t; };
+  set("Getting ready…");
+  let r=null;
+  try{
+    r=await bookRecordVideo({fromSid,onProgress:(k,n)=>set(`Recording picture ${k} of ${n} — keep this screen open`)});
+  }catch(e){ toast("Recording failed: "+String((e&&e.message)||e).slice(0,100)); }
+  if(card)card.classList.remove('show');
+  if(!r||!r.blob||!r.blob.size)return;
+  const ext=/mp4/.test(r.mime)?"mp4":"webm";
+  const name=`storybook_day${_bookDay}.${ext}`;
+  /* On a phone the share sheet is the useful place for it (WhatsApp, Files, Photos); elsewhere, a
+     plain download. */
+  try{
+    const file=new File([r.blob],name,{type:r.mime});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:name}); return; }
+  }catch(e){ if(e&&e.name==="AbortError")return; }
+  const a=document.createElement('a'); a.href=URL.createObjectURL(r.blob); a.download=name; a.click();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); }catch(_){} },60000);
+  toast(`Saved ${name} (${Math.round(r.blob.size/1048576*10)/10} MB)`);
+}
+function bookCancelVideo(){ if(_mcRec)_mcRec.cancel=true; }
 function renderGallery(){
   const el=document.getElementById('galleryGrid'); if(!el)return; el.innerHTML="";
   el.className="";  // we manage our own layout inside, not the generic .grid

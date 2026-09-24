@@ -52,7 +52,8 @@ const {chromium}=require('playwright');
 
   console.log("\n[it is the author's field, so it does not take it quietly]");
   ok("an existing graph is confirmed before it is replaced",
-     await pg.evaluate(()=>/confirm\(/.test(String(genSocialGraphForCharacter))
+     // v124.0 — the in-app sheet (uiConfirm) replaced the browser's confirm()
+     await pg.evaluate(()=>/uiConfirm\(/.test(String(genSocialGraphForCharacter))
        && /Replace /.test(String(genSocialGraphForCharacter))));
   ok("the result is trimmed on a word boundary, never mid-word",
      await pg.evaluate(()=>/briefDesc\(text,1200\)/.test(String(generateSocialGraphFor))));

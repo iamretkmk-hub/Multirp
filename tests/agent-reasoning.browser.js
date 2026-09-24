@@ -233,7 +233,8 @@ const {chromium}=require('playwright');
       !/never the background engines/.test(document.documentElement.innerHTML)
       ? true : "the old claim is still on the page"));
   ok("it points at the per-agent switches instead", await pg.evaluate(()=>
-      /each background agent has its own switch/.test(document.documentElement.innerHTML)));
+      // v124.0 — the wording moved behind the row's ⓘ; it must still be there, in the page or its help sheet
+      /each background agent has its own switch/.test((document.documentElement.innerHTML+[..._helpStore.values()].map(r=>{const d=document.createElement('div'); d.appendChild(r.frag.cloneNode(true)); return d.innerHTML;}).join(' ')))));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

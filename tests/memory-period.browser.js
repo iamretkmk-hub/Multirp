@@ -68,7 +68,11 @@ const {chromium}=require('playwright');
       const chat=curChat(); chat.gameDay=3; chat.period="Night";
       const seen=[]; const real=window.onPeriodChanged;
       window.onPeriodChanged=(c,d,p)=>seen.push({d,p,now:c.gameDay});
+      /* v129.1 — a roll here also runs a quiet day end (tests/period-engines); held off so this
+         check stays about the hook's arguments and leaves the fixtures below untouched. */
+      const realQ=window._quietDayEnd; window._quietDayEnd=()=>{};
       advanceTime(chat,1);   // Night -> Morning of day 4
+      window._quietDayEnd=realQ;
       window.onPeriodChanged=real; chat.gameDay=3; chat.period="Midday";
       return seen.length===1 && seen[0].d===3 && seen[0].now===4 ? true : JSON.stringify(seen); }));
   ok("and the guard actually refuses a day roll", await pg.evaluate(()=>{

@@ -494,23 +494,23 @@ const {chromium}=require('playwright');
       return /WRITE IT IN THE SECOND PERSON/.test(t) && /never "he", "she", "they", or their name/.test(t)
         ? true : "DEFAULT_REL lost the rule the user message now agrees with"; }));
 
-  /* v91.1 — bed-talk is not a vow. */
-  console.log("\n[a word given mid-act is weighted for what it is]");
-  ok("the extractor weights it soft, never binding", await pg.evaluate(()=>{
+  /* v91.1 — bed-talk is not a vow. v129.1 — and with the "soft" tier gone, it is simply not filed
+     unless it is said again outside the act. */
+  console.log("\n[a word given mid-act is not filed as a commitment]");
+  ok("the extractor does not count a word given during sex", await pg.evaluate(()=>{
       const t=up("promisePrompt")||"";
-      return /A word given DURING sex is never "binding"/.test(t) && /"soft" at most/.test(t)
-        ? true : "the weight rule says nothing about it"; }));
-  ok("it is weighted, not discarded — the other person may still hold them to it", await pg.evaluate(()=>{
+      return /A word given DURING sex/.test(t) && /only if it is said again, plainly, outside the act/.test(t)
+        ? true : "the mid-act rule is gone"; }));
+  ok("there is no half-binding weight left", await pg.evaluate(()=>{
       const t=up("promisePrompt")||"";
-      return /the other person may well hold them to it/.test(t)
-        ? true : "the rule reads as a delete rather than a weight"; }));
+      return !/"weight"/.test(t) && !/"soft"/.test(t) ? true : "the weight field is still asked for"; }));
   ok("the act rule it leans on is still there", await pg.evaluate(()=>{
       const t=up("promisePrompt")||"";
       return /what a person does or allows in the moment binds nothing/.test(t)
         ? true : "the ACT rule the new clause refers to is gone"; }));
   ok("a stored copy of the old default is refreshed", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
-      return /_refreshPipe\("promisePrompt","open-ended COMMITMENTS people make","A word given DURING sex is never/.test(src)
+      return /_refreshPipe\("promisePrompt","open-ended COMMITMENTS people make","THE ANSWER DECIDES"/.test(src)
         ? true : "no pipe — a saved override keeps the old rule forever"; })());
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));

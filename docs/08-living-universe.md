@@ -1,8 +1,20 @@
 # 08 · Living Universe & Directors
 
-The systems that make the world act without the player. Two clocks drive everything:
-**`postTurn(chat)`** after every player turn, and **End Day** (`endDay` →
-`endDayBackground`). Order within each is deliberate and load-bearing.
+The systems that make the world act without the player. Three clocks drive everything:
+**`postTurn(chat)`** after every player turn, **every change of the time of day**
+(`onPeriodChanged` → `runPeriodEngines`) and **End Day** (`endDay` → `endDayBackground`).
+Order within each is deliberate and load-bearing.
+
+**Which clock owns what (v129.1).** End Day keeps what touches the whole world: diaries,
+calendar/quest reconcilers, gossip, world-pulse settle, goals curator, chronicle. The
+one-character engines run at **every change of the time of day** in `runPeriodEngines`:
+character quests (reconcile → pursue → spawn → text), goal pursuit, offstage tasks, and new
+motives (`runIntentEngine` with `{period}`). Each keeps its own pacing (a goal move / quest step /
+background task at most once a day per character); the ones that look for something new (a
+quest, a motive) only ask characters with a memory of the part of the day that just ended.
+Motives fester (`intentTick`) at day end only. End Day calls `runPeriodEngines(…, endPeriod,
+{dayEnd:true})` for the last stretch. A day that rolls by travelling on past Night gets
+`_quietDayEnd` — a day marker and the same `endDayBackground` — instead of nothing.
 
 ## postTurn order (per turn — mostly background)
 
@@ -70,7 +82,7 @@ Judged, *winnable* social events:
 `chat.intents[]` — private motives: `{holderId, valence: warm|hostile, kind (grievance/
 ambition/scheme/courtship/...), targetId, aim, trigger, strength, allies[], status, plan}`.
 
-- **Formation** (End Day, `runIntentEngine` → `intentForm`): from the day's memories
+- **Formation** (every change of the time of day, `runIntentEngine` → `intentForm`): from that stretch's memories
   (importance ≥ ~0.55), relationship movement, personality. Capped at `intentMax`.
 - **Ticking** (`intentTick`): each End Day a live intent hardens/fades/recruits allies.
 - **Contemplation** (`contemplate`): a ready motive picks a concrete **plan** — method
@@ -126,19 +138,22 @@ standing — the stakeholder's one raisable rumor vs. talk merely overheard (doc
   aftermath.
 - **Calendar executor** (`runCalendarExecutor`, `calExec`): due plans that don't include the
   player execute offstage the same way, honoring the plan's recorded origin/purpose.
-- **Goal pursuit** (End Day, `runGoalPursuit`, `goalPursuit`): each offstage character decides
+- **Goal pursuit** (time-of-day change, once a day per character, `runGoalPursuit`, `goalPursuit`): each offstage character decides
   a NEXT MOVE from personality/goals/motives/memories/standings → lands on the **calendar**
   as a plan (solo or with one other character, never the player) for the executor.
 
 ## Character quests (v23.2) & quest arcs
 
-- **Character quests** (`universe`-scoped, per holder): born at End Day
-  (`runCharQuestSpawn` → `charQuestGen`) from goals + undercurrents. Char→char quests advance
+- **Character quests** (`universe`-scoped, per holder): born at any change of the time of day
+  (`runCharQuestSpawn` → `charQuestGen`) from goals (card or curated, via `engineGoals`) +
+  undercurrents, for characters who lived through something in that stretch. No cap on how many
+  run; each character is asked once per stretch (`uni.cqAsked`). Why nothing was born is kept in
+  `uni.cqLastSpawn` and shown on the Quests screen, which can also run the step on demand. Char→char quests advance
   offstage (`runCharQuestPursuit` → `charQuestStep`, narrated world events, always a final
   result). Quests needing the **player** arrive as a text ask (`maybeCharQuestText` →
   `charQuestText`) or an in-person approach through a **code-checked scene gate**
   (`checkCharQuestApproach` — alone / with named character / at place; ≤1 approach per day).
-  Evidence-based reconciliation at End Day (`reconcileCharQuestsForDay`). Awareness lines are
+  Evidence-based reconciliation at each time-of-day change, over that stretch's memories (`reconcileCharQuestsForDay`). Awareness lines are
   injected into the holder's reply payload (`quests` block, `charQuestNote`).
 - **Quest arcs** (player-facing, Universe → Quests): `generateQuestArc` (`questGen`) designs a
   GM-only premise + one opening quest; completing a quest generates the next
@@ -322,11 +337,11 @@ blocks as a spoken turn, only the format rules differ (doc 05).
 4. `writeDayDiaries` (∥ `runDailyRelationships` — slow axes over the day snapshot)
 5. `reEvaluateRelationshipsForDay` (regenerate factual sheets for pairs whose axes moved)
 6. `runGossipPropagation` → 7. `maybeWorldPulse({dayEnd:true})` (settle still-due plans)
-8. `runGoalPursuit` → 9. char quests: reconcile → pursue → spawn → text
-10. `reconcileTextsDay` → `maybeProactiveText({force:true})`
-11. `maybeSpawnConfrontation` → 12. `bindPendingTasks`/`runBackgroundTasks` →
-13. `runIntentEngine` → 14. `runGoalsCurator` (rewrites each moved character's want-list) →
-15. `runUniverseChronicler` (**must be last** — the day's record)
+8. `runPeriodEngines(…, endPeriod, {dayEnd:true})` — char quests, goal pursuit, offstage tasks,
+   intents (form for the last stretch + tick)
+9. `reconcileTextsDay` → `maybeProactiveText({force:true})`
+10. `maybeSpawnConfrontation` → 11. `runGoalsCurator` (rewrites each moved character's want-list) →
+12. `runUniverseChronicler` (**must be last** — the day's record)
 
 The foreground `endDay()` (before all this): confirm dialog → snapshot the day's messages
 (**before** pushing the new `dayMarker` — the marker would blank the "today" window) →

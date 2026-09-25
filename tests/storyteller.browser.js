@@ -164,6 +164,17 @@ const {chromium}=require('playwright');
       const r=await p; _mcScale=0.02;
       return (r===null && _mcRec===null) ? true : "got "+JSON.stringify(r&&r.blob&&r.blob.size); }));
   ok("the player carries a Save as video button", await pg.evaluate(()=>!!document.querySelector('#bookPlayer #mcSaveVid')));
+  ok("the book itself saves a video: the bar the whole chapter, a scene's button from that scene", await pg.evaluate(async()=>{
+      const got=[]; const real=window.bookRecordVideo;
+      window.bookRecordVideo=async(o)=>{ got.push(o.fromSid||null); return null; };
+      openStoryBook(); await new Promise(r=>setTimeout(r,300));
+      const bar=document.getElementById('bookVidBtn'), sc=document.querySelector('#bookBody .bkTools button[onclick^="bookSaveVideo"]');
+      if(!bar||!sc){ window.bookRecordVideo=real; return "missing button"; }
+      bar.click(); await new Promise(r=>setTimeout(r,50));
+      sc.click(); await new Promise(r=>setTimeout(r,50));
+      const sid=bookStructure(curChat()).find(c=>c.day===_bookDay).scenes[0].id;
+      window.bookRecordVideo=real;
+      return (got.length===2 && got[0]===null && got[1]===sid) ? true : JSON.stringify({got,sid}); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

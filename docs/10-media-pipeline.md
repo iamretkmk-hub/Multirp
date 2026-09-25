@@ -63,7 +63,8 @@ player's words the reader could not tell why a character answered as they did.
 
 ## Save as video (v121.2)
 
-The film button in the storyteller's controls (`bookSaveVideo`) records the same chapter — play
+The film button in the storyteller's controls, the **Video** button in the Story Book's bar (the whole
+chapter) and **Save video** under each scene (from that scene on) — all `bookSaveVideo(sid)` — record the same chapter — play
 list, framing (`mcShotLayout`), drift, captions, bubbles, title and end cards, voices — into a video
 file. `bookRecordVideo` draws each frame on an offscreen 1080×1920 (9:16) canvas (`_mcVidDraw`, ~30
 fps), captures it with `canvas.captureStream`, adds the voices through a `MediaStreamDestination`

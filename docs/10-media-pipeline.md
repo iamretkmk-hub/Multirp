@@ -26,6 +26,24 @@ through its `status` stamp, the day, part of the day and place.
   boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
   without CORS cannot be drawn and is left off the page.
 
+## Captions that summarise, and the line being answered (v126.1)
+
+Reported: a caption with one line of narration made scenes feel disconnected, and without the
+player's words the reader could not tell why a character answered as they did.
+
+- The editor is given the whole scene, numbered, with the player's lines marked "(the player)", and
+  for every picture the stretch it covers ("P2 — covers L2–L3, drawn at L3": from just after the
+  previous picture's line to its own). Its **caption** is now a summary of that stretch — 1 to 3
+  sentences, up to ~50 words, saying what the player said or did and how the others reacted
+  (`BOOK_SUM_MAX` 340 characters when shown; the video draws a long caption smaller).
+- **Bubbles**: when the character at a picture is answering something the player said in that
+  stretch, the player's line is the first bubble and the answer the second. Still checked word for
+  word; a player line typed without quotation marks counts as speech (`_bookSpoken`).
+- Without the editor, `_bookDefaultPanel` puts the player's last line since the previous picture
+  before the character's reply.
+- `_bookSig` carries a "v2" prefix, so every scene edited before this is edited again the next time
+  it is opened with the editor on.
+
 ## The player on the right, the player's voice, and the chat as a comic (v122.1)
 
 - **Sides by speaker**: `bookIsPlayer(name)` decides it — the player's bubbles on the right, everyone

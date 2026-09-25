@@ -547,7 +547,7 @@
   .bkPage.pg{display:grid;grid-template-columns:1fr 1fr;gap:8px;grid-auto-flow:row dense;}
   .bkPanel.pg{border:3px solid #111;background:#222;overflow:hidden;aspect-ratio:1;touch-action:pan-y;}
   .bkPanel.pg.wide{grid-column:span 2;}
-  .bkPanel.pg .bkCap{position:absolute;top:6px;left:6px;right:6px;width:fit-content;max-width:calc(100% - 12px);font-size:14px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .bkPanel.pg .bkCap{position:absolute;top:6px;left:6px;right:6px;width:fit-content;max-width:calc(100% - 12px);font-size:13.5px;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden;}
   .bkBubStack{position:absolute;left:5px;right:5px;bottom:14px;display:flex;flex-direction:column;gap:14px;pointer-events:none;}
   .bkPanel.pg .bkBub{pointer-events:auto;font-size:15px;max-width:86%;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;}
   .bkPanel.pg .bkBub.md{font-size:14px;} .bkPanel.pg .bkBub.sm{font-size:12.5px;}
@@ -1308,7 +1308,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v126.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v126.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3501,12 +3501,14 @@ STAY ON TRACK. Below the scene you are given what {{user}} knows: where they hav
   /* v119.1 — STORY BOOK. The editor that turns one scene's pictures into comic panels. Bubbles it
      writes are checked in code against what was actually said, so it may cut but never invent. */
   x_book_editor:{label:"Story Book editor",json:true,
-    hint:"Turns one scene's pictures into comic panels for the Story Book: a caption per panel, up to two speech bubbles copied word for word from what was said (anything reworded is dropped in code), and which pictures repeat the one before. Also a title and a one-line recap for the scene. Returns JSON {title, recap, panels:[{panel, keep, caption, bubbles[]}]}.",
+    hint:"Turns one scene's pictures into comic panels for the Story Book: per panel a caption summarising everything since the previous picture (what the player said and did, and how others reacted), up to two speech bubbles copied word for word from what was said — the player's line first when the character is answering it (anything reworded is dropped in code) — and which pictures repeat the one before. Also a title and a one-line recap for the scene. Supports {{user}}. Returns JSON {title, recap, panels:[{panel, keep, caption, bubbles[]}]}.",
     def:`You are the editor of a comic book made from a roleplay. You are given one scene: its lines, numbered, and the pictures that were drawn during it — each picture was made at a particular line. Turn the pictures into comic panels.
 
+Each panel covers a stretch of lines — given as "covers L4–L9": everything from just after the previous picture up to the line this picture was drawn at. A reader who sees only the pictures must still follow the story, so nothing that happens in a stretch may fall out of the book.
+
 For each panel write:
-- "caption": a short narration box, at most 15 words, present tense, saying what is happening in this picture — and bridging anything important said or done since the panel before it. Only what the lines show: never invent an event, a feeling or a detail.
-- "bubbles": 0 to 2 speech bubbles, each {"speaker":"<the name exactly as in the lines>","text":"..."}. The text must be copied WORD FOR WORD from something that speaker said aloud in the lines (the words inside quotation marks). Keep each bubble to about 12 words: shorten by cutting — mark a cut with … — but never reword it. Pick the words that matter most at this picture. Never put narration, thoughts or stage directions in a bubble.
+- "caption": a SUMMARY of what happened across its whole stretch, 1 to 3 sentences, at most 50 words, present tense. Say what the player ({{user}}, marked "(the player)" in the lines) said or did, and how the others reacted, so it is clear WHY this moment happens. Name people. Only what the lines show: never invent an event, a feeling or a detail. Do not just describe the picture.
+- "bubbles": 0 to 2 speech bubbles, each {"speaker":"<the name exactly as in the lines>","text":"..."}. When the character at this picture is answering something {{user}} said in this stretch, the FIRST bubble is {{user}}'s line and the second is the answer — the reader has to see what was said to them. Otherwise pick the words that matter most at this picture. The text must be copied WORD FOR WORD from something that speaker said aloud in the lines (the words inside quotation marks; a player line with no quotation marks is all speech). Keep each bubble to about 12 words: shorten by cutting — mark a cut with … — but never reword it. Never put narration, thoughts or stage directions in a bubble.
 - "keep": false only when the picture shows the same moment as the panel before it and adds nothing; otherwise true.
 
 Also give the scene a "title" (2 to 6 words, like a comic chapter heading) and a "recap" (one sentence, at most 25 words, saying what this scene was about).
@@ -33552,28 +33554,45 @@ function bookStructure(chat){
   return chapters.filter(c=>c.scenes.length);
 }
 /* A panel dressed in code: the line the picture was made for. */
-function _bookDefaultPanel(chat,p){
+/* What a line said aloud. A player turn typed without any marks is all speech (the player wrote what
+   they say), so it counts — otherwise a plain typed line could never be a bubble. */
+function _bookSpoken(l){
+  const sp=_bookSplit(l.text).said;
+  if(sp.length)return sp;
+  return (l.role==='user'&&!/[*"\u201c\u00ab_]/.test(l.text)&&l.text.trim())?[l.text.trim()]:[];
+}
+function _bookDefaultPanel(chat,p,scene){
   const m=(chat.messages||[]).find(x=>x&&x.mid===p.mid)||{};
   const {said,narr}=_bookSplit(m.content);
   const bubbles=[];
+  /* v126.1 — WHAT THE CHARACTER IS ANSWERING. A reply on its own leaves the reader guessing why they
+     said it; the player's last line since the picture before goes first, on the right. */
+  if(scene&&p.role!=='user'&&!p.narrator){
+    const k=scene.panels.findIndex(x=>x.mid===p.mid), prevI=k>0?scene.panels[k-1].i:-1;
+    const mine=scene.lines.filter(l=>l.role==='user'&&l.i>prevI&&l.i<p.i).pop();
+    const w=mine&&_bookSpoken(mine)[0];
+    if(w)bubbles.push({speaker:mine.speaker,text:_bookShort(w,BOOK_BUB_MAX)});
+  }
   if(said.length&&!p.narrator) bubbles.push({speaker:p.speaker,text:_bookShort(said[0],BOOK_BUB_MAX)});
   let caption="";
   if(p.narrator) caption=_bookShort(_bookClean(m.content).replace(/\*/g,""),BOOK_CAP_MAX);
   else if(narr.length) caption=_bookShort(narr[0],BOOK_CAP_MAX);
   return {keep:true,caption,bubbles};
 }
-function _bookSig(scene){ return scene.panels.map(p=>p.mid).join(",")+"#"+scene.lines.length; }
+/* "v2" — v126.1 changed what an edit IS (a summary caption, the player's line with the reply), so every
+   edit made before it is stale and the scene is edited again when next opened. */
+function _bookSig(scene){ return "v2|"+scene.panels.map(p=>p.mid).join(",")+"#"+scene.lines.length; }
 function _bookEdit(chat,scene){
   const e=chat&&chat.bookEdits&&chat.bookEdits[scene.id];
   return (e&&e.sig===_bookSig(scene))?e:null;
 }
 /* The panel as it will be shown: the editor's version where there is one, else the code's. */
 function bookPanelView(chat,scene,p){
-  const e=_bookEdit(chat,scene), d=_bookDefaultPanel(chat,p);
+  const e=_bookEdit(chat,scene), d=_bookDefaultPanel(chat,p,scene);
   const x=e&&e.panels&&e.panels[p.mid];
   if(!x)return d;
   const bubs=(x.bubbles&&x.bubbles.length)?x.bubbles:d.bubbles;
-  return {keep:x.keep!==false,caption:_bookShort(x.caption!=null?x.caption:d.caption,BOOK_CAP_MAX),
+  return {keep:x.keep!==false,caption:_bookShort(x.caption!=null?x.caption:d.caption,BOOK_SUM_MAX),
     bubbles:bubs.map(b=>({speaker:b.speaker,text:_bookShort(b.text,BOOK_BUB_MAX)}))};
 }
 /* ---- the editor ---- */
@@ -33586,7 +33605,7 @@ function _bookNorm(t){
 function _bookVerbatim(scene,speaker,text){
   const sp=String(speaker||"").toLowerCase().trim();
   const spoken=scene.lines.filter(l=>!l.narrator&&String(l.speaker).toLowerCase().trim()===sp)
-    .map(l=>_bookSplit(l.text).said.join(" ‖ ")).join(" ‖ ");
+    .map(l=>_bookSpoken(l).join(" ‖ ")).join(" ‖ ");
   const hay=_bookNorm(spoken); if(!hay)return false;
   const frags=String(text||"").split(/…|\.\.\./).map(f=>_bookNorm(f).replace(/^[\s.,;:!?-]+|[\s.,;:!?-]+$/g,"")).filter(f=>f.length>=2);
   return frags.length>0&&frags.every(f=>hay.indexOf(f)>-1);
@@ -33594,20 +33613,27 @@ function _bookVerbatim(scene,speaker,text){
 async function bookEditScene(chat,scene,force){
   if(!chat||!scene||!state.key)return null;
   if(!force&&_bookEdit(chat,scene))return _bookEdit(chat,scene);
-  // Lines from a little before the first picture to the end of the scene, numbered.
-  const firstI=scene.panels[0].i;
-  let lines=scene.lines.filter(l=>l.i>=firstI-6);
+  /* v126.1 — the whole scene, numbered, and for every picture the RANGE of lines it has to account
+     for: from just after the previous picture's line up to its own. Its caption summarises that
+     stretch, so nothing said between two pictures falls out of the book. */
+  let lines=scene.lines.slice();
   if(lines.length>BOOK_LINES_MAX)lines=lines.slice(-BOOK_LINES_MAX);
-  const lineNo={}; lines.forEach((l,k)=>{ lineNo[l.mid]="L"+(k+1); });
-  const linesTxt=lines.map((l,k)=>`L${k+1} ${l.narrator?"(narration)":l.speaker+":"} ${briefDesc(l.text,600)}`).join("\n");
+  const lineNo={}; lines.forEach((l,k)=>{ lineNo[l.mid]=k+1; });
+  const linesTxt=lines.map((l,k)=>`L${k+1} ${l.narrator?"(narration)":l.speaker+(l.role==='user'?" (the player)":"")+":"} ${briefDesc(l.text,600)}`).join("\n");
   const pid={};
-  const panelsTxt=scene.panels.map((p,k)=>{ pid["P"+(k+1)]=p.mid; return `P${k+1} — drawn at ${lineNo[p.mid]||"a line before these"}${p.narrator?" (a narration beat)":" ("+p.speaker+"'s line)"}`; }).join("\n");
+  let prevNo=0;
+  const panelsTxt=scene.panels.map((p,k)=>{
+    pid["P"+(k+1)]=p.mid;
+    const at=lineNo[p.mid]||prevNo||1, from=Math.min(prevNo+1,at);
+    prevNo=Math.max(prevNo,at);
+    return `P${k+1} — covers L${from}–L${at}, drawn at L${at}${p.narrator?" (a narration beat)":" ("+p.speaker+"'s line)"}`;
+  }).join("\n");
   const where=`Day ${scene.day}${scene.period?", "+scene.period:""}${scene.location?", at "+scene.location:""}`;
   const sys=fillTpl(up("x_book_editor"),{user:state.user})+"\n\n"+langDirective();
   let j=null;
   try{
     const out=await chatCompletion(epSend("x_book_editor",sys,{scene:where,lines:linesTxt,panels:panelsTxt}),
-      state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",1200),1200),dbg:"Story Book editor · "+where});
+      state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",2400),2400),dbg:"Story Book editor · "+where});
     j=parseJSON(out);
   }catch(e){ try{ _alog("book.edit.fail",String((e&&(e.friendly||e.message))||e).slice(0,160)); }catch(_){} return null; }
   if(!j||!Array.isArray(j.panels))return null;
@@ -33616,7 +33642,7 @@ async function bookEditScene(chat,scene,force){
     const mid=x&&pid[String(x.panel||"").trim()]; if(!mid)return;
     const bubbles=(Array.isArray(x.bubbles)?x.bubbles:[]).slice(0,2).map(b=>({speaker:String(b&&b.speaker||"").trim(),text:_bookShort(String(b&&b.text||"").trim(),170)}))
       .filter(b=>{ const ok=b.speaker&&b.text&&_bookVerbatim(scene,b.speaker,b.text); if(!ok)rejected++; return ok; });
-    panels[mid]={keep:x.keep!==false,caption:_bookShort(String(x.caption||"").trim(),220),bubbles};
+    panels[mid]={keep:x.keep!==false,caption:_bookShort(String(x.caption||"").trim(),BOOK_SUM_MAX),bubbles};
   });
   // Never cut every picture of a scene.
   if(scene.panels.every(p=>panels[p.mid]&&panels[p.mid].keep===false))Object.values(panels).forEach(v=>v.keep=true);
@@ -33692,6 +33718,7 @@ function bookReedit(sid){
        (the editor is also asked for ~12 words). Applied when shown, so scenes edited before this
        are shortened too. */
 const BOOK_BUB_MAX=100, BOOK_CAP_MAX=130;
+const BOOK_SUM_MAX=340;        // v126.1 — an editor caption is a summary of the stretch, not one line
 const _bookAR={};              // mid → width/height of its picture, once loaded
 function bookLayout(){ return state.bookLayout==="page"?"page":"webtoon"; }
 function toggleBookLayout(){
@@ -34154,9 +34181,10 @@ function _mcVidDraw(ctx,st,now){
   if(!L.full){ ctx.lineWidth=6; ctx.strokeStyle="#111"; ctx.strokeRect(f.x,f.y,f.w,f.h); }
   const M=48;
   if(st.cap){
-    const m=_bookDrawCap(ctx,st.cap,0,0,W-M*2,44,false);
+    const cs=st.cap.length>220?34:(st.cap.length>140?38:44);   // a summary caption is smaller
+    const m=_bookDrawCap(ctx,st.cap,0,0,W-M*2,cs,false);
     const y=L.full?70:(L.overlay?f.y+24:Math.max(24,L.top.h-m.h-28));
-    _bookDrawCap(ctx,st.cap,M,y,W-M*2,44,true);
+    _bookDrawCap(ctx,st.cap,M,y,W-M*2,cs,true);
   }
   if(st.bub){
     const tail=(!L.full&&!L.overlay)?"up":"down";

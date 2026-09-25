@@ -75,13 +75,37 @@ const {chromium}=require('playwright');
     return {rec,v,user:call?call.messages[1].content:"",sys:call?call.messages[0].content:"",again};
   });
   ok("it is the registry prompt", /You are the editor of a comic book/.test(E.sys), E.sys.slice(0,100));
-  ok("it is told the lines and which picture was drawn at which line", /THE LINES:\n[\s\S]*L1 Ayla:/.test(E.user) && /P1 — drawn at L1 \(Ayla's line\)/.test(E.user) && /P3 — drawn at L4/.test(E.user), E.user.slice(0,500));
+  ok("it is told the lines, which are the player's, and the stretch each picture covers", /THE LINES:\n[\s\S]*L1 Ayla:/.test(E.user) && /L2 Emre \(the player\):/.test(E.user)
+     && /P1 — covers L1–L1, drawn at L1 \(Ayla's line\)/.test(E.user) && /P2 — covers L2–L3, drawn at L3 \(Berk's line\)/.test(E.user) && /P3 — covers L4–L4, drawn at L4/.test(E.user), E.user.slice(0,700));
+  ok("and asked for a summary of the stretch, with the player's line before the answer", /SUMMARY of what happened across its whole stretch/.test(E.sys) && /the FIRST bubble is Emre's line/.test(E.sys), E.sys.slice(0,200));
   ok("its title and recap are kept", E.rec.title==="The Closed Harbour" && /governor/.test(E.rec.recap), JSON.stringify(E.rec));
   ok("a bubble cut with … is kept, because every word was said", E.v[0].bubbles[0].text==="They closed the harbour today…", JSON.stringify(E.v[0]));
   ok("a reworded bubble is dropped, a true one beside it stays", E.v[1].bubbles.length===1 && E.v[1].bubbles[0].speaker==="Emre", JSON.stringify(E.v[1]));
   ok("the editor's caption replaces the code's", E.v[1].caption==="Berk has seen it himself.", JSON.stringify(E.v[1]));
   ok("a repeated picture is cut", E.v[2].keep===false, JSON.stringify(E.v[2]));
   ok("and a scene is edited once", E.again===0, "called "+E.again+" more time(s)");
+  console.log("\n[the reader can tell why a character answers]");
+  ok("without the editor, the player's line goes before the reply it prompted", await pg.evaluate(()=>{
+      const c=curChat(), s=bookStructure(c)[0].scenes[0];
+      const d=_bookDefaultPanel(c,s.panels[1],s), first=_bookDefaultPanel(c,s.panels[0],s);
+      return (d.bubbles.length===2 && d.bubbles[0].speaker==="Emre" && d.bubbles[0].text==="Who closed it?" && d.bubbles[1].speaker==="Berk"
+        && first.bubbles.length===1) ? true : JSON.stringify({d:d.bubbles,first:first.bubbles}); }));
+  ok("a player line typed without quotation marks counts as what they said", await pg.evaluate(()=>{
+      const s={lines:[{speaker:"Emre",role:"user",text:"where were you last night"},{speaker:"Emre",role:"user",text:"*I sit.*"}]};
+      return (_bookVerbatim(s,"Emre","where were you last night")===true && _bookSpoken(s.lines[1]).length===0) ? true : "not counted"; }));
+  ok("an editor summary keeps its length, well past a one-line caption", await pg.evaluate(async()=>{
+      const c=curChat(), s=bookStructure(c)[0].scenes[0], keep=c.bookEdits[s.id];
+      const long="Emre asks who closed the harbour. Ayla says nobody will tell them, and Berk, who saw the governor's men at the gate himself, answers that it was the governor — which is why the bar has gone quiet.";
+      __edit=JSON.stringify({title:"T",recap:"R",panels:[{panel:"P1",keep:true,caption:long,bubbles:[]}]});
+      await bookEditScene(c,s,true);
+      const v=bookPanelView(c,s,s.panels[0]); c.bookEdits[s.id]=keep;
+      return (v.caption===long && long.length>BOOK_CAP_MAX) ? true : v.caption; }));
+  ok("an edit made before this change is stale, so the scene is edited again", await pg.evaluate(()=>{
+      const c=curChat(), s=bookStructure(c)[0].scenes[0];
+      const cur=c.bookEdits[s.id]; const old=Object.assign({},cur,{sig:cur.sig.replace(/^v2\|/,"")});
+      c.bookEdits[s.id]=old; const stale=_bookEdit(c,s)===null; c.bookEdits[s.id]=cur;
+      return stale ? true : "old edit still used"; }));
+
   ok("it never cuts every picture of a scene", await pg.evaluate(async()=>{
       const c=curChat(), s=bookStructure(c)[1].scenes[0];
       __edit=JSON.stringify({title:"x",recap:"y",panels:s.panels.map((p,k)=>({panel:"P"+(k+1),keep:false,caption:"",bubbles:[]}))});

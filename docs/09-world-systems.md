@@ -144,3 +144,22 @@ with manual nudge controls (`nudgeTracker`, `setTrackerVal`).
   `resolveWorldPositions` falls back safely, but clean up residents/visitLocs when editing.
 - Trackers with `method:llm` cost one engine call per turn each — many active trackers =
   latency + spend. Prefer endday/trigger methods where possible.
+
+## Left behind means left behind (v123.1)
+
+Reported: characters the player was placed with automatically "followed wherever I go, even when I
+pick to travel alone". Nothing recorded that the player had walked away from someone, so:
+the scene cut (Autopilot's "the world comes to you", Story mode's move-on) scored them as the best
+company again — and could move the player back to them; the Gamemaster could summon them; and a
+companion lock from an earlier "Travel together", quest trip or calendar trip was never released by a
+later "Go alone", so `resolveWorldPositions` kept placing them wherever the player was.
+
+- `travelTo` captures who is present before moving; everyone not taken along (and anyone still
+  companion-locked but not taken this time) has the lock released, is set to the place they were
+  left (`worldPositions`), and is recorded with `noteLeftBehind` in `chat.leftBehind` (per day,
+  persisted, cleared by a new day).
+- `cutCandidates` skips anyone `wasLeftBehind` today; `gmSummonCharacter` refuses them for the
+  rest of that part of the day; Story mode's `smMoveOn` records whoever it leaves.
+- A due meeting with them, `/bring`, or taking them along still works — those are the player's
+  choice. Covered by `tests/left-behind.browser.js`.
+

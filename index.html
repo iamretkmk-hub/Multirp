@@ -1308,7 +1308,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v125.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v125.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14163,10 +14163,38 @@ async function maybeSeedLocationNpcs(chat){
     if(made){ persistPersonas(); persistUniverses(); toast(`${made===1?"Someone belongs":"People belong"} to this place…`); }
   }catch(e){}
 }
+/* v123.1 — LEFT BEHIND MEANS LEFT BEHIND. Reported: "when I am automatically placed with a character,
+   they seem to follow wherever I go, even when I pick to travel alone." Nothing recorded that the
+   player had walked away from someone, so everything that fills an empty scene could hand them
+   straight back: the scene cut (Autopilot's "the world comes to you", Story mode) scored them as
+   the best company again and could even move the player back to them; the Gamemaster could summon
+   them; and a companion lock from an earlier "Travel together", quest trip or calendar trip was never
+   released by a later "Go alone", so the lock kept placing them wherever the player was.
+   Now whoever the player leaves is recorded (chat.leftBehind, per day) and stays where they were
+   left; a later trip without them releases their lock; the scene cut never picks them again that
+   day; and the Gamemaster cannot summon them for the rest of that part of the day. A due meeting
+   with them, or the player bringing them (/bring, the map), still works — that is a choice. */
+function noteLeftBehind(chat,ids,locId){
+  if(!chat||!ids||!ids.length)return;
+  const day=chat.gameDay||1, per=chatPeriod(chat);
+  if(!chat.leftBehind||chat.leftBehind._day!==day)chat.leftBehind={_day:day};
+  ids.forEach(id=>{ if(id&&id!=="_day")chat.leftBehind[id]={period:per,locId:locId||null}; });
+  try{ markChatDirty(chat); }catch(e){}
+}
+/* Did the player walk away from them today (or, with samePeriod, in this part of the day)? */
+function wasLeftBehind(chat,id,samePeriod){
+  const lb=chat&&chat.leftBehind; if(!lb||lb._day!==(chat.gameDay||1))return false;
+  const e=lb[id]; if(!e)return false;
+  return samePeriod?e.period===chatPeriod(chat):true;
+}
 async function travelTo(locId,companionIds,opts){
   opts=opts||{};
   const chat=curChat(); const dest=locById(locId); if(!chat||!dest)return;
   const fromName=chat.location||"somewhere";
+  /* Who is being left where they are, captured before anything moves. */
+  const _fromLocId=chat.locationId||null;
+  const _stayIds=(_fromLocId&&_fromLocId!==dest.id)
+    ? (chat.presentIds||[]).filter(id=>!(companionIds||[]).includes(id)&&!((opts.meetIds||[]).includes(id))) : [];
   // v19.3 (requests 3+4): traveling starts a FRESH visual scene — wipe every character's image-
   // continuity prompt and the sticky scene type. First frames at the new place are written clean.
   // v25: the sticky scene type is per-character (lastImgRuleBy) — clear it too, plus the legacy scalar.
@@ -14191,6 +14219,17 @@ async function travelTo(locId,companionIds,opts){
       if(chat.worldPositions)chat.worldPositions[id]=dest.id;
       chat.companionLock[id]=true;
     });
+  }
+  /* Released and left where they were: anyone locked to the player earlier today who was not taken
+     this time, and everyone else the player walked away from. The reroll above may have put them
+     anywhere, including at the destination — they stay put instead. */
+  if(_fromLocId&&_fromLocId!==dest.id){
+    const keep=new Set([...(companionIds||[]),...(opts.meetIds||[])]);
+    const released=Object.keys(chat.companionLock||{}).filter(id=>chat.companionLock[id]&&!keep.has(id));
+    released.forEach(id=>{ delete chat.companionLock[id]; });
+    const stay=[...new Set([..._stayIds,...released])];
+    stay.forEach(id=>{ if(chat.worldPositions)chat.worldPositions[id]=_fromLocId; });
+    noteLeftBehind(chat,stay,_fromLocId);
   }
   const companions=(companionIds||[]).map(id=>state.personas.find(p=>p.id===id)).filter(Boolean)
     // v21 WORLD RULES: whoever is barred from the destination cannot come along (UI list is
@@ -14551,6 +14590,7 @@ function gmSummonCharacter(chat,name,narration){
   if(!p)return null;
   if(!isActiveChar(p))return null;   // dead/removed characters cannot be summoned back into play
   if(charBarredHere(chat,p))return null;   // v21 — a world rule bars them from this place
+  if(wasLeftBehind(chat,p.id,true))return null;   // v123.1 — the player just walked away from them
   if(!chat.presentIds)chat.presentIds=[];
   if(!chat.presentIds.includes(p.id))chat.presentIds.push(p.id);
   if(chat.worldPositions&&chat.locationId)chat.worldPositions[p.id]=chat.locationId; // they're here now
@@ -31707,6 +31747,7 @@ async function smMoveOn(chat){
   chat._smLeaving=false; chat._smCharRun=0;
   if(ended){
     if(chatPeriodIndex(chat)>=PERIODS.length-1){ chat._smDayOver=true; return; }
+    noteLeftBehind(chat,(chat.presentIds||[]).slice(),chat.locationId);   // v123.1 — and are not handed back
     chat.presentIds=[];               // they stay where they are; the player moves on
     advanceTime(chat,1);
     try{ resolveWorldPositions(chat,true); }catch(e){}
@@ -37260,7 +37301,8 @@ function cutCandidates(chat){
   const c=chat||curChat(); if(!c)return [];
   const onstage=new Set(presentIds(c));
   return (state.personas||[])
-    .filter(p=>p&&p.universeId===c.universeId&&isActiveChar(p)&&!onstage.has(p.id)&&!_pulseHasDuePlan(c,p))
+    .filter(p=>p&&p.universeId===c.universeId&&isActiveChar(p)&&!onstage.has(p.id)&&!_pulseHasDuePlan(c,p)
+      &&!wasLeftBehind(c,p.id))   // v123.1 — somebody the player walked away from today is not handed back
     .map(p=>_cutScore(c,p))
     .sort((a,b)=>b.sc-a.sc);
 }

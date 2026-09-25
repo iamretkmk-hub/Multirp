@@ -380,7 +380,8 @@ const {chromium}=require('playwright');
         ? true : "the request does not carry the place"; })());
   ok("and it is in the user message, before the continuity reference", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
-      return /const usr=_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
+      // v128.1 — the cast block (x_img_cast) may lead it; the place still comes before continuity
+      return /const usr=(_castBlock\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
   ok("the continuity note no longer claims the location is automatic", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)

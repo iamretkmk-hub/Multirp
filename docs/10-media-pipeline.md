@@ -259,6 +259,24 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
    to reading the look text so cards written before the field still resolve.
    Identity only — face, build, colouring. **Not** rendering style: `styleTail()` owns the
    aesthetic, and matching a photo's rendering would fight the style the player picked.
+5c. **Multi-character frames (v128.1)** — asked for: every character's pictures sent, the writer
+   told which is whose *before* it writes, and the prompt written per person.
+   · **The pack is built before the writer.** It used to be built after, so the writer never knew
+     who was in the frame. `illustrate` now calls `buildRefPack` right after routing.
+   · **Everyone the moment involves.** On a "the character and you" scene type (`cast:"player"`),
+     anyone in earshot whose name appears in the latest exchange — the person being answered, or
+     someone the line names — goes into the pack too (`opts.involved`), after the speaker and the
+     player. Group/all still send everyone present; solo/none are unchanged.
+   · **One label per person, in the templates' own numbering.** The scene templates number PEOPLE
+     ("the woman in IMAGE 1" = speaker, "the man in IMAGE 2" = player, IMAGE 3+ anyone else; on POV
+     the player takes no slot). The roster used to number PICTURES, so a speaker with two photos
+     made the template's "man in IMAGE 2" point at her second photo. Now `buildRefPack` labels each
+     person "the <subject> in IMAGE <n>", `refRuns`/`editPrompt` use the same label and add which
+     Figures are that person ("IMAGE numbers the people; Figure numbers the pictures").
+   · **The writer gets the cast** (`x_img_cast`, on the image writer's card) when two or more people
+     are in the pack: each label, who it is (name, "the player", whose line this is) and their
+     pictures, with the order to call everyone only by their label; anyone else in frame with a
+     decided outfit gets it under their label. A one-person frame is written exactly as before.
 6. **Generate** via the rule's provider (`genImageForRule` → AtlasCloud / fal / ModelsLab /
    OpenRouter). Frame resolution: per-image `msg.ratio` → rule `ratio` → global
    (`_frameOverride` transient during the call).

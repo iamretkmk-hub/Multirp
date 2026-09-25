@@ -110,8 +110,12 @@ const {chromium}=require('playwright');
            && /embedText\(embedQuery/.test(src)
            && !/embedText\(query/.test(src)
          ? true : "retrieveMemories still embeds the combined string"; }));
-  ok("the lexical facet still sees the combined text", await pg.evaluate(()=>
-      /const qTok\s*=\s*new Set\(memTokens\(query\)\)/.test(String(retrieveMemories))));
+  /* v134.1 — narrowed: the lexical facet counts the keyword line and the player's own line, not the
+     last two messages (which only pushed the newest memories further up); the whole inline text is
+     still what it counts when there is no keyword line. */
+  ok("the lexical facet sees the keyword line and the player's line, the inline text only as a fallback",
+     await pg.evaluate(()=>/const qTok\s*=\s*new Set\(memTokens\(cleanQuery\?\(cleanQuery\+" "\+\(userText\|\|""\)\):query\)\)/
+       .test(String(retrieveMemories))));
   ok("the fallback embed is capped, so a scene can never become the vector", await pg.evaluate(()=>
       /inlineQuery\.slice\(0,\s*\d+\)/.test(String(retrieveMemories))));
 

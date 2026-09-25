@@ -1308,7 +1308,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v134.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v134.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -43559,13 +43559,35 @@ function cosineSim(a,b){
 }
 // A memory's stored vector IFF it matches the current embed model. Legacy/other-model vectors ignored.
 function memVec(m){ return (m&&Array.isArray(m.vec)&&m.vecModel===embedModelName())?m.vec:null; }
+/* v134.1 — WHAT THE VECTOR WAS MADE FROM. A vector used to be kept for as long as the model name
+   matched, so a memory whose content, people or tags were edited after it was embedded went on
+   being searched as the text it USED to be — tags added in the editor never reached the semantic
+   facet at all. Each vector now carries a signature of the text it was made from; a vector with
+   no signature (made before this) or a different one is re-embedded in the background. The old
+   vector keeps scoring until the new one lands, so nothing drops out of recall meanwhile. */
+function _vecSig(s){ s=String(s||""); let h=5381; for(let i=0;i<s.length;i++){ h=((h<<5)+h+s.charCodeAt(i))|0; } return (h>>>0).toString(36)+":"+s.length; }
+function memNeedsEmbed(m){
+  if(!m)return false;
+  const t=memSearchText(m); if(!t)return false;
+  return !memVec(m) || m.vecSig!==_vecSig(t);
+}
+// Embed one memory now (after an edit), without waiting for the next retrieval's backfill.
+async function embedMemoryNow(m){
+  if(!m||!embedConfigured())return false;
+  const t=memSearchText(m); if(!t)return false;
+  const f=await embedText(t,{noLog:true}); if(!f)return false;
+  m.vec=Array.from(f); m.vecModel=embedModelName(); m.vecSig=_vecSig(t);
+  persistMemory(); return true;
+}
 // Retrieval facet weight (0 = ignore that facet). Keys: Sem, Ppl, Loc, Act.
 function facetW(k,def){ const v=+state["memW"+k]; return (isFinite(v)&&v>=0)?v:def; }
 // Embed any of this owner's (or all) memories that lack a current-model vector — batched, throttled,
 // best-effort. Stops on the first failure (bad key/quota) so it never hammers a broken endpoint.
 async function ensureMemEmbeddings(ownerId,limit){
   if(!embedConfigured()||_embBusy)return;
-  const need=(state.memory||[]).filter(m=>m&&(!ownerId||m.ownerId===ownerId)&&!memVec(m)&&memSearchText(m));
+  // v134.1 — no vector first, then stale ones (edited since, or made before signatures existed).
+  const need=(state.memory||[]).filter(m=>m&&(!ownerId||m.ownerId===ownerId)&&memNeedsEmbed(m))
+    .sort((a,b)=>(memVec(a)?1:0)-(memVec(b)?1:0));
   if(!need.length)return;
   _embBusy=true;
   // One summary entry for the whole batch (per-call logging off) so the backfill stays readable
@@ -43578,8 +43600,9 @@ async function ensureMemEmbeddings(ownerId,limit){
   let done=0;
   try{
     for(const m of batch){
-      const f=await embedText(memSearchText(m),{noLog:true}); if(!f)break;
-      m.vec=Array.from(f); m.vecModel=embedModelName(); done++;
+      const t=memSearchText(m);
+      const f=await embedText(t,{noLog:true}); if(!f)break;
+      m.vec=Array.from(f); m.vecModel=embedModelName(); m.vecSig=_vecSig(t); done++;
     }
     if(done)persistMemory();
   }catch(e){}
@@ -43612,7 +43635,10 @@ async function retrieveMemories(userText,chat,ownerId){
      old memory would be a far worse bug than the one being fixed. */
   const _nowPeriod=(()=>{ try{ return chatPeriod(chat); }catch(e){ return ""; } })();
   const _nowDay=(chat&&chat.gameDay)||curGameDay();
-  const _isNow=m=>!!(m && m.gamePeriod && m.gameDay===_nowDay && m.gamePeriod===_nowPeriod);
+  /* v134.1 — except one the player wrote in the editor. It is not a summary of the scene being
+     played, and the editor stamps a new memory with the current day and part of the day by default,
+     so a memory added by hand vanished from recall until the clock moved on. */
+  const _isNow=m=>!!(m && m.source!=="manual" && m.gamePeriod && m.gameDay===_nowDay && m.gamePeriod===_nowPeriod);
   const ownAll = (ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories())
                  .filter(m=>!_isNow(m));
   // WORKING tier = the character's raw arc-tracker memories, searched semantically over the WHOLE bank
@@ -43664,7 +43690,12 @@ async function retrieveMemories(userText,chat,ownerId){
   //   • importance — the memory's own significance score
   const wSem=facetW("Sem",1), wPpl=facetW("Ppl",0.4), wLoc=facetW("Loc",0.3),
         wRec=facetW("Rec",0.3), wEmo=facetW("Emo",0.2), wImp=facetW("Imp",0.2);
-  const qTok=new Set(memTokens(query));
+  /* v134.1 — the lexical facet counts the generated keyword line and the player's own line. It used
+     to count against those PLUS the last two messages, and divide by all of it, so a memory matching
+     every keyword still scored a few hundredths (3 hits out of 150 words) and the facet did nothing;
+     the narration's own words (the people in the room, the place) only pushed the newest memories
+     further up. With no keyword line, the whole inline text is still what there is. */
+  const qTok=new Set(memTokens(cleanQuery?(cleanQuery+" "+(userText||"")):query));
   const curLoc=String((chat&&chat.location)||"").toLowerCase().trim();
   const presentNames=new Set();
   try{ (presentCast(chat)||[]).forEach(p=>{ if(p&&p.name)presentNames.add(p.name.toLowerCase()); }); }catch(_){}
@@ -43685,11 +43716,26 @@ async function retrieveMemories(userText,chat,ownerId){
       }
     }
   }catch(_){}
+  /* v134.1 — THE SEMANTIC FACET SPANS 0..1 ACROSS THE BANK. It was (cosine+1)/2, and real embedding
+     cosines sit in a narrow band (roughly 0.1 unrelated to 0.6 on topic), so the best and worst match
+     in a bank landed around 0.55 and 0.8 — a spread of a quarter of a point on the facet weighted
+     highest. People (0.4 for anyone present), recency and importance swung more than that, so the
+     newest memories with whoever was in the room won whatever the query said. The raw match is now
+     rescaled across this character's candidates: the best match scores 1, the worst 0. The lexical
+     fallback is rescaled the same way. A memory with no vector yet is scored lexically and rescaled
+     with the other lexical scores, so it competes rather than sitting at zero. */
+  const _lexRaw=m=>{ let hay=""; try{ hay=(memSearchText(m)+" "+(m.location||"")).toLocaleLowerCase("tr"); }catch(_){ hay=memSearchText(m).toLowerCase(); }
+    let s=0; qTok.forEach(w=>{ if(hay.includes(w))s++; }); return s; };
+  const _semRaw=new Map();
+  ownAll.forEach(m=>{ const v=memVec(m);
+    _semRaw.set(m, (qVec&&v)?{k:"cos",v:cosineSim(qVec,v)}:{k:"lex",v:_lexRaw(m)}); });
+  const _rng={cos:{lo:Infinity,hi:-Infinity},lex:{lo:Infinity,hi:-Infinity}};
+  _semRaw.forEach(r=>{ const g=_rng[r.k]; if(r.v<g.lo)g.lo=r.v; if(r.v>g.hi)g.hi=r.v; });
   const facetParts=m=>{
-    let sem=0; const v=memVec(m);
-    if(qVec&&v){ sem=Math.max(0,Math.min(1,(cosineSim(qVec,v)+1)/2)); }
-    else { let hay=""; try{ hay=memSearchText(m).toLowerCase(); }catch(_){}
-      let s=0; qTok.forEach(w=>{ if(hay.includes(w))s++; }); sem=qTok.size?Math.min(1,s/qTok.size):0; }
+    let sem=0; const r=_semRaw.get(m);
+    if(r){ const g=_rng[r.k], span=g.hi-g.lo;
+      if(r.k==="lex") sem = g.hi<=0 ? 0 : (span>0 ? (r.v-g.lo)/span : 1);
+      else sem = span>1e-6 ? (r.v-g.lo)/span : 1; }
     let ppl=0; const mp=(Array.isArray(m.people)?m.people:[]).map(x=>String(x).toLowerCase()).filter(Boolean);
     if(mp.length&&presentNames.size){ let hit=0; mp.forEach(n=>{ presentNames.forEach(pn=>{ if(n===pn||n.includes(pn)||pn.includes(n))hit++; }); }); ppl=Math.min(1,hit/mp.length); }
     const mloc=String(m.location||"").toLowerCase().trim();
@@ -43715,7 +43761,11 @@ async function retrieveMemories(userText,chat,ownerId){
   // prefilter only balances CANDIDATES, so the ranked-down pick could still be mostly one type or
   // intimate. Enforce the per-type cap AND the intimate share here, refilling from the wider pool.
   // (The DISTANT tier is all diaries and is governed by the diary-entries-per-turn count instead.)
-  const recent=balanceMems(recent0,recentPool,recCount);
+  /* v134.1 — the refill walks the pool in RANK order, as balanceMems says it does. It was handed
+     the raw pool, in the order memories were stored, so a slot freed by the per-type cap went to the
+     oldest memory of an allowed type rather than the next best match. */
+  const recentRanked=recentPool.map(m=>({m,s:facetScore(m)})).sort((a,b)=>b.s-a.s).map(x=>x.m);
+  const recent=balanceMems(recent0,recentRanked,recCount);
   // DEBUG TRACE — one local (no-network) entry per retrieval on the Debug page: the query, whether the
   // neural or lexical path ran, the active facet weights, and every candidate's per-facet score with the
   // injected ones flagged. This is the ground truth for "are my weights doing what I set".
@@ -43723,11 +43773,13 @@ async function retrieveMemories(userText,chat,ownerId){
     const rnd=x=>Math.round(x*1000)/1000;
     const tierTrace=(pool,picked)=>{
       const chosen=new Set(picked);
-      return pool.map(m=>({m,p:facetParts(m)})).sort((a,b)=>b.p.total-a.p.total).slice(0,12)
-        .map(({m,p})=>({injected:chosen.has(m),score:rnd(p.total),
+      return pool.map(m=>({m,p:facetParts(m)})).sort((a,b)=>b.p.total-a.p.total)
+        .map((x,i)=>Object.assign(x,{rank:i+1})).filter(x=>x.rank<=12||chosen.has(x.m))
+        .map(({m,p,rank})=>({rank:rank+"/"+pool.length,injected:chosen.has(m),score:rnd(p.total),
           facets:{semantic:rnd(p.sem),people:rnd(p.ppl),location:rnd(p.loc),recency:rnd(p.rec),emotion:rnd(p.emo),importance:rnd(p.imp)},
           match:(qVec&&memVec(m))?"neural (cosine)":"lexical (word overlap)",
-          memory:String(memSearchText(m)||"").slice(0,160)}));
+          semanticRaw:rnd((_semRaw.get(m)||{}).v||0),
+          memory:memPayloadText(memSearchText(m)||"",300)}));
     };
     const withVec=pool=>pool.filter(m=>memVec(m)).length;
     const e=dbg("Memory retrieval — "+(qVec?"semantic (embeddings)":"lexical fallback"),"In-app","(local ranking — no network request)",{
@@ -44064,7 +44116,8 @@ function saveMemEdit(){
   };
   if(_memEditId){
     const m=state.memory.find(x=>x.id===_memEditId);
-    if(m)Object.assign(m,fields);
+    // v134.1 — the edit changes what the vector should be; re-embed it now rather than next turn.
+    if(m){ Object.assign(m,fields); if(memNeedsEmbed(m)) embedMemoryNow(m).catch(()=>{}); }
   }else{
     const _ch=curChat();
     rememberMemory(Object.assign({

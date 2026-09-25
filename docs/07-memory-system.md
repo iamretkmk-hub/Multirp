@@ -178,12 +178,37 @@ Every retrieval writes a **local Debug entry** (no network): the query, neural-v
 path, the active weights, and each candidate's per-facet scores with the injected ones
 flagged — the ground truth for "are my weights doing what I set".
 
+**v134.1 — retrieval was returning the latest memories, not the relevant ones.** A tagged memory
+the query named outright never reached the candidate list. Four causes, all fixed and pinned by
+`tests/memory-retrieval.browser.js`:
+
+- **The semantic facet was squeezed.** It was `(cosine+1)/2`, and real embedding cosines sit in a
+  narrow band, so the best and worst match in a bank differed by about a quarter of a point on the
+  highest-weighted facet, less than `people` (0.4 for anyone present) or recency. The raw match is
+  now rescaled across the character's candidates each retrieval: best match 1, worst 0. The lexical
+  score is rescaled the same way, and a memory with no vector yet competes lexically.
+- **The lexical facet divided by the whole scene.** Hits were divided by every word of the keyword
+  line plus the last two messages. It now counts the keyword line and the player's own line (the
+  inline text only when there is no keyword line).
+- **Edited memories kept their old vector.** Vectors now carry `vecSig`, a signature of the text
+  they were made from (content + people + tags). A missing or different signature queues a
+  re-embed (`memNeedsEmbed`), the old vector scoring until the new one lands; saving the memory
+  editor re-embeds at once (`embedMemoryNow`).
+- **A memory added by hand vanished until the clock moved.** The editor stamps a new memory with
+  the current day and part of the day, which the "the now is not a memory" rule dropped. A
+  `source:"manual"` memory is never treated as the current scene.
+
+Also: the per-type/intimate cap refills from the pool in **rank** order (it walked storage order),
+and the Debug trace shows every injected memory with its `rank` out of the pool size and the raw
+semantic match, not only the top twelve.
+
 ## Embeddings (semantic memory)
 
 Opt-in (`embedOn`). `embedText` calls the OpenRouter embeddings endpoint (model
 `embedModel` → `openai/text-embedding-3-small`) using the main OpenRouter key; vectors are
-cached per memory keyed to the model (`memVec`); `ensureMemEmbeddings(ownerId, batch)`
-back-fills in the background after each retrieval. Any failure ⇒ silent lexical fallback
+cached per memory keyed to the model (`memVec`) and to the text they were made from (`vecSig`);
+`ensureMemEmbeddings(ownerId, batch)` back-fills missing and stale vectors in the background after
+each retrieval. Any failure ⇒ silent lexical fallback
 (`_embLastErr` surfaces in the retrieval trace).
 
 ## Injection into payloads

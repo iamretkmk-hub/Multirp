@@ -62,7 +62,7 @@ const {chromium}=require('playwright');
   ok("today's own memories, through the reply's own producer",
      /THESE ARE YOUR RECENT MEMORIES[\s\S]*argued with my brother/.test(full));
   ok("and the diaries, stamped by the same day ladder",
-     /THESE ARE YOUR DISTANT MEMORIES[\s\S]*\(yesterday\)/.test(full));
+     /THESE ARE YOUR DISTANT MEMORIES[\s\S]*This happened yesterday/.test(full));
   ok("the promises still in force", /# YOUR WORD[\s\S]*tell him yourself/.test(full));
   ok("the meetings with a time on them", /# MEETINGS[\s\S]*Dinner at the harbour/.test(full));
   ok("and the scene the call interrupted",

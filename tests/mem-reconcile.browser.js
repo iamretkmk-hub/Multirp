@@ -120,8 +120,12 @@ const {chromium}=require('playwright');
      await pg.evaluate(()=>{
        const lines=DEFAULT_MEMRECONCILE.split("\n").map(l=>l.trim()).filter(l=>l.startsWith('{"memories"'));
        const filled=lines.map(l=>JSON.parse(l).memories[0]).filter(m=>String(m.content||"").length>40);
-       return filled.length===1 && /^Day \d+, /.test(filled[0].content) && /\bI\b/.test(filled[0].content);
-     }), "no filled example, or it does not open with the day and speak as I");
+       /* v133.1 — the example no longer opens with the day: the app writes that in front itself. */
+       return filled.length===1 && !/^Day \d+/.test(filled[0].content) && /\bI\b/.test(filled[0].content);
+     }), "no filled example, or it still opens with a day, or it does not speak as I");
+  ok("the shipped prompt tells the model the app writes when and where, not it",
+     /The app writes when and where in front of every memory itself/.test(pr.d)
+     &&!/Open with the day/.test(pr.d), "");
   ok("the shipped prompt states first person and bans the second",
      /FIRST person — "I"/.test(pr.d)&&/Never "you"/.test(pr.d), "");
   ok("its example names importance the way the arc builder does",

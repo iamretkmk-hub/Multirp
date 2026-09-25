@@ -104,12 +104,28 @@ other name from. The shipped contract asks for all of them.
 the way this engine did rather than the way the arc builder does — the disagreement that sent an
 edited prompt down the wrong field in the first place. It now shows `importance_score`, says plain
 `importance` still works, and carries a **worked** example beside the skeleton so the two things
-most likely to drift are visible in situ: the first-person "I" and the day-and-hour opening. The
+most likely to drift are visible in situ: the first-person "I" (and, until v133.1, the day-and-hour opening). The
 voice rule is stated as FIRST person and bans the second outright — the fragments being rewritten
 are first person, so a reconciled memory in another voice leaves the bank mixing voices mid-way. It
 also warns, in the words of the failure a player actually hit, that an unescaped quotation mark
 inside a string value breaks the parse. Both example lines are asserted to be valid JSON by the
 test, so the prompt can never again ship an example that cannot parse.
+
+**When and where open the memory (v133.1).** The reconciler used to be told to open every memory
+with the day it was for ("Day 1, Midday. I spent the day…"), and the payload then added its own
+stamp at the end ("(six days ago, Midday) [Palmera Beach Club]") — two copies of the same fact, one
+frozen at the day it was written. Now the model writes only what happened, and the app puts a
+sentence in front of every memory it hands a character, recomputed on every call:
+
+    Memory 1: This happened six days ago at Palmera Beach Club during midday. I spent the day…
+
+`_memLead` builds it from the memory's own `gameDay`, `location` and `gamePeriod`; the gap comes from
+the same `relWhen` ladder as everything else, so it grows as the days pass. The sentence and its two
+optional pieces are fragments (`mem_lead`, `mem_lead_place`, `mem_lead_period`, under "How long ago /
+how far off"), and a piece the memory has no record of is left out whole. The place is always named
+now — the old tail dropped it when it matched the current room. Memories already stored with a
+model-written "Day N, Period." opening keep it on disk; `memStripDayLead` cuts it off wherever
+`memInjectText` hands a memory to a model.
 
 ## Diaries (`writeDayDiaries`, End Day)
 

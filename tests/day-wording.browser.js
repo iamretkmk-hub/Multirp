@@ -71,10 +71,23 @@ const {chromium}=require('playwright');
     memoryBlocks({recent:[mk(4,"Evening","We argued."),mk(1,"Morning","I bought the test.")]},"recent",op);
     return op.mem_recent_entries||"";
   });
-  ok("recent memories are dated in words", /\(yesterday, Evening\)/.test(mem)&&/\(four days ago, Morning\)/.test(mem),
+  /* v133.1 — when and where open the memory as a sentence instead of trailing it. */
+  ok("recent memories open with when, where and the part of the day, in words",
+     /Memory 1: This happened yesterday at Site Shopping Center during evening\. We argued\./.test(mem)
+     &&/Memory 2: This happened four days ago at Site Shopping Center during morning\. I bought the test\./.test(mem),
      mem);
   ok("and carry no day number at all", !/Day\s*\d/.test(mem), mem);
-  ok("the place is untouched — it was never arithmetic", /\[Site Shopping Center\]/.test(mem), mem);
+  ok("the old trailing stamp is gone", !/\(yesterday, Evening\)|\[Site Shopping Center\]/.test(mem), mem);
+  ok("a memory the model dated itself loses its frozen \"Day N, Period.\" opening", await pg.evaluate(()=>{
+      const chat=curChat(); chat.gameDay=7;
+      const op={};
+      memoryBlocks({recent:[{id:"mx",ownerId:"p_o",gameDay:1,gamePeriod:"Midday",location:"Palmera Beach Club",
+        content:"Day 1, Midday. I spent the day with Emre.",importance:0.5}]},"recent",op);
+      const t=op.mem_recent_entries||"";
+      return t==="Memory 1: This happened six days ago at Palmera Beach Club during midday. I spent the day with Emre." ? true : t; }));
+  ok("a piece with no record is left out whole", await pg.evaluate(()=>{
+      const a=_memLead({gameDay:3},5), b=_memLead({location:"Ev"},5), c=_memLead({},5);
+      return (a==="This happened two days ago. " && b==="This happened at Ev. " && c==="") ? true : [a,b,c].join(" | "); }));
 
   console.log("\n[the calendar, both directions]");
   const cal=await pg.evaluate(()=>{

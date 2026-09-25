@@ -204,13 +204,13 @@ Return ONLY this JSON — one object per memory inside the list, and nothing out
 
 This is read by a parser, not by eye. Every string closed, every number a bare number, no trailing commas, no comments, nothing before or after the object. Never put an unescaped quotation mark inside a string value.
 
-A worked one, to copy the SHAPE and the VOICE from — the first-person "I" and the day-and-hour opening are the two parts that must not drift:
-{"memories":[{"content":"Day 2, Morning. I made breakfast and we finally talked about the debt. He refused to pay any of it back and I let it go rather than push. He said he would not be home tonight.","importance_score":0.7,"emotion":"tense","feelings":"I realised I do not trust him any more, and I did not say so.","type":"CONFLICT","people":["Emre"],"tags":["debt","breakfast","home"],"location":"Ev"}]}
+A worked one, to copy the SHAPE and the VOICE from — the first-person "I" is the part that must not drift:
+{"memories":[{"content":"I made breakfast and we finally talked about the debt. He refused to pay any of it back and I let it go rather than push. He said he would not be home tonight.","importance_score":0.7,"emotion":"tense","feelings":"I realised I do not trust him any more, and I did not say so.","type":"CONFLICT","people":["Emre"],"tags":["debt","breakfast","home"],"location":"Ev"}]}
 
 USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely unrelated things — a fight with her daughter and a phone call about work are two memories, not one. Never more than three. Two things that happened in the same room between the same people are ONE memory however long they took.
 
 # WRITING THE CONTENT
-- Open with the day and the part of the day this memory is for, taken from the WHEN line at the top of what you were given. Never guess it and never carry over a date from these instructions.
+- Start straight with what happened. The app writes when and where in front of every memory itself ("This happened yesterday at the café during the evening."), from its own clock, so never open with a day, a day number, the part of the day or the place as a heading, and never write "yesterday" or "Day 2" anywhere in it.
 - FIRST person — "I", the character's own voice, past tense, the same way the fragments are written. Never "you", never their name from the outside: this is the character's own memory and it is read back to them as one.
 - Keep what a person would keep: what happened, what it cost, what they decided, what they are still carrying. What they said only if the saying of it was the event.
 - Drop the beat-by-beat. If the fragments walk through a sequence step by step, compress it to what it amounted to.

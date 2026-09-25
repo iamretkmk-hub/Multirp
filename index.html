@@ -1308,7 +1308,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v133.0</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v133.1</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4780,13 +4780,13 @@ Return ONLY this JSON — one object per memory inside the list, and nothing out
 
 This is read by a parser, not by eye. Every string closed, every number a bare number, no trailing commas, no comments, nothing before or after the object. Never put an unescaped quotation mark inside a string value.
 
-A worked one, to copy the SHAPE and the VOICE from — the first-person "I" and the day-and-hour opening are the two parts that must not drift:
-{"memories":[{"content":"Day 2, Morning. I made breakfast and we finally talked about the debt. He refused to pay any of it back and I let it go rather than push. He said he would not be home tonight.","importance_score":0.7,"emotion":"tense","feelings":"I realised I do not trust him any more, and I did not say so.","type":"CONFLICT","people":["Emre"],"tags":["debt","breakfast","home"],"location":"Ev"}]}
+A worked one, to copy the SHAPE and the VOICE from — the first-person "I" is the part that must not drift:
+{"memories":[{"content":"I made breakfast and we finally talked about the debt. He refused to pay any of it back and I let it go rather than push. He said he would not be home tonight.","importance_score":0.7,"emotion":"tense","feelings":"I realised I do not trust him any more, and I did not say so.","type":"CONFLICT","people":["Emre"],"tags":["debt","breakfast","home"],"location":"Ev"}]}
 
 USUALLY ONE entry. Return more than one ONLY when the fragments cover genuinely unrelated things — a fight with her daughter and a phone call about work are two memories, not one. Never more than three. Two things that happened in the same room between the same people are ONE memory however long they took.
 
 # WRITING THE CONTENT
-- Open with the day and the part of the day this memory is for, taken from the WHEN line at the top of what you were given. Never guess it and never carry over a date from these instructions.
+- Start straight with what happened. The app writes when and where in front of every memory itself ("This happened yesterday at the café during the evening."), from its own clock, so never open with a day, a day number, the part of the day or the place as a heading, and never write "yesterday" or "Day 2" anywhere in it.
 - FIRST person — "I", the character's own voice, past tense, the same way the fragments are written. Never "you", never their name from the outside: this is the character's own memory and it is read back to them as one.
 - Keep what a person would keep: what happened, what it cost, what they decided, what they are still carrying. What they said only if the saying of it was the event.
 - Drop the beat-by-beat. If the fragments walk through a sequence step by step, compress it to what it amounted to.
@@ -8251,6 +8251,10 @@ function loadState(){
      (and a WHERE, where there is one) now. The prompt has to say they are authoritative, or a
      model that was inventing a date carries on inventing one beside the real thing. */
   _refreshPipe("memBuild","durable, first-person MEMORY","THE DAY, THE PART OF THE DAY AND THE PLACE ARE GIVEN TO YOU",DEFAULT_MEMBUILD);
+  /* v133.1 — the reconciler stops opening every memory with "Day 1, Midday." The app now writes
+     "This happened six days ago at … during midday." in front of each memory itself, recomputed
+     every day, so a date the model wrote would only be a second, frozen copy of it. */
+  _refreshPipe("memReconcile","A stretch of one character's day has just ended","The app writes when and where in front of every memory itself",DEFAULT_MEMRECONCILE);
   // v27.x — core traits rewritten: the long in-voice five-factor sketches (quote + parenthetical
   // example per axis) become compact five-axis behavior profiles — one "Axis (low|mid|high):
   // trigger → behavior" rule per axis. Far shorter in every payload and directly playable by the
@@ -13477,7 +13481,7 @@ const PERIODS=["Morning","Midday","Afternoon","Evening","Night"];
    language, and anyone who wants "the other day" instead of "three days ago" can have it. */
 const WHEN_ORDER=["when_today","when_yesterday","when_days_ago","when_last_week","when_weeks_ago",
   "when_long_ago","when_later_today","when_tomorrow","when_day_after","when_in_days",
-  "when_next_week","when_weeks_away"];
+  "when_next_week","when_weeks_away","mem_lead","mem_lead_place","mem_lead_period"];
 const _WHEN_N=["","one","two","three","four","five","six","seven","eight","nine","ten"];
 /* Spelled out, because the rule the payload has always carried is "never say a day number", and a
    numeral in the stamp is the thing most likely to come back out as one. */
@@ -22598,8 +22602,18 @@ function memSearchText(m){
    charged week every line ends with the identical token and the model learns to skip the parentheses.
    Used by the reply payload only; every other consumer (the engines, the chronicler, the curator)
    still gets the full string. */
+/* v133.1 — memories written before the app started stamping them itself open with the date the
+   model wrote: "Day 1, Midday. I spent the day…". That frozen "Day 1" now sits beside the app's own
+   "This happened six days ago…", so it is cut off wherever a memory is handed to a model. The
+   stored text is untouched. */
+const _MEM_DAY_LEAD=/^\s*(?:Day\s+\d+\s*(?:[,\u2013\u2014-]\s*(?:Morning|Midday|Noon|Afternoon|Evening|Night)\b)?|(?:Morning|Midday|Afternoon|Evening|Night)\s*,\s*Day\s+\d+)\s*[.:\u2013\u2014-]\s*/i;
+function memStripDayLead(s){
+  s=String(s||"");
+  const t=s.replace(_MEM_DAY_LEAD,"");
+  return t.trim()?t:s;
+}
 function memInjectText(m,opts){
-  let s=memText(m);
+  let s=memStripDayLead(memText(m));
   if(m.feelings) s+=` (${String(m.feelings).trim()})`;
   else if(!(opts&&opts.noEnum) && m.emotion && m.emotion!=="neutral") s+=` (felt: ${m.emotion})`;
   return s;
@@ -22878,10 +22892,13 @@ function memoryBlocks(injectedMemories,which){
      brief is built on it), so it stays. The enum tag goes (see memInjectText). The location stays
      ONLY when it is somewhere OTHER than where this scene is happening, which is when it carries
      information — tagging every memory with the room the character is standing in does not. */
-  const _hereNow=(()=>{ try{ return String((curChat()||{}).location||"").trim().toLowerCase(); }catch(e){ return ""; } })();
-  const _where=m=>{ const l=String(m.location||"").trim(); return (l && l.toLowerCase()!==_hereNow)?` [${l}]`:""; };
+  /* v133.1 — when and where now OPEN the memory as a sentence ("This happened six days ago at
+     Palmera Beach Club during midday.") instead of trailing it as "(six days ago, Midday) [Place]".
+     Read first, it frames everything after it; tacked on the end it was read last, if at all. The
+     place is always named now: in a sentence it is not a tag repeating the room, it is where it
+     happened. */
   const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
-  const fmt=(m,i)=>{const d=_memWhen(m,_today);return `Memory ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
+  const fmt=(m,i)=>`Memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
   const out=[];
   // v38.1 — outParts, when handed one, collects the numbered entries on their own (no heading, no
   // instruction) so the payload template can print those two as its own prose and call just this.
@@ -22904,10 +22921,8 @@ function latestArcsBlock(ownerId,injectedMemories){
   const used=[].concat(inj.recent||[],inj.longterm||[],inj.diary||[]).map(m=>m&&m.id).filter(Boolean);
   const arcs=latestArcs(ownerId,used,RECENT_ARCS_N);
   if(!arcs.length)return "";
-  const _hereNow=(()=>{ try{ return String((curChat()||{}).location||"").trim().toLowerCase(); }catch(e){ return ""; } })();
-  const _where=m=>{ const l=String(m.location||"").trim(); return (l && l.toLowerCase()!==_hereNow)?` [${l}]`:""; };
   const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
-  const fmt=(m,i)=>{const d=_memWhen(m,_today);return `Latest ${i+1}: ${memInjectText(m,{noEnum:true})}${d}${_where(m)}`;};
+  const fmt=(m,i)=>`Latest ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
   // v38.1 — outParts, when handed one, collects the numbered entries on their own; see memoryBlocks.
   const op=arguments.length>2&&arguments[2]?arguments[2]:{};
   op.mem_latest_entries=arcs.map(fmt).join("\n");
@@ -23538,6 +23553,24 @@ function _memWhen(m,today){
   const t=(today!=null?today:((curChat()||{}).gameDay||0));
   const bits=[relWhen(m.gameDay,t,false),String(m.gamePeriod||"").trim()].filter(Boolean);
   return bits.length?` (${bits.join(", ")})`:"";
+}
+/* v133.1 — the same facts as a sentence that OPENS the memory: "This happened six days ago at
+   Palmera Beach Club during midday. " Every piece is a fragment (mem_lead*), and a piece the memory
+   has no record of is left out whole rather than guessed. Returns "" when there is nothing to say. */
+function _memLead(m,today){
+  if(!m)return "";
+  const t=(today!=null?today:((curChat()||{}).gameDay||0));
+  const when=m.gameDay?relWhen(m.gameDay,t,false):"";
+  const place=String(m.location||"").trim();
+  const period=String(m.gamePeriod||"").trim().toLowerCase();
+  if(!when&&!place&&!period)return "";
+  const tpl=blkTpl("mem_lead"); if(!tpl)return "";
+  const s=fillTpl(tpl,{
+    when,
+    place:place?fillTpl(blkTpl("mem_lead_place")||"",{place}):"",
+    period:period?fillTpl(blkTpl("mem_lead_period")||"",{period}):""
+  }).replace(/\s{2,}/g," ").replace(/\s+([.,])/g,"$1").trim();
+  return s?s+" ":"";
 }
 function lastDialogueLine(chat,selfP,textMode){
   try{
@@ -26345,6 +26378,14 @@ What you must not do is put it where the others can reach it: do not say it out 
   when_in_days:`in {{n}} days`,
   when_next_week:`next week`,
   when_weeks_away:`in a couple of weeks`,
+  /* v133.1 — the sentence the app puts in FRONT of every memory it hands a character: "This
+     happened six days ago at Palmera Beach Club during midday." {{when}} is the phrase from the
+     ladder above, {{place}} and {{period}} are the two pieces below, each left out whole when the
+     memory has no place or no part of the day recorded. Recomputed on every call, so the gap
+     grows as the days pass. */
+  mem_lead:`This happened {{when}}{{place}}{{period}}.`,
+  mem_lead_place:` at {{place}}`,
+  mem_lead_period:` during {{period}}`,
   /* v92.2 — what a meeting says when nobody wrote down what it was for. Saying nothing made the
      character invent a subject at the door; this makes the gap a fact they can act on. */
   calendar_no_reason:`no reason was given when this was agreed, so you genuinely do not know what it is about. If it matters to you, ask — do not pretend to know`,

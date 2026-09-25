@@ -195,9 +195,54 @@ const {chromium}=require('playwright');
     const direct=(src.match(/runCalendarEngine\(chat\)|runPromiseEngine\(chat\)/g)||[]).length;
     return (/runFutureTracker\(chat\)/.test(pt) && !/runPromiseEngine\(|runCalendarEngine\(/.test(pt) && direct===0)
       ? true : "direct detector calls left: "+direct; })());
-  ok("the three prompts are registry prompts on one card", await pg.evaluate(()=>
-    ["x_future_tracker","x_task_extract","x_future_update"].every(k=>!!K[k]&&!!up(k))
-    && X_PROMPT_CARDS.some(c=>c.key==="future_tracker"&&c.keys.length===3)));
+  ok("the four prompts are registry prompts on one card", await pg.evaluate(()=>
+    ["x_future_tracker","x_task_extract","x_future_update","x_future_reconcile"].every(k=>!!K[k]&&!!up(k))
+    && X_PROMPT_CARDS.some(c=>c.key==="future_tracker"&&c.keys.length===4)));
+
+  /* v131.1 — STAGE 3: the check at every change of the time of day. */
+  console.log("\n[the check when a part of the day ends]");
+  const R=await pg.evaluate(async()=>{
+    const c=curChat(), uni=state.universes[0]; c.period="Afternoon"; c.ftStretch=null;
+    // the tracker files a meeting early, and a "task" that was only asked for
+    window.__say("Ayla","Let's meet at the harbour tomorrow morning.");
+    window.__say("Emre","Morning works.");
+    window.__ft=[{items:[{kind:"meeting",action:"new",stage:"agreed",about:"harbour tomorrow"},{kind:"task",action:"new",stage:"agreed",holder:"Nil",about:"Nil fixes the boat"}]}];
+    window.__reply["Meetings tracker"]={new:[{title:"Sunrise boat trip from the harbour",dayOffset:2,period:"Morning",who:"Ayla",executor:"user",where:"Park"}]};
+    window.__reply["Task writer"]={task:{holder:"Nil",assigned_by:"Emre",target:"",title:"Fix the boat",desc:"You fix the boat.",motive:"",when:"",where:"",done_when:"the boat floats"}};
+    await runFutureTracker(c);
+    const mt=chatCalendar(c).find(e=>/Sunrise/.test(e.title)), tk=_charQuests(uni).find(q=>q.title==="Fix the boat");
+    if(!mt||!tk)return {err:"not filed",cal:chatCalendar(c).map(e=>e.title),calls:window.__calls.map(x=>x.d)};
+    const r={stamped:!!(mt.ftAt&&mt.ftAt.period==="Afternoon"&&tk.ftAt)};
+    window.__say("Ayla","Actually — make it the evening, the morning boat is late.");
+    window.__say("Emre","Evening then.");
+    // the part of the day ends
+    window.__calls=[];
+    window.__reply["Future reconcile"]={fixes:[{id:mt.id,changes:{period:"Evening"}},{id:tk.id,drop:true}],
+      missing:[{kind:"promise",holder:"Ayla",about:"Ayla will never lie to Emre again"}]};
+    window.__reply["Promises & commitments"]={new:[{holder:"Ayla",to:"Emre",ask:"he asked",promise:"you will never lie to Emre again",kind:"promise",shows_as:"the next time he asks where she was"}],updates:[]};
+    await runPeriodEngines(c,2,"Afternoon");
+    const rc=window.__calls.find(x=>/^Future reconcile/.test(x.d));
+    const sent=rc?rc.m.map(x=>x.content).join("\n"):"";
+    r.calls=window.__calls.map(x=>x.d).filter(d=>/Future|Promises|Meetings|Task/.test(d));
+    r.first=window.__calls.length&&/^Future reconcile/.test(window.__calls[0].d);
+    r.sentEntries=sent.indexOf("["+mt.id+"]")>=0&&sent.indexOf("["+tk.id+"]")>=0;
+    r.sentOther=/park/.test(sent);
+    r.stretch=/Actually — make it the evening/.test(sent)&&/Let's meet at the harbour/.test(sent);
+    r.period=mt.period; r.taskGone=!_charQuests(uni).some(q=>q.title==="Fix the boat");
+    r.promise=livePromises(c).map(p=>p.promise);
+    // nothing filed and nothing said → no call
+    window.__calls=[]; await runFutureReconcile(c,2,"Evening");
+    r.quiet=window.__calls.filter(x=>/^Future reconcile/.test(x.d)).length;
+    return r;
+  });
+  ok("what a pass files or changes is stamped with its part of the day", R.stamped===true, JSON.stringify(R));
+  ok("the check runs first when a part of the day ends", R.first===true, JSON.stringify(R.calls));
+  ok("it reads the entries filed in that stretch, what else is on record, and the whole stretch",
+     R.sentEntries===true && R.sentOther===true && R.stretch===true, JSON.stringify(R));
+  ok("a detail settled later is corrected", R.period==="Evening", JSON.stringify(R));
+  ok("something never actually agreed is dropped", R.taskGone===true, JSON.stringify(R));
+  ok("something agreed but missed is handed to its writer", JSON.stringify(R.promise)==='["you will not talk to Berk or Nil","you will never lie to Emre again"]', JSON.stringify(R.promise));
+  ok("a stretch that filed nothing and said nothing costs no call", R.quiet===0, JSON.stringify(R));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

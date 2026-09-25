@@ -3569,6 +3569,28 @@ WHAT IS BEING DISCUSSED BUT NOT YET AGREED is listed too. When it gets its answe
 Return ONLY JSON:
 {"items":[{"kind":"meeting|task|promise","action":"new|update|ended","stage":"planning|agreed","id":"<only for update or ended>","holder":"<who is bound, or who will do it>","about":"<one short line: what it is>"}]}
 Most turns bind nothing. {"items":[]} is the normal answer.`},
+  x_future_reconcile:{label:"Future record — check at each time of day",json:true,
+    hint:"When a part of the day ends, reads that whole stretch against the meetings, tasks and promises filed or changed in it: corrects details that ended up different, closes what was called off or done, drops what was never actually agreed, and reports anything agreed that is on no record.",
+    def:`You check a roleplay's record of the future against the stretch of the story it came from. A tracker filed these entries turn by turn while the scene was still going, so some may have been written before every detail was settled, and something agreed in the stretch may have been missed.
+
+You get:
+- THE ENTRIES filed or changed in this stretch, each with its id, its fields, and the fields you may change;
+- WHAT ELSE IS ON RECORD, so you never report something as missing that is already there;
+- THE STRETCH — everything said in this part of the day.
+
+For each entry, compare it with what was FINALLY settled by the end of the stretch:
+- a detail that ended up different (the day, the time, the place, who comes, the wording, the condition) → "changes" with only those fields;
+- it was called off, carried out or broken before the stretch ended → "ended": "done", "cancelled" or "failed", and "result": one past-tense sentence;
+- it was NEVER agreed — only asked for, suggested, wished, refused — or it is a small on-the-spot request ("make me a coffee") → "drop": true.
+Leave out every entry that is right as it stands.
+
+THE ANSWER DECIDES: something counts only if the person bound by it said yes, or decided it for themselves.
+
+Then list anything AGREED in the stretch that is on no record at all — a meeting (a set time and place), a task (a concrete job someone took on), or a promise (an open-ended word) → "missing".
+
+Return ONLY JSON:
+{"fixes":[{"id":"","changes":{},"ended":"","result":"","drop":false}],"missing":[{"kind":"meeting|task|promise","holder":"","about":""}]}
+Both arrays may be empty. That is the normal answer.`},
   x_task_extract:{label:"Task writer",json:true,
     hint:"When the tracker sees a task agreed or decided, writes it down in detail: who does it, who asked, why it was decided, and when it counts as done. A character's task lands on their card; yours lands in your quests.",
     def:`You write down a TASK someone in a roleplay has just taken on — a concrete job they will go and do. You are given what the tracker noticed and the lines where it was decided, from the first mention to the answer.
@@ -16182,6 +16204,8 @@ async function runFutureTracker(chat){
     const j=parseJSON(out);
     const items=(j&&Array.isArray(j.items))?j.items:(Array.isArray(j)?j:[]);
     let promiseDone=false;
+    const _before=_ftSnapshot(chat);   // v131.1 — whatever this pass files or changes is stamped with its stretch
+    if(!chat.ftStretch)chat.ftStretch={day:chat.gameDay||1,period:chatPeriod(chat),start:Math.max(0,len-ENGINE_RECENT_TURNS)};
     for(const it of items.slice(0,4)){
       if(!it)continue;
       const kind=String(it.kind||"").toLowerCase(), action=String(it.action||"new").toLowerCase();
@@ -16210,6 +16234,7 @@ async function runFutureTracker(chat){
         try{ await runFutureUpdate(chat,kind,String(it.id).replace(/^\[|\]$/g,""),turns); }catch(e){}
       }
     }
+    try{ _ftStampChanges(chat,_before); }catch(e){}
     markChatDirty(chat);
   }catch(e){ try{ console.warn("[future tracker] bailed:",e&&e.message||e); }catch(_){} }
   finally{
@@ -16285,60 +16310,162 @@ async function runTaskExtract(chat,opts){
   try{ if(document.getElementById('questsModal'))openQuestsModal(); }catch(e){}
   return q;
 }
-/* ONE entry changed or ended by the latest lines: patch only what they changed. */
-async function runFutureUpdate(chat,kind,id,turns){
-  if(!chat||!state.key||!id)return false;
+/* ONE entry of the record, found by kind + id, with what it shows a model, the fields that may
+   change, and how to apply a change, end it, or drop it. Shared by the per-turn updater and the
+   time-of-day reconciler so the two can never disagree on what an entry is. */
+function _ftEntry(chat,kind,id){
   const uni=universeById(chat.universeId);
   const day=chat.gameDay||1;
-  let entry=null, fields=[], show="", apply=null, end=null;
   if(kind==="meeting"){
-    const e=chatCalendar(chat).find(x=>x&&x.id===id&&!x.done); if(!e)return false;
-    entry=e; fields=["title","day (a day number)","period (Morning, Midday, Afternoon, Evening or Night)","where","who","detail"];
-    show=`MEETING: ${e.title}\nwho: ${e.who||""}\nday: ${e.day!=null?e.day:""}\nperiod: ${e.period||""}\nwhere: ${e.where||""}\ndetail: ${e.detail||""}`;
-    apply=c=>{
-      if(c.title)e.title=briefDesc(String(c.title),90);
-      if(c.day!=null&&Number.isFinite(+c.day)&&+c.day>=day&&+c.day<=day+60)e.day=Math.round(+c.day);
-      if(c.period&&PERIODS.indexOf(c.period)>=0)e.period=c.period;
-      if(c.where){ e.where=briefDesc(String(c.where),60); const l=locByName(e.where); e.locationId=l?l.id:null; }
-      if(c.who){ e.who=briefDesc(String(c.who),120); e.character=e.who; }
-      if(c.detail)e.detail=briefDesc(String(c.detail),300);
-    };
-    end=(how,res)=>{ e.done=true; if(how==="cancelled")e.cancelled=true; if(how==="failed")e.missed=true; e.result=briefDesc(String(res||""),200); };
-  }else if(kind==="task"&&uni){
+    const e=chatCalendar(chat).find(x=>x&&x.id===id&&!x.done); if(!e)return null;
+    return {kind,obj:e,
+      fields:["title","day (a day number)","period (Morning, Midday, Afternoon, Evening or Night)","where","who","detail"],
+      show:`MEETING: ${e.title}\nwho: ${e.who||""}\nday: ${e.day!=null?e.day:""}\nperiod: ${e.period||""}\nwhere: ${e.where||""}\ndetail: ${e.detail||""}`,
+      apply:c=>{
+        if(c.title)e.title=briefDesc(String(c.title),90);
+        if(c.day!=null&&Number.isFinite(+c.day)&&+c.day>=day&&+c.day<=day+60)e.day=Math.round(+c.day);
+        if(c.period&&PERIODS.indexOf(c.period)>=0)e.period=c.period;
+        if(c.where){ e.where=briefDesc(String(c.where),60); const l=locByName(e.where); e.locationId=l?l.id:null; }
+        if(c.who){ e.who=briefDesc(String(c.who),120); e.character=e.who; }
+        if(c.detail)e.detail=briefDesc(String(c.detail),300);
+      },
+      end:(how,res)=>{ e.done=true; if(how==="cancelled")e.cancelled=true; if(how==="failed")e.missed=true; e.result=briefDesc(String(res||""),200); },
+      drop:()=>{ chat.calendar=chatCalendar(chat).filter(x=>x!==e); }};
+  }
+  if(kind==="promise"){
+    const pr=livePromises(chat).find(x=>x&&x.id===id); if(!pr)return null;
+    return {kind,obj:pr,
+      fields:["promise (second person, one sentence)","shows_as (the future moment that would test it)"],
+      show:`PROMISE: ${pr.holderName}${pr.toName?` → ${pr.toName}`:""}\npromise: ${pr.promise}\nasked: ${pr.ask||""}\nshows_as: ${pr.showsAs||""}`,
+      apply:c=>{
+        if(c.promise){ const np=briefDesc(String(c.promise),220); if(np)pr.promise=np; }
+        if(c.shows_as){ const sa=briefDesc(String(c.shows_as),160); if(sa)pr.showsAs=sa; }
+      },
+      end:(how,res)=>{ pr.status=how==="done"?"kept":how==="failed"?"broken":"released"; pr.statusDay=day; pr.note=briefDesc(String(res||""),140); },
+      drop:()=>{ chat.promises=chatPromises(chat).filter(x=>x!==pr); }};
+  }
+  if(kind==="task"&&uni){
     const cq=_charQuests(uni).find(q=>q&&q.id===id&&q.status==="active");
     const gd=uni.gameData||{};
     const pq=!cq&&(Array.isArray(gd.quests)?gd.quests:[]).find(q=>q&&q.id===id&&!q.done);
-    const q=cq||pq; if(!q)return false;
-    entry=q; fields=["title","desc","when","where","done_when"];
-    show=`TASK: ${q.title}\nheld by: ${cq?q.holderName:(state.user||"the player")}\ndesc: ${q.desc||""}\nwhen: ${q.when||""}\nwhere: ${q.where||q.location||""}\ndone_when: ${q.doneWhen||""}`;
-    apply=c=>{
-      if(c.title)q.title=briefDesc(String(c.title),90);
-      if(c.desc)q.desc=String(c.desc).slice(0,800);
-      if(c.when)q.when=briefDesc(String(c.when),120);
-      if(c.where){ if(cq)q.where=briefDesc(String(c.where),60); else q.location=briefDesc(String(c.where),60); }
-      if(c.done_when)q.doneWhen=briefDesc(String(c.done_when),200);
-    };
-    end=(how,res)=>{
-      const r=briefDesc(String(res||""),240);
-      if(cq){ charQuestComplete(chat,uni,q,day,how!=="done",r||(how==="cancelled"?"It was called off.":"")); }
-      else if(how==="done"){ const d=questMarkDone(q.id,{day,result:r}); if(d)_afterQuestDone(chat,uni,d,day).catch(()=>{}); }
-      else { q.done=true; q.cancelled=true; q.result=r||"It was called off."; }
-    };
+    const q=cq||pq; if(!q)return null;
+    return {kind,obj:q,
+      fields:["title","desc","when","where","done_when"],
+      show:`TASK: ${q.title}\nheld by: ${cq?q.holderName:(state.user||"the player")}\ndesc: ${q.desc||""}\nwhen: ${q.when||""}\nwhere: ${q.where||q.location||""}\ndone_when: ${q.doneWhen||""}`,
+      apply:c=>{
+        if(c.title)q.title=briefDesc(String(c.title),90);
+        if(c.desc)q.desc=String(c.desc).slice(0,800);
+        if(c.when)q.when=briefDesc(String(c.when),120);
+        if(c.where){ if(cq)q.where=briefDesc(String(c.where),60); else q.location=briefDesc(String(c.where),60); }
+        if(c.done_when)q.doneWhen=briefDesc(String(c.done_when),200);
+      },
+      end:(how,res)=>{
+        const r=briefDesc(String(res||""),240);
+        if(cq){ charQuestComplete(chat,uni,q,day,how!=="done",r||(how==="cancelled"?"It was called off.":"")); }
+        else if(how==="done"){ const d=questMarkDone(q.id,{day,result:r}); if(d)_afterQuestDone(chat,uni,d,day).catch(()=>{}); }
+        else { q.done=true; q.cancelled=true; q.result=r||"It was called off."; }
+      },
+      drop:()=>{
+        if(cq){ gd.charQuests=_charQuests(uni).filter(x=>x!==q); }
+        else { gd.quests=(gd.quests||[]).filter(x=>x!==q); }
+      }};
   }
-  if(!entry)return false;
+  return null;
+}
+function _ftApplyFix(chat,E,fix){
+  if(!E||!fix)return false;
+  if(fix.drop===true){ E.drop(); return true; }
+  let moved=false;
+  const ch=(fix.changes&&typeof fix.changes==="object")?fix.changes:{};
+  if(Object.keys(ch).length){ E.apply(ch); moved=true; }
+  const how=String(fix.ended||"").toLowerCase();
+  if(["done","cancelled","failed"].indexOf(how)>=0){ E.end(how,fix.result); moved=true; }
+  return moved;
+}
+/* ONE entry changed or ended by the latest lines: patch only what they changed. */
+async function runFutureUpdate(chat,kind,id,turns){
+  if(!chat||!state.key||!id)return false;
+  const E=_ftEntry(chat,kind,id); if(!E)return false;
   const sys=up("x_future_update")+"\n\n"+engineLangDirective();
-  const out=await chatCompletion(epSend("x_future_update",sys,{entry:show,fields:fields.map(f=>"- "+f).join("\n"),convo:_ftConvoText(chat,turns||ENGINE_RECENT_TURNS)}),
+  const out=await chatCompletion(epSend("x_future_update",sys,{entry:E.show,fields:E.fields.map(f=>"- "+f).join("\n"),convo:_ftConvoText(chat,turns||ENGINE_RECENT_TURNS)}),
     state.memModel,{fn:"mem",temp:fnTemp("mem",0.1),max:fnTok("mem",300),dbg:"Future update · "+kind});
   const j=parseJSON(out); if(!j||typeof j!=="object")return false;
-  const ch=(j.changes&&typeof j.changes==="object")?j.changes:{};
-  if(Object.keys(ch).length)apply(ch);
-  const how=String(j.ended||"").toLowerCase();
-  if(["done","cancelled","failed"].indexOf(how)>=0)end(how,j.result);
-  markChatDirty(chat); persistChats(); if(uni)persistUniverses();
+  _ftApplyFix(chat,E,{changes:j.changes,ended:j.ended,result:j.result});
+  markChatDirty(chat); persistChats(); persistUniverses();
   try{ _refreshQuestViews(); }catch(e){}
   return true;
 }
 
+/* ===== v131.1 — THE RECONCILER AT EVERY CHANGE OF THE TIME OF DAY ============================
+   The tracker files a meeting, task or promise the moment it is agreed, and updates it when a
+   later line changes it — but a turn is a small window, and the tracker can still write too early,
+   miss a later change, take a request for a yes, or miss something outright. So when a part of
+   the day ends, ONE call reads that whole stretch against the entries filed or changed in it:
+   a detail that ended up different is corrected, something called off or done is closed, something
+   that was never actually agreed is dropped, and anything agreed that is on no record at all is
+   handed to its writer. A stretch that filed nothing and said little costs nothing. */
+/* Every entry of the record with a signature of what it says, so a pass can see what it touched. */
+function _ftSnapshot(chat){
+  const m=new Map(), sig=o=>{ try{ return JSON.stringify(o); }catch(e){ return String(Math.random()); } };
+  const put=(kind,o)=>{ if(o&&o.id)m.set(o.id,{kind,obj:o,sig:sig(Object.assign({},o,{ftAt:null}))}); };
+  try{ chatCalendar(chat).forEach(e=>put("meeting",e)); }catch(e){}
+  try{ chatPromises(chat).forEach(p=>put("promise",p)); }catch(e){}
+  try{ const uni=universeById(chat.universeId);
+    if(uni){ _charQuests(uni).forEach(q=>put("task",q));
+      ((uni.gameData||{}).quests||[]).forEach(q=>{ if(q&&q.source==="task")put("task",q); }); } }catch(e){}
+  return m;
+}
+/* Mark whatever a tracker pass created or changed with the stretch it happened in. */
+function _ftStampChanges(chat,before){
+  const at={day:chat.gameDay||1,period:chatPeriod(chat)};
+  _ftSnapshot(chat).forEach((v,id)=>{
+    const b=before.get(id);
+    if(!b||b.sig!==v.sig)v.obj.ftAt=at;
+  });
+}
+async function runFutureReconcile(chat,day,period){
+  if(!chat||!state.key)return 0;
+  const on={meeting:!!state.calOn, promise:state.promiseOn!==false, task:state.charQuestsOn!==false};
+  if(!on.meeting&&!on.promise&&!on.task)return 0;
+  const len=_ftConvoLen(chat);
+  const st=chat.ftStretch;
+  const start=(st&&typeof st.start==="number"&&st.start<=len)?st.start:Math.max(0,len-40);
+  // The next stretch begins here, whatever happens below.
+  chat.ftStretch={day:chat.gameDay||1,period:chatPeriod(chat),start:len}; markChatDirty(chat);
+  const n=Math.min(60,len-start);
+  const touched=[];
+  _ftSnapshot(chat).forEach((v,id)=>{
+    const at=v.obj&&v.obj.ftAt;
+    if(!at||at.day!==day||at.period!==period||!on[v.kind])return;
+    const E=_ftEntry(chat,v.kind,id); if(E)touched.push({id,E});
+  });
+  if(!touched.length&&n<4)return 0;           // nothing filed, and too little said to have missed anything
+  const others=_ftRecord(chat).split("\n").filter(l=>l&&!touched.some(t=>l.indexOf("["+t.id+"]")===0)).join("\n");
+  const entries=touched.map(t=>`[${t.id}]\n${t.E.show}\nfields you may change: ${t.E.fields.join("; ")}`).join("\n\n");
+  const sys=fillTpl(up("x_future_reconcile"),{user:state.user||"the player"})+"\n\n"+engineLangDirective();
+  const out=await chatCompletion(epSend("x_future_reconcile",sys,{
+      entries:entries||"(nothing was filed in this stretch)", record:others||"(nothing)",
+      convo:`Day ${day}, ${period} — the whole stretch:\n`+_ftConvoText(chat,Math.max(n,1))}),
+    state.memModel,{fn:"mem",temp:fnTemp("mem",0.1),max:fnTok("mem",600),dbg:"Future reconcile · "+period});
+  const j=parseJSON(out); if(!j||typeof j!=="object")return 0;
+  let moved=0;
+  (Array.isArray(j.fixes)?j.fixes:[]).forEach(f=>{
+    const t=f&&touched.find(x=>x.id===String(f.id||"").replace(/^\[|\]$/g,""));
+    if(t&&_ftApplyFix(chat,t.E,f)){ moved++; _ftLog(chat,`reconcile ${t.E.kind} ${t.id}: ${f.drop?"dropped":"corrected"}`); }
+  });
+  // Anything agreed in the stretch that is on no record: its writer reads the stretch.
+  const turns=Math.max(ENGINE_RECENT_TURNS,Math.min(FT_MAX_SPAN,n));
+  let promiseDone=false;
+  for(const m of (Array.isArray(j.missing)?j.missing:[]).slice(0,3)){
+    const kind=String(m&&m.kind||"").toLowerCase(); if(!on[kind])continue;
+    _ftLog(chat,`reconcile found a missing ${kind}: ${m.about||""}`);
+    if(kind==="meeting"){ try{ await runCalendarEngine(chat,{turns,fromTracker:true}); moved++; }catch(e){} }
+    else if(kind==="promise"){ if(promiseDone)continue; promiseDone=true; try{ await runPromiseEngine(chat,{force:true,turns}); moved++; }catch(e){} }
+    else if(kind==="task"){ try{ if(await runTaskExtract(chat,{turns,about:String(m.about||""),holder:String(m.holder||"")}))moved++; }catch(e){} }
+  }
+  if(moved){ markChatDirty(chat); persistChats(); persistUniverses(); try{ _refreshQuestViews(); }catch(e){} }
+  return moved;
+}
 function _calClose(){ const m=document.getElementById('calModal'); if(m)m.remove(); }
 /* v20.6 — READ-ONLY active-quests section for the calendar. Reads the STANDALONE quest store
    (universe.gameData.quests), NOT the deleted chat.game runtime. Shows active (startActive && !done)
@@ -25188,6 +25315,7 @@ epDefine("x_proactive_text","Proactive text \u2014","textProactivePrompt",[{name
 epDefine("x_quest_reconcile","Quest reconcile","x_quest_reconcile",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_future_tracker","Future tracker","x_future_tracker",[{name:"record",label:"Meetings, tasks and promises already on record",sep:"ALREADY ON RECORD:\n"},{name:"watch",label:"What is being discussed but not yet agreed",sep:"BEING DISCUSSED, NOT YET AGREED:\n"},{name:"convo",label:"The latest lines",sep:"THE LATEST LINES:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Return only the JSON."}]);
 epDefine("x_task_extract","Task writer","x_task_extract",[{name:"noticed",label:"What the tracker noticed",sep:"WHAT THE TRACKER NOTICED:\n"},{name:"cast",label:"The people of this world",sep:"THE PEOPLE:\n"},{name:"convo",label:"The lines where it was decided",sep:"THE LINES:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Write the task. Return only the JSON."}]);
+epDefine("x_future_reconcile","Future reconcile","x_future_reconcile",[{name:"entries",label:"The entries filed or changed in this stretch",sep:"THE ENTRIES:\n"},{name:"record",label:"Everything else on record",sep:"WHAT ELSE IS ON RECORD:\n"},{name:"convo",label:"The whole stretch",sep:"THE STRETCH:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Check the record. Return only the JSON."}]);
 epDefine("x_future_update","Future record update","x_future_update",[{name:"entry",label:"The entry as it stands",sep:"THE ENTRY:\n"},{name:"fields",label:"The fields that may change",sep:"FIELDS YOU MAY CHANGE:\n"},{name:"convo",label:"The latest lines",sep:"THE LATEST LINES:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Return only the JSON."}]);
 epDefine("x_reveal_npc","Reveal NPC \u2014","x_reveal_npc",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_book_editor","Story Book editor","x_book_editor",[{name:"scene",label:"Which scene",sep:"THE SCENE:\n"},{name:"lines",label:"The scene's lines, numbered",sep:"THE LINES:\n"},{name:"panels",label:"Which picture was drawn at which line",sep:"THE PICTURES:\n"},{name:"ask",label:"The instruction that closes the message",fixed:"Edit these pictures into comic panels. Return only the JSON."}]);
@@ -25445,8 +25573,8 @@ const X_PROMPT_CARDS=[
    keys:["poiGossip","x_rumor_about_you"]},
   {key:"x_unkept",label:"A meeting that never happened",desc:"At day's end, a meeting whose day has passed without it happening is written into the memory of every character who was party to it \u2014 so the daily relationship evaluation, which reasons from memories, can see that it stung.",
    keys:["x_unkept_meeting","x_neglect"]},
-  {key:"future_tracker",label:"The future: meetings, tasks, promises",desc:"After every turn, one small call decides whether the latest lines bound the future — a meeting, a task or a promise — and whether it is still being discussed or has been agreed. The answer decides: asking is never enough. Only then does the matching writer run, and a later change updates the entry instead of adding a second one.",
-   keys:["x_future_tracker","x_task_extract","x_future_update"]},
+  {key:"future_tracker",label:"The future: meetings, tasks, promises",desc:"After every turn, one small call decides whether the latest lines bound the future — a meeting, a task or a promise — and whether it is still being discussed or has been agreed. The answer decides: asking is never enough. Only then does the matching writer run, and a later change updates the entry instead of adding a second one. When a part of the day ends, one more call checks that whole stretch against what was filed in it.",
+   keys:["x_future_tracker","x_task_extract","x_future_update","x_future_reconcile"]},
   {key:"day_end_quests",label:"End of day — what moved",desc:"At day's end, reads the day's memories and decides what happened to each quest and to each favour asked of you.",
    keys:["x_quest_reconcile","x_char_quest_reconcile"]},
   {key:"autopilot",label:"Autopilot & suggested replies",desc:"What keeps a scene moving when you are quiet: the note a character gets when Autopilot hands them the next beat, the one they get when a question they asked you was left hanging, and the writer of the three tappable options above the text box.",
@@ -42747,6 +42875,9 @@ async function runPeriodEngines(chat,day,period,uni,opts){
   if(!chat)return;
   const uniObj=(uni&&typeof uni==="object")?uni:(universeById((typeof uni==="string"&&uni)||chat.universeId)||null);
   const dayEnd=!!(opts&&opts.dayEnd);
+  /* v131.1 — the record of the future is checked against the stretch first, so every engine below
+     reads meetings, tasks and promises as they were finally settled. */
+  try{ await runFutureReconcile(chat,day,period); }catch(e){}
   // Settle delivered asks first, then step pursuits, then new ones may be born, then an ask may go out.
   try{ await reconcileCharQuestsForDay(chat,day,uniObj,period); }catch(e){}
   try{ await runCharQuestPursuit(chat,day,uniObj); }catch(e){}

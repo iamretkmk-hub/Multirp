@@ -248,6 +248,14 @@ action: new|update|ended, stage: planning|agreed, id}`.
   `arc:"Tasks"`, `source:"task"`; finishing it chains no arc.
 - One pass at a time; turns landing mid-pass get exactly one more pass. Texts and calls go through
   it too. Each kind obeys its switch (`calOn`, `promiseOn`, `charQuestsOn`).
+- **The check at each time-of-day change (v131.1).** Every entry a tracker pass files or changes is
+  stamped `ftAt:{day,period}` (`_ftSnapshot`/`_ftStampChanges`). `runFutureReconcile` runs FIRST in
+  `runPeriodEngines`, so at every time change and at day end: one call (`x_future_reconcile`) reads
+  the whole stretch since the last check (`chat.ftStretch.start`, up to 60 lines) against the entries
+  stamped in it plus the rest of the record. It corrects details that ended up different, closes what
+  was done or called off, drops what was never agreed, and hands anything agreed but on no record to
+  its writer. No stamped entries and fewer than 4 lines → no call. Entries are read and patched
+  through one adapter, `_ftEntry(chat,kind,id)`, shared with `runFutureUpdate`.
 
 ## Calendar & meetings
 

@@ -267,6 +267,11 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
      anyone in earshot whose name appears in the latest exchange — the person being answered, or
      someone the line names — goes into the pack too (`opts.involved`), after the speaker and the
      player. Group/all still send everyone present; solo/none are unchanged.
+   · **(v132.1) Everyone in the scene, always.** A POV shot of two characters uploaded one picture:
+     only characters NAMED in the latest lines were added. Now every people scene type
+     (`player`/`group`/`all`, one choice in the editor: "Everyone in the scene") sends the speaker,
+     the player unless the rule is POV, the involved characters, then everyone else in earshot
+     (`inSceneCast`, falling back to `presentCast`). `solo` stays one person; `none` sends nobody.
    · **One label per person, in the templates' own numbering.** The scene templates number PEOPLE
      ("the woman in IMAGE 1" = speaker, "the man in IMAGE 2" = player, IMAGE 3+ anyone else; on POV
      the player takes no slot). The roster used to number PICTURES, so a speaker with two photos

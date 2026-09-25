@@ -33757,8 +33757,12 @@ async function galleryRecordBlob(rec){
    a data URI, an http link, or a blob: object URL rebuilt from the static-image store at boot, so
    it is normalized before it goes anywhere near the API. */
 const CAST_MODES=["solo","player","group","all","none"];
-const CAST_LABELS={solo:"Just the speaking character",player:"The character and you",
-  group:"The character and others present",all:"The character, you and others present",
+/* v132.1 — "player", "group" and "all" now send the same people (see buildRefPack): everyone in
+   the scene, plus the player unless the rule is POV. Old rules keep their stored value; the editor
+   offers the one choice. */
+const CAST_EDITOR_MODES=["solo","player","none"];
+const CAST_LABELS={solo:"Just the speaking character",player:"Everyone in the scene (you too, unless it is your point of view)",
+  group:"Everyone in the scene (you too, unless it is your point of view)",all:"Everyone in the scene (you too, unless it is your point of view)",
   none:"Nobody — a place, not people"};
 function ruleCast(rule){
   const c=rule&&rule.cast;
@@ -33879,6 +33883,7 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
   const out={urls:[],names:[],subjects:[],people:[]};
   if(mode==="none")return out;
   const people=[];
+  const solo=(mode==="solo");
   // `subject` rides along with the pictures: the roster has to name each person in the same
   // Man/Woman/Girl words the scene text uses, and only the card knows which one this is.
   if(speaker) people.push({name:speaker.name,subject:_refSubject(speaker),srcs:personRefs(speaker),id:speaker.id,speaker:true});
@@ -33888,19 +33893,24 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
      shot comes back as an ordinary two-shot of a couple. The cast setting still says he is part of
      this scene — it is his scene — he simply is not in the picture. Untick POV on the rule and the
      same rule becomes the two-shot again, with his pictures back. */
-  if((mode==="player"||mode==="all") && !rulePov(rule)) people.push({name:state.user||"the viewer",subject:_refSubject(_playerRefHolder()),srcs:playerRefs(),player:true});
-  if(mode==="group"||mode==="all"){
-    let others=[];
-    try{ others=(presentCast(chat)||[]).filter(function(c){return c&&(!speaker||c.id!==speaker.id);}); }catch(e){}
-    others.forEach(function(c){ people.push({name:c.name,subject:_refSubject(c),srcs:personRefs(c),id:c.id}); });
-  }else if(mode==="player"&&opts&&Array.isArray(opts.involved)){
-    /* v128.1 — EVERYONE THE MOMENT INVOLVES. A "the character and you" scene with a third person in
-       it — the one this line answers, or someone the exchange names — used to send only the speaker's
-       and the player's pictures, so the third person was drawn from nothing. They go up too. */
-    opts.involved.forEach(function(c){
-      if(c&&(!speaker||c.id!==speaker.id)&&!people.some(function(x){return x.id===c.id;}))
-        people.push({name:c.name,subject:_refSubject(c),srcs:personRefs(c),id:c.id});
-    });
+  /* v132.1 — EVERYONE IN THE SCENE, AND THE PLAYER UNLESS IT IS HIS EYES. Reported: two
+     characters seen from the player's point of view, one picture uploaded, and a prompt that
+     describes two people. A "the character and you" scene sent the speaker plus only whoever the
+     latest lines happened to NAME, so someone standing right there went up as nobody — while the
+     writer, who reads the scene, put them in the frame. Now every scene type with people in it
+     sends every character in the scene (the ones the exchange involves first, so a tight picture
+     budget keeps them), and the player's own pictures unless the shot is from his eyes. Only a
+     "just the speaking character" type stays one person. */
+  if(!solo&&!rulePov(rule)) people.push({name:state.user||"the viewer",subject:_refSubject(_playerRefHolder()),srcs:playerRefs(),player:true});
+  const _add=function(c){
+    if(c&&c.id&&(!speaker||c.id!==speaker.id)&&!people.some(function(x){return x.id===c.id;}))
+      people.push({name:c.name,subject:_refSubject(c),srcs:personRefs(c),id:c.id});
+  };
+  if(!solo){
+    if(opts&&Array.isArray(opts.involved))opts.involved.forEach(_add);
+    let _scene=[];
+    try{ _scene=inSceneCast(chat)||[]; if(!_scene.length)_scene=presentCast(chat)||[]; }catch(e){}
+    _scene.forEach(_add);
   }
   const live=people.filter(function(p){return p.srcs.length;});
   if(!live.length)return out;
@@ -44068,7 +44078,7 @@ function renderRules(kind){
         <textarea class="fld" data-k="when" style="min-height:54px">${esc(r.when||'')}</textarea>
         <label>Who is in this frame <span class="desc" data-help style="display:inline">(whose reference pictures go with the request)</span></label>
         <select data-k="cast" data-sel="1" style="width:100%">
-          ${CAST_MODES.map(m=>`<option value="${m}"${ruleCast(r)===m?' selected':''}>${esc(CAST_LABELS[m])}</option>`).join("")}
+          ${CAST_EDITOR_MODES.map(m=>`<option value="${m}"${(ruleCast(r)==="group"||ruleCast(r)==="all"?"player":ruleCast(r))===m?' selected':''}>${esc(CAST_LABELS[m])}</option>`).join("")}
         </select>
         <div class="desc" data-help style="margin:-2px 0 6px">With an image-edit model the picture is built from real reference photos, so this decides whose. The speaking character always comes first; “and you” adds <b>your</b> pictures (a universe's player identity, else Settings › You) so the image is of the two of you. Everyone in the frame gets a slot before anyone gets a second view, so nobody is crowded out of their own scene. <b>One exception:</b> with <b>POV scene</b> ticked below, your pictures are held back whatever this says — the camera is your eyes, so there is no body of yours to draw.</div>
         <label>Negative prompt (optional)</label>

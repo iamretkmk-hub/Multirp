@@ -6,7 +6,8 @@
    usual "the character and you" scene type sent nobody else's pictures, and the roster numbered
    pictures while the scene templates number people. Checked here through a real illustrate() call
    with the models stubbed:
-     - a third person the exchange involves has their pictures sent (a bystander does not);
+     - a third person the exchange involves has their pictures sent — and (v132.1) so does anyone
+       else in the scene, after them: a POV shot of two characters used to upload one picture;
      - the writer is told the cast BEFORE writing, in the templates' own labels, with who each is;
      - the roster names the same people with the same labels, mapped to their own figures, even when
        someone has several pictures; a POV shot leaves the player out and renumbers the rest;
@@ -61,14 +62,14 @@ const {chromium}=require('playwright');
       urls:pack?pack.urls:[],usr,roster:pack?editPrompt("bytedance/seedream-v4.5/edit","SCENE",pack.names,pack.subjects):""};
   },setup||"");
 
-  console.log("\n[everyone the moment involves has their pictures sent]");
+  console.log("\n[everyone in the scene has their pictures sent]");
   const A=await shot();
-  ok("the speaker, the player and the person being answered all go up, in the templates' order",
-     JSON.stringify(A.people.map(p=>p.n))==='["Ayla","Emre","Selin"]', JSON.stringify(A.people));
-  ok("each with all of their own pictures", JSON.stringify(A.urls)==='["data:A1","data:A2","data:E1","data:S1"]', JSON.stringify(A.urls));
-  ok("somebody present but not in the exchange stays out", A.people.every(p=>p.n!=="Deniz"), JSON.stringify(A.people));
+  ok("the speaker, the player and the person being answered go up first, in the templates' order",
+     JSON.stringify(A.people.map(p=>p.n).slice(0,3))==='["Ayla","Emre","Selin"]', JSON.stringify(A.people));
+  ok("each with all of their own pictures", JSON.stringify(A.urls)==='["data:A1","data:A2","data:E1","data:S1","data:D1"]', JSON.stringify(A.urls));
+  ok("somebody in the scene but not named in the exchange goes up too, after them", A.people[3]&&A.people[3].n==="Deniz", JSON.stringify(A.people));
   ok("each person is labelled by their IMAGE slot, unique even for two women",
-     JSON.stringify(A.people.map(p=>p.l))==='["the woman in IMAGE 1","the man in IMAGE 2","the woman in IMAGE 3"]', JSON.stringify(A.people));
+     JSON.stringify(A.people.map(p=>p.l))==='["the woman in IMAGE 1","the man in IMAGE 2","the woman in IMAGE 3","the man in IMAGE 4"]', JSON.stringify(A.people));
 
   console.log("\n[the writer is told before it writes]");
   ok("the prompt writer receives the cast", /PEOPLE IN THIS FRAME/.test(A.usr), A.usr.slice(0,300));
@@ -89,12 +90,18 @@ const {chromium}=require('playwright');
   console.log("\n[a POV shot, and a one-person frame]");
   const P=await shot("window.__rule={label:'POV',cast:'player',pov:true,promptStyle:''};");
   ok("on a POV shot the player takes no slot and the others move up",
-     JSON.stringify(P.people.map(p=>p.l))==='["the woman in IMAGE 1","the woman in IMAGE 2"]' && P.people[1].n==="Selin", JSON.stringify(P.people));
+     JSON.stringify(P.people.map(p=>p.l))==='["the woman in IMAGE 1","the woman in IMAGE 2","the man in IMAGE 3"]' && P.people[1].n==="Selin" && P.people.every(p=>p.n!=="Emre"), JSON.stringify(P.people));
+  const P2=await shot("window.__rule={label:'POV',cast:'player',pov:true,promptStyle:''}; curChat().presentIds=['p_a','p_s']; curChat().messages[0].content='\"Look at the sea.\"';");
+  ok("two characters seen from the player's eyes: both their pictures go up, his do not (the reported case)",
+     JSON.stringify(P2.people.map(p=>p.n))==='["Ayla","Selin"]' && JSON.stringify(P2.urls)==='["data:A1","data:A2","data:S1"]', JSON.stringify(P2));
+  ok("and the writer is told both, by label", /PEOPLE IN THIS FRAME/.test(P2.usr) && /IMAGE 2 = Selin/.test(P2.usr), P2.usr.slice(0,400));
   const S=await shot("window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''};");
   ok("a solo scene type stays one person", JSON.stringify(S.people.map(p=>p.n))==='["Ayla"]', JSON.stringify(S.people));
   ok("and its writer gets no cast block — written exactly as before", S.usr.indexOf("PEOPLE IN THIS FRAME")<0, S.usr.slice(0,200));
   const G=await shot("window.__rule={label:'Group',cast:'group',pov:false,promptStyle:''};");
-  ok("a group scene type still sends everyone present", JSON.stringify(G.people.map(p=>p.n).sort())==='["Ayla","Deniz","Selin"]', JSON.stringify(G.people));
+  ok("a group scene type sends everyone in the scene, the player included when it is not his eyes", JSON.stringify(G.people.map(p=>p.n).sort())==='["Ayla","Deniz","Emre","Selin"]', JSON.stringify(G.people));
+  ok("the rule editor offers one 'everyone in the scene' choice", await pg.evaluate(()=>
+     JSON.stringify(CAST_EDITOR_MODES)==='["solo","player","none"]' && /Everyone in the scene/.test(CAST_LABELS.player)));
   ok("the cast prompt is a registry prompt on the image writer's card", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.x_img_cast && !!K.x_img_cast && ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey==="x_img_cast")&&(d.blocks||[]).some(x=>x.promptKey==="imgFrameGuide"))));
 

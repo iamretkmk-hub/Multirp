@@ -24,8 +24,8 @@ maybeProactiveTextTick     a character may text first (≤1 per in-game period) 
 maybeCharQuestTextTick     a quest-holder may text their ask (heavily rate-limited) (bg)
 runTrackerEngine           freeform tracker deltas + trigger phrases (bg, if trackOn)
 runShortTermRel            fast feeling axes (adaptive cadence) (bg, if relOn)
-runPromiseEngine           open-ended commitments: find new ones AND settle open ones (bg, every 2nd turn)
-runCalendarEngine          extract new concrete meetings from conversation (bg, if calOn)
+runFutureTracker           ONE call: did this turn make / change / end a meeting, task or promise? (bg)
+                           → runCalendarEngine / runPromiseEngine / runTaskExtract / runFutureUpdate
 adjustAttendance           persuasion re-scoring of an uncertain meeting (bg)
 runCalendarExecutor        due char↔char plans (only here when pulse is OFF)
 resolveDueMeetings         due meetings involving the player — may CONSUME the turn (return)
@@ -203,11 +203,11 @@ pressure. The meetings detector was right to drop those, and there was nowhere e
 | `ask` | what was asked, or what prompted it — the reason, which is what makes it make sense a week later |
 | `promise` | the word actually given, as a standing rule |
 | `kind` | `promise` · `prohibition` · `arrangement` · `change` · `secret` |
-| `weight` | `binding` or `soft` (given lightly / under pressure) |
 | `status` | `open → kept | broken | released`, with `statusDay` and a `note` |
 
-`runPromiseEngine(chat)` fires from `postTurn` on every second turn and does BOTH jobs in one call:
-finds new commitments and settles the open ones (`kept`/`broken`/`released`/`reaffirmed`), which is
+`runPromiseEngine(chat,{force,turns})` runs when the future tracker saw a promise made, changed or
+ended, and does BOTH jobs in one call: finds new commitments and settles the open ones
+(`kept`/`broken`/`released`/`reaffirmed`/`changed` — a changed word is reworded in place), which is
 what keeps the ledger from becoming another append-only dump. `recordPromise` swallows paraphrases of
 a word already given (`_prSame`, 60% content-word overlap); `_prPrune` drops resolved entries after
 7 days and caps the list at 60. A **broken** word plants a real memory for whoever it was given to,
@@ -224,9 +224,34 @@ is worse than none at all:
 UI: a read-only section in the Meetings modal (`_calPromiseSection`) with release and delete.
 Off via `state.promiseOn`.
 
+## The future-event tracker (v130.1)
+
+`runFutureTracker(chat)` replaces the per-turn Meetings detector and the every-other-turn Promises
+detector. One small call (`x_future_tracker`) sees the latest lines, everything on record **with
+ids** (open meetings, promises, character tasks/quests, the player's tasks) and what is being
+discussed but not yet agreed (`chat.futureWatch`). It returns items `{kind: meeting|task|promise,
+action: new|update|ended, stage: planning|agreed, id}`.
+
+- **The answer decides.** Asking, wanting or demanding is never enough; only the bound person's yes
+  (or a decision of their own) counts. Small on-the-spot requests are nothing.
+- `planning` writes nothing and records where it began (`futureWatch`, dropped after 24 lines).
+  `agreed` runs the writer over the whole stretch since then (up to 30 lines), so details settled
+  later are not lost.
+- Writers: meeting → `runCalendarEngine(chat,{turns,fromTracker})` (its own errand "tasks" are
+  ignored here); promise → `runPromiseEngine(chat,{force,turns})`; task → `runTaskExtract`
+  (`x_task_extract`); an update/end of a meeting or task → `runFutureUpdate` (`x_future_update`,
+  patches only what changed, or ends it done/cancelled/failed).
+- **Tasks.** A character's (decided in their words or `_thoughts_`, or agreed when asked) is a
+  character quest with `source:"task"`, `assignedBy`, `when`, `doneWhen`; it prints on their card as
+  `YOUR TASK`, is stepped offstage when it runs through another character, never becomes a text ask,
+  and is judged by `reconcileCharQuestsForDay`. The player's is a quest in `gameData.quests` with
+  `arc:"Tasks"`, `source:"task"`; finishing it chains no arc.
+- One pass at a time; turns landing mid-pass get exactly one more pass. Texts and calls go through
+  it too. Each kind obeys its switch (`calOn`, `promiseOn`, `charQuestsOn`).
+
 ## Calendar & meetings
 
-`runCalendarEngine` (`calPrompt`) extracts only **concrete dated meetings** (day, executor,
+`runCalendarEngine` (`calPrompt`, run by the future tracker) extracts only **concrete dated meetings** (day, executor,
 certainty, purpose) from conversation/texts into `chat.calendar`. Uncertain meetings get an
 attendance % (`estimateAttendance`), which the player can move by addressing it
 (`adjustAttendance`/`attendancePersuade`). Due handling (`resolveDueMeetings`): executor

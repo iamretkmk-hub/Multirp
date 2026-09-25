@@ -39885,12 +39885,14 @@ function openQuestsModal(){
         </div></div>`;
     }).join("");
   }else{
-    cqBody=`<div class="desc">None yet — they are born at day end from the cast's goals &amp; ambitions and what's brewing in the undercurrents. A quest that needs YOU arrives as a text or an in-person approach when its moment comes.</div>`;
+    cqBody=`<div class="desc">None yet — they are born at day end from the cast's goals &amp; ambitions and what's brewing in the undercurrents. A quest that needs YOU arrives as a text or an in-person approach when its moment comes.</div>`
+      +(u.cqLastSpawn&&u.cqLastSpawn.reason?`<div class="desc" style="margin-top:6px">Last checked at the end of Day ${esc(String(u.cqLastSpawn.day||"?"))}: ${esc(u.cqLastSpawn.reason)}.</div>`:"");
   }
   const cqSection=(state.charQuestsOn!==false||cqs.length)
     ?`<div style="border-top:1px solid var(--border);margin:12px 0;padding-top:10px">
        <div class="desc" style="margin:0 0 6px;font-weight:600;color:var(--accent)">${icon("user")} Character quests <span class="desc" style="display:inline;font-weight:400">(their own pursuits)</span></div>
-       ${cqBody}</div>`
+       ${cqBody}
+       ${state.charQuestsOn!==false?`<button class="btn sec small" id="cqSpawnNow" style="width:auto;margin-top:8px" onclick="charQuestSpawnNowUI(this)">${icon("sparkle")} Look for a pursuit now</button>`:""}</div>`
     :"";
   const inpCss="width:100%";   // v124.0 — the app's standard field, not a smaller one-off
   const m=document.createElement('div'); m.id="questsModal"; m.className="modal show";
@@ -40595,23 +40597,40 @@ function openQuestLines(uni,day){
     return out.length?out.join("\n"):"(nothing is being pursued right now)";
   }catch(e){ return "(nothing is being pursued right now)"; }
 }
+/* v129.1 — WHY NO QUEST WAS BORN, SAID OUT LOUD. Reported: "I don't see any payloads regarding
+   character quests." Two gates stopped the spawn before any call was made, silently:
+     - the pool read only the card's own `goals` field, while a character's goals may live only in
+       the curated list (goalsLive) — the very list engineGoals() hands the designer — so a cast whose
+       wants had been curated, or whose cards had no Goals field, was never considered at all;
+     - the two-day spacing between one character's quests counted from day 0 for somebody who had
+       never had one, so nothing could be born at the end of Day 1.
+   Now goals are read through engineGoals (card or curated), the spacing only applies after a real
+   quest, and every day end records why nothing was born (uni.cqLastSpawn), shown on the Quests
+   screen, which can also run the step on demand. */
+function _cqSpawnNote(uni,day,reason){
+  try{ if(uni){ uni.cqLastSpawn={day,reason:String(reason||"").slice(0,200),at:Date.now()}; persistUniverses(); } }catch(e){}
+  try{ _qlog("cq.spawn.none",`Day ${day}: ${reason}`); }catch(e){}
+}
 async function runCharQuestSpawn(chat,day,uni){
   try{
-    if(state.charQuestsOn===false||!chat||!state.key)return 0;
-    uni=uni||universeById(chat.universeId); if(!uni)return 0;
+    if(!uni&&chat)uni=universeById(chat.universeId);
+    if(state.charQuestsOn===false){ _cqSpawnNote(uni,day,"character quests are switched off in Game Preferences"); return 0; }
+    if(!chat||!state.key){ _cqSpawnNote(uni,day,"no API key"); return 0; }
+    if(!uni)return 0;
     const all=_charQuests(uni); const active=_cqActive(uni);
-    if(active.length>=3)return 0;
+    if(active.length>=3){ _cqSpawnNote(uni,day,"three pursuits are already running — one has to end first"); return 0; }
     const holders=new Set(active.map(q=>q.holderId));
-    let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!holders.has(p.id)&&p.goals&&String(p.goals).trim());
-    if(!pool.length)return 0;
+    let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!holders.has(p.id)&&String(engineGoals(p)||"").trim());
+    if(!pool.length){ _cqSpawnNote(uni,day,"nobody free has any goals — give characters Goals on their card"); return 0; }
     const liveIntent=p=>((chat.intents||[]).some(i=>i&&i.holderId===p.id&&i.status!=="spent"));
     const chargedCount=p=>(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3&&((m.importance||0)>=0.5||m.type==="OBSERVATION")).length;
-    const lastQ=p=>all.filter(q=>q&&q.holderId===p.id).reduce((a,q)=>Math.max(a,q.completedDay||q.createdDay||0),0);
+    /* null = never had one: a first quest has nothing to be spaced from. */
+    const lastQ=p=>{ const mine=all.filter(q=>q&&q.holderId===p.id); return mine.length?mine.reduce((a,q)=>Math.max(a,q.completedDay||q.createdDay||0),0):null; };
     pool=pool.map(p=>({p,li:liveIntent(p)?1:0,ch:chargedCount(p),last:lastQ(p)}))
-      .filter(x=>day-x.last>=2)
+      .filter(x=>x.last===null||day-x.last>=2)
       .sort((a,b)=>(b.li-a.li)||(b.ch-a.ch))
       .slice(0,3).map(x=>x.p);
-    if(!pool.length)return 0;
+    if(!pool.length){ _cqSpawnNote(uni,day,"everyone with goals had a pursuit in the last two days"); return 0; }
     const roster=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p));
     const rosterNames=roster.map(p=>p.name);
     const locNames=(Array.isArray(uni.locations)?uni.locations:[]).map(l=>l&&l.name).filter(Boolean).slice(0,24).join(", ")||"(none named)";
@@ -40640,7 +40659,7 @@ async function runCharQuestSpawn(chat,day,uni){
         j=parseJSON(out);
       }catch(err){}
       const qq=j&&j.quest;
-      if(!qq||!qq.title){ _qlog("cq.spawn.skip",`${p.name} — no quest born`); continue; }
+      if(!qq||!qq.title){ _qlog("cq.spawn.skip",`${p.name} — no quest born`); _cqSpawnNote(uni,day,`asked ${p.name}: nothing they would commit to yet`); continue; }
       // Resolve the target: another character by exact-ish name, or the player.
       const tRaw=String(qq.target||"").trim();
       let targetId=null,targetName="";
@@ -40650,7 +40669,7 @@ async function runCharQuestSpawn(chat,day,uni){
         const tp=roster.find(x=>x.name.toLowerCase()===tRaw.toLowerCase())||roster.find(x=>x.name.toLowerCase().includes(tRaw.toLowerCase()));
         if(tp&&tp.id!==p.id){ targetId=tp.id; targetName=tp.name; }
       }
-      if(!targetId){ _qlog("cq.spawn.skip",`${p.name} — target "${tRaw}" didn't resolve`); continue; }
+      if(!targetId){ _qlog("cq.spawn.skip",`${p.name} — target "${tRaw}" didn't resolve`); _cqSpawnNote(uni,day,`${p.name}'s pursuit named "${tRaw}", who is not in this world`); continue; }
       const g=(qq.gate&&typeof qq.gate==="object")?qq.gate:{};
       const gateType=["user_alone","with_char","at_location","any"].includes(g.type)?g.type:"any";
       const approach=["text","in_person","either"].includes(qq.approach)?qq.approach:"either";
@@ -40671,6 +40690,7 @@ async function runCharQuestSpawn(chat,day,uni){
         progress:[], delivered:false, deliveredDay:null, awaitingUser:false, lastNudgeDay:null, nudges:0
       };
       all.push(q);
+      uni.cqLastSpawn={day,reason:`${p.name} began "${q.title}"`,at:Date.now()};
       persistUniverses();
       charQuestNote(uni,q,day,`The pursuit began${q.motive?": "+q.motive:"."}`);
       _qlog("cq.spawn",`"${q.title}" — ${p.name} → ${targetName}${targetId==="__user__"?` (${approach}, gate ${gateType})`:""}`);
@@ -40679,6 +40699,17 @@ async function runCharQuestSpawn(chat,day,uni){
     }
     return 0;
   }catch(e){ return 0; }
+}
+/* v129.1 — the same day-end step, on demand, from the Quests screen. */
+async function charQuestSpawnNowUI(btn){
+  const chat=curChat(); if(!chat)return;
+  if(!state.key){ toast("Add your API key first"); return; }
+  if(btn){ btn.disabled=true; btn.textContent="looking…"; }
+  let n=0;
+  try{ n=await runCharQuestSpawn(chat,chat.gameDay||1,universeById(chat.universeId)); }catch(e){}
+  const u=universeById(chat.universeId);
+  toast(n?"A new pursuit began":("No pursuit this time — "+((u&&u.cqLastSpawn&&u.cqLastSpawn.reason)||"nothing to start")));
+  try{ openQuestsModal(); }catch(e){}
 }
 // DAY-END PURSUIT: each active char→char quest may take ONE offstage step (max 2 quests stepped per
 // day, each quest at most once per day). Every move is narrated to the player as a world event;

@@ -98,6 +98,26 @@ const {chromium}=require('playwright');
   ok("the cast prompt is a registry prompt on the image writer's card", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.x_img_cast && !!K.x_img_cast && ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey==="x_img_cast")&&(d.blocks||[]).some(x=>x.promptKey==="imgFrameGuide"))));
 
+  console.log("\n[a generate-image icon under every reply]");
+  const IB=await pg.evaluate(async()=>{
+    const c=curChat(); let called=null; const real=window.reIllustrate; window.reIllustrate=mid=>{ called=mid; };
+    c.messages=[{mid:"g1",role:"user",content:'"hi"',present:[]},
+      {mid:"g2",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"hello"',present:[]},
+      {mid:"g3",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"a text",textMsg:true,textWith:"p_a",present:[]}];
+    show('chat'); renderChat(); await new Promise(r=>setTimeout(r,300));
+    const q=mid=>document.querySelector('.bubble[data-mid="'+mid+'"] .msgActions [data-genimg]');
+    const btn=q("g2"), row=btn&&btn.closest('.msgActions');
+    const sib=row&&row.querySelector('[data-dub]');
+    const r={reply:!!btn,user:!!q("g1"),svg:!!(btn&&btn.querySelector('svg')),text:(btn&&btn.textContent.trim())||"",
+      sameRow:!!sib, sameSize:!!(btn&&sib&&Math.abs(btn.getBoundingClientRect().height-sib.getBoundingClientRect().height)<1&&Math.abs(btn.getBoundingClientRect().top-sib.getBoundingClientRect().top)<1)};
+    if(btn)btn.click(); r.called=called; window.reIllustrate=real;
+    return r;
+  });
+  ok("every character reply has a generate-image icon in its action row", IB.reply===true && IB.sameRow===true, JSON.stringify(IB));
+  ok("it is an icon only, the same size and line as the others", IB.svg===true && IB.text==="" && IB.sameSize===true, JSON.stringify(IB));
+  ok("the player's own line has none", IB.user===false, JSON.stringify(IB));
+  ok("tapping it draws that reply's picture", IB.called==="g2", JSON.stringify(IB));
+
   await pg.evaluate(()=>{ Object.assign(window,window.__real); });
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

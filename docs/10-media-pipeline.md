@@ -272,6 +272,13 @@ Fires per assistant reply when auto-images are active (`autoImgActive` — toggl
      (`player`/`group`/`all`, one choice in the editor: "Everyone in the scene") sends the speaker,
      the player unless the rule is POV, the involved characters, then everyone else in earshot
      (`inSceneCast`, falling back to `presentCast`). `solo` stays one person; `none` sends nobody.
+   · **(v132.2) No picture is not no person.** Someone in the frame without reference pictures used
+     to drop out of the pack and shift everyone after them up a number (the speaker had none, so the
+     man beside her became IMAGE 1 while the writer, following the template, called her IMAGE 1 and
+     him IMAGE 2 — never sent). `buildRefPack` now returns `unpictured` with a label ("the woman with
+     no picture") and their look, and the writer gets the cast block whenever there are 2+ people,
+     anyone unpictured, or a lone picture that is not the speaker's. `x_img_cast` says its numbering
+     wins over the template's and that NO PICTURE people are described in words.
    · **One label per person, in the templates' own numbering.** The scene templates number PEOPLE
      ("the woman in IMAGE 1" = speaker, "the man in IMAGE 2" = player, IMAGE 3+ anyone else; on POV
      the player takes no slot). The roster used to number PICTURES, so a speaker with two photos

@@ -95,6 +95,17 @@ const {chromium}=require('playwright');
   ok("two characters seen from the player's eyes: both their pictures go up, his do not (the reported case)",
      JSON.stringify(P2.people.map(p=>p.n))==='["Ayla","Selin"]' && JSON.stringify(P2.urls)==='["data:A1","data:A2","data:S1"]', JSON.stringify(P2));
   ok("and the writer is told both, by label", /PEOPLE IN THIS FRAME/.test(P2.usr) && /IMAGE 2 = Selin/.test(P2.usr), P2.usr.slice(0,400));
+  /* v132.2 — the reported payload: one picture sent ("the man in IMAGE 1"), a prompt with "the woman
+     in IMAGE 1" and "the man in IMAGE 2". The speaker had no pictures and dropped out of the pack,
+     so the man beside her moved up to IMAGE 1 while the writer followed the template's numbering. */
+  const U=await shot("window.__rule={label:'POV',cast:'player',pov:true,promptStyle:''}; curChat().presentIds=['p_a','p_d']; curChat().messages[0].speaker='Deniz'; curChat().messages[0].speakerId='p_d'; curChat().messages[0].content='\"Come, sit with us.\"'; window.__refsA=state.personas[0].refs; state.personas[0].refs=[];");
+  await pg.evaluate(()=>{ state.personas[0].refs=window.__refsA; });
+  ok("a speaker with no pictures is not silently dropped: the one picture is the man's, labelled IMAGE 1",
+     JSON.stringify(U.people.map(p=>p.n+"|"+p.l))==='["Deniz|the man in IMAGE 1"]' && JSON.stringify(U.urls)==='["data:D1"]', JSON.stringify(U));
+  ok("and the writer is told she is in the frame with NO PICTURE, to be described in words",
+     /- the woman with no picture = Ayla, whose line this picture is for — NO PICTURE: describe them in words/.test(U.usr)
+     && /- the man in IMAGE 1 = Deniz \(picture 1\)/.test(U.usr), U.usr.slice(0,700));
+  ok("and that this list's numbers win over the scene template's", /THIS list wins/.test(U.usr) && /no IMAGE number beyond the last one listed/.test(U.usr), U.usr.slice(0,900));
   const S=await shot("window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''};");
   ok("a solo scene type stays one person", JSON.stringify(S.people.map(p=>p.n))==='["Ayla"]', JSON.stringify(S.people));
   ok("and its writer gets no cast block — written exactly as before", S.usr.indexOf("PEOPLE IN THIS FRAME")<0, S.usr.slice(0,200));

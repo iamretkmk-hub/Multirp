@@ -3522,12 +3522,12 @@ Return ONLY JSON, with every panel you were given, in order:
      roster will use ("the woman from Figure 1"), and names who each one is so it can read the
      exchange — but writes only the labels. */
   x_img_cast:{label:"Image writer — who is in the frame",json:false,
-    hint:"Sent to the image prompt writer when the picture has reference photos of two or more people (an edit model): who each person is, which pictures are theirs, and the label to call them by (\"the woman in IMAGE 1\" — the scene templates' own numbering). Placeholder: {{cast}} (one line per person).",
+    hint:"Sent to the image prompt writer (edit models) when the frame holds two or more people, someone without a reference picture, or one picture that is not the speaker's: who each person is, which pictures are theirs, and the label to call them by (\"the woman in IMAGE 1\" — the scene templates' own numbering). Placeholder: {{cast}} (one line per person).",
     def:`PEOPLE IN THIS FRAME — each person is drawn from their OWN reference pictures, which the image model receives in this order:
 {{cast}}
 Everyone listed is in the picture. Write where each of them is and what each of them is doing, their pose and their contact with each other, as the exchange shows it.
-Call each person ONLY by their label — "the woman in IMAGE 1", "the man in IMAGE 2" — every time you mention them. Never a name, and never just "a woman" or "the man": with more than one person, a bare "woman" does not say whose face goes on that body. These are the same IMAGE numbers the scene instructions above use.
-Do not describe anyone's face, hair, build or skin; their pictures carry that. Clothing is yours to write unless it is decided below. Add nobody who is not listed.`},
+Call each person ONLY by their label — "the woman in IMAGE 1", "the man in IMAGE 2" — every time you mention them. Never a name, and never just "a woman" or "the man": with more than one person, a bare "woman" does not say whose face goes on that body. Where the scene instructions above give someone a different IMAGE number, THIS list wins: it is the order the pictures are actually sent in, and there is no IMAGE number beyond the last one listed.
+Someone marked NO PICTURE is in the frame all the same: call them by their label and describe them briefly in words from the look given. Do not describe the face, hair, build or skin of anyone who HAS a picture; their pictures carry that. Clothing is yours to write unless it is decided below. Add nobody who is not listed.`},
 
   x_meeting_no_show_beat:{label:"Meeting no-show beat",json:false,
     hint:"The narrator sentence when someone never turned up to a meeting you waited for.",
@@ -33287,12 +33287,20 @@ async function illustrate(mid,replyText,force){
           &&_ex.indexOf(String(c.name).toLocaleLowerCase("tr"))>-1);
       }catch(e){}
       _pack=await buildRefPack(rule,speaker,chat,editModelMaxRefs(effImgModel()),{involved:_involved});
-      if(_pack&&_pack.people&&_pack.people.length>=2){
-        const _lines=_pack.people.map(p=>{
+      /* v132.2 — the writer is told the cast whenever the scene template's numbering could be wrong:
+         two or more people, anyone in the frame without a picture, or a single picture that is not
+         the speaker's. */
+      const _unp=(_pack&&_pack.unpictured)||[];
+      const _ppl=(_pack&&_pack.people)||[];
+      if(_ppl.length>=2||_unp.length||(_ppl.length===1&&!_ppl[0].speaker)){
+        const _lines=_ppl.map(p=>{
           const figs=p.from===p.to?`picture ${p.from}`:`pictures ${p.from}-${p.to}`;
           const who=p.player?`${state.user} (the player)`:p.name;
           return `- ${p.label} = ${who}${p.speaker?", whose line this picture is for":""} (${figs})`;
-        }).join("\n");
+        }).concat(_unp.map(u=>{
+          const who=u.player?`${state.user} (the player)`:u.name;
+          return `- ${u.label} = ${who}${u.speaker?", whose line this picture is for":""} — NO PICTURE: describe them in words${u.look?` (${u.look})`:""}`;
+        })).join("\n");
         _castBlock=fillTpl(up("x_img_cast"),{cast:_lines})+"\n\n";
         const _others=_pack.people.filter(p=>!p.speaker&&!p.player&&p.id)
           .map(p=>{ const c=(state.personas||[]).find(x=>x&&x.id===p.id);
@@ -33880,13 +33888,13 @@ function playerRefs(){ return personRefs(_playerRefHolder()); }
 async function buildRefPack(rule,speaker,chat,cap,opts){
   const mode=ruleCast(rule);
   const max=Math.max(1,cap||3);
-  const out={urls:[],names:[],subjects:[],people:[]};
+  const out={urls:[],names:[],subjects:[],people:[],unpictured:[]};
   if(mode==="none")return out;
   const people=[];
   const solo=(mode==="solo");
   // `subject` rides along with the pictures: the roster has to name each person in the same
   // Man/Woman/Girl words the scene text uses, and only the card knows which one this is.
-  if(speaker) people.push({name:speaker.name,subject:_refSubject(speaker),srcs:personRefs(speaker),id:speaker.id,speaker:true});
+  if(speaker) people.push({name:speaker.name,subject:_refSubject(speaker),srcs:personRefs(speaker),id:speaker.id,speaker:true,look:speaker.look});
   /* v52.2 — IN A POV FRAME THE PLAYER'S PICTURES DO NOT GO UP. The camera is his eyes, so there is
      no body of his to draw, and sending his photographs to an edit model is actively harmful: the
      model has been handed a man and will find somewhere to put him, which is how a first-person
@@ -33901,10 +33909,10 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
      sends every character in the scene (the ones the exchange involves first, so a tight picture
      budget keeps them), and the player's own pictures unless the shot is from his eyes. Only a
      "just the speaking character" type stays one person. */
-  if(!solo&&!rulePov(rule)) people.push({name:state.user||"the viewer",subject:_refSubject(_playerRefHolder()),srcs:playerRefs(),player:true});
+  if(!solo&&!rulePov(rule)){ const _ph=_playerRefHolder(); people.push({name:state.user||"the viewer",subject:_refSubject(_ph),srcs:playerRefs(),player:true,look:_ph&&_ph.look}); }
   const _add=function(c){
     if(c&&c.id&&(!speaker||c.id!==speaker.id)&&!people.some(function(x){return x.id===c.id;}))
-      people.push({name:c.name,subject:_refSubject(c),srcs:personRefs(c),id:c.id});
+      people.push({name:c.name,subject:_refSubject(c),srcs:personRefs(c),id:c.id,look:c.look});
   };
   if(!solo){
     if(opts&&Array.isArray(opts.involved))opts.involved.forEach(_add);
@@ -33912,6 +33920,22 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
     try{ _scene=inSceneCast(chat)||[]; if(!_scene.length)_scene=presentCast(chat)||[]; }catch(e){}
     _scene.forEach(_add);
   }
+  /* v132.2 — SOMEONE WITH NO PICTURE IS STILL IN THE FRAME. They used to vanish from the pack, and
+     everyone after them moved up a number: the speaker had no photos, the man beside her became
+     IMAGE 1, and the writer — still following the scene template's "the woman in IMAGE 1" — wrote
+     her as IMAGE 1 and him as an IMAGE 2 that was never sent. They are kept here, so the writer is
+     told who has no picture and describes them in words. */
+  const _cnt={};
+  people.filter(function(p){return !p.srcs.length;}).forEach(function(p){
+    const subj=(p.subject||"person").toLowerCase(); _cnt[subj]=(_cnt[subj]||0)+1;
+    let look=""; try{ look=briefDesc(lookProse(p.look)||"",220); }catch(e){}
+    out.unpictured.push({name:p.name,subject:p.subject||"",speaker:!!p.speaker,player:!!p.player,id:p.id||null,look,subj});
+  });
+  const _seen={};
+  out.unpictured.forEach(function(u){
+    const n=(_seen[u.subj]=(_seen[u.subj]||0)+1);
+    u.label="the "+(_cnt[u.subj]>1?(["first","second","third","fourth"][n-1]||("#"+n))+" ":"")+u.subj+" with no picture";
+  });
   const live=people.filter(function(p){return p.srcs.length;});
   if(!live.length)return out;
   const take=live.map(function(){return 0;});

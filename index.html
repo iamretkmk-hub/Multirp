@@ -28862,7 +28862,7 @@ async function toggleMode(mode,ev){
                    toast(state.imgPauseOn?"Auto images paused":"Auto images back on"); break;
     case 'heat':   state.heatOn=!state.heatOn; store.set(K.heatOn,state.heatOn);
                    // v41.9 — off is the moment she thinks clearly; the reckoning runs off screen
-                   if(!state.heatOn){ runAfterHeat(curChat()).catch(()=>{}); }
+                   if(!state.heatOn){ heatClearStale(curChat()); runAfterHeat(curChat()).catch(()=>{}); }
                    // v27.4 — a burst already generating has to die with the toggle. Bumping the
                    // sequence is the same cancellation signal a player turn uses; runHeatBursts
                    // checks it between beats and playCharacterTurn checks it after generation, so
@@ -30147,12 +30147,13 @@ async function sendMessage(){
     await runPresenceTracker(chat);
     maybeBuildMemory(chat);
     postTurn(chat);
+    heatEndTurn(chat);       // v135.1 — beat 1 ends with this reply; the run opens its own beats
     maybeHeatBursts(chat);   // v19.5
   }catch(err){
     typing.remove();
     chat.messages.push({mid:newMid(),role:"assistant",speaker:(present[0]||{name:"Narrator"}).name,content:(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
     persistChats();appendNewBubbles();
-  }finally{document.getElementById('sendBtn').disabled=false;}
+  }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
 }
 
 // Parse and execute an out-of-character command.
@@ -32335,7 +32336,21 @@ function heatBeginTurn(chat){
   chat._heatOpened=true;
   return true;
 }
-function heatEndTurn(chat){ if(chat) delete chat._heatBeat; }
+/* (!) v135.1 — ONLY THE TURN THAT OPENED THE BEAT CLOSES IT. While a burst run is writing (_heatBusy)
+   the beat on the chat is the RUN's, not the player turn's — heatBeginTurn refuses to open one then —
+   so a turn finishing underneath it must leave it alone (runHeatBursts clears its own). */
+function heatEndTurn(chat){ if(chat&&!_heatBusy) delete chat._heatBeat; }
+/* v135.1 — HEAT OFF LEAVES NO BEAT BEHIND. chat._heatBeat is what switches the payload to the heat
+   layout and guidance; it is transient and is meant to live for one reply. The one-on-one send path
+   opened it (heatBeginTurn) and never closed it — it relied on runHeatBursts' finally, and that run
+   returns at once when heat is off. So closing a scene clip mid-reply (which puts heat back off)
+   left the beat standing, and every later reply went out with "you are currently having sex"
+   while the switch in the menu read off. Called from every route that turns heat off. */
+function heatClearStale(chat){
+  if(!chat) return;
+  heatEndTurn(chat);
+  delete chat._heatOpened;
+}
 /* v41.9 — THE RECKONING, ONCE, WHEN THE HEAT GOES OFF. Runs off screen: no message is posted and
    nothing is said to anyone. The result lands on the persona and ships in every later payload as
    WHAT YOU DECIDED AFTERWARDS, so the next scene is played by someone who has drawn a conclusion
@@ -36715,7 +36730,7 @@ function _heatFollowScene(on){
       }
       _heatSeq++;                      // a run in flight dies with the clip
       // v41.9 — the clip ending is the end of the run as surely as the toggle is
-      try{ if(!state.heatOn) runAfterHeat(curChat()).catch(()=>{}); }catch(_){}
+      try{ if(!state.heatOn){ heatClearStale(curChat()); runAfterHeat(curChat()).catch(()=>{}); } }catch(_){}
     }
     reflectModes();
   }catch(_){}
@@ -46254,7 +46269,7 @@ function saveSettings(notify){
   if(!(state.autoSpeak||state.narrMode))_dubKill("settings-voicing-off");   // v19.41: silence NOW, including queued jobs
   {const e=document.getElementById('setNarrVoice'); if(e){state.narrVoice=e.value.trim(); store.setRaw(K.narrVoice,state.narrVoice);}}
   {const e=document.getElementById('setNmPatience'); if(e){let v=parseInt(e.value,10); if(!(v>=800&&v<=8000))v=3000; state.nmPatience=v; store.setRaw(K.nmPatience,String(v));}}
-  {const e=document.getElementById('setHeatOn'); if(e){const _was=!!state.heatOn; state.heatOn=e.checked; store.set(K.heatOn,state.heatOn); if(_was!==!!state.heatOn)_heatSeq++;}}
+  {const e=document.getElementById('setHeatOn'); if(e){const _was=!!state.heatOn; state.heatOn=e.checked; store.set(K.heatOn,state.heatOn); if(_was!==!!state.heatOn){ _heatSeq++; if(!state.heatOn)heatClearStale(curChat()); }}}
   {const e=document.getElementById('setHeatN'); if(e){let v=parseInt(e.value,10); if(!(v>=1&&v<=10))v=5; state.heatN=v; store.setRaw(K.heatN,String(v));}}
   {const e=document.getElementById('setApDelay'); if(e){let v=parseInt(e.value,10); if(!(v>=10&&v<=300))v=30; state.apDelay=v; store.setRaw(K.apDelay,String(v));}}
   {const e=document.getElementById('setApCap'); if(e){let v=parseInt(e.value,10); if(!(v>=1&&v<=30))v=6; state.apCap=v; store.setRaw(K.apCap,String(v));}}

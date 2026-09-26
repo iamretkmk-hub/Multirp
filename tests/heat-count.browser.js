@@ -73,6 +73,48 @@ const {chromium}=require('playwright');
   ok("so it is built with the heat format", fmt.heatFmt===true);
   ok("and heatN=1 tells it that it is the last beat", fmt.lastBeat===true);
 
+  // ---- v135.1 — heat going off never leaves a beat behind (the payload kept routing to heat)
+  const stale=await pg.evaluate(async()=>{
+    const chat=curChat(); const out={};
+    // the toggle
+    state.heatOn=true; delete chat._heatOpened; heatBeginTurn(chat);
+    await toggleMode('heat'); out.toggle=!chat._heatBeat && replyKind(chat,"solo")==="solo";
+    // closing a scene clip puts heat back off
+    state._heatWasOn=false; state.heatOn=true; heatBeginTurn(chat);
+    _heatFollowScene(false); out.scene=!chat._heatBeat && state.heatOn===false && replyKind(chat,"solo")==="solo";
+    // a burst run owns its beat: a player turn ending underneath it must not close it
+    state.heatOn=true; _heatBusy=true; chat._heatBeat={total:"3",n:"2",narrN:"1"};
+    heatEndTurn(chat); out.busyKept=!!chat._heatBeat; _heatBusy=false; heatEndTurn(chat);
+    // the one-on-one send path closes beat 1 even when heat went off mid-reply (the clip was closed)
+    const stubs=["chatCompletion","presentCast","runPresenceTracker","postTurn","maybeBuildMemory",
+      "autoVisualize","autoSpeakMsg","runVoiceCheck","speakPlayerTurn","settleRumors","enqueuePresent"];
+    const real={}; stubs.forEach(k=>real[k]=window[k]);
+    const _pers=state.personas, _pres=chat.presentIds, _msgs=chat.messages, _key=state.key;
+    state.personas=[{id:"p_h",name:"Burcu",universeId:state.universes[0].id,look:{}}];
+    chat.presentIds=["p_h"]; chat.messages=[]; state.key="k";
+    const solo=presentCast(chat)[0];
+    let sawHeat=null;
+    window.chatCompletion=async()=>{ if(sawHeat===null){ sawHeat=!!chat._heatBeat; state.heatOn=false; } return '"Tamam."'; };
+    window.presentCast=()=>[solo];
+    window.runPresenceTracker=async()=>({entered:[],exited:[]});
+    ["postTurn","maybeBuildMemory","autoVisualize","autoSpeakMsg","runVoiceCheck","speakPlayerTurn","settleRumors","enqueuePresent"]
+      .forEach(k=>window[k]=()=>{});
+    const _rp=state.autoRpOn;
+    try{
+      state.heatOn=true; state.autoRpOn=false; delete chat._heatOpened;
+      document.getElementById('chatInput').value='"Selam."'; await sendMessage();
+      out.sawHeat=sawHeat; out.afterSend=!chat._heatBeat;
+    }catch(e){ out.err=String(e&&e.message||e); }
+    finally{ stubs.forEach(k=>window[k]=real[k]); state.heatOn=false; state.autoRpOn=_rp;
+      state.personas=_pers; chat.presentIds=_pres; chat.messages=_msgs; state.key=_key; }
+    return out;
+  });
+  ok("toggling heat off clears the beat", stale.toggle===true, JSON.stringify(stale));
+  ok("closing the scene clip clears the beat", stale.scene===true, JSON.stringify(stale));
+  ok("a running burst keeps its own beat", stale.busyKept===true, JSON.stringify(stale));
+  ok("the solo send path ends beat 1 even when heat went off mid-reply",
+     stale.sawHeat===true && stale.afterSend===true && !stale.err, JSON.stringify(stale));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);
   await b.close();

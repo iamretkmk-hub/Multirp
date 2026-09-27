@@ -651,3 +651,31 @@ allows a shared constant **only while every one of its uses is a `${NAME}` expan
 (that is `CARD_VOICE_RULE`, whose text always ends up inside an editable default). The widened guard
 immediately found one more: the Auto-RP narrator's spoken-input rule, built inline at the call site,
 now the `narrateVerbatim` prompt.
+
+## v140.1 — what the player wears
+
+Characters have had an outfit table since v48.2 (`currentOutfit`: the scene's override, then the
+activity the sub-area implies, their home by time of day, the player's house, the location, then the
+free-text wardrobe). The player had an appearance line and nothing else, so a picture with the
+player in it dressed them however the writer guessed, and the outfit changed from frame to frame.
+
+- **Where it lives.** On the universe, beside the rest of the player's identity: `userOutfits`
+  (`{byLoc, home, activity}`, the character's shape without `userHome`, since the player's house *is*
+  their home) and `userWardrobe`, a free-text fallback. It is edited in the universe editor under
+  *Your character in this universe › What you wear*. The table comes from the shared
+  `_outfitTableHTML`, with its home rows following *Your home*. **Generate outfits / Rewrite all**
+  run the character `x_outfits_generator` on the player's details, filling only the empty slots
+  unless rewriting.
+- **How it resolves.** `playerOutfitHolder(chat)` is a stand-in card (`id:"__user__"`,
+  `isPlayer:true`), so `currentOutfit` works unchanged. The one difference is that for the player,
+  "home" is `playerHomeLoc`.
+- **The scene's say.** `runWearingTracker` includes the player once they have clothes on record, and
+  a change is stored as `chat.wearing.__user__`. Like a character's override, it expires when the
+  place or the hour changes.
+- **The image writer.** `_imgPlayerWardrobeBlock` goes into the writer's request whenever the player
+  is in the frame. That is the same test `buildRefPack` uses for the player's pictures: any cast but
+  "just the speaker" or "nobody", and not a POV rule. With a labelled cast (edit models, two or more
+  people) the block sits under the player's label (`FOR MAN 1 — Emre, the player:`). Otherwise it
+  names them. A player with nothing on record adds nothing, so existing prompts are unchanged.
+
+Test: `tests/player-outfits.browser.js`.

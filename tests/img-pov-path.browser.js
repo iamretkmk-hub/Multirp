@@ -381,7 +381,8 @@ const {chromium}=require('playwright');
   ok("and it is in the user message, before the continuity reference", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       // v128.1 — the cast block (x_img_cast) may lead it; the place still comes before continuity
-      return /const usr=(_castBlock\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
+      // v140.1 — and the player's outfit block after the cast
+      return /const usr=(_castBlock\+)?(_playerDress\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
   ok("the continuity note no longer claims the location is automatic", (()=>{
       const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
       return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)

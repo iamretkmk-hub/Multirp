@@ -2087,12 +2087,23 @@
         <button class="btn sec small" type="button" onclick="ueClearUserPics()">Clear all</button>
       </div>
       <div class="desc">Who <b>you</b> look like in this world. Any scene whose rule casts “and you” — set under <b>Who is in this frame</b> in Settings › Image Generation — sends these alongside the character's own pictures, so the picture is of the two of you. Leave empty and your global set from <b>Settings › Game Preferences › You</b> is used instead.</div></div>
+    <div><label><svg class="ic"><use href="#i-palette"/></svg> What you wear (this universe)</label>
+      <textarea class="fld" id="ueUserWardrobe" placeholder="e.g. worn leather jacket over plain dark tees, black jeans, scuffed boots; a navy suit for work" style="min-height:56px"></textarea>
+      <div class="desc">Your usual clothes, with colours. Used when no place below has an outfit written for it.</div>
+      <details style="margin-top:6px"><summary style="cursor:pointer"><b>What you wear, place by place</b></summary>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn sec small" type="button" id="ueGenUserOutfits" style="width:auto" onclick="generateUserOutfits(false)"><svg class="ic"><use href="#i-sparkle"/></svg> Generate outfits</button>
+          <button class="btn sec small" type="button" style="width:auto" onclick="generateUserOutfits(true)">Rewrite all</button>
+        </div>
+        <div class="desc" data-help style="margin-top:4px">One outfit per place, already chosen, the same way a character's card works. Whenever you are in the picture, the image writer is told what you have on right now: your home at this time of day, the place you are standing in, or swim, sport, sleep and intimate where the room calls for it. When the story changes it (you take the jacket off, you borrow a coat), that wins until you move or the hour turns.</div>
+        <div id="ueUserOutfits"></div>
+      </details></div>
     <div><label>Your personality (this universe)</label><textarea class="fld" id="ueUserPersonality" placeholder="how you tend to act: confident, dry-humoured, guarded, reckless… — used by Auto-RP to narrate your turns in your voice" style="min-height:56px"></textarea></div>
     <div><label>Your voice id (this universe)</label><input type="text" class="fld" id="ueUserVoice" placeholder="empty = your voice from Settings › Game Preferences › You"></div>
     <div><label>Your speech style (this universe)</label><textarea class="fld" id="ueUserStyle" placeholder="how you talk: terse, sarcastic, warm, formal, lots of slang… — used by Auto-RP" style="min-height:56px"></textarea></div>
     <div><label>Your background (this universe)</label><textarea class="fld" id="ueUserBio" placeholder="who you are here: history, role, ties to this world — used by the Gamemaster & Scene Writer" style="min-height:72px"></textarea></div>
     <div><label><svg class="ic"><use href="#i-home"/></svg> Your home (where you wake each day)</label>
-      <select id="ueUserHome" class="fld"></select>
+      <select id="ueUserHome" class="fld" onchange="renderUeUserOutfits()"></select>
       <div class="desc">At the start of each day (End Day) you return here. Leave as "Stay where I am" to wake wherever you ended the night.</div></div>
     <div class="subhead" style="margin-top:10px"><svg class="ic"><use href="#i-chart"/></svg> Trackers</div>
     <div class="desc">Named numeric values the story tracks (suspicion, intoxication, a power budget, pregnancy…). Each can belong to the whole story, a single character (private to them), or you the player (public or private). Each tracker has its own behaviour, its own AI prompt &amp; model, and breaking points. Values start fresh in each chat.</div>
@@ -19149,6 +19160,8 @@ function editUniverse(id){
   {const e=document.getElementById('ueUserVoice'); if(e)e.value=u.userVoice||"";}
   document.getElementById('ueUserBio').value=u.userBio||"";
   _ueUserPics=personRefs({image:u.userImage,refImages:u.userRefImages}); renderUeUserPics();
+  {const e=document.getElementById('ueUserWardrobe'); if(e)e.value=u.userWardrobe||"";}
+  _ueUserOutfits=JSON.parse(JSON.stringify(u.userOutfits||{byLoc:{},home:{},activity:{}}));   // v140.1
   _ueTrackers=Array.isArray(u.trackers)?JSON.parse(JSON.stringify(u.trackers)):[];
   renderTrackerEditor();
   _ueLocs=Array.isArray(u.locations)?JSON.parse(JSON.stringify(u.locations)):[];
@@ -19160,6 +19173,7 @@ function editUniverse(id){
        _ueLocs.map(l=>`<option value="${l.id}">${esc(l.name)}${l.type==='home'?' (home)':''}</option>`).join("");
      sel.value=u.playerHomeLocId||"";
    }}
+  renderUeUserOutfits();   // v140.1 — after the home is chosen: it decides whether the home rows show
   _uePrompts=(u.prompts&&typeof u.prompts==="object")?JSON.parse(JSON.stringify(u.prompts)):{};
   renderUePrompts();
   document.getElementById('ueDelete').style.display=id?"block":"none";
@@ -19449,6 +19463,7 @@ function saveTrackerEdit(){
 // ---- Location editor (draft copy until the universe is saved) ----
 let _ueLocs=[];
 function renderLocEditor(){
+  try{ renderUeUserOutfits(); }catch(e){}   // v140.1 — the player's outfit rows follow the location list
   const el=document.getElementById('ueLocList'); if(!el)return; el.innerHTML="";
   if(!_ueLocs.length){ el.innerHTML=`<div class="desc">No locations yet.</div>`; return; }
   // Build a name lookup for residents from the personas in this universe.
@@ -19840,6 +19855,8 @@ function saveUniverse(){
     userImage:splitPersonRefs(_ueUserPics).image||"",
     userRefImages:splitPersonRefs(_ueUserPics).refImages,
     playerHomeLocId:(document.getElementById('ueUserHome')?document.getElementById('ueUserHome').value||"":""),
+    userWardrobe:(document.getElementById('ueUserWardrobe')?document.getElementById('ueUserWardrobe').value.trim():""),
+    userOutfits:JSON.parse(JSON.stringify(_ueUserOutfits||{})),
     trackers:_ueTrackers.slice(),
     rules:JSON.parse(JSON.stringify(_ueRules||[])),
     locations:_ueLocs.slice(),
@@ -22368,21 +22385,106 @@ function renderOutfitEditor(){
   const p=editingPersona||{};
   const o=p.outfits||{}; const slots=outfitSlots(p,uni);
   if(!slots.locations.length){ host.innerHTML=`<div class="desc">This universe has no locations yet.</div>`; return; }
+  host.innerHTML=`<div class="desc" data-help style="margin-top:4px">One outfit per place, already chosen — the payload sends the one that fits and never picks. Written to the character ("You wear…"), like the rest of the card.</div>`
+    +_outfitTableHTML(o,slots,"setOutfitSlot",{home:"their own home"});
+}
+/* v140.1 — the table itself, shared by the character card and the player's section of the universe
+   editor. `setter` names the global function each input calls with (group, key, value). */
+function _outfitTableHTML(o,slots,setter,words){
+  o=o||{}; words=words||{};
   const row=(group,key,label,val)=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">
       <div class="desc" style="min-width:104px;font-size:10px;padding-top:6px">${esc(label)}</div>
       <input class="fld" style="flex:1;font-size:11px" value="${esc(val||"")}" placeholder="not written yet"
-        oninput="setOutfitSlot('${group}','${esc(key)}',this.value)">
+        data-outfit="${group}|${esc(key)}" oninput="${setter}('${group}','${esc(key)}',this.value)">
     </div>`;
-  let h=`<div class="desc" data-help style="margin-top:4px">One outfit per place, already chosen — the payload sends the one that fits and never picks. Written to the character ("You wear…"), like the rest of the card.</div>`;
-  h+=`<div style="margin-top:6px"><b style="font-size:11px">Locations</b>`
+  let h=`<div style="margin-top:6px"><b style="font-size:11px">Locations</b>`
     +slots.locations.map(l=>row("byLoc",l.id,l.name,(o.byLoc||{})[l.id])).join("")+`</div>`;
-  if(slots.home) h+=`<div style="margin-top:8px"><b style="font-size:11px">${esc(slots.home.name)} — their own home</b>`
+  if(slots.home) h+=`<div style="margin-top:8px"><b style="font-size:11px">${esc(slots.home.name)} — ${esc(words.home||"their own home")}</b>`
     +slots.periods.map(pr=>row("home",pr,pr,(o.home||{})[pr])).join("")+`</div>`;
   if(slots.userHome) h+=`<div style="margin-top:8px"><b style="font-size:11px">${esc(slots.userHome.name)} — the player's house</b>`
     +slots.periods.map(pr=>row("userHome",pr,pr,(o.userHome||{})[pr])).join("")+`</div>`;
   h+=`<div style="margin-top:8px"><b style="font-size:11px">Whatever the place cannot say</b>`
     +slots.activities.map(a=>row("activity",a,a,(o.activity||{})[a])).join("")+`</div>`;
-  host.innerHTML=h;
+  return h;
+}
+/* ---- v140.1 — THE PLAYER'S TABLE, in the universe editor ----
+   Same slots as a character's, from the universe being edited (its unsaved locations included) and
+   the home chosen in "Your home" above it. There is no "player's house" group: that IS their home. */
+let _ueUserOutfits={byLoc:{},home:{},activity:{}};
+function _ueUserOutfitSlots(){
+  const locs=(Array.isArray(_ueLocs)?_ueLocs:[]).map(l=>({id:l.id,name:l.name}));
+  const hid=(document.getElementById('ueUserHome')||{}).value||"";
+  const home=hid?(locs.find(l=>l.id===hid)||null):null;
+  return {locations:locs,home,userHome:null,periods:PERIODS.slice(),activities:OUTFIT_ACTIVITIES.slice()};
+}
+function _ueUserOutfitMissing(){
+  const s=_ueUserOutfitSlots(), o=_ueUserOutfits||{}, miss=[];
+  s.locations.forEach(l=>{ if(!String((o.byLoc||{})[l.id]||"").trim()) miss.push("location: "+l.name); });
+  if(s.home) s.periods.forEach(pr=>{ if(!String((o.home||{})[pr]||"").trim()) miss.push("home: "+pr); });
+  s.activities.forEach(a=>{ if(!String((o.activity||{})[a]||"").trim()) miss.push("activity: "+a); });
+  return miss;
+}
+function renderUeUserOutfits(){
+  const host=document.getElementById('ueUserOutfits'); if(!host)return;
+  const slots=_ueUserOutfitSlots();
+  if(!slots.locations.length){ host.innerHTML=`<div class="desc">This universe has no locations yet — add some below first.</div>`; return; }
+  host.innerHTML=_outfitTableHTML(_ueUserOutfits,slots,"setUeUserOutfitSlot",{home:"your home"});
+}
+function setUeUserOutfitSlot(group,key,val){
+  const o=_ueUserOutfits=_ueUserOutfits||{byLoc:{},home:{},activity:{}};
+  o[group]=o[group]||{};
+  if(String(val||"").trim()) o[group][key]=String(val).trim(); else delete o[group][key];
+}
+/* The character generator, handed the player instead of a card. Fills only the empty slots unless
+   `all`, exactly like a character's. Its entries come back "You wear…", which is right for the
+   player too. */
+async function generateUserOutfits(all){
+  const btn=document.getElementById('ueGenUserOutfits');
+  try{
+    const slots=_ueUserOutfitSlots();
+    if(!slots.locations.length){ toast("This universe has no locations yet — add some first"); return; }
+    const want=all?null:_ueUserOutfitMissing();
+    if(want&&!want.length){ toast("Every slot already has an outfit — use \u201cRewrite all\u201d to redo them"); return; }
+    if(btn){btn.disabled=true;btn.innerHTML=icon("sparkle")+" Writing…";}
+    const gv=id=>{const e=document.getElementById(id);return e?String(e.value||"").trim():"";};
+    const card=[
+      `Name: ${gv('ueUserName')||state.user||"the player"} (this is the PLAYER's own character, not a character card)`,
+      gv('ueUserSubject')&&`Is a: ${gv('ueUserSubject')}`,
+      gv('ueUserPersonality')&&`Personality: ${gv('ueUserPersonality')}`,
+      gv('ueUserBio')&&`Background: ${gv('ueUserBio')}`,
+      gv('ueUserLook')&&`Appearance: ${gv('ueUserLook')}`,
+      gv('ueUserWardrobe')&&`Clothes they favour (free-text note, use as taste, not as slots): ${gv('ueUserWardrobe')}`
+    ].filter(Boolean).join("\n");
+    const data=[
+      `WORLD: ${gv('ueName')}\n${gv('ueSetting').slice(0,800)}`,
+      "CHARACTER:\n"+card,
+      "LOCATIONS (use these ids exactly as the keys of byLoc):\n"+slots.locations.map(l=>`- ${l.id} — ${l.name}`).join("\n"),
+      "TIMES OF DAY: "+slots.periods.join(", "),
+      slots.home?`THEIR OWN HOME: ${slots.home.name} (${slots.home.id}) — write the "home" object`:`THEY HAVE NO HOME HERE — return "home": {}`,
+      `THE PLAYER'S HOUSE: this character IS the player — return "userHome": {}`,
+      (want&&want.length)?("ONLY THESE SLOTS ARE MISSING — write exactly these and leave every other key out:\n"+want.map(x=>"- "+x).join("\n")):""
+    ].filter(Boolean).join("\n\n———\n\n");
+    const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data}),
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),dbg:"Outfit generator (player)"});
+    const j=parseJSON(out);
+    if(!j||typeof j!=="object"){ toast("Outfit generation failed — try again"); return; }
+    const clean=x=>typeof x==="string"?x.trim():"";
+    const have=_ueUserOutfits||{};
+    const merge=(into,from,keys)=>{ const o=Object.assign({},into||{});
+      Object.keys(from||{}).forEach(k=>{ const v=clean(from[k]); if(!v)return;
+        if(keys&&keys.indexOf(k)<0)return;
+        if(all||!String(o[k]||"").trim()) o[k]=v; });
+      return o; };
+    _ueUserOutfits={
+      byLoc:merge(have.byLoc,j.byLoc,slots.locations.map(l=>l.id)),
+      home:slots.home?merge(have.home,j.home,slots.periods):(have.home||{}),
+      activity:merge(have.activity,j.activity,slots.activities)
+    };
+    renderUeUserOutfits();
+    const left=_ueUserOutfitMissing().length;
+    toast(left?`Outfits written — ${left} slot${left===1?"":"s"} still empty`:"Outfits written — every slot filled. Review & save");
+  }catch(e){ toast("Outfit generation failed"); }
+  finally{ if(btn){btn.disabled=false;btn.innerHTML=icon("sparkle")+" Generate outfits";} }
 }
 function setOutfitSlot(group,key,val){
   editingPersona=editingPersona||{};
@@ -23080,16 +23182,35 @@ function currentOutfit(p,chat){
     const period=(typeof chatPeriod==="function"&&c)?chatPeriod(c):"";
     const act=_outfitAreaActivity(sub&&sub.name,loc&&loc.name);
     if(act && String((o.activity||{})[act]||"").trim()) return {text:o.activity[act],why:"activity:"+act};
-    let home=null; try{ home=homeLocOf(p); }catch(e){}
+    // v140.1 — the player's own home is the universe's "Your home"; they have no separate userHome.
+    let home=null; try{ home=p.isPlayer?playerHomeLoc(c):homeLocOf(p); }catch(e){}
     const atHome=!!(home&&loc&&home.id===loc.id);
     if(atHome && period==="Night" && String((o.activity||{}).sleep||"").trim()) return {text:o.activity.sleep,why:"activity:sleep"};
     if(atHome && String((o.home||{})[period]||"").trim()) return {text:o.home[period],why:"home:"+period};
-    let uh=null; try{ uh=playerHomeLoc(c); }catch(e){}
+    let uh=null; try{ uh=p.isPlayer?null:playerHomeLoc(c); }catch(e){}
     if(uh&&loc&&uh.id===loc.id && String((o.userHome||{})[period]||"").trim()) return {text:o.userHome[period],why:"userHome:"+period};
     if(loc && String((o.byLoc||{})[loc.id]||"").trim()) return {text:o.byLoc[loc.id],why:"location"};
     const w=String(p.wardrobe||"").trim();
     return w?{text:w,why:"wardrobe"}:none;
   }catch(e){ return none; }
+}
+/* ===== v140.1 — WHAT THE PLAYER WEARS ==========================================================
+   Characters have had an outfit table since v48.2; the player had an appearance line and nothing
+   else, so a picture with the player in it dressed them however the image writer guessed — a new
+   outfit every frame. The player's table lives on the universe (userOutfits, plus a free-text
+   userWardrobe for anyone who does not want a table), in the character's own shape so every reader
+   works unchanged: this holder is a stand-in card for the player, id "__user__", which is also the
+   key the wearing tracker's scene override is stored under. */
+function playerOutfitHolder(chat){
+  const c=chat||curChat();
+  let u=null; try{ u=universeById((c&&c.universeId)||state.curUniverse); }catch(e){}
+  return {id:"__user__",name:state.user||"You",isPlayer:true,
+    outfits:(u&&u.userOutfits)||{},wardrobe:(u&&u.userWardrobe)||"",
+    look:{subject:state.userSubject||"",raw:state.userLook||""}};
+}
+function playerHasClothes(chat){
+  const h=playerOutfitHolder(chat);
+  return hasOutfits(h)||!!String(h.wardrobe||"").trim();
 }
 /* ---- the scene's own say over it -------------------------------------------------------------
    Stored per chat, per character, stamped with the place and time it was true of, so it expires
@@ -33083,6 +33204,8 @@ async function runWearingTracker(chat){
   try{
     if(!chat||state.presenceOff)return null;
     const cast=presentCast(chat).filter(c=>hasOutfits(c));
+    // v140.1 — the player too, once they have clothes on record; stored under "__user__"
+    if(playerHasClothes(chat)) cast.push(playerOutfitHolder(chat));
     if(!cast.length)return null;
     if(!hasClothingCue(chat))return null;
     const now=cast.map(c=>{ const f=currentOutfit(c,chat);
@@ -33311,6 +33434,25 @@ function _imgWardrobeBlock(character,chat){
     if(!w)return "";
     return `WARDROBE — the outfits this character owns and dresses from. These are OPTIONS, not the current outfit:\n${w.slice(0,600)}\n`+
       `Choose the ONE that fits the dressing context below and write its garments WITH their colours. Don't invent clothes that aren't here unless the latest exchange puts them there.`;
+  }catch(e){ return ""; }
+}
+/* v140.1 — the player's, from their table on the universe (see playerOutfitHolder). A player with
+   only the free-text note gets it as what they usually wear, which the writer adapts to the scene. */
+function _imgPlayerWardrobeBlock(chat){
+  try{
+    const h=playerOutfitHolder(chat);
+    if(hasOutfits(h)||wearingOverride(chat,"__user__")){
+      const fit=currentOutfit(h,chat);
+      if(fit&&fit.text){
+        const t=subUser(String(fit.text)).replace(/\s+/g," ").trim();
+        return `WHAT ${String(h.name).toUpperCase()} IS WEARING right now — already decided, not a list to choose from:\n${t.slice(0,600)}\n`+
+          `Draw these garments with these colours on ${h.name}. Do not substitute another outfit. The latest exchange still overrides this if it strips, opens, soaks, borrows or swaps something.`;
+      }
+    }
+    const w=String(h.wardrobe||"").replace(/\s+/g," ").trim();
+    if(!w)return "";
+    return `WHAT ${String(h.name).toUpperCase()} USUALLY WEARS — dress them from this, in a way that fits where they are and what time it is:\n${subUser(w).slice(0,600)}\n`+
+      `Name the garments with their colours. The latest exchange overrides this if it puts them in something else.`;
   }catch(e){ return ""; }
 }
 /* True when the block above is a decided outfit rather than a menu — the dressing context only
@@ -33594,7 +33736,25 @@ async function illustrate(mid,replyText,force){
         if(_others.length)_castBlock+=_others.join("\n\n")+"\n\n";
       }
     }
-    const usr=_castBlock+_dress+_placeBlock
+    /* v140.1 — WHAT THE PLAYER HAS ON, whenever the player is in this frame: every scene type that
+       casts people other than "just the speaker", unless it is shot down the player's own eyes —
+       the same test buildRefPack uses to send the player's pictures. Under the cast label when the
+       writer was given one, so it knows which figure to dress; otherwise by name. */
+    let _playerDress="";
+    try{
+      const _cm=ruleCast(rule);
+      if(_cm!=="none"&&_cm!=="solo"&&!rulePov(rule)&&playerHasClothes(chat)){
+        const _pb=_imgPlayerWardrobeBlock(chat);
+        if(_pb){
+          const _pp=_pack?(((_pack.people||[]).find(x=>x.player))||((_pack.unpictured||[]).find(x=>x.player))):null;
+          _playerDress=((_castBlock&&_pp&&_pp.label)
+              ?`FOR ${String(_pp.label).toUpperCase()} — ${state.user}, the player:`
+              :`${String(state.user||"The player").toUpperCase()} (THE PLAYER) IS IN THIS FRAME TOO — what they have on:`)
+            +"\n"+_pb+"\n\n";
+        }
+      }
+    }catch(e){ _playerDress=""; }
+    const usr=_castBlock+_playerDress+_dress+_placeBlock
       +(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any lighting in it, that is added automatically; the LOCATION is yours to write and the block above is the authority on it). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
       +_window
       +`LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;

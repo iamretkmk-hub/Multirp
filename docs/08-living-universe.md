@@ -601,3 +601,32 @@ char-quest texter read `textThreadMsgs` directly, which has only ever held the t
   ladder plus the period ("yesterday (evening)").
 
 Test: `tests/text-met-in-person.browser.js`.
+
+## v137.1 — who is coming over is read from what they said
+
+Two reports with one cause. First, the player texted "why don't you come over?", the character said
+no, and a "<char> is coming to you" meeting appeared anyway. Second, a character texted "I'm at the
+door… I'm in" and nothing happened in the story.
+
+`maybeTextInvite` was a regex over the **player's** text (`gel`, `come over`, `uğrar mısın`…). On a
+match it filed a **certain** meeting for right now at the player's location without reading the
+reply, so a refusal was walked in at the next scene turn. That same-day entry also made the meetings
+writer drop a real plan with that person as a duplicate (its dedup treats the same counterpart on the
+same day as one meeting). Nothing at all read the character's side, so "on my way" and "I'm at the
+door" never reached the calendar or the scene.
+
+The regex is deleted. `runTextArrival(chat,p)` runs after every text the character sends (replies and
+proactive texts alike). It asks one small judge, the registry prompt `x_text_arrival` on its own
+Settings card, to read the thread (both sides, with the v136.1 meeting markers), where each of them
+is, and today's plans between them. The judge answers from the character's words only:
+
+| answer | what happens |
+|---|---|
+| `arrived` — at the door, downstairs, coming in | `_textArrive`: a narrated arrival (`narrateCharMove`) and `gmSummonCharacter` bring them into the player's scene now, at the entrance. Every open meeting with them today is closed `outcome:"met"`. During a live scene event they are filed as a due meeting instead, and resolve after it. |
+| `coming` — said yes or announced it, now or later today | `_textComing`: a certain meeting (`source:"text_coming"`, executor = the character) at the player's current place for that part of today, never in the past. `resolveDueMeetings` walks them in when it comes due. An open plan with them today is moved there rather than doubled. |
+| `none` — a no, a maybe, another day, the player going to them, a third place | nothing |
+
+Only an arrival *where the player is* is executed. "I'm at the café" while the player is at home is
+`none`, and the meeting system handles it as before.
+
+Test: `tests/text-arrival.browser.js`.

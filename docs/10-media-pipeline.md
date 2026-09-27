@@ -679,3 +679,10 @@ player in it dressed them however the writer guessed, and the outfit changed fro
   names them. A player with nothing on record adds nothing, so existing prompts are unchanged.
 
 Test: `tests/player-outfits.browser.js`.
+
+**v140.2 — and the character answering you is told.** The same current outfit now goes into the
+reply payload. When the reply is aimed at the player, *Who you are responding to* carries
+`target_wearing` after `target_look`. When it is aimed at someone else, the player's card carries
+`player_wearing`. The outfit entries are written to the player ("You wear…"), so both fragments say
+whose "you" it is. Texts never carry it, because nobody sees your clothes over a phone. Nothing on
+record means neither fragment fires, and the block is exactly as before.

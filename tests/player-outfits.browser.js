@@ -106,6 +106,48 @@ const {chromium}=require('playwright');
       await pg.evaluate(()=>{ const u=state.universes[0]; u.userOutfits=u._keep; delete u._keep; });
       return (!!d&&!/THE PLAYER\) IS IN THIS FRAME/.test(d)) ? true : (d||"(writer never called)").slice(0,600); })());
 
+  console.log("\n[the character answering the player is told too]");
+  const blocks=(o)=>pg.evaluate(o=>{
+    const c=curChat(); c.locationId="L_cafe"; c.location="Vanadium Cafe"; c.period="Afternoon"; c.presentIds=["po_a","po_b"];
+    if(!state.personas.some(p=>p.id==="po_b")) state.personas.push({id:"po_b",name:"Berk",universeId:state.universes[0].id,
+      instructions:"",personality:"p",backstory:"b",style:"s",goals:"",look:{subject:"Man",raw:"short"}});
+    const p=state.personas.find(x=>x.id==="po_a");
+    const B=buildCharPromptBlocks(p,[],{recent:[],diary:[],longterm:[]},o.tn,
+      {chat:c,targetName:o.tn,targetId:o.tid,textMode:!!o.text});
+    return {rt:String(B.response_target||""),pl:String(B.player||"")};
+  },o);
+  const toMe=await blocks({tn:"Emre",tid:"__user__"});
+  ok("answering the player: the target block says what they have on", /<their_clothes>What Emre is wearing right now/.test(toMe.rt)&&/navy bomber/.test(toMe.rt), toMe.rt.slice(-600));
+  ok("and says whose \"you\" it is", /its "you" means Emre, never you/.test(toMe.rt));
+  const toBerk=await blocks({tn:"Berk",tid:"po_b"});
+  ok("answering someone else: the player's card carries it instead", !/navy bomber/.test(toBerk.rt)&&/Wearing right now \(written to Emre/.test(toBerk.pl)&&/navy bomber/.test(toBerk.pl),
+     JSON.stringify(toBerk).slice(0,900));
+  const txt=await blocks({tn:"Emre",tid:"__user__",text:true});
+  ok("never over a text", !/navy bomber/.test(txt.rt)&&!/navy bomber/.test(txt.pl), txt.rt.slice(-400));
+  ok("the scene's change reaches it", await pg.evaluate(()=>{
+      const c=curChat(); setWearingOverride(c,"__user__","Your shirt is soaked through.");
+      const B=buildCharPromptBlocks(state.personas.find(x=>x.id==="po_a"),[],{recent:[],diary:[],longterm:[]},"Emre",{chat:c,targetName:"Emre",targetId:"__user__"});
+      setWearingOverride(c,"__user__","");
+      return /soaked through/.test(String(B.response_target)); }));
+  ok("with nothing on record the block is exactly as before", await pg.evaluate(()=>{
+      const u=state.universes[0]; const keep=u.userOutfits; u.userOutfits={};
+      const B=buildCharPromptBlocks(state.personas.find(x=>x.id==="po_a"),[],{recent:[],diary:[],longterm:[]},"Emre",{chat:curChat(),targetName:"Emre",targetId:"__user__"});
+      u.userOutfits=keep; return !/their_clothes|Wearing right now/.test(String(B.response_target)); }));
+  ok("the default template calls both fragments", await pg.evaluate(()=>
+      RT_ORDER.includes("target_wearing")&&PL_ORDER.includes("player_wearing")
+      &&/\{\{call\/\/player_wearing\}\}/.test(ptPieceTemplate("player"))&&/\{\{call\/\/target_wearing\}\}/.test(ptPieceTemplate("response_target"))));
+
+  ok("and it reaches the assembled reply, on the template path and the classic one", await pg.evaluate(()=>{
+      const c=curChat(); const p=state.personas.find(x=>x.id==="po_a");
+      const inj={recent:[],diary:[],longterm:[]};
+      const hb=buildCharPromptBlocks(p,[],inj,"Emre",{chat:c,targetName:"Emre",targetId:"__user__"});
+      const tb=buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",multi:true,injected:inj});
+      const was=state.payloadTplOn; state.payloadTplOn=true;
+      let tpl=""; try{ const m=ptBuildMessages("multi",Object.assign({},hb,tb),[],{chat:c,npc:p,targetName:"Emre"}); tpl=(m||[]).map(x=>x.content).join("\n"); }
+      finally{ state.payloadTplOn=was; }
+      const cl=buildPayload("multi",hb,tb); const classic=[cl.head,cl.tail].join("\n");
+      return (/navy bomber/.test(tpl)&&/navy bomber/.test(classic)) ? true : JSON.stringify({tpl:/navy bomber/.test(tpl),classic:/navy bomber/.test(classic)}); }));
+
   console.log("\n[the universe editor]");
   ok("the player's section shows the table, home rows included", await pg.evaluate(()=>{
       editUniverse(state.universes[0].id);

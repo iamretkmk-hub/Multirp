@@ -24529,7 +24529,7 @@ const PT_INLINE_HEAD={
    line drops. Listing them here is what lets an unpicked name read as "known but empty" instead of
    as a typo in the editor's red warnings. */
 const RT_ORDER=["target_header","cont_target_header","heat_target_header",
-  "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_look"];
+  "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_look","target_wearing"];
 const RG_ORDER=["heat_guidance","guidance_open","guidance_target","guidance_close",
   "guidance_continue","guidance_reply","guidance_absence","guidance_not_yours"];
 const DRIVE_FRAGS=["drive_toward","drive_against"];
@@ -24560,7 +24560,7 @@ const MEM_FRAGS=["mem_recent_entries","mem_distant_entries","mem_latest_entries"
 /* v38.1 — step 4: the blocks that never rendered in the old fixture, so nobody had looked at them.
    Several turned out to be whole prompts written in code — STORY THREADS and the rumor label had
    no editable fragment at all. */
-const PL_ORDER=["player_intro","player_bg","player_look"];
+const PL_ORDER=["player_intro","player_bg","player_look","player_wearing"];
 const SI_ORDER=["situation_leaving","situation_arriving","situation_brief"];
 const SD_ORDER=["voice_delivery","heat_delivery","voice_format_reset"];
 const PI_ORDER=["intent_warm","intent_hostile","intent_self"];
@@ -24760,7 +24760,7 @@ function ptPieceTemplate(id,kind){
   /* The player's card, the entrance/exit note, the private aim and the delivery rules are each a
      handful of alternative fragments of which a turn picks one. Listed by name; the rest drop. */
   if(id==="player")
-    return "{{call//player_intro}}\n{{call//player_bg}}\n{{call//player_look}}";
+    return "{{call//player_intro}}\n{{call//player_bg}}\n{{call//player_look}}\n{{call//player_wearing}}";
   if(id==="situation")
     return "{{call//situation_leaving}}\n{{call//situation_arriving}}\n{{gap}}\n{{call//situation_brief}}";
   if(id==="spoken_delivery")
@@ -25673,8 +25673,8 @@ function epSend(key,systemText,parts,vars){
     your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","bio_wearing_self","bio_wearing_other","intent_aim_warm","intent_aim_cool","intent_aim_self"],
     relationships:["rel_header","rel_learned","rel_elsewhere"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
-    response_target:["target_header","target_player","target_char","target_bg","target_look","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
-    player:["player_intro","player_bg","player_look"],
+    response_target:["target_header","target_player","target_char","target_bg","target_look","target_wearing","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
+    player:["player_intro","player_bg","player_look","player_wearing"],
     situation:["situation_leaving","situation_arriving","narr_move_self","narr_move_with","narr_move_char"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
     already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled","already_said_thought_stuck",
@@ -26456,10 +26456,14 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
      reader. So the frame names the owner and covers both pronouns rather than betting on one. */
   target_bg:`<their_backstory>This is {{target}}'s own identity sheet, written TO {{target}}. Wherever it says "you" — or "I" — it means {{target}}, never you:\n{{bio}}</their_backstory>`,
   target_look:`<their_appearance>How {{target}} looks:\n{{look}}</their_appearance>`,
+  /* v140.2 — what the player has on right now (their outfit table, or what the scene changed it to).
+     The entries are written TO the player ("You wear…"), so the frame names whose "you" it is. */
+  target_wearing:`<their_clothes>What {{target}} is wearing right now. This line is written to {{target}}, so its "you" means {{target}}, never you:\n{{wearing}}</their_clothes>`,
   // Rendered ONLY when the response target is NOT the player, so the player never drops out of the payload.
   player_intro:`# PLAYER CHARACTER\n{{user}} is the human player in this roleplay — in the story with you, even though this particular reply is aimed at someone else.`,
   player_bg:`Background: {{bio}}`,
   player_look:`Appearance: {{look}}`,
+  player_wearing:`Wearing right now (written to {{user}}, so its "you" means {{user}}, never you): {{wearing}}`,
   // v30.5 — these named the character in the third person ("Emre has just entered the scene") and
   // then switched to second ("how you arrive") mid-sentence, inside a block written entirely to
   // "you". Second person throughout now.
@@ -27381,6 +27385,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
     }
     if(bio) _rtPut("target_bg",fillTpl(blkTpl("target_bg"),{bio:bio,target:tName,user:state.user||""}));
     if(look)_rtPut("target_look",fillTpl(blkTpl("target_look"),{look:look,target:tName,user:state.user||""}));
+    /* v140.2 — AND WHAT THE PLAYER HAS ON. The image writer has been told since v140.1; the person
+       looking at them was not, so a reply could admire a jacket the picture did not draw. Never over
+       a text: nobody sees what you are wearing through a phone. */
+    const _plWear=(()=>{ if(opts&&opts.textMode)return "";
+      try{ if(!playerHasClothes(chat))return "";
+        const f=currentOutfit(playerOutfitHolder(chat),chat);
+        return f&&f.text?subUser(String(f.text)).replace(/\s+/g," ").trim().slice(0,400):""; }catch(e){ return ""; } })();
+    if(isPlayer&&_plWear)_rtPut("target_wearing",fillTpl(blkTpl("target_wearing"),{wearing:_plWear,target:tName,user:state.user||""}));
     B.response_target=_rtO.map(k=>_rt[k]).join("\n");
     B._rt=_rt;
     // The player never drops out of the payload: when the reply is aimed at another character,
@@ -27390,6 +27402,7 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
       let pb=_pl.player_intro;
       if(state.userBio&&state.userBio.trim()){ _pl.player_bg=fillTpl(blkTpl("player_bg"),{bio:state.userBio.trim()}); pb+=`\n${_pl.player_bg}`; }
       if(state.userLook&&state.userLook.trim()){ _pl.player_look=fillTpl(blkTpl("player_look"),{look:state.userLook.trim()}); pb+=`\n${_pl.player_look}`; }
+      if(_plWear){ _pl.player_wearing=fillTpl(blkTpl("player_wearing"),{wearing:_plWear,user:state.user}); pb+=`\n${_pl.player_wearing}`; }
       B.player=pb; B._pl=_pl;
     }
   }

@@ -35,6 +35,7 @@ const {chromium}=require('playwright');
       const dbg=(o&&o.dbg)||"";
       if(/^Text arrival/.test(dbg)){ window.__judgeSeen.push(msgs); return window.__judge; }
       if(/^Text reply/.test(dbg)) return window.__reply||"Tamam.";
+      if(/^Roleplay reply/.test(dbg)) return '"Geldim!" *She kicks off her shoes.*';
       if(/move|arriv/i.test(dbg)) return "Ozlem walks in, shaking the rain off her coat.";
       return "";
     };
@@ -95,13 +96,21 @@ const {chromium}=require('playwright');
     window.__reply="Kapidayim, ac hadi."; window.__judge='{"move":"arrived"}';
     await sendTextMessage(chat,state.personas.find(p=>p.id==="t_o"),"Hazirim.");
   });
-  await pg.waitForTimeout(500);
+  // the arrival runs in the background and ends with her arriving line; wait for all of it
+  await pg.waitForFunction(()=>{ const c=curChat(); return presentIds(c).includes("t_o")&&!(c._arrBusy&&c._arrBusy.t_o); },null,{timeout:15000});
   ok("she is in the scene", await pg.evaluate(()=>presentIds(curChat()).includes("t_o")));
   ok("with a narrated arrival in the story", await pg.evaluate(()=>{
       const n=curChat().messages.filter(m=>m.presenceNote||m.narratorEvent).map(m=>m.content).join(" | ");
       return /Ozlem/.test(n) ? true : n; }));
   ok("the meeting she came for is closed as kept", await pg.evaluate(()=>{
       const e=chatCalendar(curChat())[0]; return (e&&e.done===true&&e.outcome==="met") ? true : JSON.stringify(e); }));
+  /* v138.1 — the arrival note is a presenceNote (sysError); suggested replies and Autopilot both wait
+     for a spoken line after one, so an arrival that ended on the note hid the suggestions. */
+  ok("she speaks on arrival, so the scene does not end on the note", await pg.evaluate(()=>{
+      const t=_apTail(curChat());
+      return (t&&t.speakerId==="t_o"&&!t.sysError&&/Geldim/.test(t.content)) ? true : JSON.stringify(t); }));
+  ok("so suggested replies can offer something again", await pg.evaluate(()=>{
+      const t=_apTail(curChat()); return !!(t&&t.role!=='user'&&!t.sysError&&_apCast(curChat()).length); }));
   ok("once she is here, the judge is not asked again", await pg.evaluate(async()=>{
       const n=window.__judgeSeen.length;
       await runTextArrival(curChat(),state.personas.find(p=>p.id==="t_o"));

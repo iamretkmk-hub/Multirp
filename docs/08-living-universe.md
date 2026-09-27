@@ -630,3 +630,10 @@ Only an arrival *where the player is* is executed. "I'm at the café" while the 
 `none`, and the meeting system handles it as before.
 
 Test: `tests/text-arrival.browser.js`.
+
+**v138.1 — and they say something when they arrive.** `_textArrive` brought the character in with
+only the arrival note. That note is a `presenceNote` carrying `sysError:true`, and suggested replies
+and Autopilot both wait for a spoken line after one. So a scene that ended on the note showed no
+suggestions and never moved until the player typed. The meeting resolver has always followed an
+arrival with `playCharacterTurn(…,"arriving")`, and the text arrival now does the same. The one
+exception is a player turn already in flight, which answers with them in the room.

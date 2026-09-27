@@ -155,7 +155,7 @@ const {chromium}=require('playwright');
        /const when=\(m\.gday!=null\)\?`Day \$\{m\.gday\}/.test(src)
          ? true : "thread lines are still unstamped");
     ok("and is trimmed to the recent few now that each line says when",
-       /textThreadMsgs\(chat,p\.id\)\.slice\(-4\)/.test(src)
+       /_textThreadTail\(chat,p,4\)/.test(src)   // v136.1 — the last four texts, with any meeting among them
          ? true : "the thread window did not change");
     ok("a where-line is built and reaches the Now block",
        /const whereLine=/.test(src) && /\$\{whereLine\?"\\n"\+whereLine:""\}/.test(src)

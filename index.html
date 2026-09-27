@@ -23761,7 +23761,9 @@ const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"]
   mem_plan:MEMPLAN_ORDER,
   /* v50.1 — the aside wordings. castHistory writes them rather than a payload block assembling
      them, so they have no block to hang under either. */
-  whisper:["whisper_to_you","whisper_back_guidance"]};
+  whisper:["whisper_to_you","whisper_back_guidance"],
+  /* v136.1 — the meeting marker castHistory and the text engines set into a text thread. */
+  text_meet:["text_met_in_person"]};
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
   world:{label:"Universe setting",kind:"dyn",desc:"The current universe's setting text. Universal — true for every character."},
@@ -26886,6 +26888,9 @@ One reply. Not a scene, not a chain of exchanges — one turn.
   /* v38.1 — how long the text sat unanswered, said out loud. Text payload only. */
   text_timing_days:`NOTE: You texted {{user}} {{days}} days ago and they are only replying now — the long silence is not lost on you.`,
   text_timing_yesterday:`NOTE: You texted {{user}} yesterday; they're only getting back to you now.`,
+  /* v136.1 — a meeting in person, set into the text thread where it happened. Written into the
+     transcript (castHistory) and the text threads the engines read, so it has no block of its own. */
+  text_met_in_person:`(Not a text: you and {{user}} met face to face {{when}}{{where}}. Everything in the thread before this came before that meeting — you have seen each other and talked in person since, so none of it is waiting on a reply, and nobody has been ignoring anybody.)`,
   watching_now:`# \u26a0\ufe0f THIS IS WHAT IS HAPPENING IN FRONT OF YOU RIGHT NOW \u26a0\ufe0f\nYou are seeing this as it happens. It is not a memory, not something you were told, and not something anyone said — it is in front of you:\n{{what}}\nThis is what your turn answers. React to it as this person would, from where you stand and from what it means to YOU — do not narrate it back, do not describe it as though reporting it to someone, and do not explain what it is. If it does not concern you, that too is a reaction.`,
   /* (!) VOLUME ONLY — WHERE the narration sits belongs to FORMAT RULES, which states it already.
      This rail used to carry "Do not open with scene-setting before you speak" as well, and that is
@@ -30182,6 +30187,15 @@ function _markTextRead(chat,pid){
   (chat&&chat.messages||[]).forEach(m=>{ if(m.textMsg && m.role==="assistant" && m.unread && m.speakerId===pid){ m.unread=false; changed=true; } });
   if(changed)persistChats();
 }
+/* v136.1 — one test for "this message is the player and this character together in person", shared
+   by every reader below instead of written out three times. */
+function _inPersonWith(m,p){
+  if(!m||!p||m.textMsg||m.role==="system"||m.sysError)return false;
+  if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)return false;
+  if(m.textNotice&&m.textWith===p.id)return false;              // the room seeing them text — they were not there
+  if(m.role==="assistant"&&m.speakerId===p.id)return true;      // their own spoken line in the player's scene
+  return witnessedBy(m,p);                                      // or they were present for a scene turn
+}
 // Texting and in-person roleplay are ONE continuous life. True if the character shared a scene with
 // the player AFTER the given text message — meeting face to face supersedes the text (nobody sulks
 // about being "left on read" by someone they've since spent an evening with).
@@ -30190,14 +30204,58 @@ function _metInPersonAfter(chat,p,textMsg){
   const msgs=chat.messages||[];
   const idx=msgs.indexOf(textMsg);
   if(idx<0)return false;
-  for(let i=idx+1;i<msgs.length;i++){
-    const m=msgs[i];
-    if(!m||m.textMsg||m.role==="system"||m.sysError)continue;
-    if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)continue;
-    if(m.role==="assistant"&&m.speakerId===p.id)return true;   // their own spoken line in the player's scene
-    if(witnessedBy(m,p))return true;                           // or they were present for a scene turn
-  }
+  for(let i=idx+1;i<msgs.length;i++){ if(_inPersonWith(msgs[i],p))return true; }
   return false;
+}
+/* v136.1 — A TEXT THREAD WITH THE MEETINGS IN IT.
+   The thread used to be the texts and nothing else, so "are you coming?" followed by an evening
+   spent together face to face read, to every model shown the thread, as a question still hanging —
+   and the character asked why you were not answering their texts. Each stretch of in-person contact
+   that falls AFTER a text and before the next one (or after the last one) now sits in the thread as
+   a meeting marker {meetNote,gday,gperiod,location}, in order. Meetings before the first text are
+   not markers: nothing in the thread is waiting on them. */
+function _meetMarkerFrom(m,chat){
+  const st=(m&&m.status)||{};
+  return {meetNote:true,
+    gday:(st.day!=null)?st.day:(m&&m.gday!=null?m.gday:null),
+    gperiod:st.period||"", location:st.location||""};
+}
+function textThreadWithMeetings(chat,p){
+  if(!chat||!p)return [];
+  const out=[]; let sawText=false, meet=null;
+  for(const m of (chat.messages||[])){
+    if(m&&m.textMsg&&(m.textWith===p.id||m.speakerId===p.id)){
+      if(meet)out.push(meet);
+      meet=null; sawText=true; out.push(m); continue;
+    }
+    if(!sawText||!_inPersonWith(m,p))continue;
+    if(!meet)meet=_meetMarkerFrom(m,chat);
+    else if(meet.gday==null||!meet.gperiod||!meet.location){      // a user line carries no stamp; the reply after it does
+      const st=m.status||{};
+      if(meet.gday==null&&st.day!=null)meet.gday=st.day;
+      if(!meet.gperiod&&st.period)meet.gperiod=st.period;
+      if(!meet.location&&st.location)meet.location=st.location;
+    }
+  }
+  if(meet)out.push(meet);
+  return out;
+}
+// The last n TEXTS of the thread, with any meeting marker among or after them.
+function _textThreadTail(chat,p,n){
+  const all=textThreadWithMeetings(chat,p);
+  let seen=0, from=0;
+  for(let i=all.length-1;i>=0;i--){ if(!all[i].meetNote && ++seen===n){ from=i; break; } }
+  return all.slice(from);
+}
+/* The marker in words, for a model. {{when}} is the shared how-long-ago ladder plus the period;
+   {{where}} is " at <place>" or empty. */
+function textMeetNote(chat,mk){
+  if(!mk)return "";
+  const today=(chat&&chat.gameDay)||1;
+  const rel=(mk.gday!=null)?relWhen(mk.gday,today,false):"";
+  const per=String(mk.gperiod||"").toLowerCase();
+  const when=rel?(per?`${rel} (${per})`:rel):"since then";
+  return fillTpl(blkTpl("text_met_in_person"),{user:state.user,when,where:mk.location?` at ${mk.location}`:""});
 }
 // When did this character last share an in-person scene with the player? → {day,period,location,gap}
 // (gap = in-game days since; 0 = earlier today) or null if they never have (or old msgs lack a stamp).
@@ -30206,9 +30264,7 @@ function _lastInPersonInfo(chat,p){
   const msgs=chat.messages||[];
   for(let i=msgs.length-1;i>=0;i--){
     const m=msgs[i];
-    if(!m||m.textMsg||m.role==="system"||m.sysError)continue;
-    if(m.worldEvent||m.questNote||m.calNote||m.dayMarker||m.presenceNote)continue;
-    if(!((m.role==="assistant"&&m.speakerId===p.id)||witnessedBy(m,p)))continue;
+    if(!_inPersonWith(m,p))continue;
     const st=m.status||{};
     const day=(st.day!=null)?st.day:null;
     return {day, period:st.period||"", location:st.location||"",
@@ -30530,8 +30586,15 @@ function _sendFromTextPop(){
 function renderTextThread(pid){
   if(_openTextPid!==pid)return;
   const box=document.getElementById('textThread'); if(!box)return;
-  const chat=curChat(); const th=textThreadMsgs(chat,pid);
+  const chat=curChat();
+  // v136.1 — the thread shows where you met in person between texts, as the models now see it
+  const _p=(state.personas||[]).find(x=>x.id===pid);
+  const th=_p?textThreadWithMeetings(chat,_p):textThreadMsgs(chat,pid);
   box.innerHTML=th.map(m=>{
+    if(m.meetNote){
+      const bits=[m.gday?_dayLabel(m.gday):"", m.gperiod?_periodTR(m.gperiod):"", m.location||""].filter(Boolean);
+      return `<div class="desc" style="text-align:center;font-size:11px;opacity:.65;margin:9px 0">🤝 Met in person${bits.length?" · "+esc(bits.join(" · ")):""}</div>`;
+    }
     const mine=m.role==="user";
     const when=m.gday?`${_dayLabel(m.gday)}${m.gperiod?" · "+_periodTR(m.gperiod):""}`:"";
     return `<div style="display:flex;justify-content:${mine?"flex-end":"flex-start"};margin:5px 0">
@@ -30671,8 +30734,11 @@ async function maybeProactiveText(chat,opts){
        most decides whether a person writes again, and what they write — was not in the payload at
        all. Four lines rather than six: with a stamp on each, the recent ones carry more than a
        longer unstamped list did. */
-    const th=textThreadMsgs(chat,p.id).slice(-4).map(m=>{
+    /* v136.1 — with the meetings in it (textThreadWithMeetings): a text followed by an evening
+       together is not a text left on read, and the composer could not tell the two apart. */
+    const th=_textThreadTail(chat,p,4).map(m=>{
       const when=(m.gday!=null)?`Day ${m.gday}${m.gperiod?", "+m.gperiod:""}`:"earlier";
+      if(m.meetNote) return `[${when}] ${textMeetNote(chat,m)}`;
       return `[${when}] ${m.role==="user"?state.user:p.name}: ${m.content}`;
     }).join("\n");
     /* v70.2 — AND WHERE EACH OF THEM IS. A text is a message to somebody who is not in the room;
@@ -31406,7 +31472,33 @@ function castHistory(chat,forP){
     }
     return true;
   });
-  const mapped=collapseEchoes(kept).map(m=>{
+  /* (!) v136.1 — A MEETING THE SCENE CUT DROPPED STILL HAPPENED. A character's texts ride the whole
+     day window, but their in-person dialogue with the player only reaches back to one prior scene.
+     So the text they sent this morning survived, the evening they then spent with the player did
+     not, and the model read an unanswered "are you coming?" followed by the player texting again —
+     and wrote "why aren't you answering me?". Where a stretch of in-person contact after a text was
+     cut out entirely, a one-line marker now stands in its place; where any of it is still in the
+     transcript, the dialogue speaks for itself and no marker is added. */
+  let withMeet=kept;
+  if(forP && kept.some(m=>m.textMsg)){
+    const keptSet=new Set(kept); withMeet=[];
+    let sawText=false, run=null;
+    const close=()=>{ if(run&&!run.visible){ const note=textMeetNote(chat,run.mk);
+        if(note) withMeet.splice(run.pos,0,{role:"assistant",speaker:"Narrator",narratorEvent:true,meetNote:true,present:[forP.id],content:note}); }
+      run=null; };
+    msgs.forEach(m=>{
+      const isText=!!(m&&m.textMsg&&keptSet.has(m));
+      if(isText){ close(); sawText=true; }
+      if(sawText && !isText && _inPersonWith(m,forP)){
+        if(!run) run={pos:withMeet.length,visible:false,mk:_meetMarkerFrom(m,chat)};
+        else if(run.mk.gday==null&&m.status&&m.status.day!=null) run.mk=_meetMarkerFrom(m,chat);
+        if(keptSet.has(m)) run.visible=true;
+      }
+      if(keptSet.has(m)) withMeet.push(m);
+    });
+    close();
+  }
+  const mapped=collapseEchoes(withMeet).map(m=>{
     // TEXT MESSAGES threaded in for continuity: label them clearly as phone texts (not words spoken in
     // the scene) so the character stays consistent with the thread without treating a text as a line
     // said out loud in the room. Their own texts keep their voice (assistant); the player's stay user.
@@ -41359,8 +41451,9 @@ async function maybeCharQuestText(chat){
       const priorAsks=((q.texts||[]).slice(-3))
         .map(t=>`- [Day ${t.day}${t.period?", "+t.period:""}] you wrote: "${t.text}"`).join("\n");
       const threadLines=(()=>{ try{
-        return textThreadMsgs(chat,holder.id).slice(-3).map(m=>{
+        return _textThreadTail(chat,holder,3).map(m=>{
           const when=(m.gday!=null)?`Day ${m.gday}${m.gperiod?", "+m.gperiod:""}`:"earlier";
+          if(m.meetNote) return `- [${when}] ${textMeetNote(chat,m)}`;   // v136.1 — they met since
           return `- [${when}] ${m.role==="user"?state.user:holder.name}: ${String(m.content||"").slice(0,300)}`;
         }).join("\n");
       }catch(_){ return ""; } })();
@@ -45072,6 +45165,7 @@ function ptCatalog(){
   out.push({name:"mem_plan",label:"Remembering that a plan was made",desc:"What a character keeps in mind about having made (or been asked into) a plan \u2014 written in English like every engine record, with the plan's own title quoted in the language it was written in, and deliberately carrying no date: the calendar holds the day and says \u201ctomorrow\u201d on the right one."});
   out.push({name:"when",label:"How long ago / how far off",desc:"The words the app puts on a memory, a finished plan or an upcoming one once it has worked out the gap itself — “yesterday”, “three days ago”, “tomorrow”. The character is never asked to subtract one day number from another; these are what it reads instead. Blank a rung and that gap says nothing but the part of the day."});
   out.push({name:"whisper",label:"Asides — whispers and concealed acts",desc:"What /whisper looks like to the person it is for and to everybody else, said or done, plus the note telling the answering character their reply is private too. Written into the transcript by castHistory rather than assembled as a block, so it is not one of the ordered pieces."});
+  out.push({name:"text_meet",label:"Met in person since the texts",desc:"The line set into a character's text thread where the two of you met face to face, so a text followed by an evening together does not read as a text left unanswered. Written into the transcript by castHistory and into the proactive and quest text threads, not assembled as a block."});
   /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
      them or it flags its own default in red; and they are worth listing anyway — this is the list
      the editor shows, so a rule is something you can find, copy and move rather than guess at. */

@@ -572,3 +572,32 @@ from `endDayBackground` with the just-ended day, captured in `endDay` before `ga
 it filters its evidence strictly (`m.gameDay!==day` → skip, `p.day===day`). Seeing it run for day 3
 while the scene shows day 4 is the end-of-day rollup firing after the boundary, as designed; a day-4
 memory cannot enter the day-3 record.
+
+## v136.1 — a text followed by a meeting is not a text left on read
+
+Reported from a live story: a character texted the player, the player never answered the text, and
+the two of them then spent a scene together face to face. The character's next text asked why the
+player was not answering their messages. Nothing had told the character they had met since.
+
+The cause is two windows of different length in `castHistory`. A character's texts ride the whole
+two-day window; their in-person dialogue with the player only reaches back to the current scene and
+one prior one. So the morning text survived and the evening together did not, and the model read an
+unanswered "are you coming?" followed by the player texting again. The proactive composer and the
+char-quest texter read `textThreadMsgs` directly, which has only ever held the texts.
+
+- `textThreadWithMeetings(chat,p)` returns the thread with a **meeting marker**
+  (`{meetNote,gday,gperiod,location}`) wherever a stretch of in-person contact falls after a text and
+  before the next one, or after the last one. Meetings before the first text are not markers:
+  nothing in the thread is waiting on them. `_inPersonWith(m,p)` is the one test for "together in
+  person", now shared with `_metInPersonAfter` and `_lastInPersonInfo`.
+- `castHistory` sets a one-line narrator marker where such a meeting was **cut out entirely**. When
+  any of it is still in the transcript the dialogue speaks for itself and no marker is added.
+- The proactive text composer and the char-quest texter read the thread through
+  `_textThreadTail(chat,p,n)` — the last *n* texts with any marker among or after them.
+- The text window shows the same thing to the player: a small "🤝 Met in person · day · period ·
+  place" divider in the thread.
+- The wording is the fragment `text_met_in_person` (`{{user}}`, `{{when}}`, `{{where}}`), editable
+  under the callable `text_meet` like the whisper wordings. `{{when}}` uses the shared how-long-ago
+  ladder plus the period ("yesterday (evening)").
+
+Test: `tests/text-met-in-person.browser.js`.

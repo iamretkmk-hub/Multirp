@@ -31963,6 +31963,22 @@ function _apTail(chat){
   }
   return null;
 }
+/* (!) v139.1 — WHAT THE SUGGESTED REPLIES ANSWER. They used _apTail and asked for a tail without
+   sysError, and an arrival/leaving note ("Özlem has arrived") is a presenceNote carrying sysError —
+   so every time somebody came or went the chips vanished and stayed gone until somebody spoke.
+   That moment is exactly when the player needs a nudge, so a presence note counts. The player-facing
+   notices (a plan filed, a task taken on, a calendar note) are not a moment in the scene at all: they
+   are skipped, so they neither hide the chips nor throw away a good set to fetch a new one. */
+function _sugTail(chat){
+  const msgs=(chat&&chat.messages)||[];
+  for(let i=msgs.length-1;i>=0;i--){
+    const m=msgs[i];
+    if(!m||m.role==='system'||m.textMsg||m.uiNote||m.questNote||m.calNote)continue;
+    return m;
+  }
+  return null;
+}
+function _sugAnswers(m){ return !!(m&&m.role!=='user'&&(!m.sysError||m.presenceNote)); }
 /* The last thing somebody SAID in the room — narration beats, notices and errors are skipped. */
 function _apLastLine(chat){
   const msgs=(chat&&chat.messages)||[];
@@ -32123,8 +32139,9 @@ async function fetchSuggestions(chat,mid){
   const my=++_sugSeq; renderAutoBar();
   let opts=[];
   try{
-    const msgs=(chat.messages||[]).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.textMsg&&m.content&&String(m.content).trim()).slice(-10);
-    const convo=msgs.map(m=>`${m.role==='user'?state.user:(m.speaker||'Narrator')}: ${briefDesc(String(m.content),700)}`).join("\n");
+    // v139.1 — who just came or went is part of the scene the suggestions answer
+    const msgs=(chat.messages||[]).filter(m=>m&&m.role!=='system'&&(!m.sysError||m.presenceNote)&&!m.textMsg&&!m.uiNote&&!m.questNote&&!m.calNote&&m.content&&String(m.content).trim()).slice(-10);
+    const convo=msgs.map(m=>`${m.role==='user'?state.user:(m.presenceNote?'Narrator':(m.speaker||'Narrator'))}: ${briefDesc(String(m.content),700)}`).join("\n");
     const sys=fillTpl(up("x_reply_suggest"),{user:state.user})+"\n\n"+langDirective();
     const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())||state.mcModel||state.model;
     const out=await chatCompletion(epSend("x_reply_suggest",sys,Object.assign({player:_playerProfileBlock(),scene:_autoRpSceneLine(chat)},_playerKnows(chat),{convo})),
@@ -32136,7 +32153,7 @@ async function fetchSuggestions(chat,mid){
   }catch(e){ opts=[]; }
   if(my!==_sugSeq)return;           // the player acted or the scene moved on meanwhile
   _sugBusy=false;
-  const tail=_apTail(chat);
+  const tail=_sugTail(chat);
   _sugOpts=(tail&&tail.mid===mid)?opts:[];
   renderAutoBar();
 }
@@ -32148,7 +32165,7 @@ function sendSuggestion(i){
   sendMessage();
 }
 function rerollSuggestions(){
-  const chat=curChat(); const tail=_apTail(chat);
+  const chat=curChat(); const tail=_sugTail(chat);
   if(!chat||!tail)return;
   _sugSeq++; _sugBusy=false;
   fetchSuggestions(chat,tail.mid);
@@ -32169,8 +32186,8 @@ function renderAutoBar(info){
   }
   bar.classList.remove('smWrap');
   const ap=!!(chat&&chat.autoPlay);
-  const tail=_apTail(chat);
-  const theirTurn=!!(chat&&tail&&tail.role!=='user'&&!tail.sysError&&_apCast(chat).length);
+  const tail=_sugTail(chat);
+  const theirTurn=!!(chat&&_sugAnswers(tail)&&_apCast(chat).length);
   const showChips=!!(state.suggestOn&&theirTurn&&!typing&&!_apBusy);
   const sig=[ap,showChips,_sugBusy,_sugOpts.join("\u0001")].join("|");
   if(sig!==_sugSig){
@@ -32219,9 +32236,10 @@ function apTick(){
     const cast=_apCast(chat);
     if(chat.storyMode){ renderAutoBar({label:smTick(chat,why)}); return; }   // v118.1 — Story mode drives instead
     // Suggestions: once the scene has settled on somebody else's line.
-    if(state.suggestOn&&!why&&tail&&tail.role!=='user'&&!tail.sysError&&mid&&_sugFor!==mid&&!_sugBusy&&cast.length
+    const sTail=_sugTail(chat), sMid=sTail?sTail.mid:null;
+    if(state.suggestOn&&!why&&_sugAnswers(sTail)&&sMid&&_sugFor!==sMid&&!_sugBusy&&cast.length
        &&Date.now()-_apSince>=1200){
-      fetchSuggestions(chat,mid);
+      fetchSuggestions(chat,sMid);
     }
     let label="";
     if(chat.autoPlay){

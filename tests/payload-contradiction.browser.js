@@ -151,11 +151,15 @@ const {chromium}=require('playwright');
      await pg.evaluate(()=>{
       const src='"Ah—" _Dayanamiyorum._';
       return normalizeChannels(src,{heat:true})===src ? true : normalizeChannels(src,{heat:true}); }));
+  /* v144.1 — the three spoken paths share one generator (generateCharacterReply), so the check is
+     that each of them goes through it and that it runs the normalizer, heat-exempt. */
   ok("and all three spoken paths run it before storing", await pg.evaluate(()=>{
       const miss=[];
-      if(!/normalizeChannels\(stripChannelLabel\(reply\)\)/.test(String(sendMessage))) miss.push("solo");
-      if(!/normalizeChannels\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
-      if(!/\{heat:_wasHeat\}/.test(String(playCharacterTurn))) miss.push("multi heat-exempt");
+      if(!/generateCharacterReply\(/.test(String(sendMessage))) miss.push("solo");
+      if(!/generateCharacterReply\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
+      if(!/generateCharacterReply\(/.test(String(playSingleReaction))) miss.push("gm reaction");
+      if(!/normalizeChannels\(/.test(String(generateCharacterReply))) miss.push("generator");
+      if(!/\{heat:wasHeat\}/.test(String(generateCharacterReply))) miss.push("heat-exempt");
       return miss.length?miss.join(", "):true; }));
 
   console.log("\n[exposure is not leak-chance]");

@@ -281,7 +281,7 @@ USER'S REQUEST — prioritize creating the places they describe (adapt them to f
 
 ---
 
-## `latentNpc` — Latent NPCs (first visit)
+## `latentNpc` — First-visit NPCs (active residents, not latent)
 
 Mints up to 2 inhabitants for a location on the player's FIRST visit (owner, bouncer, dungeon boss). Placeholders: world, loc, desc, type, cast, quests. Returns a JSON array of 0-2 compact character cards.
 

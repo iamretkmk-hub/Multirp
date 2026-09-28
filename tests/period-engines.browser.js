@@ -42,6 +42,7 @@ const {chromium}=require('playwright');
     state.intentOn=true; state.calOn=false; state.promiseOn=false; state.gmOn=false; state.travelTime=0;
     const c=curChat(); c.universeId=uni.id; c.gameDay=1; c.period="Morning"; c.timeOfDay="Morning";
     c.locationId="l_home"; c.location="Home"; c.presentIds=[]; c.intents=[]; c.messages=[]; c.goalActed={}; c._intentSwingAsked={};
+    c.goalAsked={}; c._dayEndDoneFor=null; c._trackersTickedFor=null;   // v144.1 — a day is ended once per chat; each case starts fresh
     const mem=(own,per,imp)=>({id:"m_"+Math.random().toString(36).slice(2),ownerId:own,content:"Berk mocked her in front of everyone.",
       type:"EXPERIENCE",importance:imp,gameDay:1,gamePeriod:per,universeId:uni.id,chatId:c.id,date:Date.now()});
     state.memory=[mem("p_a","Morning",0.8),mem("p_b","Morning",0.7)];   // Ceren lived through nothing

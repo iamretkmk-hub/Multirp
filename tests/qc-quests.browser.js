@@ -247,7 +247,7 @@ const {chromium}=require('playwright');
     await maybeGamemaster(c);                 // 2 real turns < gmEvery 3 → no call at all
     const earlyCalls=window.__calls.length;
     c.messages.push(say("user","so?"));
-    window.__reply=d=>{ if(d==="Gamemaster: judge"){ _dirSeq++; return JSON.stringify({stale:true,trigger:false,reason:"stalled"}); } return "Someone knocks."; };
+    window.__reply=d=>{ if(d==="Gamemaster: judge"){ markPlayerTurn(c); return JSON.stringify({stale:true,trigger:false,reason:"stalled"}); } return "Someone knocks."; };
     await maybeGamemaster(c);
     const beats=c.messages.filter(m=>m.gmBeat).length;
     c.gmLastCheck=0; window.__calls=[];
@@ -256,7 +256,7 @@ const {chromium}=require('playwright');
     return {turns,earlyCalls,beats,stringFalse:window.__calls.slice()};
   });
   ok("the cadence counts real turns only, not GM beats / markers / quest notes", M.turns===2&&M.earlyCalls===0, JSON.stringify(M));
-  ok("a beat the player overtook (_dirSeq moved) is dropped", M.beats===1, JSON.stringify(M));
+  ok("a beat the player overtook (a turn in this chat) is dropped", M.beats===1, JSON.stringify(M));
   ok('"stale":"false" / "trigger":"false" do not trigger the author', M.stringFalse.length===1&&M.stringFalse[0]==="Gamemaster: judge", JSON.stringify(M));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

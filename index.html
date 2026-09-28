@@ -209,6 +209,10 @@
   .bubble:hover .msgActions,.bubble:active .msgActions{opacity:.85;}
   .msgAct{background:none;border:none;cursor:pointer;font-size:12px;padding:2px 4px;border-radius:6px;line-height:1;opacity:.8;}
   .msgAct:hover{opacity:1;background:rgba(127,127,127,.18);}
+  /* v144.1 — Retry shows on the latest reply only (refreshRetryMark); a refused send flashes the box */
+  .msgAct.msgRetry{display:none;}
+  .bubble.canRetry .msgAct.msgRetry{display:inline-block;}
+  #chatInput.sendHeld{outline:1px dashed var(--accent);outline-offset:1px;}
   @media (hover:none){.msgActions{opacity:.55;}}
   .bubble em{opacity:.92;}
   /* An inner thought is the one thing on screen nobody else in the room can hear, so it reads
@@ -6712,14 +6716,20 @@ const FOREIGN_MARKERS=["slow","slowly","quick","quickly","soft","softly","gentle
   "breath","breathe","heart","move","moves","moved","feel","feels","felt","hold","holds","held",
   "turn","turns","turned","step","steps","stepped","walk","walks","walked","still","just"];
 const _FOREIGN_SET=new Set(FOREIGN_MARKERS);
+/* (!) v144.1 — markers that are ALSO ordinary words of the story language. German shares "warm",
+   "still", "hold" (and, capitalised, Hand/Held/Mine) with English, so "Es war still" drew a retry
+   for a correct sentence. A language without an entry uses the whole list (Turkish shares none). */
+const FOREIGN_MARKER_SKIP={de:new Set(["warm","still","hold","hand","hands","held","mine","over","under","after"])};
 function foreignWordHits(text){
   try{
     if(typeof storyLang==="function" && storyLang()==="en")return [];
     const t=String(text||""); if(!t.trim())return [];
     const words=t.match(/[A-Za-z]{4,}/g)||[];
+    const skip=(typeof storyLang==="function"&&FOREIGN_MARKER_SKIP[storyLang()])||null;
     const hits=[];
     for(const w of words){
       if(w!==w.toLowerCase())continue;                 // capitalised → a name, not an intrusion
+      if(skip&&skip.has(w))continue;                   // a word of the story language itself
       if(_FOREIGN_SET.has(w) && hits.indexOf(w)<0) hits.push(w);
     }
     return hits;
@@ -6728,7 +6738,7 @@ function foreignWordHits(text){
 function mixedLangDirective(fields){
   const n=storyLangName();
   const list=(fields||[]).map(f=>`"${f}"`).join(", ")||"the narration";
-  return `# OUTPUT LANGUAGE — TWO LANGUAGES IN ONE ANSWER (this OVERRIDES every other language instruction anywhere in this prompt, including any instruction to write in Turkish)
+  return `# OUTPUT LANGUAGE — TWO LANGUAGES IN ONE ANSWER (this OVERRIDES every other language instruction anywhere in this prompt, including any instruction to write in another language)
 - ${list} — the text the player actually reads in the story — in perfect, natural, everyday ${n}${storyLang()==="en"?"":" (do NOT translate from English: write what a native "+n+" speaker would really say)"}.
 - EVERY OTHER field — memories, notes, results, outcomes, reasons, summaries, plans — in plain ENGLISH. Those are the engine's own record, never shown as story text, and they are fed back into later prompts, so they must stay in one language.
 - Proper nouns are never translated. JSON keys and fixed enum values stay EXACTLY as the prompt specifies.`;
@@ -8694,6 +8704,25 @@ function loadState(){
   _refreshPipe("offstageEvent","You direct the OFFSTAGE life of a roleplay world","only what you were told is true",DEFAULT_OFFSTAGE_EVT);
   /* v144.1 — QC-report prompt fixes. One slot per area so the fixes stay separate. */
   // ---- v144.1 refresh: ROLEPLAY CORE ----
+  /* v144.1 — rail_voice forbade words in {{user}}'s mouth but not narrating {{user}}'s body or
+     feelings ("*You lean closer*"). The rails are sections of ONE editable box (block template
+     rails_header), which _refreshPipe cannot reach: a user who edited any section holds a full copy
+     of the box. So only the rail_voice SECTION of such a copy is upgraded, and only while it is still
+     the old shipped sentence word for word; a rail_voice the user rewrote is left alone. Everyone
+     else reads the new default directly (blkTpl falls back to it). */
+  {const OLD_RV="You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth.";
+   const NEW_MARK="is not yours to narrate";
+   const newBody=(String(BLOCK_TPL_DEFAULTS.rails_header||"").match(/\[\[rail_voice\]\]\n([\s\S]*?)\n\[\[end\]\]/)||[])[1];
+   const upRv=bag=>{
+     const box=bag&&bag.rails_header; if(typeof box!=="string"||box.indexOf(NEW_MARK)>=0)return false;
+     const m=box.match(/\[\[\s*rail_voice\s*\]\]\s*([\s\S]*?)\s*\[\[\s*end\s*\]\]/i);
+     if(!m||m[1].trim()!==OLD_RV)return false;
+     bag.rails_header=ptSpliceSection(box,"rail_voice",newBody); return true; };
+   if(newBody&&newBody.indexOf(NEW_MARK)>=0){
+     try{ if(upRv(state.blockTpls)) store.set(K.blockTpls,state.blockTpls); }catch(e){}
+     try{ let any=false; (state.universes||[]).forEach(u=>{ if(u&&u.blockTpls&&upRv(u.blockTpls))any=true; });
+          if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
+   }}
   // (end ROLEPLAY CORE)
   //
   //
@@ -10154,13 +10183,19 @@ let _presentQueue=[];
 let _presentPlaying=false;
 let _presentingMid=null;             // mid currently being appended/revealed (blank-gate in bubble())
 let _presentPendingMids=new Set();   // mids committed to state but not yet presented → renderers skip them
+let _presentLast=Promise.resolve();   // v144.1 — resolves when the most recently queued line has been shown
 function enqueuePresent(mid){
-  return new Promise(resolve=>{
+  const p=new Promise(resolve=>{
     _presentPendingMids.add(mid);
     _presentQueue.push({mid,resolve});
     _drainPresentQueue();
   });
+  _presentLast=p;
+  return p;
 }
+/* v144.1 — wait until everything queued so far is on screen (FIFO: the last one resolving means all
+   did), bounded so a stalled reveal can never hold a turn forever. */
+function presentDrained(ms){ return Promise.race([_presentLast,new Promise(r=>setTimeout(r,ms||120000))]); }
 /* ============ v28.5 — CHAT SCROLL. ONE CONTROLLER, ONE RULE ============
    Every earlier attempt DECIDED whether to scroll at particular moments: on append, on each
    typewriter tick, after a front-trim, after a rebuild. But content height changes AFTER those
@@ -10272,7 +10307,13 @@ function _drainPresentQueue(){
   if(!job){ return; }
   _presentPlaying=true;
   const m=findMsg(job.mid);
-  if(!m){ // message gone (chat switched / deleted) — skip cleanly
+  /* (!) v144.1 — only the OPEN chat is drawn. findMsg searches every chat, so a reply that landed
+     after the player switched chats was appended into the other chat's window. A line of a chat
+     that is not on screen is simply released: it is in its own transcript and renders when that
+     chat is opened. */
+  const _cc=curChat();
+  if(!m || !_cc || (_cc.messages||[]).indexOf(m)<0){ // message gone (chat switched / deleted) — skip cleanly
+    if(m)delete m._reveal;
     _presentPendingMids.delete(job.mid); _presentPlaying=false; job.resolve&&job.resolve(); _drainPresentQueue(); return;
   }
   // Reveal it now: clear the pending flag FIRST so appendNewBubbles will render this one,
@@ -10280,12 +10321,17 @@ function _drainPresentQueue(){
   _presentPendingMids.delete(job.mid);
   m._reveal=true;
   _presentingMid=job.mid;          // bubble() renders this blank until the reveal's first tick
+  /* v144.1 — anything held back behind this line (a presence note or narrator beat pushed while it
+     waited its turn) is drawn first, so the screen keeps the transcript's order even though
+     generation no longer waits for the reveal. appendNewBubbles stops at this line. */
+  try{ appendNewBubbles(); }catch(e){}
   appendOneBubble(m);
   typewriterReveal(m.mid,m.content,()=>{
     delete m._reveal;
     _presentingMid=null;
     _presentPlaying=false;
     job.resolve&&job.resolve();
+    if(!_presentQueue.length){ try{ appendNewBubbles(); }catch(e){} }   // v144.1 — release what waited behind it
     _drainPresentQueue();
   });
 }
@@ -10310,6 +10356,7 @@ function appendOneBubble(m){
   if(!list||!m)return;
   if(!chatShowsMsg(m))return;                                 // texts belong to the text window
   if(_renderedChatId!==state.curChat){ renderChat(); if(typeof reflectModes==='function')reflectModes(); return; }
+  {const _cc=curChat(); if(!_cc||(_cc.messages||[]).indexOf(m)<0)return;}   // (!) v144.1 — another chat's line
   if(list.querySelector('[data-mid="'+m.mid+'"]')) return;   // already on screen
   const _following=ChatScroll.isFollowing();
   const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid);
@@ -10338,6 +10385,7 @@ function appendOneBubble(m){
   // arrives while they have scrolled up surfaces the "↓ New" pill instead of yanking the view.
   if(_following){ ChatScroll.sync(); }
   else { showNewMsgPill(); }
+  refreshRetryMark();   // v144.1
 }
 
 /* ---- legacy reveal queue (kept as thin shims so any other caller still works) ---- */
@@ -10832,19 +10880,34 @@ function stopReply(){
 // This flags such replies so the caller can retry on a fallback model and surface an honest message.
 // Detects: (1) known canned refusal phrasings (CJK + English), (2) a reply that is overwhelmingly
 // CJK when the story language is not CJK (the roleplay here is Turkish/English).
+/* (!) v144.1 — IN-CHARACTER LINES ARE NOT REFUSALS. The English patterns were unanchored, so a
+   character saying "I'm sorry, but I can't stay tonight.", "I can't help it" or "I'm not able to
+   sleep" was flagged and the turn regenerated on another model, or dropped. Now quoted speech and
+   *action* / _thought_ spans are removed first (a refusal is the model talking, never the character),
+   curly apostrophes count, and what is left must either be a refusal of the WORK near the start
+   ("I can't continue this roleplay", "I won't write that") or a short meta reply that names content,
+   guidelines, policy, the request or being an AI. The CJK checks are unchanged. */
 function looksLikeRefusal(txt){
-  const s=(txt||"").trim();
-  if(!s) return false;
-  const phrases=[/无法(给到|提供|满足|回答|完成|继续)/, /我(不能|无法)(协助|帮助|提供|继续)/,
-    /抱歉[，,].{0,12}(无法|不能)/,
-    /\bI\s+can(?:not|'t)\s+(?:provide|assist|help|continue|comply|generate)/i,
-    /\bI(?:'m| am)\s+(?:sorry|unable)\b.{0,40}\b(?:can(?:not|'t)|unable|won'?t)\b/i,
-    /\bI'?m\s+not\s+able\s+to\b/i];
-  if(phrases.some(re=>re.test(s))) return true;
-  const cjk=(s.match(/[\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g)||[]).length;
-  const letters=(s.match(/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g)||[]).length;
+  const raw=String(txt==null?"":txt).trim();
+  if(!raw) return false;
+  if([/无法(给到|提供|满足|回答|完成|继续)/, /我(不能|无法)(协助|帮助|提供|继续)/, /抱歉[，,].{0,12}(无法|不能)/].some(re=>re.test(raw))) return true;
+  const cjk=(raw.match(/[\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g)||[]).length;
+  const letters=(raw.match(/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0600-\u06FF\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g)||[]).length;
   if(letters>=8 && cjk/letters>=0.4) return true;
-  return false;
+  const meta=raw.replace(/[\u2018\u2019\u02BC]/g,"'")
+    .replace(/"[^"\n]*"|\u201C[^\u201D\n]*\u201D|\u00AB[^\u00BB\n]*\u00BB|\u201E[^\u201C\u201D\n]*[\u201C\u201D]/g," ")
+    .replace(/\*[^*\n]*\*/g," ").replace(/(^|\s)_[^_\n]+_/g,"$1 ")
+    .replace(/\s+/g," ").trim();
+  if(!/[A-Za-z]{2,}/.test(meta)) return false;
+  if(/^As an AI\b/i.test(meta)) return true;
+  const NOT="(?:can't|cannot|can not|won't|will not|am unable to|'m unable to|am not able to|'m not able to|must decline to|am not comfortable|'m not comfortable)";
+  const OP="(?:I'm sorry|I am sorry|I apologi[sz]e|Sorry|Unfortunately)";
+  const WORK="(?:provide|assist|comply|generate|produce|fulfil+|depict|engage in|participate in|role-?play|(?:write|writing|create|creating) (?:(?:that|this|such)(?: kind of)?(?: content| scene| story| material)?(?=[.!,]|$)|explicit|sexual|graphic)|help (?:you )?with (?:that|this)(?: request| content| scene| story)?[.!]?$|continue (?:with )?(?:this|that|the|writing)(?: roleplay| role-play| story| scene| conversation| request| content| thread)?(?=\\s*(?:[.!,]|$|as\\b|because\\b|since\\b)))";
+  const META=/\b(?:content|guidelines?|polic(?:y|ies)|as an AI|AI (?:language )?model|language model|roleplay|role-play|fictional scenario|explicit|sexual(?:ly)?|minors?|non-?consensual|harmful|inappropriate|terms of (?:service|use)|request)\b/i;
+  const head=meta.slice(0,200);
+  if(new RegExp("(?:^|[.!?]\\s+|"+OP+"[,.!]?\\s*(?:but\\s*)?)I\\s*"+NOT+"\\s+"+WORK,"i").test(head)) return true;
+  const generic=new RegExp("(?:^|[.!?]\\s+)(?:"+OP+"[,.!]?\\s*(?:but\\s*)?)?I\\s*"+NOT+"\\b","i");
+  return meta.length<=400 && generic.test(head) && META.test(meta);
 }
 async function imageCompletion(prompt,model,size){
   if(!state.key)throw{friendly:"No API key set."};
@@ -12725,7 +12788,8 @@ function nmFlush(){
   }
   const inp=document.getElementById('chatInput');
   if(!inp){ nm._pend=''; return; }
-  if(inp.disabled){ nm._pendTimer=setTimeout(nmFlush,700); return; }   // a turn is converting → hold, don't drop
+  // a turn is converting or still answering (v144.1 — the per-chat turn lock) → hold, don't drop
+  if(inp.disabled||chatBusy(curChat(),"turn")){ nm._pendTimer=setTimeout(nmFlush,700); return; }
   nm._pend='';
   _alog("mic.flush","rp turn: "+text.slice(0,60));
   inp.value=text; _spokenVerbatim=true;
@@ -18864,7 +18928,7 @@ const ENGINE_RECENT_TURNS=6;
 // rarely (a cadence check, or one turn of an active event), so a wider view is cheap here.
 const DIRECTOR_RECENT_TURNS=12;
 function recentExchangeMsgs(chat,n){
-  const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
+  const fallback=(curCast(chat)[0]&&curCast(chat)[0].name)||"Narrator";
   // v26.3 — drop the player-only meta notices (world events, quest/calendar notices, day markers).
   // They are UI lines, not scene content: no engine should read a quest notification as something
   // that was said in the room, and every one of them used to eat a slot in this window.
@@ -27821,7 +27885,7 @@ Do not echo {{user}}. Never begin by quoting or paraphrasing what they just said
 {{endif}}
 
 [[rail_voice]]
-You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth.
+You are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.
 [[end]]
 
 {{if render_mode = heat}}
@@ -27965,11 +28029,16 @@ function blkTpl(key){
    from the same per-character producer below. (The old "one model voices the whole cast with
    Name: prefixes" branch is gone: both call sites are gated on a single present character, so it
    had been unreachable for several versions.) */
+/* (!) v144.1 — the chat and the speaker are the CALLER's. This read presentCast() of the open chat
+   and spoke as whoever stood first in it, so a one-on-one reply built after an await could be built
+   for the chat the player had switched to, and a Gamemaster reaction by the second person present
+   went out with the first person's card. opts.selfP names the speaker; opts.chat the scene. */
 function buildSystemPromptBlocks(injectedMemories,opts){
-  const cast=presentCast();
-  const p=cast[0]||curCast()[0];
+  const chat=(opts&&opts.chat)||curChat();
+  const cast=presentCast(chat);
+  const p=(opts&&opts.selfP)||cast[0]||curCast(chat)[0];
   if(!p)return {};
-  return buildCharPromptBlocks(p,cast.slice(1),injectedMemories,null,opts);
+  return buildCharPromptBlocks(p,cast.filter(c=>c.id!==p.id),injectedMemories,null,opts);
 }
 
 /* SCENE-WRITER BRIEFING for a character an event is bringing into the scene.
@@ -29122,6 +29191,11 @@ let _heatSeq=0,_heatBusy=false,_heatNoImg=false;   // v19.5 heat-of-the-moment s
    than pushed. The player's own turn already answers the beat, and the beat itself stays on screen.
    Same shape as _heatSeq above. */
 let _dirSeq=0;
+/* (!) v144.1 — PER CHAT. _dirSeq is one counter for the whole app, so a line typed in chat B threw
+   away a reply chat A was still generating. Each player turn stamps its own chat (chat._turnSeq, a
+   transient field); a reply started at `seq` is superseded only by a turn IN ITS OWN CHAT. */
+function turnSuperseded(chat,seq){ return !!chat && (chat._turnSeq||0)>seq; }
+function markPlayerTurn(chat){ _heatSeq++; _dirSeq++; if(chat)chat._turnSeq=_dirSeq; }
 // (v24.3 — the v19.97 per-beat repeat detector is gone with the beat loop: heat is one
 // extended generation now, so there is no next beat to loop into. _heatNoImg stays declared
 // for autoImgActive but is never raised — the single heat response gets its auto image.)
@@ -29503,7 +29577,7 @@ function presentCastAll(chat){
   const ids=presentIds(chat);
   const out=[];const seen=new Set();
   ids.forEach(id=>{const pp=resolveChar(id,chat);if(pp&&!seen.has(id)){seen.add(id);out.push(pp);}});
-  if(!out.length){const c=curCast();if(c[0])out.push(c[0]);}
+  if(!out.length){const c=curCast(chat);if(c[0])out.push(c[0]);}
   return out;
 }
 // Reject placeholder / non-name values the classifier sometimes emits as a NAME.
@@ -29564,7 +29638,7 @@ function ensureTempChar(chat,name,persona,look){
 }
 // Apply presence changes by character NAME (from tracker/gamemaster); returns {entered,exited} names.
 function applyPresence(chat,enterNames,exitNames){
-  let cast=curCast().concat(chat.tempChars||[]);   // include temporary event characters
+  let cast=curCast(chat).concat(chat.tempChars||[]);   // include temporary event characters
   // Also allow the active event's participant (may be a persona from another universe).
   if(chat.activeEvent && chat.activeEvent.participant && chat.activeEvent.participant.charId){
     const ep=resolveChar(chat.activeEvent.participant.charId,chat);
@@ -29634,7 +29708,7 @@ function notePresence(chat,entered,exited,narration){
   // Resolve names → ids so the witness/scene logic can act on a presence change structurally
   // (not by parsing the display text). enteredIds in particular lets a freshly-arrived character's
   // transcript start at THIS point, so they never inherit dialogue from before they walked in.
-  const nameToId=n=>{ const c=(curCast()||[]).concat(chat.tempChars||[]).find(x=>x&&x.name&&x.name.toLowerCase()===String(n).toLowerCase()); return c?c.id:null; };
+  const nameToId=n=>{ const c=(curCast(chat)||[]).concat(chat.tempChars||[]).find(x=>x&&x.name&&x.name.toLowerCase()===String(n).toLowerCase()); return c?c.id:null; };
   const enteredIds=(entered||[]).map(nameToId).filter(Boolean);
   const exitedIds=(exited||[]).map(nameToId).filter(Boolean);
   const narr=(narration||"").trim();
@@ -30281,6 +30355,7 @@ function renderChat(){ return perf("renderChat",()=>{
   requestAnimationFrame(_pin);
   setTimeout(_pin,60);
   setTimeout(_pin,200);
+  refreshRetryMark();   // v144.1
   renderImageRail();
   try{ updateTextBadges(); }catch(e){}
 }); }
@@ -30307,13 +30382,19 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
   let appended=0;
   for(let i=firstNew;i<msgs.length;i++){ const m=msgs[i]; if(!m.mid) m.mid=newMid();
     if(!chatShowsMsg(m)) continue;                 // a text is read in the text window, not here
-    if(_presentPendingMids.has(m.mid)) continue;   // committed to state but not yet its turn to show
     // The presentation queue owns any message still flagged _reveal (it was just pushed to state but
     // hasn't reached enqueuePresent yet, or is mid-roll). Rendering it here would paste it on screen
-    // ahead of / on top of the line currently rolling — the "everything dumps at once" bug. Skip it;
-    // the queue will append + roll it in strict order. (Already-on-screen check below is the guard
-    // for messages whose reveal has completed.)
-    if(m._reveal && !list.querySelector('[data-mid="'+m.mid+'"]')) continue;
+    // ahead of / on top of the line currently rolling — the "everything dumps at once" bug. The queue
+    // will append + roll it in strict order. (Already-on-screen check below is the guard for messages
+    // whose reveal has completed.)
+    /* (!) v144.1 — STOP there instead of skipping past it. Generation no longer waits for the reveal,
+       so a presence note can be pushed while a reply is still queued; skipping the queued reply drew
+       the note ABOVE the line it follows. The queue draws the rest, in order, when it gets there. */
+    if(_presentPendingMids.has(m.mid)) break;      // committed to state but not yet its turn to show
+    if(m._reveal && !list.querySelector('[data-mid="'+m.mid+'"]')){
+      if(m.mid===_presentingMid) break;            // the queue is drawing this one right now
+      delete m._reveal;                            // a leftover flag (its queue was cleared) — draw it whole
+    }
     const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid); appended++; }
   if(appended){
     // Front-trim to the render window with ANCHOR-based compensation (see appendOneBubble for the
@@ -30337,6 +30418,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
     if(_following){ ChatScroll.sync(); }
     else { showNewMsgPill(); }
   }
+  refreshRetryMark();   // v144.1
   renderImageRail();
 }); }
 function findMsg(mid){
@@ -30475,7 +30557,11 @@ function bubble(m){
   const _imgBtn=(m.role==='assistant'&&!m.textMsg)
     ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${esc(m.mid)}" onclick="reIllustrate('${escJs(m.mid)}')">${icon("image")}</button>`
     : "";
-  const actions=`<span class="msgActions">${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${escJs(m.mid)}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${escJs(m.mid)}')">${icon("trash")}</button></span>`;
+  // v144.1 — Retry: present on every reply, SHOWN only on the latest one (see refreshRetryMark)
+  const _retryBtn=(m.role==='assistant'&&!m.textMsg)
+    ? `<button class="msgAct msgRetry" title="Retry this reply" aria-label="Retry this reply" onclick="retryLastReply('${escJs(m.mid)}')">${icon("refresh")}</button>`
+    : "";
+  const actions=`<span class="msgActions">${_retryBtn}${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${escJs(m.mid)}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${escJs(m.mid)}')">${icon("trash")}</button></span>`;
   b.innerHTML=`<div class="meta" data-name="${esc(name)}">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${whisperTag}${actions}</div><div class="body"></div>`;
   if(!_revealing)b.querySelector('.body').innerHTML=msgBodyHTML(_dispText(m.content),b);
   if(m.role==='assistant'){
@@ -30537,6 +30623,71 @@ async function deleteMessage(mid){
   if(node) node.remove(); else renderChat();
   persistChats();
   toast("Deleted");
+  refreshRetryMark();
+}
+/* ===== v144.1 — RETRY THE LAST REPLY ============================================================
+   There was no way to ask again. After a failed turn (or a reply you did not like) the only move was
+   to send your line a second time, which put it in the transcript twice. Retry takes the LAST reply
+   after your latest line — a character's line or the error notice — out, and asks again for that same
+   line: a character's reply is regenerated by that character (the one-on-one path when they are the
+   only one in earshot, so the same payload layout is used), an error re-runs the whole turn. Your own
+   message is never duplicated, and nothing earlier than your latest line can be retried. */
+function _retryTarget(chat){
+  const msgs=(chat&&chat.messages)||[];
+  let u=-1;
+  for(let i=msgs.length-1;i>=0;i--){ const m=msgs[i]; if(m&&m.role==='user'&&!m.textMsg){ u=i; break; } }
+  if(u<0)return null;
+  for(let i=msgs.length-1;i>u;i--){
+    const m=msgs[i];
+    if(!m||m.role!=='assistant'||m.textMsg||m.presenceNote||m.narratorEvent||m.dayMarker)continue;
+    if(m.sysError?m.retryable:m.speakerId) return {u,i,m,player:msgs[u]};
+  }
+  return null;
+}
+function refreshRetryMark(){
+  try{
+    const list=document.getElementById('chatList'); if(!list)return;
+    list.querySelectorAll('.bubble.canRetry').forEach(n=>n.classList.remove('canRetry'));
+    const t=_retryTarget(curChat()); if(!t)return;
+    const node=list.querySelector('.bubble[data-mid="'+t.m.mid+'"]'); if(node)node.classList.add('canRetry');
+  }catch(e){}
+}
+function _dropMsgForRetry(chat,mid){
+  const i=chat.messages.findIndex(x=>x.mid===mid); if(i<0)return;
+  chat.messages.splice(i,1); markChatDirty(chat);
+  try{ mediaDB.kvDelete("mimg:"+mid); }catch(e){}
+  try{ mediaDB.kvDelete("mvid:"+mid); }catch(e){}
+  const node=document.querySelector('[data-mid="'+mid+'"]'); if(node)node.remove();
+}
+async function retryLastReply(mid){
+  const chat=curChat(); if(!chat)return;
+  if(chatBusy(chat,"turn")){ toast("Still answering — one moment"); return; }
+  const t=_retryTarget(chat);
+  if(!t||(mid&&t.m.mid!==mid)){ toast("Only the latest reply can be retried"); return; }
+  const m=t.m, text=String(t.player.content||"").trim();
+  if(!text){ toast("Nothing to answer"); return; }
+  if(m.sysError){
+    // the turn failed: drop its error notices and run the whole turn again for the same line
+    chat.messages.slice(t.u+1).filter(x=>x&&x.sysError&&x.retryable).forEach(x=>_dropMsgForRetry(chat,x.mid));
+    persistChats();
+    await sendMessage({chat,text,retry:"error"});
+    refreshRetryMark(); return;
+  }
+  const p=resolveChar(m.speakerId,chat);
+  if(!p||!inSceneIds(chat).includes(p.id)){ toast(((p&&p.name)||m.speaker||"They")+" can't hear you any more — nothing to retry"); return; }
+  const scene=inSceneCast(chat);
+  _dropMsgForRetry(chat,m.mid); persistChats();
+  if(scene.length===1 && !m.whisperTo){
+    await sendMessage({chat,text,retry:"reply"});   // the one-on-one path, same payload layout
+  }else{
+    const _unlock=holdChatLock(chat,"turn");
+    const sb=document.getElementById('sendBtn'); if(sb)sb.disabled=true;
+    try{
+      markPlayerTurn(chat);   // a Gamemaster reaction to the old reply is stale now
+      await playCharacterTurn(chat,p,state.user,{answerTo:m.toId||"__user__",whisperBack:!!m.whisperTo});
+    }finally{ if(sb)sb.disabled=false; _unlock(); persistChats(); }
+  }
+  refreshRetryMark();
 }
 /* v19.9 (#10) — media prompt popup + per-video loop toggle */
 function toggleVidLoop(mid,btn){
@@ -31039,223 +31190,220 @@ async function narratePlayerTurn(rawText,chat,opts){
     return clean||rawText;   // fall back to raw text if the model returns nothing
   }catch(e){ return rawText; }   // never block the turn — fall back to what they typed
 }
-async function sendMessage(){
+/* v144.1 — hold a per-chat lock across a stretch of code: returns the release function. The caller
+   has just checked chatBusy(), so nothing is queued ahead of it. Releasing frees the lock at once
+   (not a few microtasks later), unless someone has queued behind it meanwhile. */
+function holdChatLock(chat,key){
+  let rel; const held=new Promise(r=>rel=r); withChatLock(chat,key,()=>held);
+  const id=chat&&(chat.id||chat), k=id+"\u0000"+key, mine=_chatLocks.get(k);
+  return ()=>{ rel(); if(mine&&_chatLocks.get(k)===mine)_chatLocks.delete(k); };
+}
+let _sendHintAt=0;
+function _sendBusyHint(inp){
+  try{ if(inp){ inp.classList.add('sendHeld'); setTimeout(()=>inp.classList.remove('sendHeld'),900); } }catch(e){}
+  if(Date.now()-_sendHintAt>2500){ _sendHintAt=Date.now(); toast("Still answering — your line is kept, send it when the reply lands"); }
+}
+/* `opts` is for internal callers only — Story mode and Retry pass {chat,text,forceRp,retry}; the
+   send button and Enter pass nothing and read the open chat's input box. */
+async function sendMessage(opts){
+  opts=(opts&&typeof opts==="object"&&!(typeof Event!=="undefined"&&opts instanceof Event))?opts:{};
   const inp=document.getElementById('chatInput');
-  let text=inp.value.trim();if(!text)return;
-  const chat=curChat();
-
-  // ----- /whisper Name message — a private aside only that character hears; others just see that a
-  //       whisper happened. Runs a real reply turn (only that character responds).
-  {const wm=text.match(/^\/whisper\s+(.+)$/is);
-   if(wm){ inp.value="";inp.style.height="auto"; await sendWhisper(chat,wm[1]); return; }}
-  // ----- OOC commands: /bring Name, /leave Name (or /send Name), /who ----- (never narrated)
-  if(text.startsWith("/")){
-    inp.value="";inp.style.height="auto";
-    handleOOC(chat,text);
-    return;
-  }
-
-  _heatSeq++;   // v19.5: any player turn (typed or spoken) cancels a running heat burst
-  _dirSeq++;    // v26.5: ...and supersedes a director reaction still being generated
-  // v116.0 — a tapped suggestion is a short intention, so it always goes through the narrator.
-  const _forceRp=_apForceRp; _apForceRp=false;
-  apPlayerActed(chat);
-  // ----- AUTO-RP: rewrite the player's terse input into a short in-voice turn before sending. -----
-  // Runs only when the toggle is on. Best-effort: if it fails or returns nothing, the raw text is
-  // used. The input is locked with a hint while it converts so the player sees it's working.
-  if(state.autoRpOn||_forceRp){
-    const sendBtn=document.getElementById('sendBtn');
-    inp.value="";inp.style.height="auto";
-    inp.disabled=true; if(sendBtn)sendBtn.disabled=true;
-    const _ph=inp.placeholder; inp.placeholder="writing your turn…";
-    const _verb=_spokenVerbatim; _spokenVerbatim=false;
-    try{ text=await narratePlayerTurn(text,chat,{verbatim:_verb}); }
-    catch(e){}
-    finally{ inp.disabled=false; if(sendBtn)sendBtn.disabled=false; inp.placeholder=_ph; }
-  }else{
-    inp.value="";inp.style.height="auto";
-  }
-
-  chat.messages.push({mid:newMid(),role:"user",content:text,present:presentIds(chat).slice()});
-  try{ speakPlayerTurn(chat.messages[chat.messages.length-1]); }catch(e){}   // v122.1 — the player's own voice, before the reply
-  chat.lastActive=Date.now();
-  // v28.9 — if a character put a rumor to you last turn, this is the answer. Judging it in the
-  // background lets it close (or harden) without holding up the reply.
-  try{ settleRumors(chat,text); }catch(e){}
-  ChatScroll.follow();     // v28.5 — sending always takes you to your own line, and keeps you there
-  {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
-  appendNewBubbles();persistChats();
-  // The user just sent — always bring THEIR message into view (snap to bottom), regardless of
-  // prior scroll position. appendNewBubbles only auto-follows if you were already near the
-  // bottom, which (with front-trimming) could otherwise leave the view parked up the transcript.
-
-  // v26.5 — before anything routes, make sure the player is not stranded in an area the scene has
-  // walked out of (see syncPlayerSubArea). This also repairs saves already stuck in that state.
-  if(syncPlayerSubArea(chat))appendNewBubbles();
-  // ----- Nobody nearby: the user is speaking to themselves. Let directors react, no character speaks. -----
-  const present=presentCast(chat);
-  if(present.length===0){
-    /* v37.2 — SAY SO. This branch used to store the line, run the directors and return, with
-       nothing on screen to explain why nobody answered. A live log shows the cost: the presence
-       tracker mis-read "we went outside" as Hakan LEAVING, the scene emptied, and the player's next
-       three messages went unanswered while the active event kept narrating around him — which read
-       as "Hakan stopped responding" rather than "there is nobody here". The multi-character path
-       already refused to swallow a turn like this; the solo path did not. Same notice, one helper. */
-    noteNobodyHere(chat);
-    // the player's narration may summon someone (gamemaster) — otherwise just store it
-    document.getElementById('sendBtn').disabled=true;
-    try{ await postTurn(chat); }
-    catch(e){}
-    finally{ document.getElementById('sendBtn').disabled=false; persistChats();appendNewBubbles(); }
-    return;
-  }
-
-  const list=document.getElementById('chatList');
-  const typing=document.createElement('div');
-  typing.className="bubble ai";{const _sp=present[0];typing.innerHTML=`<div class="meta">${avatarHTML(_sp)}${esc((_sp||{name:"…"}).name)}</div><div class="typing"><span></span><span></span><span></span></div>`;}
-  list.appendChild(typing);ChatScroll.sync();
-  document.getElementById('sendBtn').disabled=true;
-
+  const fromInput=opts.text==null, retry=!!opts.retry;
+  let text=String(fromInput?((inp&&inp.value)||""):opts.text).trim();if(!text)return;
+  const chat=opts.chat||curChat(); if(!chat)return;
+  const _open=()=>state.curChat===chat.id;
+  /* (!) v144.1 — ONE TURN AT A TIME PER CHAT. Enter sent regardless of the disabled button and there
+     was no busy flag, so two turns ran at once and each answered from a history missing the other's
+     reply (and the first one's finally re-enabled the button under the second). A send while a turn
+     is running is refused and the typed line STAYS in the box. Slash commands other than /whisper
+     are not turns and still run at once. */
+  const _cmd=!retry&&text.startsWith("/")&&!/^\/whisper\s/i.test(text);
+  if(!_cmd&&chatBusy(chat,"turn")){ if(fromInput)_sendBusyHint(inp); return false; }
+  const _unlock=_cmd?null:holdChatLock(chat,"turn");
   try{
-    const cast=present;
-    // ===== MULTIPLE PRESENT: use the turn router (who responds, char↔char chaining) =====
-    if(cast.length>1){
-      typing.remove();
-      document.getElementById('sendBtn').disabled=false;
+    if(!retry){
+      // ----- /whisper Name message — a private aside only that character hears; others just see that a
+      //       whisper happened. Runs a real reply turn (only that character responds).
+      {const wm=text.match(/^\/whisper\s+(.+)$/is);
+       if(wm){ if(fromInput){inp.value="";inp.style.height="auto";} await sendWhisper(chat,wm[1]); return; }}
+      // ----- OOC commands: /bring Name, /leave Name (or /send Name), /who ----- (never narrated)
+      if(text.startsWith("/")){
+        if(fromInput){inp.value="";inp.style.height="auto";}
+        handleOOC(chat,text);
+        return;
+      }
+    }
+
+    markPlayerTurn(chat);   // v19.5/v26.5: any player turn cancels a running heat burst and supersedes a director reaction still being generated
+    chat._exitedIds=null;   // (!) v144.1 — a fresh player turn: last turn's departures stop mattering (sendWhisper already did this; the typed path never did)
+    // v116.0 — a tapped suggestion is a short intention, so it always goes through the narrator.
+    const _forceRp=!!opts.forceRp||_apForceRp; _apForceRp=false;
+    apPlayerActed(chat);
+    if(!retry){
+      // ----- AUTO-RP: rewrite the player's terse input into a short in-voice turn before sending. -----
+      // Runs only when the toggle is on. Best-effort: if it fails or returns nothing, the raw text is
+      // used. The input is locked with a hint while it converts so the player sees it's working.
+      if(fromInput&&inp){ inp.value="";inp.style.height="auto"; }
+      if(state.autoRpOn||_forceRp){
+        const sendBtn=document.getElementById('sendBtn');
+        const _lockUi=_open()&&inp;
+        if(_lockUi){ inp.disabled=true; if(sendBtn)sendBtn.disabled=true; }
+        const _ph=inp?inp.placeholder:""; if(_lockUi)inp.placeholder="writing your turn…";
+        const _verb=_spokenVerbatim; _spokenVerbatim=false;
+        try{ text=await narratePlayerTurn(text,chat,{verbatim:_verb}); }
+        catch(e){}
+        finally{ if(_lockUi){ inp.disabled=false; if(sendBtn)sendBtn.disabled=false; inp.placeholder=_ph; } }
+      }
+
+      chat.messages.push({mid:newMid(),role:"user",content:text,present:presentIds(chat).slice()});
+      try{ speakPlayerTurn(chat.messages[chat.messages.length-1]); }catch(e){}   // v122.1 — the player's own voice, before the reply
+      chat.lastActive=Date.now();
+      // v28.9 — if a character put a rumor to you last turn, this is the answer. Judging it in the
+      // background lets it close (or harden) without holding up the reply.
+      try{ settleRumors(chat,text); }catch(e){}
+    }
+    if(_open()){
+      ChatScroll.follow();     // v28.5 — sending always takes you to your own line, and keeps you there
+      {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
+    }
+    appendNewBubbles();persistChats();
+    // The user just sent — always bring THEIR message into view (snap to bottom), regardless of
+    // prior scroll position. appendNewBubbles only auto-follows if you were already near the
+    // bottom, which (with front-trimming) could otherwise leave the view parked up the transcript.
+
+    // v26.5 — before anything routes, make sure the player is not stranded in an area the scene has
+    // walked out of (see syncPlayerSubArea). This also repairs saves already stuck in that state.
+    if(syncPlayerSubArea(chat))appendNewBubbles();
+    // ----- Nobody nearby: the user is speaking to themselves. Let directors react, no character speaks. -----
+    /* (!) v144.1 — EARSHOT, not the location. Solo vs multi was chosen from presentCast (everyone at
+       the place), so a character alone in another room of the house answered a line they could not
+       hear. inSceneCast is who can actually hear the player; noteNobodyHere names the rest. */
+    const present=inSceneCast(chat);
+    if(present.length===0){
+      /* v37.2 — SAY SO. This branch used to store the line, run the directors and return, with
+         nothing on screen to explain why nobody answered. A live log shows the cost: the presence
+         tracker mis-read "we went outside" as Hakan LEAVING, the scene emptied, and the player's next
+         three messages went unanswered while the active event kept narrating around him — which read
+         as "Hakan stopped responding" rather than "there is nobody here". The multi-character path
+         already refused to swallow a turn like this; the solo path did not. Same notice, one helper. */
+      noteNobodyHere(chat);
+      // the player's narration may summon someone (gamemaster) — otherwise just store it
+      document.getElementById('sendBtn').disabled=true;
+      try{ await postTurn(chat); }
+      catch(e){}
+      finally{ document.getElementById('sendBtn').disabled=false; persistChats();appendNewBubbles(); }
+      return;
+    }
+
+    // ===== MULTIPLE IN EARSHOT: use the turn router (who responds, char↔char chaining) =====
+    if(present.length>1){
       await runMultiCharTurn(chat,text);
       return;
     }
-    // ===== SINGLE PRESENT CHARACTER: direct flow =====
-    const solo=cast[0];
-    heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
-    // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
-    let injected={recent:[],diary:[],longterm:[]};
-    if(state.mem && state.memory.length){
-      try{
-        const r=await retrieveMemories(text,chat,solo.id);
-        injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
-      }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
-    }
-    // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
-    // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
-    const _tOpts={ chat, targetName:state.user, targetId:"__user__" };
-    const _hb=buildSystemPromptBlocks(injected,_tOpts);
-    const _tb=buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
-        targetName:state.user, targetId:"__user__", multi:false, injected });
-    /* (!) v41.6 — HEAT BEAT 1 IS A HEAT PAYLOAD, EVEN WITH ONE CHARACTER PRESENT. heatBeginTurn()
-       above claims this reply as beat 1 of the run and sets chat._heatBeat, which the comment on
-       that function calls "what switches the payload to the `heat` layout" — but this path asked
-       for "solo" by name, so it never switched. The multi path has always picked the kind
-       (_heatBeat?"heat":"multi"); this one was written before heat existed and never caught up.
-       Visible as: a heat template you wrote by hand was ignored and the solo one ran instead — and
-       with heatN=1, where beat 1 is the ONLY beat, heat never used its own layout at all. */
-    const _kind=replyKind(chat,"solo");
-    const _pl=buildPayload(_kind,_hb,_tb);
-    // Build this character's history through the SAME witness/scene-scoped builder the multi-character
-    // path uses, so a solo responder never inherits dialogue from before they arrived or that they
-    // didn't witness. (Previously the solo path sent the whole transcript unfiltered — the core leak.)
-    const history=castHistory(chat,solo);
-    // Tag the last line as the response target, then append the post-dialogue guidance.
-    const taggedHistory=tagLastForTarget(history);
-    /* v33.0 — user payload template first; null means "not enabled, or it failed" and we use the
-       classic head/history/tail assembly, which is what the default template reproduces anyway. */
-    let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHistory,
-      {chat,npc:solo,targetName:state.user},
-      ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
-        buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
-          targetName:state.user, targetId:"__user__", multi:false, injected })));
-    if(!messages){
-      messages=[];
-      if(_pl.head)messages.push({role:"system",content:_pl.head});
-      messages.push(...taggedHistory);
-      if(_pl.tail)messages.push({role:"system",content:_pl.tail});
-    }
-    if(chat.pendingGmNudge){
-      messages.push({role:"system",content:`[Director's note — do not mention or acknowledge this as out-of-character. React to it naturally in-scene as ${solo.name}:] ${chat.pendingGmNudge}`});
-      chat.pendingGmNudge=null;persistChats();
-    }
-    const _rpModel=rpModel();
-    let reply=await chatCompletion(messages,_rpModel,{rp:true,dbg:"Roleplay reply"});
-    /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
-       character already said in this scene, the prompt lost — so ask once more with the repeat
-       quoted back and an explicit instruction to move off it. One retry only: a second identical
-       answer is the model's final word and is still better than an empty turn. */
-    try{
-      try{ noteRumorRaise(chat,solo,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
-      const _mine=ownRecentLines(chat,solo,3);
-      const _hit=_mine.find(x=>repeatKind(reply,x));
-      /* ONE retry, shared. A repeat is the worse fault, so it wins the budget when both apply;
-         over-narration takes it otherwise. Heat writes long by design and has its own form rails. */
-      const _narr=(!_hit && !(chat&&chat._heatBeat))?overNarrated(reply):null;
-      if(_hit||_narr){
-        const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
-        try{ _alog("retry.spend",(_hit?"repeat":"narration")+" retry — this turn costs a second call"); }catch(_){}
-        const _again=await chatCompletion(
-          messages.concat([{role:"assistant",content:reply},
-            {role:"system",content:_note}]),
-          _rpModel,{rp:true,dbg:"Roleplay reply ("+(_hit?"repeat":"narration")+" retry)"});
-        if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
-           (_hit?!_mine.some(x=>repeatKind(_again,x))
-                :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
-      }
-    }catch(e){}
-    // REFUSAL HANDLING (mirrors the multi-character path): a non-empty reply can be a content
-    // refusal (e.g. v4-pro's canned "无法" line), which is NOT a token problem. Retry once on the
-    // fallback model, then surface an honest message rather than blaming Max tokens.
-    let refused=looksLikeRefusal(reply);
-    if(refused){
-      const fb=(state.fallbackModel&&state.fallbackModel.trim())||((state.mcModel&&state.mcModel!==_rpModel)?state.mcModel:_rpModel);
-      if(fb!==_rpModel){
-        try{
-          const alt=await chatCompletion(messages,fb,{rp:true,dbg:"Roleplay reply (refusal fallback)"});
-          if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
-        }catch(e){/* keep refused=true */}
-      }
-    }
-    typing.remove();
-    if(refused){
-      document.getElementById('sendBtn').disabled=false;
-      toast("The model declined this content — try a different model for this scene in Settings → LLMs");
-      return;
-    }
-    // Empty reply even after the token-bump retry — surface a clear hint instead of a blank bubble.
-    if(!reply||!reply.trim()){
-      document.getElementById('sendBtn').disabled=false;
-      toast("Empty reply — try raising Max tokens in Settings (reasoning models need headroom)");
-      return;
-    }
-    // v38.6 — a spoken line never carries the transcript's "(text message)" tag; see stripChannelLabel.
-    // v62.1 — and the channels are repaired before it is stored, so a malformed turn cannot become
-    // the exemplar the next turn copies. See normalizeChannels.
-    reply=normalizeChannels(stripChannelLabel(reply));
-    const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
-      // v44.5 — a solo reply is always to {{user}}; recorded so that if someone walks in mid-scene,
-      // the line they find waiting is already marked as somebody else's to answer.
-      toId:"__user__",toName:state.user};
-    stampStatus(chat,msg);chat.messages.push(msg);
-    // BACKGROUND (does not wait on screen): persist, fire the image pipeline the instant text is
-    // ready, run the voice check. The bubble itself is shown by the presentation queue.
-    persistChats();
-    autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
-    autoSpeakMsg(msg,solo);
-    runVoiceCheck(chat,msg,solo);
-    // ON SCREEN: append + reveal this one line, in order, via the presentation queue. Not awaited,
-    // so the turn loop proceeds (memory/presence/GM run in the background) while it rolls.
-    enqueuePresent(msg.mid);
-    // Detect anyone the reply (or the player) narrated entering/leaving — this was previously
-    // only done in the multi-character path, so one-on-one scenes never ran presence detection.
-    await runPresenceTracker(chat);
-    maybeBuildMemory(chat);
-    postTurn(chat);
-    heatEndTurn(chat);       // v135.1 — beat 1 ends with this reply; the run opens its own beats
-    maybeHeatBursts(chat);   // v19.5
-  }catch(err){
-    typing.remove();
-    chat.messages.push({mid:newMid(),role:"assistant",speaker:(present[0]||{name:"Narrator"}).name,content:(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
-    persistChats();appendNewBubbles();
-  }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
-}
+    // ===== SINGLE CHARACTER IN EARSHOT: direct flow =====
+    const solo=present[0];
+    const list=document.getElementById('chatList');
+    const typing=document.createElement('div');
+    typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(solo)}${esc(solo.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
+    if(_open()&&list){list.appendChild(typing);ChatScroll.sync();}
+    document.getElementById('sendBtn').disabled=true;
+    const _seq=_dirSeq;   // v144.1 — the same supersede guard playCharacterTurn has (see turnSuperseded)
 
+    try{
+      heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
+      // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
+      let injected={recent:[],diary:[],longterm:[]};
+      if(state.mem && state.memory.length){
+        try{
+          const r=await retrieveMemories(text,chat,solo.id);
+          injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
+        }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
+      }
+      // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
+      // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
+      const _tOpts={ chat, selfP:solo, targetName:state.user, targetId:"__user__" };
+      const _hb=buildSystemPromptBlocks(injected,_tOpts);
+      const _tb=buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
+          targetName:state.user, targetId:"__user__", multi:false, injected });
+      /* (!) v41.6 — HEAT BEAT 1 IS A HEAT PAYLOAD, EVEN WITH ONE CHARACTER PRESENT. heatBeginTurn()
+         above claims this reply as beat 1 of the run and sets chat._heatBeat, which the comment on
+         that function calls "what switches the payload to the `heat` layout" — but this path asked
+         for "solo" by name, so it never switched. The multi path has always picked the kind
+         (_heatBeat?"heat":"multi"); this one was written before heat existed and never caught up.
+         Visible as: a heat template you wrote by hand was ignored and the solo one ran instead — and
+         with heatN=1, where beat 1 is the ONLY beat, heat never used its own layout at all. */
+      const _kind=replyKind(chat,"solo");
+      const _pl=buildPayload(_kind,_hb,_tb);
+      // Build this character's history through the SAME witness/scene-scoped builder the multi-character
+      // path uses, so a solo responder never inherits dialogue from before they arrived or that they
+      // didn't witness. (Previously the solo path sent the whole transcript unfiltered — the core leak.)
+      const history=castHistory(chat,solo);
+      // Tag the last line as the response target, then append the post-dialogue guidance.
+      const taggedHistory=tagLastForTarget(history);
+      /* v33.0 — user payload template first; null means "not enabled, or it failed" and we use the
+         classic head/history/tail assembly, which is what the default template reproduces anyway. */
+      let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHistory,
+        {chat,npc:solo,targetName:state.user},
+        ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
+          buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
+            targetName:state.user, targetId:"__user__", multi:false, injected })));
+      if(!messages){
+        messages=[];
+        if(_pl.head)messages.push({role:"system",content:_pl.head});
+        messages.push(...taggedHistory);
+        if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+      }
+      if(chat.pendingGmNudge){
+        messages.push({role:"system",content:`[Director's note — do not mention or acknowledge this as out-of-character. React to it naturally in-scene as ${solo.name}:] ${chat.pendingGmNudge}`});
+        chat.pendingGmNudge=null;persistChats();
+      }
+      // v144.1 — generation, the repeat/narration retry, refusal fallback and clean-up are shared with
+      // every other character reply (see generateCharacterReply).
+      const g=await generateCharacterReply(chat,solo,messages,{dbg:"Roleplay reply"});
+      typing.remove();
+      if(g.refused){
+        toast("The model declined this content — try a different model for this scene in Settings → LLMs");
+        return;
+      }
+      // Empty reply even after the token-bump retry — surface a clear hint instead of a blank bubble.
+      if(!g.text){
+        toast("Empty reply — try raising Max tokens in Settings (reasoning models need headroom)");
+        return;
+      }
+      if(turnSuperseded(chat,_seq))return;   // v144.1 — the player took another turn in this chat meanwhile
+      const reply=g.text;
+      const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
+        // v44.5 — a solo reply is always to {{user}}; recorded so that if someone walks in mid-scene,
+        // the line they find waiting is already marked as somebody else's to answer.
+        toId:"__user__",toName:state.user};
+      stampStatus(chat,msg);chat.messages.push(msg);
+      // ON SCREEN: append + reveal this one line, in order, via the presentation queue. Not awaited,
+      // so the turn loop proceeds (memory/presence/GM run in the background) while it rolls.
+      enqueuePresent(msg.mid);
+      // BACKGROUND (does not wait on screen): persist, fire the image pipeline the instant text is
+      // ready, run the voice check. The bubble itself is shown by the presentation queue.
+      persistChats();
+      autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
+      autoSpeakMsg(msg,solo);
+      runVoiceCheck(chat,msg,solo);
+      // Detect anyone the reply (or the player) narrated entering/leaving — this was previously
+      // only done in the multi-character path, so one-on-one scenes never ran presence detection.
+      await runPresenceTracker(chat);
+      maybeBuildMemory(chat);
+      // v144.1 — a retried reply answers a line the directors already had their turn on
+      if(opts.retry!=="reply")postTurn(chat);
+      heatEndTurn(chat);       // v135.1 — beat 1 ends with this reply; the run opens its own beats
+      if(opts.retry!=="reply")maybeHeatBursts(chat);   // v19.5
+    }catch(err){
+      typing.remove();
+      // v144.1 — the player pressed Stop: no error bubble (Retry is on the last reply if they want one)
+      if(err&&err.stopped){ try{ toast("Stopped."); }catch(_){} }
+      else{
+      chat.messages.push({mid:newMid(),role:"assistant",speaker:"System",content:(err.friendly||"Something went wrong."),sysError:true,retryable:true,img:null,imgState:"idle",vidState:"idle",video:null});
+      persistChats();appendNewBubbles(); }
+    }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
+  }finally{ if(_unlock)_unlock(); }
+}
 // Parse and execute an out-of-character command.
 /* ===== TEXT MESSAGING v2 =====================================================
    A phone side-channel. Text messages live in chat.messages (textMsg:true, present:[] so they
@@ -32046,7 +32194,7 @@ async function sendWhisper(chat,rest){
     if(target)body=parts.join(" ").trim(); }
   if(!target){ toast("Whisper: no one here by that name. Usage: /whisper Name message"); return; }
   if(!body){ toast("Usage: /whisper "+target.name+" <message>"); return; }
-  _heatSeq++; _dirSeq++;
+  markPlayerTurn(chat);   // v144.1 — per-chat (see turnSuperseded)
   apPlayerActed(chat);            // v116.0 — a whisper is the player's turn too
   if(chat)chat._exitedIds=null;   // fresh player turn — last turn's departures stop mattering
   chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
@@ -32335,7 +32483,7 @@ function cmdPaletteKey(e){
 }
 
 function castConvoText(chat,limit,viewerId){
-  const cast=curCast();const fallback=(cast[0]&&cast[0].name)||"Narrator";
+  const cast=curCast(chat);const fallback=(cast[0]&&cast[0].name)||"Narrator";   // v144.1 — this chat's cast
   const who=viewerId===undefined?"__user__":viewerId;
   return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg).slice(-(limit||14))
     .map(m=>{
@@ -32378,6 +32526,60 @@ function whisperSplit(text){
 }
 /* What the room gets from an aside: the public remainder, or nothing at all. */
 function whisperOpenPart(m){ try{ return whisperSplit(m&&m.content).open; }catch(e){ return ""; } }
+/* ===== v144.1 — *NARRATION* SPANS, READ LIKE A PERSON READS THEM ===============================
+   stripNarration and spokenOnly paired the first asterisk with the next one (one regex),
+   whatever lay between. One missing asterisk flipped the whole line:
+       "Fine." *I sigh… "Whatever you say," I mutter. *I turn back.*
+   paired the first * with the third, so the dialogue in the middle was deleted and "I turn back."
+   was kept as if spoken; and an unclosed *… matched nothing, so private narration reached the other
+   characters whole. Now, per line: an asterisk OPENS when a word follows it and CLOSES when a word
+   precedes it (Markdown's rule), an opener with no closer runs to the next opener or the end of the
+   line, a closer with no opener reaches back to the start of the line (or the last quote), and
+   quoted speech is never removed — spoken words stay spoken even inside an action span. Asterisks
+   inside a quotation are emphasis, not narration. */
+function _quoteSpans(line){
+  const out=[]; let i=0;
+  while(i<line.length){
+    const c=line[i]; let close=null;
+    if(c==='"')close='"'; else if(c==='“')close='”'; else if(c==='«')close='»'; else if(c==='„')close='“”';
+    if(close){
+      let j=i+1; while(j<line.length&&close.indexOf(line[j])<0)j++;
+      if(j<line.length){ out.push([i,j+1]); i=j+1; continue; }
+    }
+    i++;
+  }
+  return out;
+}
+function dropStarNarration(text){
+  if(!text)return "";
+  return String(text).split("\n").map(line=>{
+    if(line.indexOf("*")<0)return line;
+    const Q=_quoteSpans(line);
+    const inQ=i=>Q.some(q=>i>=q[0]&&i<q[1]);
+    const lastQEnd=i=>{ let e=0; Q.forEach(q=>{ if(q[1]<=i&&q[1]>e)e=q[1]; }); return e; };
+    const ws=ch=>ch===undefined||/\s/.test(ch);
+    const drop=[]; let open=-1, lastEnd=0;
+    for(let i=0;i<line.length;i++){
+      if(line[i]!=='*'||inQ(i))continue;
+      let j=i; while(line[j+1]==='*')j++;                    // **bold** counts as one mark
+      const canOpen=!ws(line[j+1]), canClose=!ws(line[i-1]);
+      if(open>=0){
+        if(canClose){ drop.push([open,j+1]); lastEnd=j+1; open=-1; }
+        else if(canOpen){ drop.push([open,i]); open=i; }     // an unclosed span ends where the next begins
+      }else if(canOpen){ open=i; }
+      else if(canClose){ const from=Math.max(lastEnd,lastQEnd(i)); drop.push([from,j+1]); lastEnd=j+1; }
+      i=j;
+    }
+    if(open>=0)drop.push([open,line.length]);                 // unclosed to the end of the line
+    if(!drop.length)return line;
+    let out="";
+    for(let i=0;i<line.length;i++){
+      const dropped=drop.some(d=>i>=d[0]&&i<d[1]);
+      out+=(!dropped||inQ(i))?line[i]:(out.endsWith(" ")?"":" ");
+    }
+    return out;
+  }).join("\n");
+}
 // Remove *narration* / _stage directions_ from a message, keeping spoken dialogue and plain
 // prose. Used only for OLDER messages in the roleplay history window (tiered compaction):
 // recent turns are always sent in full so the model keeps the immediate scene's detail.
@@ -32385,8 +32587,7 @@ function whisperOpenPart(m){ try{ return whisperSplit(m&&m.content).open; }catch
 // we keep the original so we never send an empty/again-meaningless line.
 function stripNarration(text){
   if(!text) return text;
-  let t=text;
-  t=t.replace(/\*[^*]*\*/g,"");                 // *asterisk narration*
+  let t=dropStarNarration(text);                // *asterisk narration* (v144.1 — see dropStarNarration)
   t=t.replace(/_[^_]*_/g,"");                    // _underscore emphasis/stage directions_
   t=t.replace(/\([^)]*\)/g,"");                  // (parenthetical asides)
   t=t.replace(/\[[^\]]*\]/g,"");                 // [bracketed directions]
@@ -32401,8 +32602,7 @@ function stripNarration(text){
 // returns "" so it can be dropped (a character never learns another character's private narration).
 function spokenOnly(text){
   if(!text) return "";
-  return String(text)
-    .replace(/\*[^*]*\*/g," ")     // *asterisk narration*
+  return dropStarNarration(text)   // *asterisk narration*, balanced or not (v144.1)
     .replace(/_[^_]*_/g," ")       // _underscore stage directions_
     .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
 }
@@ -32886,11 +33086,16 @@ function noteNobodyHere(chat){
     persistChats();appendNewBubbles();updateChatHeader();
   }catch(e){}
 }
+/* v25.10 — the router is shown the WHOLE last line: the back half is where the hand-off usually
+   lives. A generous cap keeps head and tail on the rare reply that exceeds it. (v144.1 — shared by
+   router 2 and the Gamemaster reaction router, which still cut at 400.) */
+function _routerLastLine(raw){ raw=String(raw||""); return raw.length>1600?raw.slice(0,800)+"\n[…]\n"+raw.slice(-700):raw; }
 async function runMultiCharTurn(chat,playerText,stimulus){
   const cap=Math.max(1,state.mcChainCap||4);
   document.getElementById('sendBtn').disabled=true;
   try{
-    await runPresenceTracker(chat);   // the player may have narrated someone leaving/arriving
+    const _pchain={net:false};   // v144.1 — one uncued presence check per chain (see runPresenceTracker)
+    await runPresenceTracker(chat,{chain:_pchain});   // the player may have narrated someone leaving/arriving
     let cast=inSceneCast(chat);   // only characters in the player's area (earshot) can respond
     if(cast.length===0){ // nobody in the player's area — they're effectively talking to themselves
       // Don't silently swallow the turn. If there ARE people at this location but in OTHER areas,
@@ -32921,7 +33126,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
       const out=await chatCompletion(epSend("routerPlayer",sys,{roster:roster,stimulus:(stimulus||`${state.user} just said:\n"${playerText}"`),exchange:castConvoText(chat,8)}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
       const j=parseJSON(out);
       if(j){addressed=j.addressed||"group";
-        responders=(Array.isArray(j.responders)?j.responders:[]).map(n=>cast.find(c=>c.name.toLowerCase()===String(n).toLowerCase())).filter(Boolean);
+        responders=(Array.isArray(j.responders)?j.responders:[]).map(n=>findByName(cast,n)).filter(Boolean);   // v144.1 — "Ayla" resolves "Ayla Demir" (it fell back to cast[0])
         // De-dupe (a model can repeat a name) and cap at TWO — the router prompt asks for at most two
         // responders on a group address; this guarantees the loop never floods the turn even if the
         // model returns more. Order is preserved (who-speaks-first as the router judged it).
@@ -32949,9 +33154,9 @@ async function runMultiCharTurn(chat,playerText,stimulus){
          so that is the line each of them answers. Unpinned, responder #2 was re-aimed at responder
          #1 — the freshest line in the room by then — and when #1 had put a question to the player,
          #2 answered it for him. `answerTo` keeps the whole group answering the person who spoke. */
-      try{ ok=await playCharacterTurn(chat,r,state.user,{answerTo:"__user__"}); } finally{ heatEndTurn(chat); }
+      try{ ok=await playCharacterTurn(chat,r,state.user,{answerTo:"__user__",noWait:true}); } finally{ heatEndTurn(chat); }
       if(ok){lastSpeaker=r;turns++;spokenThisChain.add(r.id);}
-      const tr=await runPresenceTracker(chat);
+      const tr=await runPresenceTracker(chat,{chain:_pchain});
       try{ await runWearingTracker(chat); }catch(_){}   // v48.2 — cue-gated; an ordinary turn costs nothing
       if(tr.lastBeat){lastSpeaker=tr.lastBeat;turns+=(tr.entered.length+tr.exited.length);}
     }
@@ -32982,7 +33187,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
         // someone by name), so the router judged from a line missing its actual addressee. A
         // generous safety cap keeps head+tail on the rare reply that exceeds it.
         const _lastRaw=((chat.messages.filter(m=>!m.sysError&&m.role==='assistant').slice(-1)[0]||{}).content||"");
-        const _lastLine=(lastSpeaker?lastSpeaker.name+": ":"")+(_lastRaw.length>1600?_lastRaw.slice(0,800)+"\n[…]\n"+_lastRaw.slice(-700):_lastRaw);
+        const _lastLine=(lastSpeaker?lastSpeaker.name+": ":"")+_routerLastLine(_lastRaw);
         const _presentNames=[state.user,...cast.map(c=>c.name)].join(", ");
         const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
         const sys=fillTpl(up("routerChar"),{user:state.user,speaker:lastSpeaker?lastSpeaker.name:cast[0].name,
@@ -32996,15 +33201,15 @@ async function runMultiCharTurn(chat,playerText,stimulus){
         const out=await chatCompletion(epSend("routerChar",sys,{data:`Should one of the other characters present respond to that, or does the turn return to ${state.user}? Return only the JSON.`}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
         const j=parseJSON(out);
         if(j&&j.continue===true&&j.responder&&String(j.responder).toLowerCase()!=="null"){
-          next=others.find(c=>c.name.toLowerCase()===String(j.responder).toLowerCase());
+          next=findByName(others,j.responder);
         }
       }catch(e){console.warn("[router] character-chain router failed — returning turn to the player:",e&&e.message||e);}
       if(!next)break;                 // scene returns to the player (the common case)
       // If this pick already spoke, it's a self-defense rebound — consume their one allowance.
       if(spokenThisChain.has(next.id))defendedThisChain.add(next.id);
-      const ok=await playCharacterTurn(chat,next,lastSpeaker?lastSpeaker.name:state.user);
+      const ok=await playCharacterTurn(chat,next,lastSpeaker?lastSpeaker.name:state.user,{noWait:true});
       if(ok){lastSpeaker=next;turns++;spokenThisChain.add(next.id);}
-      const tr=await runPresenceTracker(chat);
+      const tr=await runPresenceTracker(chat,{chain:_pchain});
       try{ await runWearingTracker(chat); }catch(_){}   // v48.2 — cue-gated; an ordinary turn costs nothing
       if(tr.lastBeat){lastSpeaker=tr.lastBeat;turns+=(tr.entered.length+tr.exited.length);}
       if(!ok)break;
@@ -33013,9 +33218,17 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     postTurn(chat);
     maybeHeatBursts(chat);   // v19.5
   }catch(err){
-    chat.messages.push({mid:newMid(),role:"assistant",speaker:curPersona().name,content:(err.friendly||"Something went wrong."),sysError:true,img:null,imgState:"idle",vidState:"idle",video:null});
-    persistChats();appendNewBubbles();
-  }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
+    if(err&&err.stopped){ try{ toast("Stopped."); }catch(_){} }   // v144.1 — Stop is not an error
+    else{
+    chat.messages.push({mid:newMid(),role:"assistant",speaker:"System",content:(err.friendly||"Something went wrong."),sysError:true,retryable:true,img:null,imgState:"idle",vidState:"idle",video:null});
+    persistChats();appendNewBubbles(); }
+  }finally{
+    heatEndTurn(chat);
+    /* v144.1 — generation no longer waits for each reveal, but the TURN still ends when its lines are
+       on screen: the send button (and the turn lock held by sendMessage) come back after that. */
+    try{ await presentDrained(); }catch(e){}
+    document.getElementById('sendBtn').disabled=false;
+  }
 }
 /* ===== v116.0 — AUTOPILOT & SUGGESTED REPLIES ====================================================
    Reported: "If I don't type anything, the game is dead. I always need to go somewhere, bring a
@@ -33172,7 +33385,7 @@ async function apBeat(chat){
   try{
     const ok=await playCharacterTurn(chat,pick.p,pick.addressed,{note:pick.note});
     if(!ok){ chat._apBeats=Math.max(chat._apBeats,state.apCap); return false; }   // failed — wait for the player
-    if(seq!==_dirSeq)return true;   // the player cut in; their own turn runs the pipeline
+    if(turnSuperseded(chat,seq))return true;   // the player cut in; their own turn runs the pipeline
     try{ await runPresenceTracker(chat); }catch(e){}
     try{ maybeBuildMemory(chat); }catch(e){}
     try{ postTurn(chat); }catch(e){}
@@ -33259,7 +33472,7 @@ async function fetchSuggestions(chat,mid){
 function sendSuggestion(i){
   const t=_sugOpts[i]; if(!t)return;
   const inp=document.getElementById('chatInput'), sb=document.getElementById('sendBtn');
-  if(!inp||inp.disabled||(sb&&sb.disabled)){ toast("The scene is still moving — one moment"); return; }
+  if(!inp||inp.disabled||(sb&&sb.disabled)||chatBusy(curChat(),"turn")){ toast("The scene is still moving — one moment"); return; }
   inp.value=t; _apForceRp=true;
   sendMessage();
 }
@@ -33443,7 +33656,7 @@ async function smStep(chat){
       chat._smCharRun=(chat._smCharRun||0)+1;
       const seq=_dirSeq;
       const ok=await playCharacterTurn(chat,pick.p,pick.addressed);
-      if(ok&&seq===_dirSeq){
+      if(ok&&!turnSuperseded(chat,seq)){
         try{ await runPresenceTracker(chat); }catch(e){}
         try{ maybeBuildMemory(chat); }catch(e){}
         try{ postTurn(chat); }catch(e){}
@@ -33547,11 +33760,15 @@ async function smPlayerMove(chat){
   await _smSend(chat,intent);
 }
 /* Play an intention as the player's turn: the narrator writes it, the normal pipeline answers it. */
+/* (!) v144.1 — into THIS chat, explicitly. It wrote the intention into the shared input box and
+   called sendMessage(), which reads curChat() — so a step that finished after the player switched
+   chats spoke for them in the chat they had just opened. It also never touches what the player is
+   typing now. */
 async function _smSend(chat,intent){
-  const inp=document.getElementById('chatInput'); if(!inp)return;
+  if(!chat||state.curChat!==chat.id)return;
   chat._smCharRun=0;
-  inp.value=intent; _apForceRp=true; _smSending=true;
-  try{ await sendMessage(); }
+  _smSending=true;
+  try{ await sendMessage({chat,text:intent,forceRp:true}); }
   finally{ _smSending=false; }
 }
 /* The player picked one of the options (or "you decide"). */
@@ -33916,15 +34133,84 @@ async function runHeatBursts(chat){
    guess below. The turn router uses it: every responder it queued against one player line is
    answering the PLAYER, no matter who else has spoken since. Pass "__user__" for the player, or a
    character id. Omitted, nothing changes — the target is derived as before. */
+/* ===== v144.1 — ONE CHARACTER-REPLY GENERATOR ==================================================
+   The one-on-one path, playCharacterTurn and the Gamemaster reaction each had their own copy of
+   "call the model, retry a repeat, catch a refusal, clean the text", and the copies had drifted:
+   the solo copy never stripped a leading "Name:" (so the model learned to prefix its lines) and
+   dropped the heat flag from normalizeChannels (so inner thoughts turned into narration on heat
+   beat 1); the multi copy compared the refusal fallback with state.model instead of the model that
+   actually answered, so with rotation on the "fallback" could be the very model that refused; only
+   the multi copy raised the heat token floor; the Gamemaster copy had none of it and crashed on its
+   own `const`. This is the one copy. It returns the result and leaves the bubble to the caller.
+     → {text, raw, refused, model}  text is "" when refused or empty. */
+async function generateCharacterReply(chat,p,messages,opts){
+  opts=opts||{};
+  const wasHeat=!!(chat&&chat._heatBeat);
+  const model=rpModel();
+  const rpOpts={rp:true,dbg:opts.dbg||("Roleplay reply · "+p.name)};
+  // v27.4 — heat beats are separate messages now, so each one only needs room for ONE
+  // dialogue-dense reply, not for the whole run. Never LESS than the user's own setting.
+  if(wasHeat){
+    const n=Math.max(2,Math.min(10,+chat._heatBeat.total||5)), bi=+chat._heatBeat.n||1;
+    rpOpts.max=Math.max(+state.tokens||4000,900);
+    rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
+  }
+  let reply=await chatCompletion(messages,model,rpOpts);
+  /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
+     character already said in this scene, the prompt lost — so ask once more with the repeat
+     quoted back and an explicit instruction to move off it. One retry only: a second identical
+     answer is the model's final word and is still better than an empty turn.
+     ONE retry, shared. A repeat is the worse fault, so it wins the budget when both apply;
+     over-narration takes it otherwise. Heat writes long by design and has its own form rails. */
+  try{
+    try{ noteRumorRaise(chat,p,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
+    const _mine=ownRecentLines(chat,p,3);
+    const _hit=_mine.find(x=>repeatKind(reply,x));
+    const _narr=(!_hit && !wasHeat)?overNarrated(reply):null;
+    if(_hit||_narr){
+      const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
+      try{ _alog("retry.spend",(_hit?"repeat":"narration")+" retry — this turn costs a second call"); }catch(_){}
+      const _again=await chatCompletion(
+        messages.concat([{role:"assistant",content:reply},{role:"system",content:_note}]),
+        model,Object.assign({},rpOpts,{dbg:rpOpts.dbg+" ("+(_hit?"repeat":"narration")+" retry)"}));
+      if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
+         (_hit?!_mine.some(x=>repeatKind(_again,x))
+              :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
+    }
+  }catch(e){}
+  /* REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
+     canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it. Retry
+     ONCE on the fallback model; if it also refuses, or the only candidate IS the model that refused,
+     the caller says so honestly instead of rendering the refusal or blaming the token limit. */
+  let refused=looksLikeRefusal(reply);
+  if(refused){
+    const fb=(state.fallbackModel&&state.fallbackModel.trim())||((state.mcModel&&state.mcModel!==model)?state.mcModel:model);
+    if(fb!==model){
+      try{
+        const alt=await chatCompletion(messages,fb,Object.assign({},rpOpts,{dbg:rpOpts.dbg.replace(/^Roleplay reply/,"Roleplay reply (refusal fallback)")}));
+        if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
+      }catch(e){/* keep refused=true; honest message from the caller */}
+    }
+  }
+  if(refused) return {text:"",raw:reply,refused:true,model};
+  // strip a leading "Name:" prefix if the model added one (regex-safe); v38.6 — a spoken line never
+  // carries the transcript's "(text message)" tag; v62.1 — the channels are repaired before it is
+  // stored (heat has no narration channel, so it is exempt) — see normalizeChannels.
+  const prefix=String(p.name||"").replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  const text=normalizeChannels(
+    stripChannelLabel(stripChannelLabel(reply||"").replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"")).trim(),
+    {heat:wasHeat});
+  return {text:text||"",raw:reply,refused:false,model};
+}
 async function playCharacterTurn(chat,p,addressed,opts){
-  const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see _dirSeq)
+  const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see turnSuperseded)
   const _hseq=_heatSeq, _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
   const present=presentCast(chat);
   const others=present.filter(c=>c.id!==p.id);   // only characters actually present
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);ChatScroll.sync();}
+  if(list&&state.curChat===chat.id){list.appendChild(typing);ChatScroll.sync();}   // v144.1 — never into another chat's window
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
@@ -33991,69 +34277,20 @@ async function playCharacterTurn(chat,p,addressed,opts){
       messages.push({role:"system",content:`[Director's note — react naturally in-scene as ${p.name}, do not mention this:] ${chat.pendingGmNudge}`});
       chat.pendingGmNudge=null;persistChats();
     }
-    const _rpModel=rpModel();
-    const _rpOpts={rp:true,dbg:"Roleplay reply · "+p.name};
-    // v27.4 — heat beats are separate messages now, so each one only needs room for ONE
-    // dialogue-dense reply, not for the whole run. Never LESS than the user's own setting.
-    if(chat._heatBeat){
-      const n=Math.max(2,Math.min(10,+chat._heatBeat.total||5)), bi=+chat._heatBeat.n||1;
-      _rpOpts.max=Math.max(+state.tokens||4000,900);
-      _rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
-    }
-    let reply=await chatCompletion(messages,_rpModel,_rpOpts);
-    /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
-       character already said in this scene, the prompt lost — so ask once more with the repeat
-       quoted back and an explicit instruction to move off it. One retry only: a second identical
-       answer is the model's final word and is still better than an empty turn. */
-    try{
-      try{ noteRumorRaise(chat,p,reply); }catch(e){}      // v28.9 — raising a rumor spends the move
-      const _mine=ownRecentLines(chat,p,3);
-      const _hit=_mine.find(x=>repeatKind(reply,x));
-      // ONE retry, shared — see the solo path. Repeat wins the budget; over-narration takes it otherwise.
-      const _narr=(!_hit && !(chat&&chat._heatBeat))?overNarrated(reply):null;
-      if(_hit||_narr){
-        const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
-        const _again=await chatCompletion(
-          messages.concat([{role:"assistant",content:reply},
-            {role:"system",content:_note}]),
-          _rpModel,Object.assign({},_rpOpts,{dbg:_rpOpts.dbg+" ("+(_hit?"repeat":"narration")+" retry)"}));
-        try{ _alog("retry.spend",(_hit?"repeat":"narration")+" retry — this turn costs a second call"); }catch(_){}
-        if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
-           (_hit?!_mine.some(x=>repeatKind(_again,x))
-                :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
-      }
-    }catch(e){}
-    // REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
-    // canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it.
-    // If the primary model refused, retry ONCE on the fallback model (flash tends to be more
-    // permissive here). If the fallback also refuses or comes back empty, we surface an honest
-    // "model declined" message below rather than rendering the refusal or blaming the token limit.
-    let refused=looksLikeRefusal(reply);
-    if(refused){
-      const fb=(state.fallbackModel&&state.fallbackModel.trim())||((state.mcModel&&state.mcModel!==state.model)?state.mcModel:state.model);
-      if(fb!==state.model){
-        try{
-          const alt=await chatCompletion(messages,fb,Object.assign({},_rpOpts,{dbg:"Roleplay reply (refusal fallback) · "+p.name}));
-          if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
-        }catch(e){/* keep refused=true; honest message below */}
-      }
-    }
+    // v144.1 — generation, retry, refusal fallback and clean-up: the shared generator.
+    const g=await generateCharacterReply(chat,p,messages);
     typing.remove();
-    // strip a leading "Name:" prefix if the model added one (regex-safe)
-    const prefix=p.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
-    const cleaned=normalizeChannels(
-      stripChannelLabel(stripChannelLabel(reply).replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"")).trim(),
-      {heat:_wasHeat});   // v62.1 — heat has no narration channel; see normalizeChannels
     // The model declined this content (not a token/length issue) — say so honestly and skip the
     // turn instead of pushing the refusal text as a bubble or blaming Max tokens.
-    if(refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return false; }
+    if(g.refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return false; }
+    const cleaned=g.text;
     // Empty reply (model returned nothing even after the token-bump retry) — don't push a blank
     // bubble or run image/voice on nothing. Skip this character's turn cleanly.
     if(!cleaned){ toast(""+p.name+": empty reply (try raising Max tokens in Settings)"); return false; }
     // v26.5 — the player took their turn while this was generating (a gamemaster reaction racing
     // the player's own reply). Their turn answers the same moment, so drop this one rather than
-    // giving one character two replies to it.
-    if(_seq!==_dirSeq)return false;
+    // giving one character two replies to it. v144.1 — a turn in THIS chat; see turnSuperseded.
+    if(turnSuperseded(chat,_seq))return false;
     // v27.4 — the heat toggle went off (or the player cut in) while this continuation was
     // generating. Nobody asked for it any more, so drop it instead of pushing a bubble the user
     // just switched off. This is the "heat keeps talking after I turn it off" fix.
@@ -34067,16 +34304,18 @@ async function playCharacterTurn(chat,p,addressed,opts){
     if(_whisperBack){ msg.whisperTo="__user__"; msg.whisperToName=state.user; }   // v49.1 — private both ways
     if(chat._heatBeat)msg.heatBeat=true;   // v27.1 — so a burst can never chain off its own output
     stampStatus(chat,msg);chat.messages.push(msg);
+    const shown=enqueuePresent(msg.mid);   // queued at once, so the order on screen is the order pushed
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
     // next character can generate while this one is still queued/rolling on screen.
     persistChats();
-    autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
+    autoVisualize(msg.mid,cleaned);   // v29: image — or scene routing while the video window is open
     autoSpeakMsg(msg,p);
     runVoiceCheck(chat,msg,p);
-    // ON SCREEN: append + reveal in strict order via the presentation queue. We AWAIT the reveal so
-    // the chain paces to the animation — the next character's line doesn't paste in while this one is
-    // still rolling. (Generation already happened; this only gates the on-screen hand-off.)
-    await enqueuePresent(msg.mid);
+    // ON SCREEN: append + reveal in strict order via the presentation queue. By default we AWAIT the
+    // reveal so a heat run or an autopilot beat paces to the animation. (!) v144.1 — the player-turn
+    // chain passes noWait: it waited out every typewriter reveal before even asking for the next
+    // line (about 20 s per long line at 28 cps), though the queue alone already keeps the order.
+    if(!(opts&&opts.noWait)) await shown;
     return true;
   }catch(err){
     typing.remove();
@@ -34089,52 +34328,75 @@ async function playCharacterTurn(chat,p,addressed,opts){
 // Movement/greeting cues that suggest someone entered or left. Used as a cheap pre-check so
 // we only spend an LLM call on the presence tracker when the latest text actually hints at a
 // scene change — most turns have none and are skipped.
+/* (!) v144.1 — WHOLE WORDS. The cues were tested with String.includes, so "gir" fired on "girl",
+   "enter" on "center", "left" on "left hand", "appear" on "appearance", and "gel" / "git" / "çık"
+   on most Turkish sentences — the presence call ran on nearly every line (one logged turn spent 19
+   calls). English cues now match as whole words or phrases. Turkish ones are a stem at a word start
+   that may take suffixes (a trailing * below), and the bare verb roots are gone: only inflections
+   that actually mean arriving or leaving (geldi…, giriyor…, gitti…, ayrıl…) are kept. */
 const PRESENCE_CUES=[
   // arrivals / departures (verbs)
   "enter","enters","entering","entered","arrive","arrives","arriving","arrived",
   "walk in","walks in","walked in","walking in","step in","steps in","stepped in","stepping in",
-  "come in","comes in","came in","coming in","burst in","bursts in","burst into","barge","barges","barged",
-  "show up","shows up","showed up","showing up","appear","appears","appeared","appearing",
-  "join","joins","joined","joining","approach","approaches","approached","approaching",
-  "leave","leaves","leaving","left","depart","departs","departed","departing",
+  "come in","comes in","came in","coming in","burst in","bursts in","burst into","barge in","barges in","barged in",
+  "show up","shows up","showed up","showing up","appears in the doorway","appeared in the doorway",
+  "appears at the door","appeared at the door","join us","joins us","joined us","joining us",
+  "join them","joins them","joined them","approaches","approached","approaching",
+  "leave","leaves","leaving","left the","left without","has left","have left","had left","just left",
+  "depart","departs","departed","departing",
   "walk out","walks out","walked out","walking out","walk off","walks off","walked off",
   "step out","steps out","stepped out","stepping out","head out","heads out","headed out",
   "go out","goes out","went out","going out","head off","heads off","headed off",
   "storm off","storms off","stormed off","storm out","storms out","stormed out",
   "exit","exits","exited","exiting","slip out","slips out","slipped out","slip away","slips away","slipped away",
-  "take off","takes off","took off","run off","runs off","ran off","walk away","walks away","walked away",
-  "turn away","turns away","turned away","get up and","gets up and","got up and",
-  "show themselves out","sees herself out","sees himself out","excuse herself","excuses herself",
-  "excuse himself","excuses himself","excuse myself","excuses myself",
-  "knock","knocks","knocked","knocking","doorbell","the door opens","door opens","door swings",
-  "comes through the door","through the doorway","into the room","out of the room","from the room",
+  "run off","runs off","ran off","walk away","walks away","walked away",
+  "get up and","gets up and","got up and",
+  "see myself out","sees herself out","sees himself out","show myself out","excuse herself","excuses herself",
+  "excuse himself","excuses himself","excuse myself",
+  "knock","knocks","knocked","knocking","doorbell","door opens","door swings",
+  "through the door","through the doorway","into the room","out of the room","from the room",
   "out the door","out of the door","towards the door","toward the door","to the door","for the door",
   // greetings / farewells (signal arrival or departure)
-  "welcome","hello","hi there","hey there","good to see you","nice to see you","look who",
+  "welcome back","welcome home","welcome in","hello","hi there","hey there","good to see you","nice to see you","look who",
   "goodbye","good bye","bye","farewell","see you","see ya","take care","catch you later",
-  "i'm leaving","im leaving","i'll go","ill go","i should go","i have to go","i gotta go",
-  "i'm off","im off","i'll be going","heading home","heading out","time to go","i'll leave you",
-  "until next time","i'll see you","see you later","see you soon","i must go","i'll be back",
-  // --- Turkish movement / greeting cues (RP language may be Turkish) ---
-  "gir","girer","girdi","giriyor","gel","gelir","geldi","geliyor","geliyorum","geleyim",
-  "çık","çıkar","çıktı","çıkıyor","çıkıyorum","ayrıl","ayrılır","ayrıldı","ayrılıyor",
-  "git","gider","gitti","gidiyor","gidiyorum","gitmeliyim","gitmem","gideyim","kalkıp",
-  "uzaklaş","uzaklaşır","uzaklaştı","yürüyüp","yürür","içeri gir","dışarı çık","odaya gir",
-  "odadan çık","kapı açıl","kapı açıldı","kapıya","kapıyı","kapı çal","kapı çalı","kapı çaldı",
-  "çekip git","çekti git","terk et","terk etti","ayrılıyorum","gidiyorum artık",
-  // greetings / farewells (TR)
-  "merhaba","selam","hoş geldin","hoşgeldin","hoş geldiniz","hoşça kal","hoşçakal","hoşça kalın",
-  "güle güle","görüşürüz","görüşmek üzere","kendine iyi bak","iyi günler","iyi geceler",
-  "gitmem lazım","gitmem gerek","ben kaçtım","ben gideyim","sonra görüşürüz","tekrar görüşürüz"
+  "i'm leaving","im leaving","i'll go","i should go","i have to go","i gotta go",
+  "i'm off","i'll be going","heading home","heading out","time to go","i'll leave you",
+  "until next time","i must go","i'll be back"
 ];
+const PRESENCE_CUES_TR=[
+  // arrivals — a trailing * lets the stem take its suffixes (geldi, geldim, geldiğinde…)
+  "geldi*","geliyor*","gelmiş*","gelip","girdi*","giriyor*","girer","girip","girmiş*",
+  "içeri gir*","içeri gel*","içeriye","odaya gir*","eve gel*","ortaya çıktı*",
+  "kapı*","zil","zili","zile","zilin*",
+  // departures
+  "çıktı*","çıkıyor*","çıkıp","çıkmalı*","dışarı*","ayrıl*","gitti*","gidiyor*","gidip","gitmeli*",
+  "gitmem lazım","gitmem gerek","gideyim","gidelim","gideceğim","uzaklaş*","terk et*","kalkıp",
+  "çekip git*","yola çık*","ben kaçtım","kaçıyorum",
+  // greetings / farewells
+  "merhaba","selam","selamlar","hoş geldin*","hoşgeldin*","hoşça kal*","hoşçakal*",
+  "güle güle","görüşürüz","görüşmek üzere","kendine iyi bak","iyi günler","iyi geceler"
+];
+const PRESENCE_CUE_RE=(()=>{
+  const q=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/ /g,"\\s+");
+  const en=PRESENCE_CUES.map(q).join("|");
+  const tr=PRESENCE_CUES_TR.map(s=>/\*$/.test(s)?q(s.slice(0,-1))+"\\p{L}*":q(s)).join("|");
+  return new RegExp("(?<![\\p{L}\\p{N}])(?:"+en+"|"+tr+")(?![\\p{L}\\p{N}])","u");
+})();
+function presenceCueIn(text){
+  const t=String(text||"").replace(/\u0130/g,"i").toLowerCase().replace(/[\u2018\u2019\u02BC]/g,"'");
+  return PRESENCE_CUE_RE.test(t);
+}
 // Returns true if the latest message contains any movement/greeting cue.
 function hasPresenceCue(chat){
-  const msgs=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError);
+  let msgs=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError);
   if(!msgs.length)return false;
+  /* v144.1 — a line the tracker has already read is not a new cue. In a chain the player's
+     "goodbye" used to re-trigger the call after every responder that followed it. */
+  const seen=chat._presenceSeenMid?msgs.findIndex(m=>m.mid===chat._presenceSeenMid):-1;
+  if(seen>=0)msgs=msgs.slice(seen+1);
   // Scan the last message (the freshest beat) plus the immediately preceding one, so a
   // player line like "goodbye" followed by a character's exit is both covered.
-  const text=msgs.slice(-2).map(m=>m.content||"").join("\n").toLowerCase();
-  return PRESENCE_CUES.some(cue=>text.includes(cue));
+  return msgs.slice(-2).some(m=>presenceCueIn(m.content));
 }
 
 // After a turn, detect narrative entrances/exits and update presence.
@@ -34205,10 +34467,10 @@ async function runWearingTracker(chat){
   }catch(e){ return null; }
 }
 
-async function runPresenceTracker(chat){
+async function runPresenceTracker(chat,opts){
   const result={entered:[],exited:[],lastBeat:null};
   if(state.presenceOff)return result;
-  const cast=curCast();
+  const cast=curCast(chat);   // (!) v144.1 — THIS chat's universe, not the open one's
   if(cast.length<1)return result;                 // no characters in the universe
   // Cheap pre-check: only spend an LLM call when the latest text hints at someone entering or
   // leaving (a movement verb or greeting/farewell, English or Turkish). As a safety net for
@@ -34216,8 +34478,16 @@ async function runPresenceTracker(chat){
   // so presence can't silently drift out of sync.
   const totalTurns=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError).length;
   const sinceLast=totalTurns-(chat._presenceLastRun||0);
-  if(!hasPresenceCue(chat) && sinceLast<5)return result;
+  /* v144.1 — and the uncued safety net fires at most ONCE per player-turn chain (opts.chain is the
+     chain's own flag): the call ran at the start and again after every responder. */
+  const _chain=opts&&opts.chain;
+  if(!hasPresenceCue(chat)){
+    if(sinceLast<5 || (_chain&&_chain.net))return result;
+    if(_chain)_chain.net=true;
+  }
   chat._presenceLastRun=totalTurns;
+  const _markSeen=()=>{ const ms=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError); chat._presenceSeenMid=ms.length?ms[ms.length-1].mid:null; };
+  _markSeen();
   try{
     const present=presentCast(chat).map(c=>c.name);
     const offstage=cast.filter(c=>!present.includes(c.name)).map(c=>c.name);
@@ -34338,6 +34608,7 @@ async function runPresenceTracker(chat){
       persistChats();appendNewBubbles();updateChatHeader();
     }
   }catch(e){console.warn("[presence] presence tracker failed — presence unchanged this turn:",e&&e.message||e);}
+  _markSeen();   // v144.1 — the lines this run produced (a parting line, a move note) are read too
   return result;
 }
 
@@ -43475,10 +43746,10 @@ async function maybeGamemaster(chat,force){
   }
   /* (!) v144.1 — postTurn does not await this, so the judge and the author used to finish after the
      player's NEXT message and post a beat judged on a scene that had already moved on. Any player turn
-     bumps _dirSeq; a changed sequence drops the beat, the same way it drops a stale reaction. */
+     in THIS chat supersedes it (turnSuperseded), the same way it drops a stale reaction. */
   const _gmSeq=_dirSeq;
   try{
-    const cast=curCast();                       // whole universe roster (who could appear)
+    const cast=curCast(chat);                   // whole universe roster (who could appear)
     const present=presentCast(chat);             // who is actually in the scene now
     // v28.4 — a private moment forbids arrivals outright, and tells both stages so.
     const _private=(!force)&&sceneIsPrivateMoment(chat);
@@ -43519,7 +43790,7 @@ async function maybeGamemaster(chat,force){
           exchange:since,staging:staging,world:worldRaw}),
         state.gmModel,{fn:"gm",temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
       const j=parseJSON(judgeOut);
-      if(_gmSeq!==_dirSeq)return;
+      if(turnSuperseded(chat,_gmSeq))return;
       // The judge now reports TWO independent signals: staleness (the scene has stalled) and a
       // tension trigger (the scene is healthy but ripe for an external complication). Intervene if
       // EITHER fires — previously this gated on j.stale only, so every trigger-only event (the
@@ -43568,7 +43839,7 @@ async function maybeGamemaster(chat,force){
       state.gmModel,{fn:"gm",temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=unquoteWrap(nudge);
     if(!clean)return;
-    if(_gmSeq!==_dirSeq){ try{ _alog("gm.stale","the player moved on while the beat was being written — dropped"); }catch(_){} return; }
+    if(turnSuperseded(chat,_gmSeq)){ try{ _alog("gm.stale","the player moved on while the beat was being written — dropped"); }catch(_){} return; }
     /* (!) v76.1 — DECLINING IS AN ANSWER. A Gamemaster prompt that offers the author a way to say
        "nothing happens here" is the right prompt — a monitor notices a stall but cannot tell a
        stall from a silence that is doing work. The engine had no way to hear it, so the refusal
@@ -44042,17 +44313,27 @@ async function runSceneWriter(chat){
       }
     }catch(_){}
     // Parse the structured reply (may be {} if the model didn't return clean JSON).
-    const j=parseJSON(out)||{};
-    // Decide the visible beat text. Prefer the model's narration; if it's missing
-    // or empty, fall back to the raw reply with any reasoning/code fences stripped,
-    // so the Scene Writer is NEVER silent (mirrors how the Gamemaster always posts).
-    let beat=unquoteWrap(j.narration!=null?String(j.narration):"");
-    if(!beat){
-      beat=String(out||"")
+    const _parsed=parseJSON(out);
+    const j=_parsed||{};
+    /* (!) v144.1 — WHAT THE PLAYER READS. This fell back to the raw reply whenever narration was
+       empty, so a writer that correctly answered "narration": "" (no beat this turn) had its whole
+       JSON posted as the Narrator's line, and a reply that failed to parse was shown as
+       {"narration":…}. Now: parsed JSON posts its narration or NOTHING; only unparseable output
+       falls back, a "narration" field is pulled out of it if one is there, and text that still
+       starts like JSON is never shown. */
+    let beat="";
+    if(_parsed&&typeof _parsed==="object"){
+      beat=unquoteWrap(_parsed.narration!=null?String(_parsed.narration):"");
+    }else{
+      let raw=String(out||"")
         .replace(/<think>[\s\S]*?<\/think>/gi,"")   // drop reasoning blocks
         .replace(/```(?:json)?/gi,"")               // drop code fences
         .trim();
-      beat=unquoteWrap(beat);
+      const _nf=raw.match(/"narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if(_nf){ try{ raw=JSON.parse('"'+_nf[1]+'"'); }catch(_){ raw=_nf[1]; } }
+      else if(/^[\[{]/.test(raw)) raw="";
+      beat=unquoteWrap(String(raw||"").trim());
+      if(/^[\[{]/.test(beat)) beat="";
     }
     // Post the writer's beat as a narrator-event line (same rendering as the Gamemaster).
     if(beat){
@@ -44260,7 +44541,7 @@ async function gamemasterReactions(chat){
   const _seq=_dirSeq;   // v26.5 — abandon the whole chain the moment the player takes their turn
   const spokenThisChain=new Set();   // no character reacts twice to the same event
   while(turns<cap){
-    if(_seq!==_dirSeq)break;
+    if(turnSuperseded(chat,_seq))break;
     // v19.71 — EARSHOT pool, not the whole location: a character standing at the entrance (e.g. a
     // fresh GM arrival) is "present" at the venue but cannot perceive a beat happening in an inner
     // area, so they must not be picked to react to it. Same scoping the reply paths use.
@@ -44270,15 +44551,17 @@ async function gamemasterReactions(chat){
     let next=null,addr=state.user;
     try{
       // D2(a): fill the template's declared inputs (see main chain router for rationale).
-      const _lastLine=((chat.messages.filter(m=>!m.sysError).slice(-1)[0]||{}).content||"(a narrator event)").slice(0,400);
+      // v144.1 — the same whole-line cap and single-copy inputs router 2 got in v25.10 / v30.6: the
+      // 400-character cut beheaded the beat, and the hooks sheet rode in the user message a second time.
+      const _lastLine=_routerLastLine((chat.messages.filter(m=>!m.sysError).slice(-1)[0]||{}).content||"")||"(a narrator event)";
       const _presentNames=[state.user,...cast.map(c=>c.name)].join(", ");
-      const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${c.interject.trim().slice(0,140)}`:"")).join("\n");
+      const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
       const sys=fillTpl(up("routerChar"),{user:state.user,speaker:lastSpeaker?lastSpeaker.name:"the narrator",
         last_line:_lastLine,present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
-      const out=await chatCompletion(epSend("routerChar",sys,{data:`A narrator event just occurred. Which present character (if any) would react? Present:\n${_hooksSheet}\n\nRecent exchange:\n${castConvoText(chat,6)}`}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
+      const out=await chatCompletion(epSend("routerChar",sys,{data:`A narrator event just happened (it is the last line above). Should one of the characters present react to it, or does the turn return to ${state.user}?\n\nRecent exchange:\n${castConvoText(chat,6)}\n\nReturn only the JSON.`}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
       const j=parseJSON(out);
       if(j&&j.continue&&j.responder&&String(j.responder).toLowerCase()!=="null"){
-        next=others.find(c=>c.name.toLowerCase()===String(j.responder).toLowerCase());
+        next=findByName(others,j.responder);   // v144.1 — a first name resolves too (see findByName)
         addr=j.addressed||state.user;
       }
     }catch(e){console.warn("[router] gm-reaction router failed — no reaction played:",e&&e.message||e);}
@@ -44294,7 +44577,8 @@ async function playSingleReaction(chat,p,eventText){
   const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list){list.appendChild(typing);ChatScroll.sync();}
+  if(list&&state.curChat===chat.id){list.appendChild(typing);ChatScroll.sync();}
+  const _seq=_dirSeq;
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
@@ -44302,7 +44586,9 @@ async function playSingleReaction(chat,p,eventText){
       injected={ recent:(r.recent||[]), diary:(r.diary||[]), longterm:(r.longterm||[]) };
     }catch(e){injected={recent:[],diary:[],longterm:[]};}}
     // v19 payload assembly: block content unchanged; block ORDER from the "gm" payload layout.
-    const _hb=buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" });
+    // v144.1 — built for THIS character in THIS chat (selfP), not the open chat's first-present.
+    const _tOpts={ chat, selfP:p, targetName:state.user, targetId:"__user__" };
+    const _hb=buildSystemPromptBlocks(injected,_tOpts);
     const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
         targetName:state.user, targetId:"__user__", multi:false, injected });
     const _pl=buildPayload("gm",_hb,_tb);
@@ -44312,7 +44598,7 @@ async function playSingleReaction(chat,p,eventText){
     const taggedHistory=tagLastForTarget(history);
     let _msgs=ptBuildMessages("gm",Object.assign({},_hb,_tb),taggedHistory,
       {chat,npc:p,targetName:state.user},
-      ()=>Object.assign({},buildSystemPromptBlocks(injected,{ chat, targetName:state.user, targetId:"__user__" }),
+      ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
         buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
           targetName:state.user, targetId:"__user__", multi:false, injected })));
     if(!_msgs){
@@ -44321,13 +44607,17 @@ async function playSingleReaction(chat,p,eventText){
       _msgs.push(...taggedHistory);
       if(_pl.tail)_msgs.push({role:"system",content:_pl.tail});
     }
-    const _seq=_dirSeq;
-    const reply=await chatCompletion(_msgs,rpModel(),{rp:true,dbg:"Roleplay reply (gamemaster reaction)"});
+    /* (!) v144.1 — `const reply` was reassigned two lines later, so EVERY one-on-one reaction threw a
+       TypeError after the call was paid for: a "reaction failed" toast and nothing posted. It also
+       skipped the refusal, empty and "Name:" safeguards the other paths have; it now shares them. */
+    const g=await generateCharacterReply(chat,p,_msgs,{dbg:"Roleplay reply (gamemaster reaction)"});
     typing.remove();
     // v26.5 — the player spoke while this was generating: their turn already answers the beat, so
     // pushing this too would give ONE character two replies to the same moment.
-    if(_seq!==_dirSeq)return;
-    reply=normalizeChannels(stripChannelLabel(reply));   // v38.6 / v62.1 — see those two
+    if(turnSuperseded(chat,_seq))return;
+    if(g.refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return; }
+    if(!g.text){ toast(""+p.name+": empty reply (try raising Max tokens in Settings)"); return; }
+    const reply=g.text;
     const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null};
     stampStatus(chat,msg);chat.messages.push(msg);
     persistChats();appendNewBubbles();

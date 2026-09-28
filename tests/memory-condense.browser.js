@@ -31,6 +31,8 @@ const {chromium}=require('playwright');
       ownerId:"p_c",character:"Nil",date:Date.now()-(60-i)*1000,gameDay:1,gamePeriod:"Morning",
       source:"auto",universeId:uni.id,chatId:state.curChat});
     state.condenseOn=true; state.key="k";
+    // v144.1 — the condenser never merges the current day+period; these are day 1, the chat is past it
+    { const c=curChat(); if(c){ c.gameDay=5; c.period="Evening"; } }
     const dbgBefore=dbgLog.length;
     window.chatCompletion=async()=>reply;
     const before=memoriesOf("p_c").length;

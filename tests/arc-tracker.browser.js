@@ -197,7 +197,9 @@ Your DEFAULT is always "ongoing" + "same".`;
        await run([],[[],[],[],[]])===0);
     ok("the commit does not read presence-now as the cast", (()=>{
         const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-        return /const memCast=cast\.filter\(p=>p&&\(spanPresent\.has\(p\.id\)\|\|p\.temp\)\)/.test(src)
+        // v144.1 — temporary characters no longer get memories (retrieval never reads them), so the
+        // filter is span presence alone.
+        return /const memCast=cast\.filter\(p=>p&&spanPresent\.has\(p\.id\)\)/.test(src)
           ? true : "commitMemoryArc still filters on presentIds alone"; })());
   }
 

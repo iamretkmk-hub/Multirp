@@ -103,8 +103,9 @@ const {chromium}=require('playwright');
   }));
   ok("_memType only ever returns a type the memory system files by",
      h.type[0]==="INTIMACY"&&h.type[1]==="CONFLICT"&&h.type[2]===""&&h.type[3]==="", JSON.stringify(h.type));
-  ok("_memImp reads both names, clamps to 0-1 and refuses a non-number",
-     h.imp[0]===0.7&&h.imp[1]===0.3&&h.imp[2]===1&&h.imp[3]===0&&h.imp[4]===0, JSON.stringify(h.imp));
+  // v144.1 — a 0–10 answer is SCALED (5 → 0.5), no longer clamped to 1 (memImpNorm)
+  ok("_memImp reads both names, scales a 0-10 answer to 0-1 and refuses a non-number",
+     h.imp[0]===0.7&&h.imp[1]===0.3&&h.imp[2]===0.5&&h.imp[3]===0&&h.imp[4]===0, JSON.stringify(h.imp));
   ok("_memReconcileList never invents an entry out of nothing",
      h.list[0]===0&&h.list[1]===0&&h.list[2]===1&&h.list[3]===1, JSON.stringify(h.list));
 

@@ -251,7 +251,8 @@ const {chromium}=require('playwright');
        await q("We agreed to meet at five in the salon after she finishes at the gym.",4,"Morning",["Emre"])===false);
     ok("the arc commit consults it before writing", (()=>{
         const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-        return /const _dup=memNearDuplicate\(p\.id,mem\.content,day,period,mem\.people\);/.test(src)
+        // v144.1 — it also passes the source message ids (same span under a neighbouring period)
+        return /const _dup=memNearDuplicate\(p\.id,mem\.content,day,period,mem\.people,srcMids\);/.test(src)
           ? true : "commitMemoryArc still only checks for an exact repeat"; })());
   }
 

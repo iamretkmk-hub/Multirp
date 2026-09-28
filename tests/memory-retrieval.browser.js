@@ -31,7 +31,9 @@ const {chromium}=require('playwright');
       if(String(url).indexOf("embeddings")>-1){
         window.__embCalls++;
         const body=JSON.parse(opts.body);
-        return new Response(JSON.stringify({data:[{embedding:window.__fakeVec(body.input)}]}),{status:200});
+        // v144.1 — the backfill batches: an array input answers with one vector per item
+        const ins=Array.isArray(body.input)?body.input:[body.input];
+        return new Response(JSON.stringify({data:ins.map((t,i)=>({index:i,embedding:window.__fakeVec(t)}))}),{status:200});
       }
       return realFetch(url,opts);
     };
@@ -120,6 +122,9 @@ const {chromium}=require('playwright');
       state.memory.push({id:"man",ownerId:"p_b",character:"Burcu",universeId:state.curUniverse,source:"manual",
         content:"Annem bana altın bir kolye hediye etti.",gameDay:7,gamePeriod:"Evening",importance:.6,
         type:"KNOWLEDGE",people:[],tags:["kolye"],date:999});
+      // v144.1 — embedded first, as saving the editor does: an unembedded memory no longer scores a
+      // perfect semantic 1 by being the only lexical candidate (it is capped below a strong match).
+      await ensureMemEmbeddings("p_b",32);
       const r=await retrieveMemories("Annemin kolyesi",curChat(),"p_b");
       return r.recent.some(m=>m.id==="man") ? true : "recent = "+r.recent.map(m=>m.id).join(","); }));
   ok("an arc memory of this same stretch is still left out", await pg.evaluate(async()=>{

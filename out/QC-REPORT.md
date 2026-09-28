@@ -384,3 +384,39 @@ Ordered by impact relative to effort. ✔ means re-checked by hand.
 6. **Calendar correctness:** End Day with a meeting pending, the counterpart-present check, date parser fixes, bounds on the day offset, the dedupe using place and period, a universe filter on unkept memories.
 7. **Refactor:** one shared character-reply generator for the solo, multi and reaction paths.
 8. **Docs:** they say v29.1 and about 30k lines; the app is v144 and 48k lines. The SCRIPT MAP and banners still describe removed game systems, and the settings text says "last 3 snapshots" where the code keeps 6.
+
+---
+
+## 8. Fix status (v145.0)
+
+Every item in this report was addressed in the v144.1 batch, released as **v145.0**. The work went in as one shared groundwork commit, then six area branches merged into `ccr-ee7705a9-15lcea`.
+
+**Groundwork (shared helpers, used by every area):**
+- `parseJSON` parses the text as-is before touching curly quotes;
+- `esc()` escapes quotes, and `escJs()` covers ids inside inline handlers;
+- `curCast(chat)` reads the chat it is given;
+- `findByName` / `nameInText` / `sameName`: Turkish-folded, whole-word name matching;
+- `withChatLock` / `chatBusy`: per-chat engine locks;
+- `_textArc` is now durable;
+- tests use relative paths, and `tests/run-all.js` runs the whole suite.
+
+**Tests:** six new suites with 295 checks in total: `qc-infra` (35), `qc-roleplay` (54), `qc-living-world` (48), `qc-calendar` (67), `qc-quests` (33), `qc-memory` (58). Existing tests that pinned intentionally changed behaviour were updated; each area's commit message names them. CI was added at `.github/workflows/tests.yml`.
+
+| Area | Status | Main changes |
+|---|---|---|
+| Roleplay core | Fixed | One `generateCharacterReply()` for the solo, multi-character and Gamemaster-reaction paths (the reaction crash is gone). Per-chat turn lock and per-chat supersede (`turnSuperseded`). Chat-switch safety. Refusal detector ignores quoted speech. Scene Writer never shows raw JSON. Solo path chosen by earshot. The chain no longer waits for the typewriter. Word-boundary presence cues. Retry button. POV rail (never narrate the player). Unbalanced-asterisk parsing. Language-neutral directives. |
+| Living world + intents | Fixed | End Day runs once per day and resumes after a reload. Ended day and period passed through every day-end writer, so gossip can now motivate. Stale-snapshot guards on the world round and offstage interaction. Serialised period engines. Privacy lock on armed plans. Hidden/removed characters filtered out. Intent spent only when it fires. Neutral rumour text. Up to 2 motives in the reply. Gossip scoped per universe and pruned. **Placement rolled per part of the day.** Calendar executor retries, and never books the player. |
+| Calendar + promises + texts | Fixed | One meeting outcome vocabulary. End Day with a meeting still ahead rolls it forward instead of blaming anyone. "Go / Later / Skip it". Counterpart present means met. English, first-person no-show fragments. Date parser fixes. Day and period bounds. Universe-scoped unkept memories. Place-and-period dedupe. Roster checks. Queued text replies. Promise dedupe ignores filler words and needs the same names and polarity. Open promises are never pruned and lapse after 21 days. |
+| Quests + Gamemaster + world rules | Fixed | Character-quest cost caps, lapse and prune. Rewritten private-moment detector using live heat state. Stuck arcs recover (wider evidence, "failed" outcome, Abandon, next-quest retry). `questMarkDone` takes its universe. Quest notes hidden from characters. Arc names unique. Rule-compiler warnings. Gamemaster drops beats the player overtook. |
+| Memory + relationships | Fixed | Per-listener heard text, so no whisper or thought leaks. Condenser counts raw memories only and keeps flags. Memory-build lock with source message ids. Arcs survive a failed build. History-window "now" rule. No diaries in "latest". Importance and type clamped. Relationship deltas capped and absolute values converted. Sheet merge keeps hidden and player ties. Neglect stamped from presence. Outcomes follow conviction. Debounced memory saves. Batched embeddings. Retrieval scoring fixes. |
+| Infrastructure + security | Fixed | Safe media URLs and a full handler-escaping audit. Prompt-pack allowlist, and the OpenRouter key is never sent to another origin. Checked writes with retry. Media saves gated on hydration. One-writer tab lock. Validated, atomic backup restore with key choice. Timeouts on every transport. Background semaphore, `Retry-After` and a 402 breaker. Usage logged. Stop button. Boot fatal screen. `sw.js` safety. Dead code removed. Docs brought up to date. |
+
+**Partial or deferred, on purpose:**
+- **Whole collections are still serialised on each save.** This is mitigated by snapshot skipping and cached slim messages. One record per chat would need a storage migration.
+- **Vectors are not stored compactly** (Float32Array). That needs matching changes to export and import.
+- **The 714 empty `catch` blocks were not reworked wholesale.** Logging was added only on the paths that were fixed.
+- **`charQuestGen` titles are still generated in English**, under the engine language directive.
+- **Router 2 still runs after every chained line.** The presence call is now capped instead.
+- **`runFutureUpdate` still reads the live clock.** Its day values are absolute and clamped.
+- **The story clock still has no weekdays.** The tracker prompt now tells the model to count days instead.
+- **The period "relationship settle" call was removed, not rebuilt.** It could never fire, and the fast read already covers that role.

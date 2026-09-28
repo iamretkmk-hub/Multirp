@@ -9784,6 +9784,42 @@ function closeModal(id){document.getElementById(id).classList.remove('show');}
    &#39; back to ' BEFORE the JS runs, so HTML escaping alone cannot keep such a value inside it. */
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function escJs(s){return esc(String(s==null?"":s).replace(/[\\'"\n\r\u2028\u2029<>]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0")));}
+/* v144.1 — a stored or imported URL is only put in src= / href= / url() when it is media the app
+   itself produces: an inline image/video/audio data: URI, a blob: object URL, or an http(s) link
+   (the providers' CDNs). Anything else — javascript:, data:text/html, a relative path smuggled in
+   through an imported universe — becomes "" (an empty, harmless attribute). */
+function safeMediaUrl(u){
+  const s=String(u==null?"":u).trim();
+  return /^(?:data:(?:(?:image|video|audio)\/[\w.+-]+|application\/octet-stream)[;,]|blob:|https?:\/\/)/i.test(s)?s:"";
+}
+function escUrl(u){ return esc(safeMediaUrl(u)); }
+/* v144.1 — on IMPORT, a media-looking field (image, url, src, cover…) holding a URL with any other
+   scheme is blanked, so a shared universe or backup cannot carry javascript: or data:text/html into
+   the app. Prose fields are never touched: only a media-named key whose value starts with a
+   non-web scheme (javascript:, data:, file:…) that is not inline image/video/audio is blanked.
+   Walks objects/arrays in place; returns how many fields it blanked. */
+const _MEDIA_KEY_RE=/(image|img|url|src|cover|photo|picture|portrait|video|thumb|poster)/i;
+const _NOT_MEDIA_KEY_RE=/(prompt|desc|caption|text|content|note|style|name|label|title)/i;
+const _BAD_SCHEME_RE=/^\s*(?:javascript|vbscript|data|file|filesystem|about|jar|intent|chrome[a-z-]*)\s*:/i;
+const _badMediaVal=(k,v)=>_MEDIA_KEY_RE.test(k)&&!_NOT_MEDIA_KEY_RE.test(k)&&_BAD_SCHEME_RE.test(v)&&!safeMediaUrl(v);
+function sanitizeImportedMedia(x,depth){
+  let n=0; depth=depth||0;
+  if(!x||typeof x!=="object"||depth>8)return 0;
+  if(Array.isArray(x)){ for(const v of x) n+=sanitizeImportedMedia(v,depth+1); return n; }
+  for(const k of Object.keys(x)){
+    const v=x[k];
+    if(typeof v==="string"){
+      if(_badMediaVal(k,v)){ x[k]=""; n++; }
+    }else if(v&&typeof v==="object"){
+      // an array of URL strings under a media key (reference images)
+      if(Array.isArray(v)){ for(let i=0;i<v.length;i++){ if(typeof v[i]==="string"&&_badMediaVal(k,v[i])){ v[i]=""; n++; } } }
+      n+=sanitizeImportedMedia(v,depth+1);
+    }
+  }
+  return n;
+}
+// …and inside CSS url(): a quoted CSS string, so a quote in the value cannot end the declaration.
+function cssUrl(u){ return JSON.stringify(safeMediaUrl(u)); }
 /* Reusable "instructions" popup for AI generation. Opens a modern, centered modal with a single
    instruction textarea and resolves with the entered text (possibly "" when the user just presses
    Generate) or null if the user cancels / dismisses. Every "Generate …" button routes through this
@@ -10649,19 +10685,31 @@ async function fetchWithTimeout(url,init,o){
   if(outer){ if(outer.aborted)onAbort(); else outer.addEventListener("abort",onAbort,{once:true}); }
   const fail=e=>{ const err=new Error(timedOut?"timed out after "+ms+"ms":(outer&&outer.aborted)?"aborted":String((e&&e.message)||e||"network error"));
     err.kind=timedOut?"timeout":(outer&&outer.aborted)?"abort":"network"; return err; };
+  // Every await below races the abort, so even a transport that ignores the signal cannot hang us.
+  const guard=ctl?new Promise((_,rej)=>ctl.signal.addEventListener("abort",()=>rej(new Error("aborted")),{once:true})):null;
+  if(guard)guard.catch(()=>{});
+  const race=p=>guard?Promise.race([p,guard]):p;
   try{
     if(outer&&outer.aborted) throw new Error("aborted");
-    const res=await fetch(url,Object.assign({},init,ctl?{signal:ctl.signal}:{}));
+    const res=await race(fetch(url,Object.assign({},init,ctl?{signal:ctl.signal}:{})));
     if(!o.read) return res;
-    const text=await res.text();
-    if(o.read==="text") return {res,text};
-    let data=null, jsonError=false;
-    try{ data=text?JSON.parse(text):null; }catch(e){ jsonError=true; }
-    if(res.ok&&!text) jsonError=true;
-    return {res,data,text,jsonError};
+    if(o.read==="text") return {res,text:(typeof res.text==="function")?await race(res.text()):""};
+    // JSON: parse with res.json(); on failure keep a snippet of the raw body (from a clone) for the log.
+    const cl=(typeof res.clone==="function")?(()=>{ try{ return res.clone(); }catch(_){ return null; } })():null;
+    try{ return {res,data:await race(res.json()),text:"",jsonError:false}; }
+    catch(e){
+      if(timedOut||(outer&&outer.aborted)) throw e;
+      let text=""; try{ text=cl?String(await race(cl.text())):""; }catch(_){}
+      return {res,data:null,text,jsonError:true};
+    }
   }catch(e){ throw fail(e); }
   finally{ if(timer)clearTimeout(timer); if(outer)try{ outer.removeEventListener("abort",onAbort); }catch(_){} }
 }
+function _sameOrigin(a,b){ try{ return new URL(a).origin===new URL(b).origin; }catch(e){ return false; } }
+// ModelsLab's own hosts (its fetch_result links have used the legacy stablediffusionapi.com domain).
+function _mlHostOk(u){ try{ const x=new URL(u); return x.protocol==="https:"&&/(^|\.)(modelslab\.com|stablediffusionapi\.com)$/i.test(x.hostname); }catch(e){ return false; } }
+// The OpenRouter bearer, only when `url` is OpenRouter itself (see pollVideo).
+function _orAuthFor(url){ return _sameOrigin(url,OR)?{"Authorization":"Bearer "+state.key}:{}; }
 function _sleep(ms,signal){ return new Promise((res,rej)=>{
   if(signal&&signal.aborted){ const e=new Error("aborted"); e.kind="abort"; return rej(e); }
   const t=setTimeout(()=>{ if(signal)signal.removeEventListener("abort",ab); res(); },Math.max(0,ms));
@@ -10776,13 +10824,16 @@ async function imageCompletion(prompt,model,size){
   if(!state.key)throw{friendly:"No API key set."};
   const body={model,modalities:["image"],messages:[{role:"user",content:prompt}],image_config:size?{size}:undefined};
   const entry=dbg("Image generation (OpenRouter)","OpenRouter",OR+"/chat/completions",body);
-  let res;
-  try{res=await fetch(OR+"/chat/completions",{method:"POST",
+  let g;
+  // v144.1 — a ceiling (the call had none) that also covers the body, and a readable non-JSON error.
+  try{g=await fetchWithTimeout(OR+"/chat/completions",{method:"POST",
     headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-    body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","Network error");throw{friendly:"Network error during image generation."};}
-  if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:httpMsg(res.status)};}
-  const d=await res.json();
+    body:JSON.stringify(body)},{timeoutMs:180000,read:"json"});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out after 180s":"Network error");throw{friendly:to?"The image model did not answer within 3 minutes.":"Network error during image generation."};}
+  const res=g.res;
+  if(!res.ok){dbgDone(entry,"error","HTTP "+res.status+_errSnippet(g));throw{friendly:httpMsg(res.status)};}
+  if(g.jsonError||!g.data){dbgDone(entry,"error","HTTP 200 but the body is not JSON: "+String(g.text||"").slice(0,200));throw{friendly:"OpenRouter sent back something that isn't an image reply. Try again."};}
+  const d=g.data;
   const url=d.choices?.[0]?.message?.images?.[0]?.image_url?.url;
   if(!url){dbgDone(entry,"error","No image returned");throw{friendly:"No image returned."};}
   dbgDone(entry,"ok",url);
@@ -10797,9 +10848,9 @@ async function modelslabCall(endpoint,body){
   if(!state.segkey)throw{friendly:"No ModelsLab API key set. Add it in Settings."};
   const payload=Object.assign({key:state.segkey},body);
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});}
-  catch(e){throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},{timeoutMs:120000});}
+  catch(e){throw{friendly:(e&&e.kind==="timeout")?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok)throw{friendly:mlMsg(res.status)};
   let d;try{d=await res.json();}catch(e){throw{friendly:"ModelsLab returned an unreadable response."};}
   return await mlResolve(d);
@@ -10818,8 +10869,10 @@ async function mlResolve(d,setStat){
     if(setStat)setStat(`Generating… (${i*Math.round(eta)||"~"}s)`);
     await new Promise(r=>setTimeout(r,eta*1000));
     let r;
-    try{r=await fetch(fetchUrl,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({key:state.segkey})});}
+    // v144.1 — only ever to ModelsLab: fetch_result comes from the response, and this body carries the key.
+    if(!_mlHostOk(fetchUrl)) throw{friendly:"ModelsLab pointed the result somewhere else; not sending the key there."};
+    try{r=await fetchWithTimeout(fetchUrl,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({key:state.segkey})},{timeoutMs:30000});}
     catch(e){continue;}
     if(!r.ok){ if(r.status>=500) continue; throw{friendly:mlMsg(r.status)}; }
     let s;try{s=await r.json();}catch(e){continue;}
@@ -10854,9 +10907,9 @@ async function modelslabImageWithStat(endpoint,body,setStat,label){
   const payload=Object.assign({key:state.segkey},body);
   const entry=dbg(label||"Image generation (ModelsLab)","ModelsLab",ML+endpoint,Object.assign({},payload,{key:"•••redacted•••"}));
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});}
-  catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},{timeoutMs:120000});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out":"CORS / network");throw{friendly:to?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:mlMsg(res.status)};}
   let d;try{d=await res.json();}catch(e){dbgDone(entry,"error","Unreadable response");throw{friendly:"ModelsLab returned an unreadable response."};}
   try{const url=await mlResolve(d,setStat);dbgDone(entry,"ok",url);return url;}
@@ -10888,9 +10941,9 @@ async function modelslabVideo(prompt,imageUrl,negative,rule){
   const label="Video generation (ModelsLab)"+(rule&&rule.label?" · "+rule.label:"");
   const entry=dbg(label,"ModelsLab",ML+endpoint,Object.assign({},body,{key:"•••redacted•••",init_image:"[image data omitted]"}));
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)},{timeoutMs:120000});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out":"CORS / network");throw{friendly:to?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:mlMsg(res.status)};}
   let d;try{d=await res.json();}catch(e){dbgDone(entry,"error","Unreadable response");throw{friendly:"ModelsLab returned an unreadable response."};}
   try{const url=await mlResolve(d);dbgDone(entry,"ok",url);return url;}
@@ -10937,8 +10990,9 @@ async function atlasGenerate(kind,body,label,setStat,opts){
      throw{friendly:"“"+bad+"” was never uploaded to AtlasCloud, so the request was not sent. This is normally a rejected or missing AtlasCloud API key — check it in Settings and try again."};}}
   const payload=JSON.stringify(body);
   let res;
-  try{res=await fetch(ATLAS+endpoint,{method:"POST",headers:hdr,body:payload});}
-  catch(e){dbgDone(entry,"error","CORS / network ("+Math.round(payload.length/1024)+"KB body)");throw{friendly:"Couldn't reach AtlasCloud (network/CORS). Check your connection."};}
+  try{res=await fetchWithTimeout(ATLAS+endpoint,{method:"POST",headers:hdr,body:payload},{timeoutMs:120000});}
+  catch(e){ if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Timed out submitting"); throw{friendly:"AtlasCloud did not answer in time. Try again."}; }
+    dbgDone(entry,"error","CORS / network ("+Math.round(payload.length/1024)+"KB body)");throw{friendly:"Couldn't reach AtlasCloud (network/CORS). Check your connection."};}
   if(!res.ok){
     // Surface the API's actual validation message (e.g. bad size/aspect) instead of a bare HTTP code.
     let apiMsg="";
@@ -10964,7 +11018,7 @@ async function atlasGenerate(kind,body,label,setStat,opts){
     if(setStat)setStat(`Generating… (${i*Math.round(stepMs/1000)}s)`);
     await new Promise(r=>setTimeout(r,stepMs));
     let r;
-    try{r=await fetch(ATLAS+pollPath+id,{method:"GET",headers:{"Authorization":"Bearer "+state.atlasKey}});}
+    try{r=await fetchWithTimeout(ATLAS+pollPath+id,{method:"GET",headers:{"Authorization":"Bearer "+state.atlasKey}},{timeoutMs:30000});}
     catch(e){continue;}
     if(r.status===404 && pollPath==="model/prediction/"){ pollPath="model/result/"; continue; }  // try alternate path
     if(!r.ok){ if(r.status>=500)continue; dbgDone(entry,"error","HTTP "+r.status); throw{friendly:atlasMsg(r.status)}; }
@@ -11482,8 +11536,9 @@ async function falImage(prompt,negative,rule){
   const url=FAL_RUN+model.replace(/^\/+/,"");
   const entry=dbg("Image generation (fal.ai)"+(rule&&rule.label?" · "+rule.label:""),"fal.ai",url,Object.assign({},body,{loras:loras.length?loras:"[]"}));
   let res;
-  try{ res=await fetch(url,{method:"POST",headers:{"Authorization":"Key "+state.falKey,"Content-Type":"application/json"},body:JSON.stringify(body)}); }
-  catch(e){ dbgDone(entry,"error","CORS / network"); throw{friendly:"Couldn't reach fal.ai from the browser (network/CORS)."}; }
+  try{ res=await fetchWithTimeout(url,{method:"POST",headers:{"Authorization":"Key "+state.falKey,"Content-Type":"application/json"},body:JSON.stringify(body)},{timeoutMs:180000}); }
+  catch(e){ if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Timed out after 180s"); throw{friendly:"fal.ai did not answer within 3 minutes."}; }
+    dbgDone(entry,"error","CORS / network"); throw{friendly:"Couldn't reach fal.ai from the browser (network/CORS)."}; }
   if(!res.ok){ dbgDone(entry,"error","HTTP "+res.status); throw{friendly:falMsg(res.status)}; }
   let d; try{ d=await res.json(); }catch(e){ dbgDone(entry,"error","Unreadable response"); throw{friendly:"fal.ai returned an unreadable response."}; }
   const out=d&&Array.isArray(d.images)&&d.images[0]&&d.images[0].url;
@@ -12654,7 +12709,7 @@ async function dubMessage(mid){
   const m=findMsg(mid); if(!m)return;
   // Replay if we already have audio for this line (xAI only — Inworld streams, no URL to cache).
   if(m.ttsUrl){ _playDubUrl(m.ttsUrl); toast("Playing"); return; }
-  const btn=document.querySelector(`[data-dub="${mid}"]`);
+  const btn=document.querySelector(`[data-dub="${esc(mid)}"]`);
   const setBtn=t=>{ if(btn)btn.innerHTML=t; };
   setBtn("…");
   try{
@@ -14171,7 +14226,7 @@ function renderUniverses(){
     const desc=(u.setting||"").trim().replace(/\s+/g," ");
     const c=document.createElement('div');c.className="charCard uniCard";
     c.innerHTML=`
-      ${u.image?`<img src="${esc(u.image)}" class="cc-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`:`<div class="cc-emoji">${esc(u.avatar||"🌌")}</div>`}
+      ${u.image?`<img src="${escUrl(u.image)}" class="cc-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`:`<div class="cc-emoji">${esc(u.avatar||"🌌")}</div>`}
       <div class="cc-grad-top"></div>
       <div class="cc-grad"></div>
       <button class="cc-edit" title="Edit" data-edit><svg class="ic"><use href="#i-edit"/></svg></button>
@@ -14491,7 +14546,7 @@ function applyLocationBackground(){
     if(u&&u.image)img=u.image;
   }
   if(img){
-    list.style.backgroundImage=`linear-gradient(rgba(13,15,20,0.82),rgba(13,15,20,0.92)), url(${img})`;
+    list.style.backgroundImage=`linear-gradient(rgba(13,15,20,0.82),rgba(13,15,20,0.92)), url(${cssUrl(img)})`;
     list.style.backgroundSize="cover"; list.style.backgroundPosition="center"; list.style.backgroundAttachment="local";
   }else{ list.style.backgroundImage=""; }
 }
@@ -14864,7 +14919,7 @@ function openTravel(){
         <div class="kvline" style="padding:0">
           <div style="min-width:0"><b>${l.type==='home'?icon("home"):icon("pin")} ${esc(l.name)}</b>${here?' <span class="pill" style="font-size:9px">here</span>':''}
             <div class="desc">${esc((l.description||'').slice(0,90))}${res?` · ${icon("users")} ${esc(res)}`:''}</div></div>
-          ${here?'':`<button class="btn small" onclick="chooseCompanions('${l.id}')">Go</button>`}
+          ${here?'':`<button class="btn small" onclick="chooseCompanions('${escJs(l.id)}')">Go</button>`}
         </div></div>`;
     }).join("");
   }
@@ -14888,11 +14943,11 @@ function chooseCompanions(locId){
    <div class="desc" data-help>Select who goes to the same place. Everyone makes their own way there — nobody rides along with you, and the narration puts them at the destination rather than on the road. Residents of the destination will be there regardless.</div>
    <div id="travelCompanions" style="display:flex;flex-direction:column;gap:6px;margin:8px 0">
      ${present.map(p=>`<label class="kvline" style="cursor:pointer"><span>${avatarHTML(p)} ${esc(p.name)}</span>
-        <input type="checkbox" data-cid="${p.id}" checked></label>`).join("")}
+        <input type="checkbox" data-cid="${esc(p.id)}" checked></label>`).join("")}
    </div>
    <div class="row">
-     <button class="btn sec" onclick="_doTravel('${locId}',false)">Go alone</button>
-     <button class="btn" onclick="_doTravel('${locId}',true)">Travel together</button>
+     <button class="btn sec" onclick="_doTravel('${escJs(locId)}',false)">Go alone</button>
+     <button class="btn" onclick="_doTravel('${escJs(locId)}',true)">Travel together</button>
    </div></div>`;
   m.addEventListener('click',e=>{if(e.target===m)_travelClose();});
   document.body.appendChild(m);
@@ -14922,13 +14977,13 @@ function openSubMove(){
     return `<div class="card" style="padding:9px;${isHere?'border-color:var(--accent)':''}">
       <div class="kvline" style="padding:0">
         <div><b>${icon("pin")} ${esc(s.name)}</b>${isHere?' <span class="pill" style="font-size:9px">you are here</span>':''}</div>
-        ${isHere?'':`<button class="btn small" onclick="_doSubMove('${s.id}')">Go</button>`}
+        ${isHere?'':`<button class="btn small" onclick="_doSubMove('${escJs(s.id)}')">Go</button>`}
       </div></div>`;
   }).join("");
   const companions = here.length?`<div class="desc" style="margin-top:8px">Anyone in earshot you tick will come with you:</div>
     <div id="subCompanions" style="display:flex;flex-direction:column;gap:6px;margin:6px 0">
       ${here.map(p=>`<label class="kvline" style="cursor:pointer"><span>${avatarHTML(p)} ${esc(p.name)}</span>
-        <input type="checkbox" data-cid="${p.id}"></label>`).join("")}</div>`:"";
+        <input type="checkbox" data-cid="${esc(p.id)}"></label>`).join("")}</div>`:"";
   const m=document.createElement('div'); m.id="travelModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_travelClose()">×</button>
    <div class="card editCard"><h3>Move within ${esc(l.name)}</h3>
@@ -16912,7 +16967,7 @@ function _calQuestsSection(chat){
       const meta=[locName?icon("pin")+" "+esc(locName):"", npcNm?icon("user")+" "+esc(npcNm)+(npcState?" · "+npcState:""):"", castLine].filter(Boolean).join(" · ");
       // v22.9 — full description (no 160-char cut), the quest memory's latest lines, and the same
       // action set meetings have: go to the place, edit, mark done (chains the next quest), delete.
-      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
       return `<div class="card" style="padding:8px">
         <div class="qrow">
           <div class="qtxt"><b>${esc(q.title||"(untitled)")}</b>
@@ -16920,10 +16975,10 @@ function _calQuestsSection(chat){
           ${meta?`<div class="desc" style="margin-top:3px">${meta}</div>`:""}
           ${prog}</div>
           <div class="qbtns">
-            ${(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${q.id}')">▶</button>`:""}
-            <button class="btn sec small" title="Edit" onclick="questEditUI('${q.id}')">${icon("edit")}</button>
-            <button class="btn sec small" title="Mark done (the next step follows)" onclick="questMarkDoneUI('${q.id}')">${icon("check")}</button>
-            <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+            ${(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${escJs(q.id)}')">▶</button>`:""}
+            <button class="btn sec small" title="Edit" onclick="questEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+            <button class="btn sec small" title="Mark done (the next step follows)" onclick="questMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>
+            <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
           </div>
         </div></div>`;
     };
@@ -16952,7 +17007,7 @@ function openCalendar(){
   const entryRow=e=>{
     const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
     const overdue=!e.done && e.day!=null && e.day<today;
-    const when=e.day!=null?(overdue?`<span style="color:#E8A33D">Day ${e.day} · missed</span>`:`Day ${e.day}`):"";
+    const when=e.day!=null?(overdue?`<span style="color:#E8A33D">Day ${esc(e.day)} · missed</span>`:`Day ${esc(e.day)}`):"";
     const meta=[when, e.period?esc(e.period):"", certLabel(e), dirLabel(e), locName?icon("pin")+" "+esc(locName):"", e.source==='auto'?'auto':""].filter(Boolean).join(" · ");
     const isToday=!e.done && e.day===today;
     return `<div class="card" style="padding:8px;${isToday?'border-color:var(--accent)':''}">
@@ -16962,10 +17017,10 @@ function openCalendar(){
           ${e.done&&e.result?`<div class="desc" style="color:var(--good);opacity:.8">${icon("check")} ${esc(e.result)}</div>`:""}
           ${e.done&&(e.outcome==="missed"||e.outcome==="cancelled")?`<div class="desc" style="color:#E8A33D;opacity:.8">${e.outcome==="cancelled"?"cancelled":"missed / didn't happen"}</div>`:""}</div>
         <div class="qbtns">
-          ${!e.done?`<button class="btn small" title="Attend now" onclick="attendPlan('${e.id}')">▶</button>`:""}
-          <button class="btn sec small" title="Edit" onclick="addCalManual('${e.id}')">${icon("edit")}</button>
-          <button class="btn sec small" title="${e.done?'reopen':'mark done'}" onclick="toggleCalDone('${e.id}')">${e.done?icon("undo"):icon("check")}</button>
-          <button class="btn danger sec small" onclick="delCalEntry('${e.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+          ${!e.done?`<button class="btn small" title="Attend now" onclick="attendPlan('${escJs(e.id)}')">▶</button>`:""}
+          <button class="btn sec small" title="Edit" onclick="addCalManual('${escJs(e.id)}')">${icon("edit")}</button>
+          <button class="btn sec small" title="${e.done?'reopen':'mark done'}" onclick="toggleCalDone('${escJs(e.id)}')">${e.done?icon("undo"):icon("check")}</button>
+          <button class="btn danger sec small" onclick="delCalEntry('${escJs(e.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
         </div></div></div>`;
   };
   const rows=all.length?all.map(entryRow).join("")
@@ -17024,7 +17079,7 @@ function _calBrewingSection(chat){
   const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment"};
   const row=i=>`<div class="card" style="padding:8px">
       <div class="qtxt"><b>${esc(i.holderName||"someone")}${i.targetName?` → ${esc(i.targetName)}`:""}</b>
-        <div class="desc">${esc(i.kind||"motive")} · ${esc(intentPrio(i))} priority · ${esc(statusLbl[i.status]||i.status||"")}${i.born!=null?` · since Day ${i.born}`:(i.day!=null?` · since Day ${i.day}`:"")}</div>
+        <div class="desc">${esc(i.kind||"motive")} · ${esc(intentPrio(i))} priority · ${esc(statusLbl[i.status]||i.status||"")}${i.born!=null?` · since Day ${esc(i.born)}`:(i.day!=null?` · since Day ${esc(i.day)}`:"")}</div>
         ${i.aim?`<div class="desc" style="opacity:.8">${esc(String(i.aim).slice(0,200))}</div>`:""}
         ${i.trigger?`<div class="desc" style="opacity:.6">from: ${esc(String(i.trigger).slice(0,160))}</div>`:""}</div></div>`;
   return `<h3 style="margin-top:14px">${icon("globe")} Brewing
@@ -17036,7 +17091,7 @@ function _calOffstageSection(chat){
   if(!log.length)return "";
   const row=e=>`<div class="card" style="padding:8px">
       <div class="qtxt"><b>${esc(e.headline||String(e.event||"").slice(0,80))}</b>
-        <div class="desc">Day ${e.day}${e.period?", "+esc(e.period):""}${e.place?" · "+esc(e.place):""}${e.who?" · "+esc(e.who):""}</div>
+        <div class="desc">Day ${esc(e.day)}${e.period?", "+esc(e.period):""}${e.place?" · "+esc(e.place):""}${e.who?" · "+esc(e.who):""}</div>
         ${e.event&&e.headline?`<div class="desc" style="opacity:.8">${esc(String(e.event).slice(0,220))}</div>`:""}</div></div>`;
   return `<h3 style="margin-top:14px">${icon("news")} The living universe
       <span class="desc" data-help style="display:inline;font-weight:400">(what happened while you were elsewhere — you do not know these in scene)</span></h3>
@@ -17066,8 +17121,8 @@ function _calPromiseSection(chat){
         ${pr.note?`<div class="desc" style="opacity:.7">${esc(pr.note)}</div>`:""}
         <div class="desc">${meta}</div></div>
       <div class="qbtns">
-        ${pr.status==="open"?`<button class="btn sec small" title="Release them from this" onclick="releasePromise('${pr.id}')">${icon("check")}</button>`:""}
-        <button class="btn danger sec small" title="Delete" onclick="delPromise('${pr.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+        ${pr.status==="open"?`<button class="btn sec small" title="Release them from this" onclick="releasePromise('${escJs(pr.id)}')">${icon("check")}</button>`:""}
+        <button class="btn danger sec small" title="Delete" onclick="delPromise('${escJs(pr.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
       </div></div></div>`;
   };
   return `<div style="margin-top:14px"><div class="desc" style="font-weight:600;margin-bottom:4px">Promises &amp; standing commitments</div>
@@ -17106,7 +17161,7 @@ function _calWorldSection(chat){
         <div class="desc">${meta}</div>
         ${(e.detail||e.origin)&&!e.done?`<div class="desc" style="opacity:.75">${esc(String(e.detail||e.origin).slice(0,180))}</div>`:""}
         ${e.done&&e.result?`<div class="desc" style="color:var(--good);opacity:.8">${icon("check")} ${esc(e.result)}</div>`:""}</div>
-      <div class="qbtns">${!e.done?`<button class="btn sec small" title="Edit" onclick="addCalManual('${e.id}')">${icon("edit")}</button><button class="btn danger sec small" title="Cancel this plan" onclick="delCalEntry('${e.id}')"><svg class="ic"><use href="#i-x"/></svg></button>`:""}</div></div></div>`;
+      <div class="qbtns">${!e.done?`<button class="btn sec small" title="Edit" onclick="addCalManual('${escJs(e.id)}')">${icon("edit")}</button><button class="btn danger sec small" title="Cancel this plan" onclick="delCalEntry('${escJs(e.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>`:""}</div></div></div>`;
   };
   return `<h3 style="margin-top:14px">${icon("news")} World plans <span class="desc" data-help style="display:inline;font-weight:400">(between characters or solo — happen offstage, on their own)</span></h3>
     ${open.map(row).join("")||""}${recent.map(row).join("")||""}`;
@@ -17288,7 +17343,7 @@ function addCalManual(editId){
       const byNameIds=parts0.map(byName).filter(Boolean).map(c=>c.id);
       new Set(all.concat(byNameIds)).forEach(id=>{
         if(primary.has(id))return;
-        const cb=m.querySelector(`#caMore input[data-more="${id}"]`); if(cb)cb.checked=true;
+        const cb=m.querySelector(`#caMore input[data-more="${esc(id)}"]`); if(cb)cb.checked=true;
       });
     }
   }
@@ -19292,7 +19347,7 @@ function openStoryState(){
         const here=presentIdSet.has(fromId);
         const persona=state.personas.find(x=>x.id===fromId);
         const count=targets.length;
-        const header=`<div class="relNameRow" onclick="ssToggleChar('${fromId}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-top:6px">
+        const header=`<div class="relNameRow" onclick="ssToggleChar('${escJs(fromId)}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-top:6px">
           <span style="font-size:17px">${esc(p.avatar||"🎭")}</span>
           <span style="flex:1;min-width:0">
             <b>${esc(p.name)}</b>${here?` <span class="pill" style="font-size:9px">here now</span>`:""}
@@ -19340,9 +19395,9 @@ function openStoryState(){
           ` <span class="pill" style="font-size:9px">${esc(ownerLabel(key))}</span>`;
         rows.push(`<div class="kvline"><span>${esc(t.name)}${ownerTag} <b>${v}${t.max!=null?"/"+t.max:""}</b>${st&&st.text?` <span class="desc">— ${esc(st.text)}</span>`:""}</span>
           <span style="display:flex;gap:4px">
-            <button class="btn sec small" onclick="nudgeTracker('${t.id}',-1,'${key}')">−1</button>
-            <button class="btn sec small" onclick="nudgeTracker('${t.id}',1,'${key}')">+1</button>
-            <button class="btn sec small" onclick="setTrackerVal('${t.id}','${key}')">set</button>
+            <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',-1,'${escJs(key)}')">−1</button>
+            <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',1,'${escJs(key)}')">+1</button>
+            <button class="btn sec small" onclick="setTrackerVal('${escJs(t.id)}','${escJs(key)}')">set</button>
           </span></div>`);
       }
     }
@@ -19414,10 +19469,10 @@ function openStoryState(){
             ${others.length?` \u00b7 also heard by ${esc(others.slice(0,4).join(", "))}`:""}
           </div>
           <span style="display:flex;gap:4px;flex-wrap:wrap">
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','settled')">They believe you</button>
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','believed')">They believe it</button>
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','dead')">Never happened</button>
-            <button class="btn sec small" onclick="ssCoolGossip('${g.id}')">Cool off</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','settled')">They believe you</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','believed')">They believe it</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','dead')">Never happened</button>
+            <button class="btn sec small" onclick="ssCoolGossip('${escJs(g.id)}')">Cool off</button>
           </span>
         </div>`;
       }).join("");
@@ -19562,7 +19617,7 @@ function editUniverse(id){
   {const sel=document.getElementById('ueUserHome');
    if(sel){
      sel.innerHTML=`<option value="">Stay where I am</option>`+
-       _ueLocs.map(l=>`<option value="${l.id}">${esc(l.name)}${l.type==='home'?' (home)':''}</option>`).join("");
+       _ueLocs.map(l=>`<option value="${esc(l.id)}">${esc(l.name)}${l.type==='home'?' (home)':''}</option>`).join("");
      sel.value=u.playerHomeLocId||"";
    }}
   renderUeUserOutfits();   // v140.1 — after the home is chosen: it decides whether the home rows show
@@ -19590,7 +19645,7 @@ function renderTrackerEditor(){
     const meth={llm:"AI",endday:"End Day",trigger_then_day:"event→daily"}[trackerMethod(t)]||"AI";
     row.innerHTML=`<div class="kvline" style="padding:0">
       <div style="min-width:0"><b>${esc(t.name||"(unnamed)")}</b>
-        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${t.min!=null?t.min:0}–${t.max!=null?t.max:100} · ${beh}${t.perDay?` · ${t.perDay>0?"+":""}${t.perDay}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${t.publicAt}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
+        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${t.min!=null?t.min:0}–${t.max!=null?t.max:100} · ${beh}${t.perDay?` · ${t.perDay>0?"+":""}${esc(t.perDay)}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${esc(t.publicAt)}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0">
         <button class="btn sec small" type="button" data-edit>Edit</button>
@@ -19608,7 +19663,7 @@ function toggleTrackerGenForm(){
   if(f){ f.remove(); return; }   // already open → close (× / click-outside / toggle button)
   const uni=editingUniverse; if(!uni){ toast("Save the universe first"); return; }
   const opts=['<option value="__story__">The story (no owner)</option>']
-    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`)).join("");
+    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join("");
   // A centered popup overlay (not an inline block at the bottom of the universe editor).
   f=document.createElement('div'); f.id='tgForm';
   f.style.cssText="position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.6)";
@@ -19718,7 +19773,7 @@ function _teRenderCharList(selectedIds){
   const chars=_teUniverseChars();
   if(!chars.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; return; }
   box.innerHTML=chars.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-    <input type="checkbox" class="teCharChk" value="${p.id}" ${sel.has(p.id)?"checked":""}>
+    <input type="checkbox" class="teCharChk" value="${esc(p.id)}" ${sel.has(p.id)?"checked":""}>
     <span>${esc(p.avatar||"🎭")} ${esc(p.name)}</span></label>`).join("");
 }
 function teSetVis(v){
@@ -19864,7 +19919,7 @@ function renderLocEditor(){
     const resNames=(l.residents||[]).map(id=>(state.personas.find(p=>p.id===id)||{}).name).filter(Boolean).join(", ");
     const row=document.createElement('div'); row.className="card"; row.style.padding="8px";
     const thumb=l.image
-      ? `<img src="${l.image}" data-view style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:zoom-in">`
+      ? `<img src="${escUrl(l.image)}" data-view style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:zoom-in">`
       : `<div data-gen style="width:100%;height:120px;border-radius:10px;margin-bottom:8px;background:var(--surface);border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;cursor:pointer">${icon("image")} No image — tap to generate</div>`;
     row.innerHTML=`${thumb}
       <div class="kvline" style="padding:0">
@@ -20024,7 +20079,7 @@ function editLocation(i){
   if(!cands.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; }
   else{
     box.innerHTML=cands.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="leResChk" value="${p.id}" ${cur.has(p.id)?"checked":""}>
+      <input type="checkbox" class="leResChk" value="${esc(p.id)}" ${cur.has(p.id)?"checked":""}>
       <span>${esc(p.avatar||"🎭")} ${esc(p.name)}</span></label>`).join("");
   }
   // Sub-areas (private zones). Ensure an entrance, then render the editable list.
@@ -20043,7 +20098,7 @@ function renderLeSubs(){
     const lock=s.entrance;
     const mult=(typeof s.gossipMult==="number")?Math.max(0,Math.min(1,s.gossipMult)):1;
     const imgCell=s.image
-      ? `<img src="${s.image}" class="leSubImg" data-si="${si}" title="View / replace area image" style="width:40px;height:40px;object-fit:cover;border-radius:8px;cursor:zoom-in">`
+      ? `<img src="${escUrl(s.image)}" class="leSubImg" data-si="${si}" title="View / replace area image" style="width:40px;height:40px;object-fit:cover;border-radius:8px;cursor:zoom-in">`
       : `<button class="btn sec small leSubGenImg" type="button" data-si="${si}" title="Generate an image for this area">${icon("sparkle")}</button>`;
     return `<div class="kvline" style="padding:4px 0;gap:8px;flex-wrap:wrap;align-items:center">
       ${imgCell}
@@ -20288,9 +20343,9 @@ function renderUePrompts(){
         <div style="font-size:13px">${esc(reg.label)}${reg.json?' <span class="pill" style="font-size:9px">JSON</span>':''}</div>
         <div class="pill" style="font-size:10px;margin-top:3px;border-color:${overridden?'var(--accent)':'var(--border)'};color:${overridden?'var(--accent)':'var(--muted)'}">${overridden?'Custom for this universe':'Default (global)'}</div>
       </div>
-      <button class="btn sec small" type="button" style="width:auto;padding:6px 10px" onclick="openPromptEdit('${reg.key}','universe')">Edit</button>
-      <button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Paste the current global prompt into this universe as a copy" onclick="setUePromptToGlobal('${reg.key}')">Set to default</button>
-      ${overridden?`<button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Revert to global (inherit, track future global edits)" onclick="clearUePrompt('${reg.key}')">↺</button>`:''}`;
+      <button class="btn sec small" type="button" style="width:auto;padding:6px 10px" onclick="openPromptEdit('${escJs(reg.key)}','universe')">Edit</button>
+      <button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Paste the current global prompt into this universe as a copy" onclick="setUePromptToGlobal('${escJs(reg.key)}')">Set to default</button>
+      ${overridden?`<button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Revert to global (inherit, track future global edits)" onclick="clearUePrompt('${escJs(reg.key)}')">↺</button>`:''}`;
     box.appendChild(row);
   });
 }
@@ -20468,7 +20523,7 @@ function renderPersonas(){
     const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":(p.latent?" latent":""));
     const desc=p.personality||p.scenario||p.backstory||"";
     const visual=p.image
-      ? `<img class="cc-img" src="${p.image}" alt="">`
+      ? `<img class="cc-img" src="${escUrl(p.image)}" alt="">`
       : `<div class="cc-emoji">${esc(p.avatar||"🎭")}</div>`;
     const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">removed</div>`:(p.latent?`<div class="cc-dead-badge" title="Undiscovered — /seek to reveal">undiscovered</div>`:"");
     const reviveBtn=p.removed?`<button class="cc-revive" title="Revive" data-revive>Revive</button>`:"";
@@ -20477,7 +20532,7 @@ function renderPersonas(){
       <div class="cc-grad"></div>
       ${deadBadge}
       <button class="cc-edit" title="Edit" data-edit><svg class="ic"><use href="#i-edit"/></svg></button>
-      ${p.removed?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${p.id}" style="display:none"></span></button>`}
+      ${p.removed?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${esc(p.id)}" style="display:none"></span></button>`}
       ${reviveBtn}
       <div class="cc-info">
         <div class="cc-name">${esc(p.name)}</div>
@@ -20550,9 +20605,9 @@ function openCharacterPage(id){
   if(diaryDays.length){
     const dcover=p.diaryCover||p.image||null;
     diaryHtml=`<div class="cpSection"><div class="subhead">${icon("book")} Diary <span class="desc">${diaryDays.length} day${diaryDays.length===1?"":"s"} · ${diaries.length} entr${diaries.length===1?"y":"ies"}</span></div>
-      <div class="bookGrid"><div class="bookCard" onclick="_charPageClose();openDiaryReader('${p.id}')">
+      <div class="bookGrid"><div class="bookCard" onclick="_charPageClose();openDiaryReader('${escJs(p.id)}')">
         <div class="bk-spine"></div>
-        ${dcover?`<img class="bk-img" src="${dcover}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
+        ${dcover?`<img class="bk-img" src="${escUrl(dcover)}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
         <div class="bk-grad"></div>
         <div class="bk-info"><div class="bk-name">${esc(p.name)}</div><div class="bk-sub">Tap to read</div></div>
       </div></div></div>`;
@@ -20560,7 +20615,7 @@ function openCharacterPage(id){
   // ---- Images block: thumbnail grid → swipe viewer ----
   let imgHtml="";
   if(imgs.length){
-    const cells=imgs.map((r,i)=>`<div class="galCell"><img src="${r.url}" data-cpimg="${i}" alt=""></div>`).join("");
+    const cells=imgs.map((r,i)=>`<div class="galCell"><img src="${escUrl(r.url)}" data-cpimg="${i}" alt=""></div>`).join("");
     imgHtml=`<div class="cpSection"><div class="subhead">${icon("image")} Images <span class="desc">${imgs.length}</span></div><div class="grid cpGrid">${cells}</div></div>`;
   }
   // ---- Videos block ----
@@ -20568,7 +20623,7 @@ function openCharacterPage(id){
   if(vids.length){
     const cells=vids.map(v=>{
       const remote=(typeof httpsMedia==="function")?httpsMedia(v.url):v.url;
-      return `<div class="galVidWrap"><video src="${remote}" controls playsinline loop preload="metadata" referrerpolicy="no-referrer" style="width:100%;border-radius:12px;border:1px solid var(--border);background:#000"></video>${v.prompt?`<div class="desc" style="margin-top:4px">${esc(String(v.prompt).slice(0,120))}</div>`:""}</div>`;
+      return `<div class="galVidWrap"><video src="${escUrl(remote)}" controls playsinline loop preload="metadata" referrerpolicy="no-referrer" style="width:100%;border-radius:12px;border:1px solid var(--border);background:#000"></video>${v.prompt?`<div class="desc" style="margin-top:4px">${esc(String(v.prompt).slice(0,120))}</div>`:""}</div>`;
     }).join("");
     vidHtml=`<div class="cpSection"><div class="subhead">${icon("film")} Videos <span class="desc">${vids.length}</span></div><div class="cpVids">${cells}</div></div>`;
   }
@@ -20582,16 +20637,16 @@ function openCharacterPage(id){
     <button class="x" onclick="_charPageClose()">×</button>
     <div class="card editCard">
       <div class="cpHead">
-        <div class="cpAvatar">${cover?`<img src="${cover}" alt="">`:`<span class="cpEmoji">${esc(p.avatar||"🎭")}</span>`}</div>
+        <div class="cpAvatar">${cover?`<img src="${escUrl(cover)}" alt="">`:`<span class="cpEmoji">${esc(p.avatar||"🎭")}</span>`}</div>
         <div style="flex:1;min-width:0">
           <h3 style="margin:0">${esc(p.name)}${p.removed?` <span class="desc">(removed)</span>`:""}</h3>
           <div class="desc" style="margin-top:2px">${uni?esc((uni.avatar||"🌌")+" "+uni.name):""}</div>
         </div>
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
-        <button class="btn sec small" onclick="_charPageClose();editPersona('${p.id}')">${icon("edit")} Edit character</button>
-        <button class="btn sec small" onclick="_charPageClose();openTextWith('${p.id}')">${icon("message")} Text</button>
-        ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${p.id}')">${icon("book")} Read diary</button>`:""}
+        <button class="btn sec small" onclick="_charPageClose();editPersona('${escJs(p.id)}')">${icon("edit")} Edit character</button>
+        <button class="btn sec small" onclick="_charPageClose();openTextWith('${escJs(p.id)}')">${icon("message")} Text</button>
+        ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${escJs(p.id)}')">${icon("book")} Read diary</button>`:""}
       </div>
       ${field("Personality",p.personality)}
       ${field("Backstory",p.backstory)}
@@ -20636,7 +20691,7 @@ function renderRefStrip(elId,list,fallback,onRemove){
     const cell=document.createElement('div');
     cell.className="refSlot"+(src?"":" empty");
     if(src){
-      cell.innerHTML=`<img src="${esc(src)}" referrerpolicy="no-referrer" alt="">`+
+      cell.innerHTML=`<img src="${escUrl(src)}" referrerpolicy="no-referrer" alt="">`+
         `<span class="rsTag">${i===0?"profile":"ref "+(i+1)}</span>`;
       const x=document.createElement('button');
       x.type="button"; x.className="rsDel"; x.textContent="×";
@@ -21007,7 +21062,7 @@ function renderPeVisitLocs(p){
     const tag=l.type==='home'?' <span class="desc">(home)</span>':'';
     const note=isHome?' <span class="desc">— always (lives here)</span>':'';
     return `<label class="peVisitRow">
-      <input type="checkbox" class="peVisitChk" value="${l.id}" ${checked?'checked':''} ${isHome?'disabled':''}>
+      <input type="checkbox" class="peVisitChk" value="${esc(l.id)}" ${checked?'checked':''} ${isHome?'disabled':''}>
       <span>${esc(l.name)}${tag}${note}</span></label>`;
   }).join("");
   el.innerHTML=rows;
@@ -21107,7 +21162,7 @@ let uvImageData=null;   // working universe picture for the open panel
 function renderUniversePicPreview(){
   const el=document.getElementById('uvImgPreview');if(!el)return;
   const u=universeById(state.curUniverse);
-  if(uvImageData){el.innerHTML=`<img src="${uvImageData}" style="width:100%;height:100%;object-fit:cover;border-radius:16px">`;}
+  if(uvImageData){el.innerHTML=`<img src="${escUrl(uvImageData)}" style="width:100%;height:100%;object-fit:cover;border-radius:16px">`;}
   else{el.textContent=(u&&u.avatar)||"🌌";}
 }
 function clearUniversePic(){uvImageData=null;renderUniversePicPreview();}
@@ -21799,7 +21854,7 @@ function _openRelGenPopup(p){
     <textarea id="relGenGuide" style="min-height:90px" placeholder="e.g. She is ${esc(state.user||"the player")}'s wife of ten years, quietly resentful. A cousin to Polat. Treats Mümtaz as a rival."></textarea>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
       <button class="btn sec small" onclick="document.getElementById('relGenPop').remove()">Cancel</button>
-      <button class="btn small" id="relGenGo" onclick="_runRelGen('${p.id}')">Generate</button>
+      <button class="btn small" id="relGenGo" onclick="_runRelGen('${escJs(p.id)}')">Generate</button>
     </div></div>`;
   pop.addEventListener('click',e=>{ if(e.target===pop)pop.remove(); });
   document.body.appendChild(pop);
@@ -22787,7 +22842,7 @@ function _outfitTableHTML(o,slots,setter,words){
   const row=(group,key,label,val)=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">
       <div class="desc" style="min-width:104px;font-size:10px;padding-top:6px">${esc(label)}</div>
       <input class="fld" style="flex:1;font-size:11px" value="${esc(val||"")}" placeholder="not written yet"
-        data-outfit="${group}|${esc(key)}" oninput="${setter}('${group}','${escJs(key)}',this.value)">
+        data-outfit="${group}|${esc(key)}" oninput="${setter}('${escJs(group)}','${escJs(key)}',this.value)">
     </div>`;
   let h=`<div style="margin-top:6px"><b style="font-size:11px">Locations</b>`
     +slots.locations.map(l=>row("byLoc",l.id,l.name,(o.byLoc||{})[l.id])).join("")+`</div>`;
@@ -28810,19 +28865,19 @@ function renderImageRail(){
     return;
   }
   const media = m.video
-    ? `<video src="${m.video}" controls playsinline loop onloadeddata="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')"></video>`
-    : `<img src="${m.img}" referrerpolicy="no-referrer" onload="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')" onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<div class=\\'railEmpty\\' style=\\'border:none\\'>Image couldn\\'t load here.<br>Tap the bubble on the left to view it.</div>')" onclick="viewSceneImage('${m.mid}')">`;
+    ? `<video src="${escUrl(m.video)}" controls playsinline loop onloadeddata="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')"></video>`
+    : `<img src="${escUrl(m.img)}" referrerpolicy="no-referrer" onload="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')" onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<div class=\\'railEmpty\\' style=\\'border:none\\'>Image couldn\\'t load here.<br>Tap the bubble on the left to view it.</div>')" onclick="viewSceneImage('${escJs(m.mid)}')">`;
   const tag = pinned
     ? `<span class="railTag pinned"><svg class="ic" style="width:12px;height:12px"><use href="#i-pin"/></svg> Pinned</span>`
     : `<span class="railTag">Latest</span>`;
   const pinLabel = pinned ? "Unpin" : "Pin";
   const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
-  const frameBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Change frame & regenerate" onclick="pickFrame('${m.mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`:"";
+  const frameBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Change frame & regenerate" onclick="pickFrame('${escJs(m.mid)}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`:"";
   // v27: Video (+ Scene) live in one dropdown.
-  const ddBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${m.mid}')">${icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`:"";
+  const ddBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${escJs(m.mid)}')">${icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`:"";
   rail.innerHTML=`<div class="railImg">${tag}${media}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-      <button class="pinBtn ${pinned?"on":""}" title="${pinLabel}" onclick="togglePin('${m.mid}')"><svg class="ic"><use href="#i-pin"/></svg></button>
+      <button class="pinBtn ${pinned?"on":""}" title="${pinLabel}" onclick="togglePin('${escJs(m.mid)}')"><svg class="ic"><use href="#i-pin"/></svg></button>
       ${ddBtn}${frameBtn}
     </div>`;
 }
@@ -29614,7 +29669,7 @@ function openCast(){
       }
     }
     const row=document.createElement('div');row.className="card";row.style.cssText="flex-direction:row;align-items:center;gap:10px;padding:10px";
-    row.innerHTML=`<span class="avatarChip lg" style="font-size:22px">${p.image?`<img src="${esc(p.image)}" alt="">`:esc(p.avatar||"🎭")}</span>
+    row.innerHTML=`<span class="avatarChip lg" style="font-size:22px">${p.image?`<img src="${escUrl(p.image)}" alt="">`:esc(p.avatar||"🎭")}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600">${esc(p.name)}</div>
         <div class="desc" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${present?'<span class="dot on"></span> nearby':'<span class="dot off"></span> away'}${areaLabel} · ${esc((lookProse(p.look)||p.personality||"").slice(0,28))}</div>
@@ -29857,7 +29912,7 @@ function findMsg(mid){
 // Small avatar HTML (image if available, else emoji) for a persona — used by bubbles & typing.
 function avatarHTML(sp){
   if(!sp) return "";
-  if(sp.image) return `<span class="avatarChip"><img src="${esc(sp.image)}" alt=""></span>`;
+  if(sp.image) return `<span class="avatarChip"><img src="${escUrl(sp.image)}" alt=""></span>`;
   return `<span class="avatarChip">${esc(sp.avatar||"🎭")}</span>`;
 }
 // Compact status strip shown under a character reply: Day · Period · Location · trackers.
@@ -29877,7 +29932,7 @@ function statusStripHTML(m){
   if(loc)bits.push(`<span>${icon("pin")} ${esc(loc)}</span>`);
   let trk="";
   if(trackers.length){
-    trk=`<span class="ss-trk">`+trackers.map(t=>`${esc(t.name)} ${t.val}`).join(" · ")+`</span>`;
+    trk=`<span class="ss-trk">`+trackers.map(t=>`${esc(t.name)} ${esc(t.val)}`).join(" · ")+`</span>`;
   }
   return `<div class="statusStrip">${bits.join('<span class="ss-dot">·</span>')}${trk?'<span class="ss-dot">·</span>'+trk:""}</div>`;
 }
@@ -29969,7 +30024,7 @@ function bubble(m){
   // Per-message edit/delete controls (real chat lines only — not GM/narrator/day markers,
   // which return earlier). Kept tiny and muted so they don't crowd the bubble.
   const _dubBtn = (m.role==='assistant')
-    ? `<button class="msgAct" title="Dub (speak aloud)" data-dub="${m.mid}" onclick="dubMessage('${m.mid}')">${icon("volume")}</button>`
+    ? `<button class="msgAct" title="Dub (speak aloud)" data-dub="${esc(m.mid)}" onclick="dubMessage('${escJs(m.mid)}')">${icon("volume")}</button>`
     : "";   // v19.51: the talking-video button moved into the image's sceneTools bar — the meta-row
             // copy was gated on media EXISTING AT RENDER TIME, but images land async via
             // refreshBubble (which never rebuilt the meta row), so the button effectively never showed.
@@ -29977,9 +30032,9 @@ function bubble(m){
      (reIllustrate → illustrate with force), one tap from the row the other actions live in. A reply
      that already has a picture is drawn again. Phone texts carry no picture. */
   const _imgBtn=(m.role==='assistant'&&!m.textMsg)
-    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${m.mid}" onclick="reIllustrate('${m.mid}')">${icon("image")}</button>`
+    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${esc(m.mid)}" onclick="reIllustrate('${escJs(m.mid)}')">${icon("image")}</button>`
     : "";
-  const actions=`<span class="msgActions">${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${m.mid}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${m.mid}')">${icon("trash")}</button></span>`;
+  const actions=`<span class="msgActions">${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${escJs(m.mid)}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${escJs(m.mid)}')">${icon("trash")}</button></span>`;
   b.innerHTML=`<div class="meta" data-name="${esc(name)}">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${whisperTag}${actions}</div><div class="body"></div>`;
   if(!_revealing)b.querySelector('.body').innerHTML=msgBodyHTML(_dispText(m.content),b);
   if(m.role==='assistant'){
@@ -30326,7 +30381,7 @@ function _stickyImg(m){
   return null;
 }
 function _stickyHTML(st,note,extra){
-  return `<div class="scene sticky"><img src="${st.url}" referrerpolicy="no-referrer" onclick="viewSceneImage('${st.mid}')">
+  return `<div class="scene sticky"><img src="${escUrl(st.url)}" referrerpolicy="no-referrer" onclick="viewSceneImage('${escJs(st.mid)}')">
           <div class="stickyTag">${note}</div>${extra||""}</div>`;
 }
 function sceneHTML(m){
@@ -30339,16 +30394,16 @@ function sceneHTML(m){
   }
   const _c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
   const _pinned=!!(_c&&_c.pinnedMid===mid);
-  const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${mid}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
+  const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${escJs(mid)}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
   // ---- video states take over the scene area once started ----
   if(m.vidState==="loading")
     return `<div class="scene loading"><div class="spin"></div><span id="vidstat_${mid}">Animating scene…</span></div>`;
   if(m.video)
-    return `<div class="scene"><video id="vid_${mid}" src="${m.video}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
+    return `<div class="scene"><video id="vid_${mid}" src="${escUrl(m.video)}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <button class="btn sec small ${m.vidLoop===false?"":"on"}" onclick="toggleVidLoop('${mid}',this)" title="Loop playback"><svg class="ic"><use href="#i-loop"/></svg></button>
-              <button class="btn sec small" onclick="showMediaPrompt('${mid}')" title="Show the generation prompt"><svg class="ic"><use href="#i-info"/></svg></button>
-              <button class="btn sec small" onclick="downloadVideo('${mid}')" title="Save video"><svg class="ic"><use href="#i-download"/></svg></button>
+              <button class="btn sec small ${m.vidLoop===false?"":"on"}" onclick="toggleVidLoop('${escJs(mid)}',this)" title="Loop playback"><svg class="ic"><use href="#i-loop"/></svg></button>
+              <button class="btn sec small" onclick="showMediaPrompt('${escJs(mid)}')" title="Show the generation prompt"><svg class="ic"><use href="#i-info"/></svg></button>
+              <button class="btn sec small" onclick="downloadVideo('${escJs(mid)}')" title="Save video"><svg class="ic"><use href="#i-download"/></svg></button>
               ${pinBtn}</div></div>`;
   // ---- image states ----
   if(m.imgState==="loading"){
@@ -30358,26 +30413,26 @@ function sceneHTML(m){
   }
   if(m.imgState==="error"){
     const st=_stickyImg(m);
-    const retry=`<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("warn")} Retry</button></div>`;
+    const retry=`<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("warn")} Retry</button></div>`;
     return st ? _stickyHTML(st,"Couldn't illustrate this one",retry)
-              : `<div class="scene"><div class="retry">${icon("warn")} Couldn't illustrate.<button class="btn sec small" onclick="reIllustrate('${mid}')">Retry</button></div></div>`;
+              : `<div class="scene"><div class="retry">${icon("warn")} Couldn't illustrate.<button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">Retry</button></div></div>`;
   }
   if(m.img){
     // v27: Video (+ Scene) live in one dropdown under the image.
-    const ddBtn=`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${mid}')">${m.vidState==="error"?icon("warn"):icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`;
-    const v=`${ddBtn} <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${mid}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${mid}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
+    const ddBtn=`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${escJs(mid)}')">${m.vidState==="error"?icon("warn"):icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`;
+    const v=`${ddBtn} <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${escJs(mid)}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${escJs(mid)}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
     const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
-    const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
-    return `<div class="scene"><img src="${m.img}" referrerpolicy="no-referrer" onerror="imgFallback('${mid}',this)" onclick="viewSceneImage('${mid}')">
+    const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${escJs(mid)}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
+    return `<div class="scene"><img src="${escUrl(m.img)}" referrerpolicy="no-referrer" onerror="imgFallback('${escJs(mid)}',this)" onclick="viewSceneImage('${escJs(mid)}')">
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${v}${frameBtn}${pinBtn}</div></div>`;
   }
   // No image yet and not auto-illustrating -> offer a per-request generate button
   // (also while "Pause images" is on: auto-gen is halted, but a manual request still works)
   {const st=_stickyImg(m);
    const gen=(!state.autoImg||state.imgPauseOn)
-     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("image")} Generate image</button></div>` : "";
+     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>` : "";
    if(st) return _stickyHTML(st,"Still this",gen);
-   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("image")} Generate image</button></div>`;}
+   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>`;}
   return "";
 }
 function refreshBubble(mid){
@@ -30481,7 +30536,7 @@ function refreshBubble(mid){
       // Can't embed here (no CORS, mixed-content, or expired URL). Offer the working direct link
       // instead of a dead frame — the video itself generated fine.
       const fb=document.createElement('div');fb.style.cssText="padding:10px;font-size:13px;line-height:1.4";
-      fb.innerHTML=`▶️ Video ready. <a href="${remote}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Tap to open ↗</a>`;
+      fb.innerHTML=`▶️ Video ready. <a href="${escUrl(remote)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Tap to open ↗</a>`;
       if(vid.parentNode){ vid.parentNode.insertBefore(fb,vid); vid.remove(); }
     };
     const bar=document.createElement('div');bar.className="sceneTools";bar.style.cssText="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
@@ -31331,7 +31386,7 @@ function openTextInbox(){
     const u=unreadTextCount(chat,p.id);
     const last=textThreadMsgs(chat,p.id).slice(-1)[0];
     const prev=last?esc(String(last.content).slice(0,42)):'<span class="desc">No messages yet</span>';
-    return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left;width:100%" onclick="openTextWith('${p.id}')">
+    return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left;width:100%" onclick="openTextWith('${escJs(p.id)}')">
       <span style="font-size:20px">${esc(p.avatar||'🎭')}</span>
       <span style="flex:1;min-width:0"><b>${esc(p.name)}</b><br><span style="font-size:12px;opacity:.7">${prev}</span></span>
       ${u?`<span class="calBadge" style="position:static">${u}</span>`:""}</button>`;
@@ -34473,10 +34528,10 @@ async function submitVideo(prompt,firstFrameDataUrl){
   const entry=dbg("Video generation (OpenRouter)","OpenRouter",OR+"/videos",
     Object.assign({},body,firstFrameDataUrl?{frame_images:"[image data omitted]"}:{}));
   let res;
-  try{res=await fetch(OR+"/videos",{method:"POST",
+  try{res=await fetchWithTimeout(OR+"/videos",{method:"POST",
     headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-    body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","Network error");throw{friendly:"Network error submitting video."};}
+    body:JSON.stringify(body)},{timeoutMs:120000});}
+  catch(e){dbgDone(entry,"error",(e&&e.kind==="timeout")?"Timed out submitting":"Network error");throw{friendly:"Network error submitting video."};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:httpMsg(res.status)};}
   const d=await res.json();
   if(!d.id&&!d.polling_url){dbgDone(entry,"error","No job returned");throw{friendly:"Video service didn't return a job."};}
@@ -34492,14 +34547,18 @@ async function pollVideo(job,setStat){
     const elapsed=Math.round((Date.now()-start)/1000);
     setStat(`Generating video… ${elapsed}s`);
     let res;
-    try{res=await fetch(pollUrl,{headers:{"Authorization":"Bearer "+state.key}});}
+    /* (!) v144.1 — the bearer only goes to OpenRouter itself. polling_url and unsigned_urls come
+       from the response and can name a CDN or storage host; they used to get the OpenRouter key too. */
+    try{res=await fetchWithTimeout(pollUrl,{headers:_orAuthFor(pollUrl)},{timeoutMs:30000});}
     catch(e){continue;}
     if(!res.ok){ if(res.status>=500) continue; throw{friendly:httpMsg(res.status)}; }
-    const s=await res.json();
+    let s; try{ s=await res.json(); }catch(e){ continue; }
     if(s.status==="completed"){
       const contentUrl=(s.unsigned_urls&&s.unsigned_urls[0])||(OR+"/videos/"+jobId+"/content?index=0");
       setStat("Downloading…");
-      const vres=await fetch(contentUrl,{headers:{"Authorization":"Bearer "+state.key}});
+      let vres;
+      try{ vres=await fetchWithTimeout(contentUrl,{headers:_orAuthFor(contentUrl)},{timeoutMs:180000}); }
+      catch(e){ throw{friendly:"Couldn't download the finished video."}; }
       if(!vres.ok)throw{friendly:"Couldn't download the finished video."};
       const blob=await vres.blob();
       return URL.createObjectURL(blob);
@@ -34624,7 +34683,7 @@ function openGalleryPicker(opts){
       const on=picked.has(r.id);
       cell.style.cssText="position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid "+(on?"var(--accent)":"transparent");
       cell.innerHTML=r.url
-        ? `<img src="${r.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
+        ? `<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
         : `<div class="desc" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px">…</div>`;
       if(on){ const t=document.createElement('div');
         t.style.cssText="position:absolute;top:4px;right:4px;background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px";
@@ -35109,12 +35168,12 @@ function renderStoryBook(){
   if(!chat||!el)return;
   const ch=bookStructure(chat);
   if(sel)sel.innerHTML=ch.map(c=>{ const n=c.scenes.reduce((a,s)=>a+s.panels.length,0);
-    return `<option value="${c.day}"${c.day===_bookDay?" selected":""}>Day ${c.day} · ${n} picture${n===1?"":"s"}</option>`; }).join("");
+    return `<option value="${esc(c.day)}"${c.day===_bookDay?" selected":""}>Day ${esc(c.day)} · ${n} picture${n===1?"":"s"}</option>`; }).join("");
   {const b=document.getElementById('bookEdBtn'); if(b){ b.classList.toggle('on',!!state.bookEditor); b.title=state.bookEditor?"AI editor on — tap to turn off":"AI editor off — tap to turn on"; }}
   {const t=document.getElementById('bookLayTxt'); if(t)t.textContent=bookLayout()==="page"?"Comic page":"Webtoon";}
   const chap=ch.find(c=>c.day===_bookDay)||ch[ch.length-1];
   if(!chap){ el.innerHTML=""; return; }
-  el.innerHTML=`<h2 class="bkDay">Day ${chap.day}</h2>`+chap.scenes.map(s=>`<section class="bkScene" data-sid="${esc(s.id)}"></section>`).join("");
+  el.innerHTML=`<h2 class="bkDay">Day ${esc(chap.day)}</h2>`+chap.scenes.map(s=>`<section class="bkScene" data-sid="${esc(s.id)}"></section>`).join("");
   chap.scenes.forEach(s=>{
     _bookRenderScene(chat,s);
     if(state.bookEditor&&state.key&&!_bookEdit(chat,s)&&!_bookBusy.has(s.id))_bookQueueEdit(chat,s,false);
@@ -35180,7 +35239,7 @@ function _bookRenderScene(chat,s){
         +(v.caption?`<figcaption class="bkCap">${esc(v.caption)}</figcaption>`:"")+`<div class="bkBubStack">`;
       v.bubbles.forEach((b,bi)=>{
         const pos=(chat.bookPos||{})[p.mid+":"+bi];
-        h+=`<div class="bkBub${bookIsPlayer(b.speaker)?" alt":""}${_bookBubCls(b.text)}${pos?" free":""}" data-key="${esc(p.mid+":"+bi)}"${pos?` style="left:${pos.x}%;top:${pos.y}%"`:""}><b>${esc(b.speaker)}</b>${esc(b.text)}</div>`;
+        h+=`<div class="bkBub${bookIsPlayer(b.speaker)?" alt":""}${_bookBubCls(b.text)}${pos?" free":""}" data-key="${esc(p.mid+":"+bi)}"${pos?` style="left:${+pos.x||0}%;top:${+pos.y||0}%"`:""}><b>${esc(b.speaker)}</b>${esc(b.text)}</div>`;
       });
       h+=`</div></figure>`;
     }
@@ -35529,7 +35588,7 @@ async function _mcRun(seq){
       const est=_mcReadMs(it.v.caption)+it.v.bubbles.reduce((a,b)=>a+_mcReadMs(b.text),0);
       const kb=["mcKb1","mcKb2","mcKb3","mcKb4"][_mc.i%4];
       stage.innerHTML=`<div class="mcFrame">`+(vid
-        ?`<video class="mcMedia" src="${esc(vid)}" autoplay muted playsinline loop></video>`
+        ?`<video class="mcMedia" src="${escUrl(vid)}" autoplay muted playsinline loop></video>`
         :`<img class="mcMedia ${kb}" alt="" style="animation-duration:${Math.max(4,Math.round(est/1000)+3)}s">`)
         +`</div><div class="mcTop"><div class="mcCap" hidden></div></div><div class="mcBot"><div class="mcBub" hidden></div></div>`;
       const media=stage.querySelector('.mcMedia');
@@ -35823,7 +35882,7 @@ function _renderGalImages(el){
     [...counts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,n])=>{
       const card=document.createElement('div'); card.className="charCard"; card.onclick=()=>openGalFolder(name);
       card.innerHTML=`
-        <img class="cc-img" src="${cover.get(name)}" alt="">
+        <img class="cc-img" src="${escUrl(cover.get(name))}" alt="">
         <div class="cc-grad"></div>
         <div class="cc-info"><div class="cc-name">${esc(name)}</div><div class="cc-sub">${n} image${n===1?"":"s"}</div></div>`;
       grid.appendChild(card);
@@ -35908,7 +35967,7 @@ function _renderGalImages(el){
 // fragment nudges engines that only paint a frame after a seek.
 function _vidThumbHTML(url,cls){
   const u=esc(httpsMedia(url))+"#t=0.001";
-  return `<video ${cls?`class="${cls}" `:""}src="${u}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
+  return `<video ${cls?`class="${cls}" `:""}src="${escUrl(u)}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
 }
 function _sceneOwner(s){ return (s&&s.characterName)||""; }
 /* v28.1 — SCENES ARE PER CHARACTER. A scene is created inside one character's video tab and carries
@@ -36156,9 +36215,9 @@ function renderSceneEditor(){
   whenWrap.appendChild(wta); box.appendChild(whenWrap);
   const act=document.createElement('div'); act.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
   act.innerHTML=`
-    <button class="btn small" ${clips.length?"":"disabled"} onclick="playSceneModal('${s.id}')">${icon("play")} Play</button>
-    <button class="btn sec small" ${clips.length?"":"disabled"} onclick="closeSceneEditor();playSceneInChat('${s.id}')">${icon("pin")} Play over story</button>
-    <button class="btn danger small" onclick="deleteScene('${s.id}')">${icon("trash")} Delete</button>`;
+    <button class="btn small" ${clips.length?"":"disabled"} onclick="playSceneModal('${escJs(s.id)}')">${icon("play")} Play</button>
+    <button class="btn sec small" ${clips.length?"":"disabled"} onclick="closeSceneEditor();playSceneInChat('${escJs(s.id)}')">${icon("pin")} Play over story</button>
+    <button class="btn danger small" onclick="deleteScene('${escJs(s.id)}')">${icon("trash")} Delete</button>`;
   box.appendChild(act);
   const lh=document.createElement('div'); lh.className="desc"; lh.style.cssText="font-weight:700;color:var(--text)";
   lh.textContent=`Play order · ${clips.length} clip${clips.length===1?"":"s"}`;
@@ -36405,7 +36464,7 @@ function renderPlayground(){
       recs.forEach((r,i)=>{
         const cell=document.createElement('div');
         cell.style.cssText="position:relative;width:74px;height:74px;border-radius:10px;overflow:hidden;border:2px solid var(--accent);background:var(--surface)";
-        cell.innerHTML=r.url?`<img src="${r.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`:"";
+        cell.innerHTML=r.url?`<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`:"";
         const n=document.createElement('div');
         n.textContent=String(i+1);
         n.style.cssText="position:absolute;left:2px;top:2px;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;background:var(--accent);color:#fff;font-size:11px";
@@ -36729,9 +36788,9 @@ function _i2vRefRow(kind){
       const c=document.createElement('div');
       c.style.cssText="position:relative;width:72px;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#000";
       if(kind==="image"&&r.url){
-        c.innerHTML=`<img src="${esc(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:72px;object-fit:cover;display:block">`;
+        c.innerHTML=`<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:72px;object-fit:cover;display:block">`;
       }else if(kind==="video"&&r.url){
-        c.innerHTML=`<video src="${esc(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:72px;object-fit:cover;display:block"></video>`;
+        c.innerHTML=`<video src="${escUrl(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:72px;object-fit:cover;display:block"></video>`;
       }else{
         c.style.height="72px"; c.style.display="flex"; c.style.alignItems="center"; c.style.justifyContent="center";
         c.innerHTML=`<span style="color:#fff;opacity:.75">${icon(kind==="audio"?"volume":"film")}</span>`;
@@ -36763,8 +36822,8 @@ function _i2vRefRow(kind){
         const c=document.createElement('div');
         c.style.cssText="position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#000;cursor:pointer";
         if(r.url) c.innerHTML=kind==="image"
-          ? `<img src="${esc(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:block">`
-          : `<video src="${esc(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`;
+          ? `<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:block">`
+          : `<video src="${escUrl(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`;
         else c.style.opacity=".35";
         if(r.url) c.onclick=()=>_i2vRefFromGallery(kind,r);
         g.appendChild(c);
@@ -37775,7 +37834,7 @@ function openMediaMenu(ev,mid){
   if(document.getElementById('mediaMenu')){ closeMediaMenu(); return; }
   const menu=document.createElement('div'); menu.className="mediaMenu"; menu.id="mediaMenu";
   menu.innerHTML=`
-    <button onclick="closeMediaMenu();animateScene('${mid}')">${icon("film")}<span>Animate<small>Turn this image into a video clip</small></span></button>
+    <button onclick="closeMediaMenu();animateScene('${escJs(mid)}')">${icon("film")}<span>Animate<small>Turn this image into a video clip</small></span></button>
     <button onclick="closeMediaMenu();openScenePicker({mode:'play'})">${icon("scenes")}<span>Scene<small>Play one of your scenes over the story</small></span></button>`;
   document.body.appendChild(menu);
   const t=ev.currentTarget||ev.target;
@@ -40049,7 +40108,7 @@ function _mapRenderCanvas(){
   // Background: an AI-generated map image if the universe has one, else the drawn parchment SVG.
   let bg="";
   if(u.mapImage){
-    bg=`<image href="${esc(u.mapImage)}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid slice"/>`;
+    bg=`<image href="${escUrl(u.mapImage)}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid slice"/>`;
   }else{
     let h=0; for(const c of String(u.id))h=(h*31+c.charCodeAt(0))>>>0;
     const rnd=()=>{ h^=h<<13;h>>>=0;h^=h>>17;h^=h<<5;h>>>=0; return (h%1000)/1000; };
@@ -40185,7 +40244,7 @@ function _mapLocPanel(locId){
   const here=chat.locationId===locId;
   const inside=charactersAtLocation(chat,locId)||[];
   const rows=inside.map(p=>{
-    const av=p.image?`<img src="${esc(p.image)}" alt="">`:`<span class="mapPopEmoji sm">${esc(p.avatar||"🎭")}</span>`;
+    const av=p.image?`<img src="${escUrl(p.image)}" alt="">`:`<span class="mapPopEmoji sm">${esc(p.avatar||"🎭")}</span>`;
     const atHere=here; // if the location IS the player's location, Go/Bring are moot
     return `<div class="mapCharRow">
       <button class="mapCharAv" title="View ${esc(p.name)}" onclick="_mapCharState('${escJs(p.id)}')">${av}</button>
@@ -40221,7 +40280,7 @@ function _mapTravelFromPanel(locId){
 // info (their standing/goals + their offstage intents). Reuses _renderPeRelationships into a target.
 function _mapCharState(charId){
   const chat=curChat(); const p=(state.personas||[]).find(x=>x.id===charId); if(!chat||!p)return;
-  const av=p.image?`<img src="${esc(p.image)}" alt="">`:`<span class="mapPopEmoji">${esc(p.avatar||"🎭")}</span>`;
+  const av=p.image?`<img src="${escUrl(p.image)}" alt="">`:`<span class="mapPopEmoji">${esc(p.avatar||"🎭")}</span>`;
   // Living-engine intents owned by this character.
   const kindIcon={grievance:icon("bolt"),ambition:icon("crown"),desire:icon("heart"),loyalty:icon("shield"),scheme:icon("dagger")};
   const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment",spent:"resolved / faded",active:"active"};
@@ -41144,7 +41203,7 @@ function questEditUI(qid){
        <textarea class="fld" id="qeProg" style="min-height:90px" placeholder="day 3: Selim admitted he sold the deed."></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeQuestEdit()">Cancel</button>
-       <button class="btn" onclick="questEditSave('${q.id}')">${icon("save")} Save quest</button>
+       <button class="btn" onclick="questEditSave('${escJs(q.id)}')">${icon("save")} Save quest</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeQuestEdit(); });
@@ -41212,7 +41271,7 @@ function openQuestDebugModal(){
       const loc=q.locationId?(locById(q.locationId)?"loc ✓":"loc ?"):(q.location?"loc pending":"no loc");
       const npc=q.npcId?((state.personas||[]).some(p=>p&&p.id===q.npcId)?"npc ✓":"npc ?"):(q.npcName?"npc pending":"no npc");
       const n=(q.progress||[]).length;
-      return `<div class="desc" style="margin:2px 0">#${q.seq??"?"} <b>${esc(q.title||"")}</b> — ${st} · ${loc} · ${npc} · ${n} memory note${n===1?"":"s"}</div>`;
+      return `<div class="desc" style="margin:2px 0">#${esc(q.seq??"?")} <b>${esc(q.title||"")}</b> — ${st} · ${loc} · ${npc} · ${n} memory note${n===1?"":"s"}</div>`;
     }).join("");
     const live=quests.some(q=>q&&q.arc===a&&!q.done&&q.startActive!==false);
     return `<div class="card" style="padding:10px">
@@ -41299,7 +41358,7 @@ function openQuestsModal(){
                     :(q.startActive!==false?`<span style="color:var(--accent2)">active</span>`
                     :`<span style="opacity:.5">locked</span>`);
         // v22.9 — quest memory (progress log) + meeting-style actions on every quest row.
-        const prog=(q.progress||[]).slice(-3).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+        const prog=(q.progress||[]).slice(-3).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
         const live=(!q.done && q.startActive!==false);
         return `<div class="card" style="padding:8px;${q.done?'opacity:.6':''}">
           <div class="qrow">
@@ -41309,10 +41368,10 @@ function openQuestsModal(){
               ${prog}
               ${q.done&&q.result?`<div class="desc" style="color:var(--good);opacity:.8">${icon("check")} ${esc(q.result)}</div>`:""}</div>
             <div class="qbtns">
-              ${live&&(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${q.id}')">▶</button>`:""}
-              <button class="btn sec small" title="Edit" onclick="questEditUI('${q.id}')">${icon("edit")}</button>
-              ${live?`<button class="btn sec small" title="Mark this quest done (the next step follows)" onclick="questMarkDoneUI('${q.id}')">${icon("check")}</button>`:""}
-              <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+              ${live&&(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${escJs(q.id)}')">▶</button>`:""}
+              <button class="btn sec small" title="Edit" onclick="questEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+              ${live?`<button class="btn sec small" title="Mark this quest done (the next step follows)" onclick="questMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>`:""}
+              <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
             </div>
           </div></div>`;
       }).join("");
@@ -41336,7 +41395,7 @@ function openQuestsModal(){
       const askLine=(q.targetId==="__user__"&&q.ask)
         ?`<div class="desc">${icon("message")} wants from ${esc(state.user||"you")}: ${esc(q.ask)} <span class="pill" style="font-size:9px">${esc((q.approach||"either").replace("_"," "))}</span>${gateLbl&&q.approach!=="text"?` <span class="pill" style="font-size:9px">${gateLbl}</span>`:""}${q.delivered?` <span class="pill" style="font-size:9px">asked${q.awaitingUser?" · awaiting answer":""}</span>`:""}</div>`
         :"";
-      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
       return `<div class="card" style="padding:8px;${q.status!=="active"?'opacity:.6':''}">
         <div class="qrow">
           <div class="qtxt"><b>${esc(q.holderName||"?")}</b>${(q.source!=="task"||q.targetName)?` → ${esc(tgt)}`:""} <span class="desc" style="display:inline">· ${q.source==="task"?`<span class="pill" style="font-size:9px">task</span> `:""}${st}</span>
@@ -41345,9 +41404,9 @@ function openQuestsModal(){
             ${askLine}${prog}
             ${q.status!=="active"&&q.result?`<div class="desc" style="color:${q.status==="failed"?"#c0556b":"var(--good)"};opacity:.85">${icon("check")} ${esc(q.result)}</div>`:""}</div>
           <div class="qbtns">
-            <button class="btn sec small" title="Edit" onclick="charQuestEditUI('${q.id}')">${icon("edit")}</button>
-            ${q.status==="active"?`<button class="btn sec small" title="Mark this pursuit resolved" onclick="charQuestMarkDoneUI('${q.id}')">${icon("check")}</button>`:""}
-            <button class="btn danger sec small" title="Delete" onclick="charQuestDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+            <button class="btn sec small" title="Edit" onclick="charQuestEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+            ${q.status==="active"?`<button class="btn sec small" title="Mark this pursuit resolved" onclick="charQuestMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>`:""}
+            <button class="btn danger sec small" title="Delete" onclick="charQuestDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
           </div>
         </div></div>`;
     }).join("");
@@ -42417,8 +42476,8 @@ function charQuestMarkDoneUI(id){
        <textarea class="fld" id="cqResult" style="min-height:64px"></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeCharQuestResolve()">Cancel</button>
-       <button class="btn danger sec" onclick="charQuestResolveSave('${q.id}',true)">Failed</button>
-       <button class="btn" onclick="charQuestResolveSave('${q.id}',false)">${icon("check")} Achieved</button>
+       <button class="btn danger sec" onclick="charQuestResolveSave('${escJs(q.id)}',true)">Failed</button>
+       <button class="btn" onclick="charQuestResolveSave('${escJs(q.id)}',false)">${icon("check")} Achieved</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestResolve(); });
@@ -42465,7 +42524,7 @@ function charQuestEditUI(id){
        <textarea class="fld" id="cqeProg" style="min-height:80px"></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeCharQuestEdit()">Cancel</button>
-       <button class="btn" onclick="charQuestEditSave('${q.id}')">${icon("save")} Save</button>
+       <button class="btn" onclick="charQuestEditSave('${escJs(q.id)}')">${icon("save")} Save</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestEdit(); });
@@ -44513,14 +44572,16 @@ async function embedText(text,opts){
   const url=embedUrlVal();
   const entry=(opts&&opts.noLog)?null:dbg((opts&&opts.dbgLabel)||("Embeddings — "+model),"OpenRouter",url,body);
   try{
-    const r=await fetch(url,{method:"POST",
+    // v144.1 — with a ceiling (body included): a stalled endpoint used to hold retrieval, and the turn, for ever.
+    const g=await fetchWithTimeout(url,{method:"POST",
       headers:{"Content-Type":"application/json","Authorization":"Bearer "+embedKeyVal()},
-      body:JSON.stringify(body)});
+      body:JSON.stringify(body)},{timeoutMs:(opts&&opts.timeoutMs)||30000,read:"json"});
+    const r=g.res;
     if(!r.ok){
-      _embLastErr="HTTP "+r.status+" "+String(await r.text().catch(()=>"")).slice(0,300);
+      _embLastErr="HTTP "+r.status+" "+String(g.text||"").slice(0,300);
       dbgDone(entry,"error",_embLastErr); return null;
     }
-    const j=await r.json();
+    const j=g.data;
     const v=j&&j.data&&j.data[0]&&j.data[0].embedding;
     if(!Array.isArray(v)||!v.length){
       _embLastErr="No embedding vector in response ("+String(JSON.stringify(j)).slice(0,200)+")";
@@ -44801,7 +44862,7 @@ function renderMemory(){
       const card=document.createElement('div'); card.className="charCard"; card.onclick=()=>{memFilterOwner=id;renderMemory();};
       const img=ownerImg(id);
       card.innerHTML=`
-        ${img?`<img class="cc-img" src="${img}" alt="">`:`<div class="cc-emoji">${esc(ownerAvatar(id))}</div>`}
+        ${img?`<img class="cc-img" src="${escUrl(img)}" alt="">`:`<div class="cc-emoji">${esc(ownerAvatar(id))}</div>`}
         <div class="cc-grad"></div>
         <div class="cc-info"><div class="cc-name">${esc(ownerName(id))}</div><div class="cc-sub">${n} memor${n===1?"y":"ies"}</div></div>`;
       grid.appendChild(card);
@@ -44849,8 +44910,8 @@ function renderMemory(){
       ${m.importance!==undefined?`<div class="desc">importance ${imp}%</div>`:""}
       ${tags?`<div class="chips" style="gap:4px">${tags}</div>`:""}
       <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn sec small" onclick='openMemEditor("${m.id}")'>Edit</button>
-        <button class="btn danger sec small" onclick="delMemory('${m.id}')">Delete</button>
+        <button class="btn sec small" onclick='openMemEditor("${escJs(m.id)}")'>Edit</button>
+        <button class="btn danger sec small" onclick="delMemory('${escJs(m.id)}')">Delete</button>
       </div>`;
     el.appendChild(c);
   });
@@ -44893,7 +44954,7 @@ function renderDiary(){
     const cover=p.diaryCover||p.image||null;
     card.innerHTML=`
       <div class="bk-spine"></div>
-      ${cover?`<img class="bk-img" src="${cover}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
+      ${cover?`<img class="bk-img" src="${escUrl(cover)}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
       <div class="bk-grad"></div>
       <div class="bk-info">
         <div class="bk-name">${esc(p.name)}</div>
@@ -44993,7 +45054,8 @@ function openDiaryReader(ownerId,day){
   // bar (title + close) and one bottom chip bar (nav · font · read-aloud · paper look) float ON
   // the paper as translucent ink chips. Font chip CYCLES the handwriting; the palette chip opens the paper-look
   // popover (user prompt → generated texture as the page background, persisted globally).
-  const _paperBg=state.diaryPaperUrl?`background-image:url('${state.diaryPaperUrl.replace(/'/g,"%27")}');background-size:cover;background-position:center;`:"";
+  // v144.1 — inside a style="" attribute: validated, quoted for CSS, then HTML-escaped (a " ended the attribute).
+  const _paperBg=safeMediaUrl(state.diaryPaperUrl)?`background-image:url(${esc(cssUrl(state.diaryPaperUrl))});background-size:cover;background-position:center;`:"";
   const m=document.createElement('div'); m.id="diaryReaderModal"; m.className="modal show";
   m.innerHTML=`
     <div class="diaryReader"><div class="paperWrap paperPage" style="--diary-font:${curFont.css};--diary-size:${curFont.size}px;${_paperBg}">
@@ -45009,7 +45071,7 @@ function openDiaryReader(ownerId,day){
         <span class="diaryChip" style="cursor:default">Day ${day}${days.length>1?` · ${dayIdx+1}/${days.length}`:""}</span>
         <button class="diaryChip" ${nextDay==null?"disabled":""} onclick="${nextDay==null?"":`openDiaryReader('${ownerId}',${nextDay})`}" title="Next day">›</button>
         <button class="diaryChip" onclick="cycleDiaryFont()" title="Handwriting: ${esc(curFont.label||curFont.id)}" style="font-family:${curFont.css}">Aa</button>
-        <button class="diaryChip" data-diaryread onclick="dubDiary('${ownerId}')" title="Read aloud"><svg class="ic"><use href="#i-volume"/></svg></button>
+        <button class="diaryChip" data-diaryread onclick="dubDiary('${escJs(ownerId)}')" title="Read aloud"><svg class="ic"><use href="#i-volume"/></svg></button>
         <button class="diaryChip" onclick="toggleDiaryPaperPop()" title="Paper look">${icon("palette")}</button>
       </div>
     </div></div>`;
@@ -45360,7 +45422,7 @@ function renderOvrFields(){
 function renderProvField(host,fn,cfg){
   const cur=PROVIDERS[String(cfg.prov||"")]?String(cfg.prov):"or";
   const opts=Object.keys(PROVIDERS).map(id=>
-    `<option value="${id}"${id===cur?' selected':''}>${esc(PROVIDERS[id].label)}</option>`).join("");
+    `<option value="${esc(id)}"${id===cur?' selected':''}>${esc(PROVIDERS[id].label)}</option>`).join("");
   host.innerHTML=`
     <div class="kvline" style="padding:0"><label style="margin:0"><svg class="ic"><use href="#i-brain"/></svg> Provider</label>
       <select data-prov class="fld" style="width:auto;padding:3px 8px">${opts}</select></div>
@@ -45737,9 +45799,9 @@ function _plqBlockInner(pKey,b){
       <textarea class="fld" id="${taId}" data-pkey="${key}" oninput="plqInput(this)">
 ${esc(state[key]||"")}</textarea>
       <div class="plqWarnHost">${_phWarnHtml(state[key]||"",promptPlaceholders(key))}</div>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${key}')">Reset to default</button>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${taId}','${key}')">${icon("sparkle")} Write with AI</button>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${taId}','${key}',event)">{{&nbsp;}} Placeholder</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${escJs(key)}')">Reset to default</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${escJs(taId)}','${escJs(key)}')">${icon("sparkle")} Write with AI</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${escJs(taId)}','${escJs(key)}',event)">{{&nbsp;}} Placeholder</button>
       ${used.length>1?`<div class="plqShared">Shared prompt — also used in: ${esc(used.join(", "))}. Editing it here edits it everywhere.</div>`:""}
     </details>`+_plqTplNote(b);
   }
@@ -45956,13 +46018,13 @@ function phMenuForPrompt(taId,promptKey,ev){
   if(ev)ev.stopPropagation();
   const toks=promptPlaceholders(promptKey);
   if(!toks.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">This prompt gets <b>no substitutions</b> — a typed {{token}} would be sent to the model literally.</div>`); return; }
-  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${taId}','${t}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
+  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${escJs(taId)}','${escJs(t)}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
 }
 function phMenuForTpl(taId,tplKey,ev){
   if(ev)ev.stopPropagation();
   const toks=tplPlaceholders(tplKey);
   if(!toks.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">This fragment gets <b>no substitutions</b> — a typed {{token}} would be sent literally.</div>`); return; }
-  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${taId}','${t}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
+  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${escJs(taId)}','${escJs(t)}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
 }
 /* ---- block-level remove / re-add (reply payloads only) ---- */
 function plqRemoveBlock(pKey,bId){
@@ -45994,7 +46056,7 @@ function phAddMenu(pKey,ev){
   if(!removed.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">All placeholder parts are already in this payload. Remove one with ✕ and it becomes re-addable here.</div>`); return; }
   _phMenuShow(ev,removed.map(id=>{
     const b=d.blocks[id];
-    return `<button type="button" onclick="plqAddBlock('${pKey}','${id}')"><b>${esc(b.label)}</b><span class="desc">${esc(b.desc||"")}</span></button>`;
+    return `<button type="button" onclick="plqAddBlock('${escJs(pKey)}','${escJs(id)}')"><b>${esc(b.label)}</b><span class="desc">${esc(b.desc||"")}</span></button>`;
   }).join(""));
 }
 /* ---- the guide card's placeholder dictionary (Settings → Payloads, top card) ---- */
@@ -46199,11 +46261,11 @@ function renderEngineTemplates(){
         <div id="epPieces_${k}"></div>
         <textarea id="epTpl_${k}" rows="12" spellcheck="false"
           style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
-          oninput="epTplInput('${k}')">${esc(ptTemplate(tk))}</textarea>
+          oninput="epTplInput('${escJs(k)}')">${esc(ptTemplate(tk))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${k}')">Preview</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epEditPrompt('${k}')">Edit this engine's prompt</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${k}')">Reset to default</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${escJs(k)}')">Preview</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epEditPrompt('${escJs(k)}')">Edit this engine's prompt</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${escJs(k)}')">Reset to default</button>
         </div>
         <div id="epPrev_${k}" style="margin-top:8px"></div>
       </details>`;
@@ -46298,11 +46360,11 @@ function _ptPieceRow(name,label,desc,kind,ctx){
   return `<div style="padding:8px 9px;border-bottom:1px solid var(--border)">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <code style="font-size:13.5px;color:var(--accent);cursor:pointer" title="Tap to copy {{call//${esc(name)}}}"
-            onclick="ptShowCallName('${name}')">${esc(name)}</code>
+            onclick="ptShowCallName('${escJs(name)}')">${esc(name)}</code>
       <span class="desc" style="flex:1;min-width:130px">${esc(label||"")}</span>
     </div>
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${name}')">copy</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${escJs(name)}')">copy</button>
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${usedCall}">used by</button>
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${editCall}">edit</button>
     </div>
@@ -46366,8 +46428,8 @@ function _ptFragBox(k){
     <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)"${_tall}>
 ${esc(blkTpl(k))}</textarea>
     <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k),!!_box)}</div>
-    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>
-    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button>
+    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${escJs(k)}')">Reset</button>
+    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${escJs(tid)}','${escJs(k)}',event)">{{&nbsp;}} Placeholder</button>
   </div>`;
 }
 
@@ -46462,7 +46524,7 @@ function ptEditPiece(name){
      and does not move here: it keeps its own box in Reply payloads. The piece that carries it gets
      a way back to it, so "edit" never leaves half the piece behind. */
   const ownPrompt=(blk&&blk.kind==="prompt")
-    ? `<button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:8px" onclick="ptJumpToPrompt('${name}')">Your own prompt text is in Reply payloads — open it</button>`
+    ? `<button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:8px" onclick="ptJumpToPrompt('${escJs(name)}')">Your own prompt text is in Reply payloads — open it</button>`
     : "";
   const extra=(!blk||!Array.isArray(blk.tpls)||!blk.tpls.length)?REPLY_EXTRA_TPLS[name]:null;
   if(Array.isArray(extra) && extra.length){
@@ -46511,7 +46573,7 @@ function epEditPrompt(key){
   _ptOpenAncestors(det); det.open=true;
   try{ renderEnginePayloadEditor(card.key); }catch(e){}
   _ptFlash(det);
-  toast("Opened “"+esc(card.label||card.key).replace(/&amp;/g,"&")+"”");
+  toast("Opened “"+(card.label||card.key)+"”");   // v144.1 — toast is text: esc() would show &quot; for a quote
 }
 
 /* ============================================================================================
@@ -46648,12 +46710,12 @@ function renderPayloadTemplates(){
         <div class="desc" data-help style="margin:0 0 6px"><b>Separate your own wording from a call with a BLANK LINE, not <code>{{gap}}</code>.</b> A paragraph — everything between two blank lines — is dropped whole when every call inside it comes back empty, and <code>{{gap}}</code> is a blank line that deliberately does <i>not</i> end the paragraph. That is right for a heading that should vanish with its block, and wrong for your own prose: written next to <code>{{gap}}</code>, it disappears on every turn that call has nothing to say. Use <code>{{gap}}</code> only inside one piece you want to vanish as a unit.</div>
         <textarea id="ptTpl_${kind}" rows="16" spellcheck="false"
           style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
-          oninput="ptTplInput('${kind}')">${esc(ptTemplate(kind))}</textarea>
+          oninput="ptTplInput('${escJs(kind)}')">${esc(ptTemplate(kind))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${kind}')">Preview with my story</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptStripHeaders('${kind}')">Erase the app's wording</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${kind}')">Reset to default</button>
-          ${ptHasPreset(kind)?`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptRestoreTpl('${kind}')" title="The hand-written layout that ships with this build \u2014 grouped headings, every heading its own editable fragment.">Restore authored layout</button>`:""}
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${escJs(kind)}')">Preview with my story</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptStripHeaders('${escJs(kind)}')">Erase the app's wording</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${escJs(kind)}')">Reset to default</button>
+          ${ptHasPreset(kind)?`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptRestoreTpl('${escJs(kind)}')" title="The hand-written layout that ships with this build \u2014 grouped headings, every heading its own editable fragment.">Restore authored layout</button>`:""}
         </div>
         <div id="ptPrev_${kind}" style="margin-top:8px"></div>
       </details>`;
@@ -46757,8 +46819,8 @@ function renderPayloadList(){
       const d=PAYLOAD_DEFS[pk];
       return `<details class="acc" data-plq="${pk}"><summary><b>${esc(d.label)}</b> <span class="desc" style="display:inline">— ${payloadOrder(pk).length-1} parts</span></summary>
         <div class="desc" data-help style="margin:6px 0">${esc(d.desc)}</div>
-        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="resetPayloadOrder('${pk}')">Reset order to default</button>
-        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="phAddMenu('${pk}',event)">＋ Placeholder</button>
+        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="resetPayloadOrder('${escJs(pk)}')">Reset order to default</button>
+        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="phAddMenu('${escJs(pk)}',event)">＋ Placeholder</button>
         <div class="plqBody" id="plqBody_${pk}"></div>
       </details>`;
     }).join("");
@@ -46779,21 +46841,21 @@ function renderPayloadEditor(pKey){
     const isHist=(id==="__history__");
     const isDyn=!isHist&&b.kind==="dyn";
     const badge=isHist?icon("message")+" dialogue":(b.kind==="prompt"?icon("edit")+" text — editable":icon("puzzle")+" placeholder — live data");
-    return `<div class="plqRow${isHist?" plqHist":isDyn?" plqDyn":""}" data-p="${pKey}" data-b="${id}">
+    return `<div class="plqRow${isHist?" plqHist":isDyn?" plqDyn":""}" data-p="${pKey}" data-b="${esc(id)}">
       <div class="plqHead">
         <code class="plqName" title="Tap to copy {{call//${isHist?"dialogue_history":id}}}"
-              onclick="event.stopPropagation();ptShowCallName('${isHist?"dialogue_history":id}')">${isHist?"dialogue_history":id}</code>
+              onclick="event.stopPropagation();ptShowCallName('${escJs(isHist?"dialogue_history":id)}')">${isHist?"dialogue_history":id}</code>
         <span class="plqLabel">${esc(b.label)}</span>
         <span class="plqBadge">${badge}</span>
       </div>
       <div class="plqBtns">
-        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Copy the name you type to call this piece in a payload template" onclick="event.stopPropagation();ptShowCallName('${isHist?"dialogue_history":id}')">copy</button>
-        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Which payload templates use this piece" onclick="event.stopPropagation();ptShowUsedBy('${isHist?"dialogue_history":id}')">used by</button>
-        ${(!isHist&&(Array.isArray(b.tpls)&&b.tpls.length||b.kind==="prompt"))?`<button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Open this piece's wording in the payload template's piece list" onclick="event.stopPropagation();ptEditPiece('${id}')">wording</button>`:""}
+        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Copy the name you type to call this piece in a payload template" onclick="event.stopPropagation();ptShowCallName('${escJs(isHist?"dialogue_history":id)}')">copy</button>
+        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Which payload templates use this piece" onclick="event.stopPropagation();ptShowUsedBy('${escJs(isHist?"dialogue_history":id)}')">used by</button>
+        ${(!isHist&&(Array.isArray(b.tpls)&&b.tpls.length||b.kind==="prompt"))?`<button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Open this piece's wording in the payload template's piece list" onclick="event.stopPropagation();ptEditPiece('${escJs(id)}')">wording</button>`:""}
         <span class="plqArrows">
-          <button type="button" title="Move up" onclick="movePayloadBlock('${pKey}','${id}',-1)">▲</button>
-          <button type="button" title="Move down" onclick="movePayloadBlock('${pKey}','${id}',1)">▼</button>
-          ${isDyn?`<button type="button" title="Remove this placeholder from the payload (re-add with ＋ Placeholder)" onclick="plqRemoveBlock('${pKey}','${id}')">${icon("x")}</button>`:""}
+          <button type="button" title="Move up" onclick="movePayloadBlock('${escJs(pKey)}','${escJs(id)}',-1)">▲</button>
+          <button type="button" title="Move down" onclick="movePayloadBlock('${escJs(pKey)}','${escJs(id)}',1)">▼</button>
+          ${isDyn?`<button type="button" title="Remove this placeholder from the payload (re-add with ＋ Placeholder)" onclick="plqRemoveBlock('${escJs(pKey)}','${escJs(id)}')">${icon("x")}</button>`:""}
         </span>
       </div>
       ${b.desc?`<div class="plqDesc">${esc(b.desc)}${isHist?" Everything above is sent BEFORE it, everything below AFTER it.":""}</div>`:""}
@@ -46830,7 +46892,7 @@ function renderEnginePayloadEditor(eKey){
     const badge=b.kind==="prompt"?icon("edit")+" editable":icon("settings")+" dynamic";
     return `<div class="plqRow">
       <div class="plqHead">
-        ${b.kind==="prompt"?`<code class="plqName" title="The prompt key — its engine template is filed under this name" onclick="event.stopPropagation();ptCopyPlain('${b.promptKey}','Prompt key')">${esc(b.promptKey)}</code>`:""}
+        ${b.kind==="prompt"?`<code class="plqName" title="The prompt key — its engine template is filed under this name" onclick="event.stopPropagation();ptCopyPlain('${escJs(b.promptKey)}','Prompt key')">${esc(b.promptKey)}</code>`:""}
         <span class="plqLabel">${esc(label||"")}</span>
         <span class="plqBadge">${badge}</span>
       </div>
@@ -47664,6 +47726,9 @@ function validateBackupBundle(b){
   }
   ["memory","gossip","scenes"].forEach(k=>{ if(c[k]!==undefined&&c[k]!==null&&!Array.isArray(c[k])) bad(k+" is not a list"); });
   ["universes","personas"].forEach(k=>{ if(c[k]!==undefined&&c[k]!==null&&!Array.isArray(c[k])) bad(k+" is not a list"); });
+  // media fields with a non-media scheme are blanked (not rejected: the rest of the backup is good)
+  sanitizeImportedMedia(c.universes); sanitizeImportedMedia(c.personas); sanitizeImportedMedia(c.chats); sanitizeImportedMedia(c.scenes);
+  if(b.media&&typeof b.media==="object"){ sanitizeImportedMedia(b.media.images); sanitizeImportedMedia(b.media.videos); }
   if(b.localStorage!==undefined){
     if(!isObj(b.localStorage)) bad("settings are malformed");
     for(const k in b.localStorage){ if(typeof b.localStorage[k]!=="string") bad("setting "+k+" is not text"); }
@@ -47784,6 +47849,7 @@ async function exportRoleplay(){
 }
 async function importRoleplayFile(b){
   if(!b||b.kind!=="roleplay") throw new Error("Not a roleplay export");
+  sanitizeImportedMedia(b.universe); sanitizeImportedMedia(b.personas); sanitizeImportedMedia(b.chats);   // v144.1
   if(!(await uiConfirm("Its universe, characters, chats and memories are added. Existing data is kept; items with the same id are overwritten.",{title:"Import this roleplay?",icon:"download",ok:"Import"}))) return false;
   // Merge universe + personas (so the roleplay is playable), then chats + memories.
   if(b.universe){ const i=state.universes.findIndex(u=>u.id===b.universe.id); if(i>=0)state.universes[i]=b.universe; else state.universes.push(b.universe); persistUniverses(); }
@@ -47811,6 +47877,8 @@ async function exportUniverses(){
 }
 async function importUniversesFile(b){
   if(!b||b.kind!=="universes") throw new Error("Not a universes export");
+  if(!Array.isArray(b.universes||[])||(b.personas!=null&&!Array.isArray(b.personas))) throw new Error("Damaged universes export");
+  sanitizeImportedMedia(b.universes); sanitizeImportedMedia(b.personas);   // v144.1
   let incoming=b.universes||[];
   if(!incoming.length){ toast("No universes in that file"); return false; }
   const names=incoming.map(u=>u.name||u.id).join(", ");
@@ -48740,7 +48808,7 @@ function openCallPicker(){
     list.innerHTML=cast.map(p=>{
       const av=esc(p.avatar||'🎭'), nm=esc(p.name);
       const voiceTag=p.voiceId?'':' <span style="opacity:.5;font-size:11px">(default voice)</span>';
-      return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left" onclick="startCallWith('${p.id}')"><span style="font-size:22px">${av}</span> <span>${nm}${voiceTag}</span></button>`;
+      return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left" onclick="startCallWith('${escJs(p.id)}')"><span style="font-size:22px">${av}</span> <span>${nm}${voiceTag}</span></button>`;
     }).join("");
   }
   openModal('callPickerModal');
@@ -48750,7 +48818,7 @@ function startCallWith(pid){
   if(!p){ toast("Character not found"); return; }
   closeModal('callPickerModal');
   // populate overlay — character's generated image if present, else their emoji
-  {const pic=document.getElementById('vcPic'); if(pic){ if(p.image){ pic.style.backgroundImage=`url("${p.image}")`; pic.textContent=''; } else { pic.style.backgroundImage='none'; pic.textContent=p.avatar||'🎭'; } }}
+  {const pic=document.getElementById('vcPic'); if(pic){ if(p.image){ pic.style.backgroundImage=`url(${cssUrl(p.image)})`; pic.textContent=''; } else { pic.style.backgroundImage='none'; pic.textContent=p.avatar||'🎭'; } }}
   {const n=document.getElementById('vcName'); if(n)n.textContent=p.name;}
   {const tr=document.getElementById('vcTranscript'); if(tr){ tr.innerHTML=''; tr.style.display='none'; }}
   vcStatus("Connecting…");

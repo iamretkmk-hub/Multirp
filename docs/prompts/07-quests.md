@@ -157,29 +157,31 @@ Every name in the world's own language and flavor.
 
 ## `x_quest_reconcile` — Quest reconciler (world quests)
 
-At day's end, reads the day's memories and decides what moved on each active quest. Note the output language is named in the text — change it there if your story is not in Turkish.
+At day's end, reads the day's memories (and, for a quest nobody in its cast lived today, the day's other memories and {{user}}'s own lines) and decides what moved on each active quest: done, failed, or progress.
 
 | | |
 |---|---|
 | **Fires** | logged as `Quest reconcile` |
-| **Runs on** | `state.memModel` · bucket `mem` · temp `fnTemp("mem",0.2)` · max `fnTok("mem",520)` |
+| **Runs on** | `state.memModel` · bucket `mem` · temp `fnTemp("mem",0.2)` · max `fnTok("mem",620)` |
 | **Sections** | `data` |
-| **Returns** | `id`, `done`, `result`, `progress` |
-| **Size** | 1499 characters |
+| **Placeholders** | declared: `{{user}}`<br>supplied: `user` |
+| **Returns** | `id`, `done`, `failed`, `result`, `progress`, `line` |
+| **Size** | 2079 characters |
 
 ````text
-You judge the day's progress on the ACTIVE quests of a roleplay, using ONLY the memories as evidence. Each quest below states its FULL objective, its own character(s), and the memories THOSE characters formed today — each memory is listed under the name of the character who holds it. A memory shows how the quest proceeded through that character's eyes; never attribute one character's memory to another.
+You judge the day's progress on the ACTIVE quests of a roleplay, using ONLY the evidence given. Each quest below states its FULL objective, its own character(s), and the memories THOSE characters formed today — each memory is listed under the name of the character who holds it. A memory shows how the quest proceeded through that character's eyes; never attribute one character's memory to another. When a quest's own characters formed nothing today, or cannot be found, judge it from the OTHER MEMORIES FROM TODAY and {{user}}'S OWN LINES further down, if they are given.
 
 For each quest decide:
-- "done": true ONLY if the memories clearly show the quest's objective was achieved today. Never on a hunch; if unsure it stays pending.
-- otherwise, if the memories show something relevant to the quest happened (a step taken toward it, a lead found, a setback, a complication, the quest's subject acted on or discussed), report it as "progress". Report progress whenever the day's memories genuinely touch the quest's subject — partial movement counts.
+- "done": true ONLY if the evidence clearly shows the quest's objective was achieved today. Never on a hunch; if unsure it stays pending.
+- "failed": true ONLY if the evidence clearly shows the objective can no longer be achieved — the person it needs is gone for good, the thing is destroyed, the chance is lost, {{user}} refused it outright. A setback is not a failure.
+- otherwise, if the evidence shows something relevant to the quest happened (a step taken toward it, a lead found, a setback, a complication, the quest's subject acted on or discussed), report it as "progress". Report progress whenever the day's evidence genuinely touches the quest's subject — partial movement counts.
 
 OUTPUT FORMAT — return ONLY a JSON array. No prose, no explanation, no markdown fences.
-- One entry per quest that changed today; a quest with no relevant memories gets NO entry.
+- One entry per quest that changed today; a quest with no relevant evidence gets NO entry.
 - If nothing moved on any quest, return exactly: []
-- Entry shape: {"id":"<the quest id, without the # prefix>","done":true|false,"result":"<only when done: ONE past-tense TURKISH sentence of what happened>","progress":"<only when not done but it moved: ONE past-tense TURKISH sentence of how>"}
+- Entry shape: {"id":"<the quest id, without the # prefix>","done":true|false,"failed":true|false,"result":"<only when done or failed: ONE past-tense sentence of what happened — the record>","progress":"<only when it moved but is still open: ONE past-tense sentence of how — the record>","line":"<only when done or failed: the same outcome as ONE short sentence for the player to read in the story>"}
 Example of a valid reply:
-[{"id":"q_abc123","done":false,"progress":"Aysu babasının çekmecesindeki mektubu buldu ama kimseye göstermedi."}]
+[{"id":"q_abc123","done":false,"failed":false,"progress":"Aysu found the letter in her father's drawer but showed it to no one."}]
 ````
 
 ---
@@ -324,8 +326,8 @@ At day's end, decides what happened to the personal favours characters asked of 
 | **Runs on** | `state.memModel` · bucket `mem` · temp `fnTemp("mem",0.2)` · max `fnTok("mem",480)` |
 | **Placeholders** | declared: `{{user}}`<br>supplied: `user` |
 | **Sections** | `data` |
-| **Returns** | `id`, `done`, `failed`, `answered`, `result`, `progress` |
-| **Size** | 1016 characters |
+| **Returns** | `id`, `done`, `failed`, `answered`, `result`, `progress`, `line` |
+| **Size** | 1366 characters |
 
 ````text
 You judge the day's progress on characters' PERSONAL quests that involve the player ({{user}}), using ONLY the memories as evidence. Each quest below has been ASKED of the player (in person or by text). For each quest decide:
@@ -334,6 +336,7 @@ You judge the day's progress on characters' PERSONAL quests that involve the pla
 - "answered": true if the player meaningfully ENGAGED with the ask today (agreed, bargained, asked questions, said later) — even without finishing it.
 - otherwise, if something relevant happened, report it as "progress".
 Never on a hunch; if unsure it stays pending.
+Entries marked TASK are jobs a character took on themselves. Judge them the same way from the memories: "done" when the memories show it carried out (its "done when" condition met), "failed" when it can no longer happen; "answered" does not apply.
 Return ONLY a JSON array — one entry PER QUEST THAT CHANGED today, or [] if none:
-[{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense ENGLISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense ENGLISH sentence>"}]
+[{"id":"<the quest id>","done":true|false,"failed":true|false,"answered":true|false,"result":"<if done/failed: ONE past-tense ENGLISH sentence of the outcome>","progress":"<if it merely moved: ONE past-tense ENGLISH sentence>","line":"<if done/failed: the same outcome as ONE short sentence for the player to read in the story>"}]
 ````

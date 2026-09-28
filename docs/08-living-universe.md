@@ -79,12 +79,26 @@ Judged, *winnable* social events:
 
 ## Offstage intents & agency (layer 4)
 
-`chat.intents[]` — private motives: `{holderId, valence: warm|hostile, kind (grievance/
-ambition/scheme/courtship/...), targetId, aim, trigger, strength, allies[], status, plan}`.
+`chat.intents[]` — private motives: `{holderId, valence: warm|hostile|self_serving, kind (grievance/
+ambition/scheme/courtship/...), targetId, aim, trigger, strength, priority (high|medium|low),
+fedDay, allies[], status, plan}`. A character carries several at once, up to
+`intentsPerChar()` (Settings → "Max motives per character", `state.intentPerChar`, default 3).
+`intentWeight(i)` = strength × priority factor (1.25 / 1 / 0.75) is what every consumer ranks by
+(which motive colours a reply, which armed plan fires first, the Brewing list).
 
-- **Formation** (every change of the time of day, `runIntentEngine` → `intentForm`): from that stretch's memories
-  (importance ≥ ~0.55), relationship movement, personality. Capped at `intentMax`.
-- **Ticking** (`intentTick`): each End Day a live intent hardens/fades/recruits allies.
+- **Formation** (every change of the time of day, `runIntentEngine` → `intentForm`): from that
+  stretch's memories (importance ≥ ~0.55), relationship movement, personality. The same call
+  **revises** what the holder already carries (`revise[]`: strength delta, fed → `fedDay`, new
+  priority, reshaped aim, or `drop`) and forms up to `{{room}}` new ones. A new want toward the same
+  person with the same kind reinforces the existing motive instead; with no room, a new motive only
+  gets in by outweighing the weakest non-armed one, which it crowds out.
+- **Ticking** (`intentTick`): each End Day, one call per holder over all their live motives, with
+  their memories of the day and their feelings toward each target: what fed or eased each one,
+  priorities, recruits, readiness, drops. **Cooling** is in code (`_intentCool`): a motive not fed
+  today loses 0.03 + 0.03 × idle days (max 0.2), ×0.6 for high priority and ×1.4 for low; under 0.2
+  it is spent ("cooled off"). A failed tick call still cools.
+- Spent motives carry `spentDay`/`spentWhy`; each holder keeps their last three so the former
+  knows what they already acted on or let go.
 - **Contemplation** (`contemplate`): a ready motive picks a concrete **plan** — method
   (direct / public spectacle / proxy / undermine-first / ambush / leverage) + a **gate**
   (target alone / with someone / at a place / audience present).

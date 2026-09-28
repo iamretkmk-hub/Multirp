@@ -645,6 +645,15 @@
   .updBar .updTxt{flex:1;min-width:0;line-height:1.35}
   .updBar button{flex:none;width:auto;margin:0;padding:7px 12px;font-size:13px}
   .updBar .updX{background:none;border:none;color:var(--text);opacity:.5;padding:6px 8px;font-size:16px;cursor:pointer}
+  /* v144.1 — the read-only notice for a second tab: same card, pinned to the top, warning-coloured. */
+  .updBar.tabRo{top:calc(10px + env(safe-area-inset-top,0px));bottom:auto;border-color:var(--warn,#d08a3a)}
+  #stopBtn{background:var(--surface);color:var(--text);box-shadow:none;border:1px solid var(--border);}
+  /* v144.1 — the boot-failure screen (R-OBS-1 "Fatal"): plain words, and a way to get your data out. */
+  #fatalScreen{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center;padding:16px;background:var(--bg,#0B0810);color:var(--text,#eee)}
+  #fatalScreen.show{display:flex}
+  #fatalScreen .fatalCard{max-width:460px;width:100%;background:var(--card,#17121f);border:1px solid var(--border,#333);border-radius:16px;padding:18px;line-height:1.45}
+  #fatalScreen pre{white-space:pre-wrap;word-break:break-word;font-size:11px;opacity:.7;max-height:120px;overflow:auto}
+  #fatalScreen button{margin:6px 6px 0 0;width:auto}
   .spin{width:22px;height:22px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot .8s linear infinite;}
   @keyframes rot{to{transform:rotate(360deg);}}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
@@ -1238,6 +1247,8 @@
     <div id="cmdPalette" class="hide" role="listbox" aria-label="Commands"></div>
     <textarea id="chatInput" rows="1" placeholder="Say or do something…" oninput="cmdPaletteSync()" onkeydown="return cmdPaletteKey(event)" onblur="setTimeout(cmdPaletteHide,140)"></textarea>
     <button class="iconBtn" id="sendBtn" onclick="sendMessage()"><svg class="ic"><use href="#i-send"/></svg></button>
+    <!-- v144.1 — Stop: shown only while a roleplay reply is in flight (see stopReply). -->
+    <button class="iconBtn hide" id="stopBtn" type="button" onclick="stopReply()" title="Stop the reply" aria-label="Stop the reply"><svg class="ic" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg></button>
   </div>
 </div>
 
@@ -1980,7 +1991,7 @@
           <button class="btn sec small" onclick="importPick('all')"><svg class="ic"><use href="#i-arrow-up"/></svg> Import everything (restore)</button>
 
           <div class="desc" style="margin-top:10px;font-weight:600;color:var(--accent)"><svg class="ic"><use href="#i-clock"/></svg> Automatic snapshots</div>
-          <div class="desc">The app quietly keeps the last 3 snapshots of everything on this device. If something goes wrong, restore one here.</div>
+          <div class="desc">The app quietly keeps the last 6 snapshots of your chats, memories, characters and settings on this device (text only — the gallery is not copied). A snapshot is taken about once a minute after changes and when the app goes to the background. If something goes wrong, restore one here.</div>
           <button class="btn sec small" onclick="renderAutoBackups()"><svg class="ic"><use href="#i-refresh"/></svg> Show snapshots</button>
           <div id="autoBkList"></div>
 
@@ -2735,6 +2746,19 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="updBar tabRo" id="tabRoBar" role="alert">
+  <span class="updTxt">StoryMind is open in another tab. This tab is <b>read-only</b> — nothing you do here is saved, so two tabs can't overwrite each other. Close the other tab, then reload this one.</span>
+  <button class="btn small" onclick="updReload()">Reload</button>
+</div>
+<div id="fatalScreen" role="alert">
+  <div class="fatalCard">
+    <h3 style="margin:0 0 8px">StoryMind couldn't start</h3>
+    <div>Something failed while loading your data. Nothing has been changed or deleted — this screen does not write anything. You can download whatever can still be read, then reload.</div>
+    <pre id="fatalMsg"></pre>
+    <button class="btn small" onclick="fatalExport()">Download what's recoverable</button>
+    <button class="btn sec small" onclick="updReload()">Reload</button>
+  </div>
+</div>
 <div class="updBar" id="updBar" role="status">
   <span class="updTxt">A newer build is on the server.</span>
   <button class="btn small" onclick="updReload()">Reload</button>
@@ -2891,13 +2915,36 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
 // ModelsLab API base. Image and video endpoints live under different paths.
 const ML="https://modelslab.com/api/v6/";
 const ATLAS="https://api.atlascloud.ai/api/v1/";   // AtlasCloud image/video (async submit→poll)
+let _lsRev=0;   // v144.1 — bumped by every settings write; the snapshot skip reads it (doAutoBackup)
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v);}catch(e){return d;}},
-  set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){console.warn("storage set failed",k,e);return false;}},
-  raw(k,d){const v=localStorage.getItem(k);return v===null?d:v;},
-  setRaw(k,v){try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}},
+  set(k,v){_lsRev++;try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){console.warn("storage set failed",k,e);return false;}},
+  // v144.1 — raw() had no try/catch: with storage blocked, the first read threw and the app was blank.
+  raw(k,d){try{const v=localStorage.getItem(k);return v===null?d:v;}catch(e){return d;}},
+  setRaw(k,v){_lsRev++;try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}},
   del(k){try{localStorage.removeItem(k);return true;}catch(e){console.warn("storage del failed",k,e);return false;}}};
 
-/* ===== PERF instrumentation (temporary, opt-in) =====
+/* ===== v144.1 — UNCAUGHT ERRORS ARE LOGGED =====
+   An error nobody caught used to vanish (there is no console on a phone). Each one now lands in the
+   Debug log as a failed row, rate-limited so a loop cannot flood it. Boot failures get the fatal
+   screen instead (see init / bootFatal). */
+let _unhandledN=0, _unhandledT=0;
+function _logUnhandled(kind,reason){
+  try{
+    const now=Date.now(); if(now-_unhandledT>60000){ _unhandledT=now; _unhandledN=0; }
+    if(++_unhandledN>20)return;
+    const msg=String((reason&&(reason.friendly||reason.message))||reason||"unknown");
+    try{ console.error("[unhandled] "+kind+":",reason); }catch(_){}
+    if(typeof dbg!=="function")return;
+    const e=dbg("Unhandled · "+kind,"App","(no caller caught this)",{message:msg,stack:String((reason&&reason.stack)||"").slice(0,1500)});
+    dbgDone(e,"error",msg);
+  }catch(_){}
+}
+window.addEventListener('error',ev=>_logUnhandled("error",ev&&(ev.error||ev.message)));
+window.addEventListener('unhandledrejection',ev=>_logUnhandled("promise",ev&&ev.reason));
+// API keys and the TTS relay URL: what "Export everything" leaves out unless asked (see exportAll).
+const SECRET_LS_KEYS=["sm_key","sm_segkey","sm_atlaskey","sm_falkey","sm_civitaikey","sm_nanokey","sm_dgkey","sm_embedkey","sm_ttsrelay"];
+
+/* ===== PERF instrumentation (opt-in; zero cost while off) =====
    Disabled by default — zero overhead. Enable from the console with:  __SM_PERF=true
    Then watch console for timings around renderChat / persistChatsNow / bubble / the send loop,
    plus DOM node counts and (Chrome) JS heap. perfDump() prints aggregate stats. */
@@ -2971,7 +3018,27 @@ const mediaDB=(function(){
         r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error);
       })); }catch(e){ console.warn("idb getAll failed",storeName,e); return []; }
     },
+    // v144.1 — throwing twin of getAll, for hydrateMedia (see the kvGetStrict note below).
+    async getAllStrict(storeName){
+      return await open().then(db=>new Promise((res,rej)=>{
+        const r=db.transaction(storeName,"readonly").objectStore(storeName).getAll();
+        r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error);
+      }));
+    },
     async clear(storeName){ try{ await tx(storeName,"readwrite",s=>s.clear()); return true; }catch(e){ return false; } },
+    /* v144.1 — a backup restore in ONE transaction: every kv entry, plus (optionally) the image and
+       video stores replaced. Either all of it commits or none of it does. Throws on failure. */
+    async restoreAtomic(kv,media){
+      const names=["kv"].concat(media?["images","videos"]:[]);
+      const db=await open();
+      await new Promise((res,rej)=>{
+        const t=db.transaction(names,"readwrite");
+        t.oncomplete=()=>res(); t.onerror=()=>rej(t.error||new Error("transaction failed")); t.onabort=()=>rej(t.error||new Error("transaction aborted"));
+        const k=t.objectStore("kv"); for(const key in kv) k.put(kv[key],key);
+        if(media){ for(const nm of ["images","videos"]){ const s=t.objectStore(nm); s.clear(); (media[nm]||[]).forEach(r=>{ if(r&&r.id) s.put(r); }); } }
+      });
+      return true;
+    },
     // ---- kv helpers for the growing text collections ----
     async kvGet(key){
       try{ return await open().then(db=>new Promise((res,rej)=>{
@@ -3066,7 +3133,7 @@ async function preloadCollections(){
     }
   }
   collectionsSafe=true;
-  for(const key in seed){ try{ await mediaDB.kvSet(key,seed[key]); }catch(e){} }
+  for(const key in seed){ let ok=false; try{ ok=await mediaDB.kvSet(key,seed[key]); }catch(e){} if(!ok)try{ console.error("[storage] migration seed failed:",key); }catch(_){} }
 }
 /* One place for every persist* to ask before it writes. A read-only session still plays — it
    just never commits, and says so once rather than silently discarding the turn. */
@@ -3075,85 +3142,61 @@ function canPersistCollections(){
   if(collectionsSafe) return true;
   if(!_roWarned){
     _roWarned=true;
-    try{ toast("Storage unreadable — NOT saving. Close other tabs and reload before playing."); }catch(_){}
+    try{ toast(_tabReadOnly?"Read-only: StoryMind is open in another tab — close it and reload to save here."
+                          :"Storage unreadable — NOT saving. Close other tabs and reload before playing."); }catch(_){}
   }
   return false;
 }
-
-/* ===== EXPORT / IMPORT ===== back up & restore all app data (localStorage) ===== */
-const APP_PREFIX="sm_";
-function collectAppData(includeKeys){
-  const data={};
-  for(let i=0;i<localStorage.length;i++){
-    const k=localStorage.key(i);
-    if(!k||!k.startsWith(APP_PREFIX))continue;
-    // optionally strip the two API-key fields
-    if(!includeKeys && (k==="sm_key"||k==="sm_segkey"||k==="sm_atlaskey"))continue;
-    data[k]=localStorage.getItem(k);   // store raw string; values are already JSON/string
-  }
-  return data;
-}
-function exportData(includeKeys){
-  try{
-    const payload={
-      app:"StoryMind",
-      version:1,
-      exportedAt:new Date().toISOString(),
-      includesApiKeys:!!includeKeys,
-      data:collectAppData(includeKeys)
-    };
-    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    const stamp=new Date().toISOString().slice(0,19).replace(/[:T]/g,"-");
-    a.href=url;a.download=`storymind-backup-${stamp}.json`;
-    document.body.appendChild(a);a.click();
-    setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},1500);
-    toast("Backup downloaded");
-  }catch(e){toast("Export failed: "+(e.message||e));}
-}
-function triggerImport(){
-  // Open the OS file picker, then restore from the chosen backup.
-  const inp=document.getElementById('importFile');
-  inp.value="";inp.click();
-}
-function handleImportFile(input){
-  const file=input.files&&input.files[0];
-  if(!file)return;
-  const reader=new FileReader();
-  reader.onload=async()=>{
+/* ===== v144.1 — ONE WRITER AT A TIME =====
+   Every collection is written whole, so two open tabs were last-writer-wins: an idle second tab's
+   next save put back the state it loaded, over twenty turns played in the first. The first tab takes
+   a lock at boot; a later tab runs read-only (the same collectionsSafe=false the unreadable-storage
+   path uses) and says so. The lock goes with the tab, so after the first tab closes a reload of the
+   second takes over — and the second is told when that happens. Web Locks where available, else a
+   BroadcastChannel handshake; with neither, every tab writes, as before. */
+let _tabReadOnly=false;
+function acquireWriterLock(){
+  return new Promise(resolve=>{
+    let settled=false; const done=v=>{ if(!settled){ settled=true; resolve(v); } };
     try{
-      const parsed=JSON.parse(reader.result);
-      const data=parsed&&parsed.data?parsed.data:parsed; // tolerate raw-dump format
-      if(!data||typeof data!=="object")throw new Error("Unrecognized backup file");
-      const keys=Object.keys(data).filter(k=>k.startsWith(APP_PREFIX));
-      if(!keys.length)throw new Error("No StoryMind data found in file");
-      const hasKeys=keys.includes("sm_key")||keys.includes("sm_segkey")||keys.includes("sm_atlaskey");
-      const msg=`Restore ${keys.length} items from this backup?`+
-        (parsed.exportedAt?`\nExported: ${new Date(parsed.exportedAt).toLocaleString()}`:"")+
-        `\n\nThis REPLACES your current chats, memories, characters and settings`+
-        (hasKeys?" (including API keys).":".")+`\nThis cannot be undone.`;
-      if(!(await uiConfirm(msg,{title:"Restore this backup?",ok:"Restore",danger:true})))return;
-      // Wipe existing app data first so removed items don't linger.
-      const toRemove=[];
-      for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(APP_PREFIX))toRemove.push(k);}
-      toRemove.forEach(k=>localStorage.removeItem(k));
-      // Write imported values.
-      keys.forEach(k=>{
-        let v=data[k];
-        if(typeof v!=="string")v=JSON.stringify(v); // tolerate already-parsed values
-        localStorage.setItem(k,v);
-      });
-      toast("Restored Reloading…");
-      setTimeout(()=>location.reload(),700);
-    }catch(e){
-      toast("Import failed: "+(e.message||e));
-    }
-  };
-  reader.onerror=()=>toast("Couldn't read that file");
-  reader.readAsText(file);
+      if(navigator.locks&&navigator.locks.request){
+        navigator.locks.request("storymind-writer",{ifAvailable:true},lock=>{
+          if(!lock){ done(false); return; }
+          done(true); return new Promise(()=>{});   // held for the life of the page
+        }).catch(()=>done(true));
+        return;
+      }
+    }catch(e){}
+    try{
+      if(typeof BroadcastChannel!=="undefined"){
+        const bc=new BroadcastChannel("storymind-writer"); let leader=false;
+        bc.onmessage=ev=>{ const m=(ev&&ev.data)||{};
+          if(m.q==="leader?"&&leader) bc.postMessage({a:"me"});
+          else if(m.a==="me"&&!settled) done(false); };
+        bc.postMessage({q:"leader?"});
+        setTimeout(()=>{ if(!settled){ leader=true; done(true); } },400);
+        window._smWriterBc=bc;
+        return;
+      }
+    }catch(e){}
+    done(true);
+  });
+}
+function _showTabReadOnly(){
+  const b=document.getElementById('tabRoBar'); if(b)b.classList.add('show');
+  // Wait for the writer's lock; when the other tab closes, say that a reload now takes over.
+  try{
+    if(navigator.locks&&navigator.locks.request)
+      navigator.locks.request("storymind-writer",()=>{
+        const t=b&&b.querySelector('.updTxt');
+        if(t)t.textContent="The other StoryMind tab has closed. Reload this tab to continue — it will save again.";
+        return new Promise(()=>{});
+      }).catch(()=>{});
+  }catch(e){}
 }
 
+/* v144.1 — the legacy localStorage-only exportData / triggerImport / handleImportFile lived here.
+   Nothing called them (the Backup card uses exportAll / importDispatch); removed. */
 
 /* ===== THE THREE LAYERS THE IMAGE WRITER IS ASSEMBLED FROM =====================================
    A request to the image writer is: the universal prompt (rewritePrompt), then — only for an
@@ -7089,6 +7132,7 @@ function renderDebug(){
       <div data-body class="hide" style="display:flex;flex-direction:column;gap:8px">
         <div class="desc" style="word-break:break-all">${esc(e.endpoint)}</div>
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
+        ${e.usage?`<div class="desc">🧮 Billed: <b>${+e.usage.prompt_tokens||0}</b> prompt + <b>${+e.usage.completion_tokens||0}</b> completion tokens</div>`:""}
         ${_dbgMixLine(e.payload)}
         <div class="kvline" style="padding:0">
           <label style="margin:0">${payloadLabel}</label>
@@ -8783,13 +8827,35 @@ function loadState(){
 // so persist cost scaled with (total messages across ALL chats). We now cache each chat's slim
 // copy keyed by a cheap signature (id + message count + last mid + last msg revision marker) and
 // only rebuild the ones that actually changed. Measured: ~96ms → ~2ms at 10×1000-msg chats.
-const _slimCache=new Map(); // chatId -> {sig, slim}
-function _chatSig(c){
+const _slimCache=new Map(); // chatId -> {sig, msig, slim}
+/* (!) v144.1 — THE SIGNATURE ONLY SAW SIX FIELDS. A chat whose promises, calendar or a durable marker
+   (_prPurged) changed, with no new message, kept its cached copy — and the combined check then skipped
+   the write altogether, so the change never reached disk (the paid promise purge re-ran after every
+   reload). The signature is now two parts: the MESSAGES part (count, last mid, _rev — rebuilding the
+   slim messages is the expensive bit) and a cheap hash over every top-level field, where an object
+   field contributes its identity and length, so a reassignment or an append is seen. In-place edits
+   inside nested objects are still invisible to it: that is what markChatDirty / persistChats(chat) and
+   the per-call touch of the open chat (see persistChats) are for. */
+function _msgSig(c){
   const msgs=c.messages||[];
   const last=msgs[msgs.length-1];
   // _rev is bumped by markChatDirty() on any in-place message edit (img/video/text/state changes).
-  return msgs.length+"|"+(last?last.mid:"")+"|"+(c._rev||0)+"|"+(c.location||"")+"|"+(c.gameDay||0)+"|"+(c.presentIds?c.presentIds.join(","):"");
+  return msgs.length+"|"+(last?last.mid:"")+"|"+(c._rev||0);
 }
+const _sigIds=new WeakMap(); let _sigIdN=0;
+function _sigId(v){ let i=_sigIds.get(v); if(!i){ i=++_sigIdN; _sigIds.set(v,i); } return i; }
+function _h32(s){ let h=0x811c9dc5; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); } return (h>>>0).toString(36); }
+function _topSig(c){
+  let s="";
+  for(const k in c){
+    if(k==="messages"||(k[0]==="_"&&!DURABLE_CHAT_KEYS.has(k)))continue;
+    const v=c[k], t=typeof v;
+    if(v===null||(t!=="object"&&t!=="function")) s+=k+"="+v+";";
+    else s+=k+"#"+_sigId(v)+(Array.isArray(v)?"/"+v.length:"")+";";
+  }
+  return _h32(s);
+}
+function _chatSig(c){ return _msgSig(c)+"|"+(c._touch||0)+"|"+_topSig(c); }
 /* Per-chat fields that begin with "_" but are NOT in-flight state: each one records that
    something has already happened, and losing it on reload makes the app do that thing again.
    Every entry has been checked against its call site; anything not listed is treated as
@@ -8809,8 +8875,8 @@ const DURABLE_CHAT_KEYS=new Set([
                         //   thread used to be re-remembered as a new memory after every reload)
   "_wpKey"              // the day the cached world positions were computed for
 ]);
-function _slimChat(c){
-  const sc={...c,messages:(c.messages||[]).map(m=>{
+function _slimChat(c,cachedMsgs){
+  const sc={...c,messages:cachedMsgs||(c.messages||[]).map(m=>{
     const o={...m};
     // Strip the heavy inline img from persistence, but KEEP a durable remote imgSrc (http(s) URL
     // from the provider) so refreshBubble can restore the image after reload — same pattern as
@@ -8858,11 +8924,12 @@ function persistChatsNow(){ return perf("persistChatsNow",()=>{
   const liveIds=new Set();
   for(const id in state.chats){
     const c=state.chats[id]; liveIds.add(id);
-    const sig=_chatSig(c);
+    const msig=_msgSig(c), sig=msig+"|"+(c._touch||0)+"|"+_topSig(c);
     const hit=_slimCache.get(id);
     if(hit && hit.sig===sig){ slim[id]=hit.slim; continue; }   // unchanged chat — reuse cached slim
-    const sc=_slimChat(c);
-    _slimCache.set(id,{sig,slim:sc});
+    // Only the top level changed → re-copy it around the cached slim messages (cheap).
+    const sc=_slimChat(c,(hit&&hit.msig===msig)?hit.slim.messages:null);
+    _slimCache.set(id,{sig,msig,slim:sc});
     slim[id]=sc;
   }
   // Drop cache entries for deleted chats so the map can't grow unbounded.
@@ -8871,45 +8938,82 @@ function persistChatsNow(){ return perf("persistChatsNow",()=>{
   // changed since the last flush. Debounced persistChats() can fire on no-op paths (re-opening
   // a chat, presence re-checks that change nothing); the combined signature lets us bail cheaply.
   const _combinedSig=Array.from(liveIds).sort().map(id=>id+":"+(_slimCache.get(id)&&_slimCache.get(id).sig)).join("~")+"#cur="+(state.curChat||"");
-  if(_combinedSig===_lastPersistSig){ return; }
-  _lastPersistSig=_combinedSig;
-  // Chats now live in IndexedDB (large quota) — no need to strip-and-pray against a 5MB
-  // ceiling. We still strip base64 media (it lives in the media stores) to keep the blob lean.
+  if(_combinedSig===_lastPersistSig||_combinedSig===_inflightPersistSig){ return; }
+  /* (!) v144.1 — THE "SAVED" SIGNATURE IS RECORDED WHEN THE WRITE SUCCEEDS, not when it starts. It was
+     set before kvSet resolved, so a failed save looked saved and was never retried. The old
+     localStorage rescue copy is gone too: boot only reads it when the key is missing from IndexedDB,
+     so it was never read back, and a multi-megabyte chat blob in localStorage could fill the quota
+     the settings live in ("Storage full — trimming oldest messages" described something that never
+     reached the reload). A failed write now retries with backoff and says so (R-OBS-1). */
+  const sig=_combinedSig; _inflightPersistSig=sig; _dataRev++;
+  // Chats now live in IndexedDB (large quota). We still strip base64 media (it lives in the media
+  // stores) to keep the blob lean.
   mediaDB.kvSet("chats",slim).then(ok=>{
-    if(!ok){
-      // IDB write failed (rare: private mode / disk pressure). Fall back to localStorage so
-      // the turn isn't lost, trimming oldest messages if even that overflows. Work on a deep
-      // copy — slim[id] objects are shared with _slimCache, so trimming them in place would
-      // corrupt the cache (and thus future exports/loads).
-      const fb=JSON.parse(JSON.stringify(slim));
-      if(!store.set(K.chats,fb)){
-        toast("Storage full — trimming oldest messages");
-        const ids=Object.keys(fb).sort((a,b)=>(fb[b].messages.length)-(fb[a].messages.length));
-        let saved=false;
-        for(let pass=0; pass<20 && !saved; pass++){
-          for(const id of ids){ if(fb[id].messages.length>40) fb[id].messages=fb[id].messages.slice(-Math.ceil(fb[id].messages.length*0.8)); }
-          saved=store.set(K.chats,fb);
-        }
-      }
-    }
+    if(_inflightPersistSig===sig)_inflightPersistSig=null;
+    if(_noteWrite("chats",ok)){ _lastPersistSig=sig; return; }
+    _retryWriteLater("chats",()=>persistChatsNow());
   });
   store.setRaw(K.curChat,state.curChat||"");
 }); }
+/* ---- v144.1 — WRITE RESULTS ARE CHECKED (R-OBS-1: "a toast, and a warning if it repeats") ----
+   _noteWrite records one write's outcome: the first failure toasts, a run of failures raises one
+   stronger warning, and any success resets both. _retryWriteLater re-runs a failed collection write
+   with backoff (5s → 60s) — the retry reads the CURRENT value, so it can never write stale data. */
+let _writeFails=0, _writeWarnedOnce=false, _writeWarnedRepeat=false;
+const _writeRetry=new Map();   // key -> {timer, n}
+function _noteWrite(what,ok){
+  if(ok){
+    _writeFails=0; _writeWarnedOnce=false; _writeWarnedRepeat=false;
+    const r=_writeRetry.get(what); if(r){ clearTimeout(r.timer); _writeRetry.delete(what); }
+    return true;
+  }
+  _writeFails++;
+  try{ console.error("[storage] write failed:",what,"(failure "+_writeFails+" in a row)"); }catch(_){}
+  try{ if(typeof dbg==="function"){ const e=dbg("Storage · save "+what,"IndexedDB","kv:"+what,{what}); dbgDone(e,"error","write failed ("+_writeFails+" in a row)"); } }catch(_){}
+  if(!_writeWarnedOnce){ _writeWarnedOnce=true; try{ toast("Couldn't save "+what+" — retrying"); }catch(_){} }
+  else if(_writeFails>=3&&!_writeWarnedRepeat){ _writeWarnedRepeat=true;
+    try{ toast("Saving keeps failing (storage full or blocked?) — export a backup from Settings → Backup now"); }catch(_){} }
+  return false;
+}
+function _retryWriteLater(key,fn){
+  const r=_writeRetry.get(key)||{timer:null,n:0};
+  if(r.timer)return;
+  const wait=Math.min(60000,5000*Math.pow(2,r.n)); r.n++;
+  r.timer=setTimeout(()=>{ r.timer=null; try{ fn(); }catch(e){ console.warn("[storage] retry failed",key,e); } },wait);
+  _writeRetry.set(key,r);
+}
+// One collection → its kv key, checked, retried on failure. `get` is read again on each retry.
+function _kvPersist(key,get){
+  if(!canPersistCollections()) return Promise.resolve(false);
+  _dataRev++;
+  return mediaDB.kvSet(key,get()).then(ok=>{
+    if(!_noteWrite(key,ok)) _retryWriteLater(key,()=>_kvPersist(key,get));
+    return ok;
+  });
+}
 // Debounced/coalesced persistence: a turn fires persistChats() many times (once per
 // character message, per nudge, etc). Instead of deep-copying + JSON-stringifying the
 // ENTIRE chat blob on each, we coalesce them into a single write a tick later. Any code
 // path that must guarantee a flush (unload, export, clear) calls persistChatsNow().
 let _persistChatsTimer=null;
-let _lastPersistSig=null; // combined per-chat signature of the last write; lets persistChatsNow() skip no-op flushes
-function persistChats(){
+let _lastPersistSig=null; // combined per-chat signature of the last SUCCESSFUL write; lets persistChatsNow() skip no-op flushes
+let _inflightPersistSig=null;   // the signature of a write still in flight (no duplicate write for it)
+/* v144.1 — persistChats(chat) marks that chat dirty itself (its messages are re-slimmed). Called with
+   no chat — as ~160 call sites do, right after changing something on the open chat — it touches the
+   OPEN chat, so a nested in-place change (a promise's wording, a tracker value) is written even though
+   no signature field moved. Background work on another chat should pass that chat. */
+function persistChats(chat){
+  if(chat&&typeof chat==="object"&&chat.messages) markChatDirty(chat);
+  else{ const oc=state.curChat&&state.chats&&state.chats[state.curChat]; if(oc) oc._touch=(oc._touch||0)+1; }
   if(_persistChatsTimer) return;
   _persistChatsTimer=setTimeout(()=>{ _persistChatsTimer=null; persistChatsNow(); scheduleAutoBackup(); }, 400);
 }
 function flushPersistChats(){ if(_persistChatsTimer){ clearTimeout(_persistChatsTimer); _persistChatsTimer=null; } persistChatsNow(); }
-function persistPersonas(){if(!canPersistCollections())return;mediaDB.kvSet("personas",state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
-function persistUniverses(){if(!canPersistCollections())return;mediaDB.kvSet("universes",state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
-function persistMemory(){if(!canPersistCollections())return;mediaDB.kvSet("memory",state.memory);}
-function persistGossip(){if(!canPersistCollections())return;mediaDB.kvSet("gossip",state.gossip||[]);}
+// v144.1 — each write is checked and retried (see _kvPersist); they used to discard kvSet's result.
+function persistPersonas(){if(!canPersistCollections())return;_kvPersist("personas",()=>state.personas);store.setRaw(K.curPersona,state.curPersona);try{captureStaticImages("p");}catch(e){}}
+function persistUniverses(){if(!canPersistCollections())return;_kvPersist("universes",()=>state.universes);store.setRaw(K.curUniverse,state.curUniverse||"");try{captureStaticImages("u");}catch(e){}}
+function persistMemory(){if(!canPersistCollections())return;_kvPersist("memory",()=>state.memory);}
+function persistGossip(){if(!canPersistCollections())return;_kvPersist("gossip",()=>state.gossip||[]);}
 /* ===== v25.11 — DURABLE GALLERY MEDIA =========================================
    Generated images and videos used to be stored as the PROVIDER'S REMOTE URL (fal / AtlasCloud /
    ModelsLab CDN links). Those links expire after a while, so the gallery quietly went blank — the
@@ -9183,37 +9287,76 @@ function dropGalleryMedia(id){
   _gmCaptured.delete(id);
   try{ mediaDB.kvDelete(_gmKey(id)); }catch(e){}
 }
+/* (!) v144.1 — NO MEDIA WRITE BEFORE THE MEDIA HAS BEEN READ. putAll CLEARS the store and writes what
+   is in memory, and hydrateMedia used the soft reads that answer [] on any error — so one failed read
+   at boot (a blocked database during an update reload), followed by the first new picture, replaced
+   the whole gallery with that one picture. The same for scenes. Writes now wait for a hydration that
+   provably read the stores (_mediaSafe); a write asked for before then is remembered and made once
+   hydration succeeds. If hydration fails, media is not saved this session and the player is told. */
+let _mediaSafe=false;
+const _mediaPending=new Set();
+function _canPersistMedia(kind){
+  if(!canPersistCollections())return false;
+  if(_mediaSafe)return true;
+  _mediaPending.add(kind);
+  return false;
+}
 function persistImages(){
+  _gmCaptureAll(state.images);   // additive (per-record byte copies) — safe before hydration
+  if(!_canPersistMedia("images"))return;
+  _dataRev++;
   // Records are metadata now (the bytes live under gmedia:<id>), so the whole gallery is written
   // back — no cap, nothing evicted.
-  mediaDB.putAll("images",(state.images||[]).filter(x=>x&&x.id).map(_slimMediaRec));
-  _gmCaptureAll(state.images);
+  mediaDB.putAll("images",(state.images||[]).filter(x=>x&&x.id).map(_slimMediaRec)).then(ok=>{
+    if(!_noteWrite("images",ok)) _retryWriteLater("images",persistImages); });
   // Best-effort: clear any legacy localStorage images key from older versions.
   try{ localStorage.removeItem(K.images); }catch(e){}
 }
 function persistVideos(){
+  _gmCaptureAll(state.videos);
+  if(!_canPersistMedia("videos"))return;
+  _dataRev++;
   // Every clip is kept — including the ones a scene references, which the old rolling cap of 20
   // had to be taught to spare.
-  mediaDB.putAll("videos",(state.videos||[]).filter(v=>v&&v.id).map(_slimMediaRec));
-  _gmCaptureAll(state.videos);
+  mediaDB.putAll("videos",(state.videos||[]).filter(v=>v&&v.id).map(_slimMediaRec)).then(ok=>{
+    if(!_noteWrite("videos",ok)) _retryWriteLater("videos",persistVideos); });
 }
 // v27 — scenes are tiny metadata (name + ordered clip refs w/ url snapshots) → kv store.
-function persistScenes(){ mediaDB.kvSet("scenes",state.scenes||[]); }
+function persistScenes(){ if(!_canPersistMedia("scenes"))return; _kvPersist("scenes",()=>state.scenes||[]); }
 // Hydrate media arrays from IndexedDB after loadState (async — gallery re-renders when ready).
 let _mediaHydrated=false;   // v27: guards scene-dock stale cleanup until scenes are actually loaded
 async function hydrateMedia(){
+  let imgs, vids, scenes;
   try{
-    const imgs=await mediaDB.getAll("images");
-    const vids=await mediaDB.getAll("videos");
+    imgs=await mediaDB.getAllStrict("images");
+    vids=await mediaDB.getAllStrict("videos");
+    scenes=await mediaDB.kvGetStrict("scenes");
+  }catch(e){
+    // v144.1 — unreadable: keep what this session makes in memory, but never write over the stores.
+    _mediaSafe=false; _mediaPending.clear();
+    try{ console.error("[storage] media unreadable — gallery saves are OFF this session:",e); }catch(_){}
+    try{ toast("The gallery couldn't be read — new pictures won't be saved until you reload"); }catch(_){}
+    return;
+  }
+  try{
     if(imgs&&imgs.length){
       // Merge: keep anything already in memory this session, prepend stored history by date.
       const seen=new Set(state.images.map(x=>x.id));
       const restored=imgs.filter(x=>!seen.has(x.id)).sort((a,b)=>(a.date||0)-(b.date||0));
       state.images=[...restored,...state.images];
     }
-    if(vids&&vids.length){ state.videos=vids.sort((a,b)=>(a.date||0)-(b.date||0)); }
-    const scenes=await mediaDB.kvGet("scenes");
-    if(Array.isArray(scenes)) state.scenes=scenes;
+    if(vids&&vids.length){
+      // v144.1 — merge like the images: a clip made while hydration was running is kept.
+      const seenV=new Set(vids.map(v=>v&&v.id));
+      state.videos=[...vids.sort((a,b)=>(a.date||0)-(b.date||0)),...(state.videos||[]).filter(v=>v&&!seenV.has(v.id))];
+    }
+    if(Array.isArray(scenes)){ const seenS=new Set(scenes.map(x=>x&&x.id)); state.scenes=[...scenes,...(state.scenes||[]).filter(x=>x&&!seenS.has(x.id))]; }
+    _mediaSafe=true;
+    // Writes asked for while hydration ran are made now, on the merged arrays.
+    const pend=[..._mediaPending]; _mediaPending.clear();
+    if(pend.includes("images"))persistImages();
+    if(pend.includes("videos"))persistVideos();
+    if(pend.includes("scenes"))persistScenes();
     bindMediaToUniverse();
     // v25.11 — point every gallery record at its stored bytes (see captureGalleryMedia), so the
     // gallery survives the provider links expiring. Best-effort; failures leave the links in place.
@@ -9224,7 +9367,7 @@ async function hydrateMedia(){
     _mediaHydrated=true;
     const gal=document.getElementById('galleryGrid'); if(gal) renderGallery();
     if(typeof syncSceneDock==="function")try{syncSceneDock();}catch(e){}
-  }catch(e){ console.warn("hydrateMedia failed",e); _mediaHydrated=true; }
+  }catch(e){ console.warn("hydrateMedia failed",e); _mediaHydrated=true; }   // reads succeeded; only the re-linking failed
 }
 // v25.11 — boot pass for gallery media. One key sweep tells us which records have stored bytes;
 // the newest window is materialized into object URLs right away and the rest are left marked
@@ -9661,6 +9804,42 @@ function closeModal(id){document.getElementById(id).classList.remove('show');}
    &#39; back to ' BEFORE the JS runs, so HTML escaping alone cannot keep such a value inside it. */
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function escJs(s){return esc(String(s==null?"":s).replace(/[\\'"\n\r\u2028\u2029<>]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0")));}
+/* v144.1 — a stored or imported URL is only put in src= / href= / url() when it is media the app
+   itself produces: an inline image/video/audio data: URI, a blob: object URL, or an http(s) link
+   (the providers' CDNs). Anything else — javascript:, data:text/html, a relative path smuggled in
+   through an imported universe — becomes "" (an empty, harmless attribute). */
+function safeMediaUrl(u){
+  const s=String(u==null?"":u).trim();
+  return /^(?:data:(?:(?:image|video|audio)\/[\w.+-]+|application\/octet-stream)[;,]|blob:|https?:\/\/)/i.test(s)?s:"";
+}
+function escUrl(u){ return esc(safeMediaUrl(u)); }
+/* v144.1 — on IMPORT, a media-looking field (image, url, src, cover…) holding a URL with any other
+   scheme is blanked, so a shared universe or backup cannot carry javascript: or data:text/html into
+   the app. Prose fields are never touched: only a media-named key whose value starts with a
+   non-web scheme (javascript:, data:, file:…) that is not inline image/video/audio is blanked.
+   Walks objects/arrays in place; returns how many fields it blanked. */
+const _MEDIA_KEY_RE=/(image|img|url|src|cover|photo|picture|portrait|video|thumb|poster)/i;
+const _NOT_MEDIA_KEY_RE=/(prompt|desc|caption|text|content|note|style|name|label|title)/i;
+const _BAD_SCHEME_RE=/^\s*(?:javascript|vbscript|data|file|filesystem|about|jar|intent|chrome[a-z-]*)\s*:/i;
+const _badMediaVal=(k,v)=>_MEDIA_KEY_RE.test(k)&&!_NOT_MEDIA_KEY_RE.test(k)&&_BAD_SCHEME_RE.test(v)&&!safeMediaUrl(v);
+function sanitizeImportedMedia(x,depth){
+  let n=0; depth=depth||0;
+  if(!x||typeof x!=="object"||depth>8)return 0;
+  if(Array.isArray(x)){ for(const v of x) n+=sanitizeImportedMedia(v,depth+1); return n; }
+  for(const k of Object.keys(x)){
+    const v=x[k];
+    if(typeof v==="string"){
+      if(_badMediaVal(k,v)){ x[k]=""; n++; }
+    }else if(v&&typeof v==="object"){
+      // an array of URL strings under a media key (reference images)
+      if(Array.isArray(v)){ for(let i=0;i<v.length;i++){ if(typeof v[i]==="string"&&_badMediaVal(k,v[i])){ v[i]=""; n++; } } }
+      n+=sanitizeImportedMedia(v,depth+1);
+    }
+  }
+  return n;
+}
+// …and inside CSS url(): a quoted CSS string, so a quote in the value cannot end the declaration.
+function cssUrl(u){ return JSON.stringify(safeMediaUrl(u)); }
 /* Reusable "instructions" popup for AI generation. Opens a modern, centered modal with a single
    instruction textarea and resolves with the entered text (possibly "" when the user just presses
    Generate) or null if the user cancels / dismisses. Every "Generate …" button routes through this
@@ -10387,6 +10566,15 @@ async function chatCompletion(messages,model,opts={}){
   const _headers=Object.assign({"Authorization":"Bearer "+_api.key,"Content-Type":"application/json"},
     _isOR?{"HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"}:{});
   const entry=dbg(opts.dbg||"Chat / roleplay",_api.label,_url,body);
+  // v144.1 — a background call waits out a paused provider instead of failing one by one (see _mcBreaker).
+  const _bg=opts.rp!==true&&opts.foreground!==true;
+  if(_bg){ const br=_mcBreakerOpen(_api); if(br){ dbgDone(entry,"error","Skipped — background calls to "+_api.label+" are paused ("+br+")"); throw{friendly:httpMsg(br==="credit"?402:401,_api),paused:true}; } }
+  // v144.1 — Stop. A roleplay reply (or a caller passing opts.signal) can be aborted by the player.
+  const _stopCtl=(opts.rp===true||opts.signal)?_rpCallStart(opts.signal):null;
+  const _sig=_stopCtl?_stopCtl.signal:undefined;
+  const _stopped=()=>{ dbgDone(entry,"error","Stopped by the player"); return {friendly:"Stopped.",stopped:true}; };
+  const _wait=async ms=>{ try{ await _sleep(ms,_sig); }catch(e){ throw _stopped(); } };
+  try{
   // Retry transient failures (rate-limit 429 / 5xx) a couple of times with backoff. This is what
   // turned a burst of schedule calls into "Network error" rows — too many requests at once.
   const maxTry=(opts.retries!=null?opts.retries:2);
@@ -10400,37 +10588,60 @@ async function chatCompletion(messages,model,opts={}){
      timeout so it can be told apart from a refusal, a rate limit or a bad key. The default is
      deliberately generous — the drives writer has legitimately taken 62 seconds — and a call site
      that blocks the UI passes something tighter. */
-  const _tmo=Math.max(5000,+((opts.timeoutMs!=null)?opts.timeoutMs:180000));
-  let res, lastStatus=0, _timedOut=false;
+  /* v144.1 — the floor is 100 ms (it was 5 s) so a test can exercise the timeout; call sites pass
+     seconds. The timeout now covers reading the body as well (fetchWithTimeout), not only the
+     headers: a provider that sent 200 and then stalled mid-body used to hang the turn for ever. */
+  const _tmo=Math.max(100,+((opts.timeoutMs!=null)?opts.timeoutMs:180000));
+  let res, lastStatus=0, d=null, _got=null;
   for(let attempt=0;attempt<=maxTry;attempt++){
+    if(_sig&&_sig.aborted) throw _stopped();
+    if(_bg) await _mcSlot(_api.id);        // v144.1 — at most MC_BG_MAX background calls per provider
     dbgDispatched(entry);                 // v73.1 — this attempt's own clock
-    const _ctrl=(typeof AbortController!=="undefined")?new AbortController():null;
-    const _timer=_ctrl?setTimeout(()=>{ _timedOut=true; try{ _ctrl.abort(); }catch(_){} },_tmo):null;
-    try{res=await fetch(_url,{method:"POST",headers:_headers,
-      body:JSON.stringify(body),signal:_ctrl?_ctrl.signal:undefined});}
+    try{ _got=await fetchWithTimeout(_url,{method:"POST",headers:_headers,body:JSON.stringify(body)},{timeoutMs:_tmo,signal:_sig,read:"json"}); }
     catch(e){
-      const _wasTimeout=_timedOut||(e&&(e.name==="AbortError"||e.name==="TimeoutError"));
-      _timedOut=false;
-      if(attempt<maxTry){ await new Promise(r=>setTimeout(r,600*(attempt+1))); continue; }
+      if(e&&e.kind==="abort") throw _stopped();
+      /* (!) v144.1 — A LONG CALL THAT TIMED OUT IS NOT RETRIED. Each attempt had its own 180 s clock,
+         so a stalled provider held a turn for nine minutes before saying anything. A short timeout
+         (under a minute) still gets its retries — that is a blip, not a stall. */
+      const _wasTimeout=e&&e.kind==="timeout";
+      if(attempt<maxTry && !(_wasTimeout&&_tmo>=60000)){ await _wait(_jitter(600*(attempt+1))); continue; }
       if(_wasTimeout){
         const _secs=Math.round(_tmo/1000);
         dbgDone(entry,"error","Timed out after "+_secs+"s (no response from the provider)");
-        throw{friendly:"The model did not answer within "+_secs+" seconds. The provider may be stalling — try again, or switch the model for this job."};
+        throw{friendly:"The model did not answer within "+_secs+" seconds. The provider may be stalling — try again, or switch the model for this job.",timeout:true};
       }
       dbgDone(entry,"error","Network error");throw{friendly:"Can't reach the internet. Check your connection."};
     }
-    finally{ if(_timer)clearTimeout(_timer); }
-    lastStatus=res.status;
+    finally{ if(_bg)_mcRelease(_api.id); }
+    res=_got.res; lastStatus=res.status;
     if(res.ok)break;
+    // v144.1 — a bad key or no credit pauses the BACKGROUND engines (one toast) instead of each failing.
+    if(res.status===401||res.status===402||res.status===403) _mcBreakerTrip(_api,res.status);
     // retry on rate-limit / server errors; fail fast on client errors (auth, bad model, etc.)
     if((res.status===429||res.status>=500) && attempt<maxTry){
-      await new Promise(r=>setTimeout(r,800*(attempt+1)));
+      // v144.1 — honour Retry-After (seconds or a date), with jitter so parallel calls do not return in step.
+      const ra=_retryAfterMs(res);
+      if(ra!=null&&ra>30000){ dbgDone(entry,"error","HTTP 429 (Retry-After "+Math.round(ra/1000)+"s)"); throw{friendly:"Rate limited by "+_api.label+" — it asks to wait "+Math.round(ra/1000)+" seconds."}; }
+      await _wait(ra!=null?ra+Math.random()*250:_jitter(800*(attempt+1)));
       continue;
     }
-    dbgDone(entry,"error","HTTP "+res.status);throw{friendly:httpMsg(res.status,_api)};
+    dbgDone(entry,"error","HTTP "+res.status+_errSnippet(_got));throw{friendly:httpMsg(res.status,_api)};
   }
   if(!res||!res.ok){dbgDone(entry,"error","HTTP "+lastStatus);throw{friendly:httpMsg(lastStatus||0,_api)};}
-  const d=await res.json();
+  /* (!) v144.1 — A 200 THAT IS NOT A REPLY. `await res.json()` threw a raw SyntaxError on an HTML
+     or truncated body, and a 200 whose body carries only {error:{…}} (gateways do this for upstream
+     failures) read as an empty reply and triggered the paid rescue call. Both are named now. */
+  d=_got.data;
+  if(_got.jsonError){
+    dbgDone(entry,"error","HTTP 200 but the body is not JSON: "+String(_got.text||"").slice(0,200));
+    throw{friendly:_api.label+" sent back something that isn't a model reply. Try again, or switch the model for this job."};
+  }
+  if(d&&d.error&&!(Array.isArray(d.choices)&&d.choices.length)){
+    const em=String((d.error&&(d.error.message||d.error.code))||"unknown error");
+    dbgDone(entry,"error","HTTP 200 carrying an error: "+em.slice(0,300));
+    throw{friendly:_api.label+" returned an error: "+em.slice(0,160)};
+  }
+  _dbgUsage(entry,d);
   let out=extractCompletionText(d);
   // EMPTY-RESPONSE RESCUE. Reasoning models (e.g. deepseek-v4-pro) spend hidden reasoning tokens
   // BEFORE the answer. If max_tokens is small (or the prompt is thin, like a bare arrival note),
@@ -10452,16 +10663,23 @@ async function chatCompletion(messages,model,opts={}){
       _reasonOnly?(_isOR?{reasoning:{enabled:false,exclude:true}}:{reasoning_effort:undefined}):{});
     if(!_isOR&&_reasonOnly)delete retryBody.reasoning_effort;   // no portable "off"; just stop asking
     try{
-      const res2=await fetch(_url,{method:"POST",headers:_headers,body:JSON.stringify(retryBody)});
-      if(res2.ok){
-        const d2=await res2.json();
+      // v144.1 — the rescue has the same ceiling as the call (it had none, and could hang a turn).
+      const g2=await fetchWithTimeout(_url,{method:"POST",headers:_headers,body:JSON.stringify(retryBody)},
+        {timeoutMs:Math.max(100,+(opts.rescueTimeoutMs!=null?opts.rescueTimeoutMs:_tmo)),signal:_sig,read:"json"});
+      if(g2.res.ok&&g2.data){
+        const d2=g2.data;
         const out2=extractCompletionText(d2);
         if(out2.trim()){
+          _dbgUsage(entry,d2,true);
           dbgDone(entry,"ok",out2+"\n\n[recovered after "+(_reasonOnly?"a thinking-only response — retried with thinking disabled and":"an empty response — retried with")+" max_tokens="+bumped+(fin?", first finish_reason="+fin:"")+"]");
           return out2;
         }
       }
-    }catch(e){/* fall through to the soft-error below */}
+    }catch(e){
+      if(e&&e.kind==="abort") throw _stopped();
+      if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Empty response, and the recovery call timed out"); throw{friendly:"The model returned nothing, and the retry timed out. Try again, or switch the model for this job.",timeout:true}; }
+      /* otherwise fall through to the soft-error below */
+    }
   }
   // Surface an empty-but-OK response as a soft error in the log so it's diagnosable instead of
   // looking like a success that did nothing (the old behaviour). The caller still gets "".
@@ -10470,6 +10688,136 @@ async function chatCompletion(messages,model,opts={}){
       ?"(thinking-only response — the model returned its reasoning but never produced an answer, and the retry with thinking disabled didn't recover one either. Turn OFF Settings → LLM Selection → Model reasoning / thinking, raise Max tokens, or pick a non-reasoning model for this job.)"
       :"(empty response — model returned no content; if using a reasoning model, raise the token limit in Settings)"));
   return out;
+  }finally{ if(_stopCtl)_rpCallEnd(_stopCtl); }
+}
+/* ===== v144.1 — MODEL-CALL TRANSPORT HELPERS =====================================================
+   fetchWithTimeout(url, init, {timeoutMs, signal, read}) — one ceiling for the whole exchange. With
+   read:"json"|"text" the body is read under the same timer and it resolves {res, data, text,
+   jsonError}; without `read` it resolves the Response once headers arrive. It throws an Error whose
+   .kind is "timeout", "abort" (the caller's signal) or "network". */
+async function fetchWithTimeout(url,init,o){
+  o=o||{};
+  const ms=Math.max(1,+o.timeoutMs||60000);
+  const ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  let timedOut=false;
+  const timer=ctl?setTimeout(()=>{ timedOut=true; try{ ctl.abort(); }catch(_){} },ms):null;
+  const outer=o.signal, onAbort=()=>{ try{ ctl&&ctl.abort(); }catch(_){} };
+  if(outer){ if(outer.aborted)onAbort(); else outer.addEventListener("abort",onAbort,{once:true}); }
+  const fail=e=>{ const err=new Error(timedOut?"timed out after "+ms+"ms":(outer&&outer.aborted)?"aborted":String((e&&e.message)||e||"network error"));
+    err.kind=timedOut?"timeout":(outer&&outer.aborted)?"abort":"network"; return err; };
+  // Every await below races the abort, so even a transport that ignores the signal cannot hang us.
+  const guard=ctl?new Promise((_,rej)=>ctl.signal.addEventListener("abort",()=>rej(new Error("aborted")),{once:true})):null;
+  if(guard)guard.catch(()=>{});
+  const race=p=>guard?Promise.race([p,guard]):p;
+  try{
+    if(outer&&outer.aborted) throw new Error("aborted");
+    const res=await race(fetch(url,Object.assign({},init,ctl?{signal:ctl.signal}:{})));
+    if(!o.read) return res;
+    if(o.read==="text") return {res,text:(typeof res.text==="function")?await race(res.text()):""};
+    // JSON: parse with res.json(); on failure keep a snippet of the raw body (from a clone) for the log.
+    const cl=(typeof res.clone==="function")?(()=>{ try{ return res.clone(); }catch(_){ return null; } })():null;
+    try{ return {res,data:await race(res.json()),text:"",jsonError:false}; }
+    catch(e){
+      if(timedOut||(outer&&outer.aborted)) throw e;
+      let text=""; try{ text=cl?String(await race(cl.text())):""; }catch(_){}
+      return {res,data:null,text,jsonError:true};
+    }
+  }catch(e){ throw fail(e); }
+  finally{ if(timer)clearTimeout(timer); if(outer)try{ outer.removeEventListener("abort",onAbort); }catch(_){} }
+}
+function _sameOrigin(a,b){ try{ return new URL(a).origin===new URL(b).origin; }catch(e){ return false; } }
+// ModelsLab's own hosts (its fetch_result links have used the legacy stablediffusionapi.com domain).
+function _mlHostOk(u){ try{ const x=new URL(u); return x.protocol==="https:"&&/(^|\.)(modelslab\.com|stablediffusionapi\.com)$/i.test(x.hostname); }catch(e){ return false; } }
+// The OpenRouter bearer, only when `url` is OpenRouter itself (see pollVideo).
+function _orAuthFor(url){ return _sameOrigin(url,OR)?{"Authorization":"Bearer "+state.key}:{}; }
+function _sleep(ms,signal){ return new Promise((res,rej)=>{
+  if(signal&&signal.aborted){ const e=new Error("aborted"); e.kind="abort"; return rej(e); }
+  const t=setTimeout(()=>{ if(signal)signal.removeEventListener("abort",ab); res(); },Math.max(0,ms));
+  const ab=()=>{ clearTimeout(t); const e=new Error("aborted"); e.kind="abort"; rej(e); };
+  if(signal)signal.addEventListener("abort",ab,{once:true});
+}); }
+function _jitter(ms){ return ms*(0.75+Math.random()*0.5); }
+function _retryAfterMs(res){
+  try{
+    const h=res&&res.headers&&res.headers.get&&res.headers.get("Retry-After"); if(!h)return null;
+    const n=parseFloat(h); if(isFinite(n)&&String(+n)===String(h).trim()) return Math.max(0,n*1000);
+    const t=Date.parse(h); return isFinite(t)?Math.max(0,t-Date.now()):null;
+  }catch(e){ return null; }
+}
+function _errSnippet(g){
+  try{ const m=g&&g.data&&g.data.error&&(g.data.error.message||g.data.error.code); return m?" — "+String(m).slice(0,200):""; }catch(e){ return ""; }
+}
+// d.usage (the provider's billed token counts) onto the debug row. `add` sums a rescue call in.
+function _dbgUsage(entry,d,add){
+  try{
+    const u=d&&d.usage; if(!entry||!u)return;
+    const p=+u.prompt_tokens||0, c=+u.completion_tokens||0;
+    if(add&&entry.usage){ entry.usage={prompt_tokens:entry.usage.prompt_tokens+p,completion_tokens:entry.usage.completion_tokens+c}; }
+    else entry.usage={prompt_tokens:p,completion_tokens:c};
+  }catch(e){}
+}
+/* A small semaphore per provider for BACKGROUND model calls. Tracker evaluation alone fans out one
+   call per tracker × owner through Promise.all; a turn could put twenty requests in flight at once,
+   which is what the 429 rows were. Roleplay replies (opts.rp) and foreground calls never queue. */
+const MC_BG_MAX=4;
+const _mcSem={};
+function _mcSlot(pid){
+  const s=_mcSem[pid]||(_mcSem[pid]={n:0,q:[]});
+  if(s.n<MC_BG_MAX){ s.n++; return Promise.resolve(); }
+  return new Promise(r=>s.q.push(r));
+}
+function _mcRelease(pid){
+  const s=_mcSem[pid]; if(!s)return;
+  const next=s.q.shift(); if(next) next(); else s.n=Math.max(0,s.n-1);
+}
+/* Circuit breaker: after a 401/402/403, background calls to that provider are skipped for two
+   minutes (one toast), instead of every engine in the turn failing on its own. It is tied to the
+   key that failed, so fixing the key in Settings lifts it at once. */
+const MC_BREAKER_MS=120000;
+const _mcBreak={};   // pid -> {until, key, why}
+function _mcBreakerTrip(api,status){
+  const why=status===402?"credit":"key";
+  const was=_mcBreak[api.id];
+  _mcBreak[api.id]={until:Date.now()+MC_BREAKER_MS,key:api.key,why};
+  if(!was||was.until<Date.now()){
+    try{ toast(httpMsg(status,api)+" Background engines are paused for 2 minutes."); }catch(_){}
+  }
+}
+function _mcBreakerOpen(api){
+  const b=_mcBreak[api.id]; if(!b)return "";
+  if(b.until<Date.now()||b.key!==api.key){ delete _mcBreak[api.id]; return ""; }
+  return b.why;
+}
+/* The Stop control. Every in-flight roleplay call registers its AbortController here; the stop button
+   (next to Send) is visible while any is out. After a stop, further roleplay calls in the SAME turn
+   (a retry, the refusal fallback, the next speaker) are refused until the send button comes back —
+   the turn's own finally re-enables it, and that is what ends the stop. */
+const _rpCtrls=new Set();
+let _rpStopped=false;
+function _rpCallStart(outer){
+  const c=new AbortController();
+  if(outer){ if(outer.aborted)c.abort(); else outer.addEventListener("abort",()=>c.abort(),{once:true}); }
+  if(_rpStopped)c.abort();
+  _rpCtrls.add(c); _rpStopSync();
+  return c;
+}
+function _rpCallEnd(c){ _rpCtrls.delete(c); _rpStopSync(); }
+function _rpStopSync(){
+  const b=document.getElementById('stopBtn'); if(b) b.classList.toggle('hide',!_rpCtrls.size);
+}
+function stopReply(){
+  if(!_rpCtrls.size)return;
+  _rpStopped=true;
+  _rpCtrls.forEach(c=>{ try{ c.abort(); }catch(_){} });
+  // The stop lasts until the turn gives the send button back (or 20 s, whichever is first).
+  const sb=document.getElementById('sendBtn');
+  const end=()=>{ _rpStopped=false; try{ mo&&mo.disconnect(); }catch(_){} };
+  let mo=null;
+  if(sb&&sb.disabled&&typeof MutationObserver!=="undefined"){
+    mo=new MutationObserver(()=>{ if(!sb.disabled)end(); });
+    mo.observe(sb,{attributes:true,attributeFilter:["disabled"]});
+    setTimeout(end,20000);
+  }else setTimeout(end,1500);
 }
 // REFUSAL DETECTOR. A model can return a NON-EMPTY reply that is actually a content refusal —
 // e.g. DeepSeek v4-pro emits a canned Chinese refusal ("你好，我无法给到相关内容。") on content it
@@ -10496,13 +10844,16 @@ async function imageCompletion(prompt,model,size){
   if(!state.key)throw{friendly:"No API key set."};
   const body={model,modalities:["image"],messages:[{role:"user",content:prompt}],image_config:size?{size}:undefined};
   const entry=dbg("Image generation (OpenRouter)","OpenRouter",OR+"/chat/completions",body);
-  let res;
-  try{res=await fetch(OR+"/chat/completions",{method:"POST",
+  let g;
+  // v144.1 — a ceiling (the call had none) that also covers the body, and a readable non-JSON error.
+  try{g=await fetchWithTimeout(OR+"/chat/completions",{method:"POST",
     headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-    body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","Network error");throw{friendly:"Network error during image generation."};}
-  if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:httpMsg(res.status)};}
-  const d=await res.json();
+    body:JSON.stringify(body)},{timeoutMs:180000,read:"json"});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out after 180s":"Network error");throw{friendly:to?"The image model did not answer within 3 minutes.":"Network error during image generation."};}
+  const res=g.res;
+  if(!res.ok){dbgDone(entry,"error","HTTP "+res.status+_errSnippet(g));throw{friendly:httpMsg(res.status)};}
+  if(g.jsonError||!g.data){dbgDone(entry,"error","HTTP 200 but the body is not JSON: "+String(g.text||"").slice(0,200));throw{friendly:"OpenRouter sent back something that isn't an image reply. Try again."};}
+  const d=g.data;
   const url=d.choices?.[0]?.message?.images?.[0]?.image_url?.url;
   if(!url){dbgDone(entry,"error","No image returned");throw{friendly:"No image returned."};}
   dbgDone(entry,"ok",url);
@@ -10517,9 +10868,9 @@ async function modelslabCall(endpoint,body){
   if(!state.segkey)throw{friendly:"No ModelsLab API key set. Add it in Settings."};
   const payload=Object.assign({key:state.segkey},body);
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});}
-  catch(e){throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},{timeoutMs:120000});}
+  catch(e){throw{friendly:(e&&e.kind==="timeout")?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok)throw{friendly:mlMsg(res.status)};
   let d;try{d=await res.json();}catch(e){throw{friendly:"ModelsLab returned an unreadable response."};}
   return await mlResolve(d);
@@ -10538,8 +10889,10 @@ async function mlResolve(d,setStat){
     if(setStat)setStat(`Generating… (${i*Math.round(eta)||"~"}s)`);
     await new Promise(r=>setTimeout(r,eta*1000));
     let r;
-    try{r=await fetch(fetchUrl,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({key:state.segkey})});}
+    // v144.1 — only ever to ModelsLab: fetch_result comes from the response, and this body carries the key.
+    if(!_mlHostOk(fetchUrl)) throw{friendly:"ModelsLab pointed the result somewhere else; not sending the key there."};
+    try{r=await fetchWithTimeout(fetchUrl,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({key:state.segkey})},{timeoutMs:30000});}
     catch(e){continue;}
     if(!r.ok){ if(r.status>=500) continue; throw{friendly:mlMsg(r.status)}; }
     let s;try{s=await r.json();}catch(e){continue;}
@@ -10574,9 +10927,9 @@ async function modelslabImageWithStat(endpoint,body,setStat,label){
   const payload=Object.assign({key:state.segkey},body);
   const entry=dbg(label||"Image generation (ModelsLab)","ModelsLab",ML+endpoint,Object.assign({},payload,{key:"•••redacted•••"}));
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});}
-  catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},{timeoutMs:120000});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out":"CORS / network");throw{friendly:to?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:mlMsg(res.status)};}
   let d;try{d=await res.json();}catch(e){dbgDone(entry,"error","Unreadable response");throw{friendly:"ModelsLab returned an unreadable response."};}
   try{const url=await mlResolve(d,setStat);dbgDone(entry,"ok",url);return url;}
@@ -10608,9 +10961,9 @@ async function modelslabVideo(prompt,imageUrl,negative,rule){
   const label="Video generation (ModelsLab)"+(rule&&rule.label?" · "+rule.label:"");
   const entry=dbg(label,"ModelsLab",ML+endpoint,Object.assign({},body,{key:"•••redacted•••",init_image:"[image data omitted]"}));
   let res;
-  try{res=await fetch(ML+endpoint,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:mlCorsMsg()};}
+  try{res=await fetchWithTimeout(ML+endpoint,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)},{timeoutMs:120000});}
+  catch(e){const to=e&&e.kind==="timeout"; dbgDone(entry,"error",to?"Timed out":"CORS / network");throw{friendly:to?"ModelsLab did not answer in time. Try again.":mlCorsMsg()};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:mlMsg(res.status)};}
   let d;try{d=await res.json();}catch(e){dbgDone(entry,"error","Unreadable response");throw{friendly:"ModelsLab returned an unreadable response."};}
   try{const url=await mlResolve(d);dbgDone(entry,"ok",url);return url;}
@@ -10657,8 +11010,9 @@ async function atlasGenerate(kind,body,label,setStat,opts){
      throw{friendly:"“"+bad+"” was never uploaded to AtlasCloud, so the request was not sent. This is normally a rejected or missing AtlasCloud API key — check it in Settings and try again."};}}
   const payload=JSON.stringify(body);
   let res;
-  try{res=await fetch(ATLAS+endpoint,{method:"POST",headers:hdr,body:payload});}
-  catch(e){dbgDone(entry,"error","CORS / network ("+Math.round(payload.length/1024)+"KB body)");throw{friendly:"Couldn't reach AtlasCloud (network/CORS). Check your connection."};}
+  try{res=await fetchWithTimeout(ATLAS+endpoint,{method:"POST",headers:hdr,body:payload},{timeoutMs:120000});}
+  catch(e){ if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Timed out submitting"); throw{friendly:"AtlasCloud did not answer in time. Try again."}; }
+    dbgDone(entry,"error","CORS / network ("+Math.round(payload.length/1024)+"KB body)");throw{friendly:"Couldn't reach AtlasCloud (network/CORS). Check your connection."};}
   if(!res.ok){
     // Surface the API's actual validation message (e.g. bad size/aspect) instead of a bare HTTP code.
     let apiMsg="";
@@ -10684,7 +11038,7 @@ async function atlasGenerate(kind,body,label,setStat,opts){
     if(setStat)setStat(`Generating… (${i*Math.round(stepMs/1000)}s)`);
     await new Promise(r=>setTimeout(r,stepMs));
     let r;
-    try{r=await fetch(ATLAS+pollPath+id,{method:"GET",headers:{"Authorization":"Bearer "+state.atlasKey}});}
+    try{r=await fetchWithTimeout(ATLAS+pollPath+id,{method:"GET",headers:{"Authorization":"Bearer "+state.atlasKey}},{timeoutMs:30000});}
     catch(e){continue;}
     if(r.status===404 && pollPath==="model/prediction/"){ pollPath="model/result/"; continue; }  // try alternate path
     if(!r.ok){ if(r.status>=500)continue; dbgDone(entry,"error","HTTP "+r.status); throw{friendly:atlasMsg(r.status)}; }
@@ -11202,8 +11556,9 @@ async function falImage(prompt,negative,rule){
   const url=FAL_RUN+model.replace(/^\/+/,"");
   const entry=dbg("Image generation (fal.ai)"+(rule&&rule.label?" · "+rule.label:""),"fal.ai",url,Object.assign({},body,{loras:loras.length?loras:"[]"}));
   let res;
-  try{ res=await fetch(url,{method:"POST",headers:{"Authorization":"Key "+state.falKey,"Content-Type":"application/json"},body:JSON.stringify(body)}); }
-  catch(e){ dbgDone(entry,"error","CORS / network"); throw{friendly:"Couldn't reach fal.ai from the browser (network/CORS)."}; }
+  try{ res=await fetchWithTimeout(url,{method:"POST",headers:{"Authorization":"Key "+state.falKey,"Content-Type":"application/json"},body:JSON.stringify(body)},{timeoutMs:180000}); }
+  catch(e){ if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Timed out after 180s"); throw{friendly:"fal.ai did not answer within 3 minutes."}; }
+    dbgDone(entry,"error","CORS / network"); throw{friendly:"Couldn't reach fal.ai from the browser (network/CORS)."}; }
   if(!res.ok){ dbgDone(entry,"error","HTTP "+res.status); throw{friendly:falMsg(res.status)}; }
   let d; try{ d=await res.json(); }catch(e){ dbgDone(entry,"error","Unreadable response"); throw{friendly:"fal.ai returned an unreadable response."}; }
   const out=d&&Array.isArray(d.images)&&d.images[0]&&d.images[0].url;
@@ -12374,7 +12729,7 @@ async function dubMessage(mid){
   const m=findMsg(mid); if(!m)return;
   // Replay if we already have audio for this line (xAI only — Inworld streams, no URL to cache).
   if(m.ttsUrl){ _playDubUrl(m.ttsUrl); toast("Playing"); return; }
-  const btn=document.querySelector(`[data-dub="${mid}"]`);
+  const btn=document.querySelector(`[data-dub="${esc(mid)}"]`);
   const setBtn=t=>{ if(btn)btn.innerHTML=t; };
   setBtn("…");
   try{
@@ -13888,7 +14243,7 @@ function renderUniverses(){
     const desc=(u.setting||"").trim().replace(/\s+/g," ");
     const c=document.createElement('div');c.className="charCard uniCard";
     c.innerHTML=`
-      ${u.image?`<img src="${esc(u.image)}" class="cc-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`:`<div class="cc-emoji">${esc(u.avatar||"🌌")}</div>`}
+      ${u.image?`<img src="${escUrl(u.image)}" class="cc-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`:`<div class="cc-emoji">${esc(u.avatar||"🌌")}</div>`}
       <div class="cc-grad-top"></div>
       <div class="cc-grad"></div>
       <button class="cc-edit" title="Edit" data-edit><svg class="ic"><use href="#i-edit"/></svg></button>
@@ -14208,7 +14563,7 @@ function applyLocationBackground(){
     if(u&&u.image)img=u.image;
   }
   if(img){
-    list.style.backgroundImage=`linear-gradient(rgba(13,15,20,0.82),rgba(13,15,20,0.92)), url(${img})`;
+    list.style.backgroundImage=`linear-gradient(rgba(13,15,20,0.82),rgba(13,15,20,0.92)), url(${cssUrl(img)})`;
     list.style.backgroundSize="cover"; list.style.backgroundPosition="center"; list.style.backgroundAttachment="local";
   }else{ list.style.backgroundImage=""; }
 }
@@ -14581,7 +14936,7 @@ function openTravel(){
         <div class="kvline" style="padding:0">
           <div style="min-width:0"><b>${l.type==='home'?icon("home"):icon("pin")} ${esc(l.name)}</b>${here?' <span class="pill" style="font-size:9px">here</span>':''}
             <div class="desc">${esc((l.description||'').slice(0,90))}${res?` · ${icon("users")} ${esc(res)}`:''}</div></div>
-          ${here?'':`<button class="btn small" onclick="chooseCompanions('${l.id}')">Go</button>`}
+          ${here?'':`<button class="btn small" onclick="chooseCompanions('${escJs(l.id)}')">Go</button>`}
         </div></div>`;
     }).join("");
   }
@@ -14605,11 +14960,11 @@ function chooseCompanions(locId){
    <div class="desc" data-help>Select who goes to the same place. Everyone makes their own way there — nobody rides along with you, and the narration puts them at the destination rather than on the road. Residents of the destination will be there regardless.</div>
    <div id="travelCompanions" style="display:flex;flex-direction:column;gap:6px;margin:8px 0">
      ${present.map(p=>`<label class="kvline" style="cursor:pointer"><span>${avatarHTML(p)} ${esc(p.name)}</span>
-        <input type="checkbox" data-cid="${p.id}" checked></label>`).join("")}
+        <input type="checkbox" data-cid="${esc(p.id)}" checked></label>`).join("")}
    </div>
    <div class="row">
-     <button class="btn sec" onclick="_doTravel('${locId}',false)">Go alone</button>
-     <button class="btn" onclick="_doTravel('${locId}',true)">Travel together</button>
+     <button class="btn sec" onclick="_doTravel('${escJs(locId)}',false)">Go alone</button>
+     <button class="btn" onclick="_doTravel('${escJs(locId)}',true)">Travel together</button>
    </div></div>`;
   m.addEventListener('click',e=>{if(e.target===m)_travelClose();});
   document.body.appendChild(m);
@@ -14639,13 +14994,13 @@ function openSubMove(){
     return `<div class="card" style="padding:9px;${isHere?'border-color:var(--accent)':''}">
       <div class="kvline" style="padding:0">
         <div><b>${icon("pin")} ${esc(s.name)}</b>${isHere?' <span class="pill" style="font-size:9px">you are here</span>':''}</div>
-        ${isHere?'':`<button class="btn small" onclick="_doSubMove('${s.id}')">Go</button>`}
+        ${isHere?'':`<button class="btn small" onclick="_doSubMove('${escJs(s.id)}')">Go</button>`}
       </div></div>`;
   }).join("");
   const companions = here.length?`<div class="desc" style="margin-top:8px">Anyone in earshot you tick will come with you:</div>
     <div id="subCompanions" style="display:flex;flex-direction:column;gap:6px;margin:6px 0">
       ${here.map(p=>`<label class="kvline" style="cursor:pointer"><span>${avatarHTML(p)} ${esc(p.name)}</span>
-        <input type="checkbox" data-cid="${p.id}"></label>`).join("")}</div>`:"";
+        <input type="checkbox" data-cid="${esc(p.id)}"></label>`).join("")}</div>`:"";
   const m=document.createElement('div'); m.id="travelModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_travelClose()">×</button>
    <div class="card editCard"><h3>Move within ${esc(l.name)}</h3>
@@ -16900,7 +17255,7 @@ function _calQuestsSection(chat){
       const meta=[locName?icon("pin")+" "+esc(locName):"", npcNm?icon("user")+" "+esc(npcNm)+(npcState?" · "+npcState:""):"", castLine].filter(Boolean).join(" · ");
       // v22.9 — full description (no 160-char cut), the quest memory's latest lines, and the same
       // action set meetings have: go to the place, edit, mark done (chains the next quest), delete.
-      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
       return `<div class="card" style="padding:8px">
         <div class="qrow">
           <div class="qtxt"><b>${esc(q.title||"(untitled)")}</b>
@@ -16908,10 +17263,10 @@ function _calQuestsSection(chat){
           ${meta?`<div class="desc" style="margin-top:3px">${meta}</div>`:""}
           ${prog}</div>
           <div class="qbtns">
-            ${(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${q.id}')">▶</button>`:""}
-            <button class="btn sec small" title="Edit" onclick="questEditUI('${q.id}')">${icon("edit")}</button>
-            <button class="btn sec small" title="Mark done (the next step follows)" onclick="questMarkDoneUI('${q.id}')">${icon("check")}</button>
-            <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+            ${(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${escJs(q.id)}')">▶</button>`:""}
+            <button class="btn sec small" title="Edit" onclick="questEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+            <button class="btn sec small" title="Mark done (the next step follows)" onclick="questMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>
+            <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
           </div>
         </div></div>`;
     };
@@ -16942,7 +17297,7 @@ function openCalendar(){
   const entryRow=e=>{
     const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
     const overdue=!e.done && e.day!=null && e.day<today;
-    const when=e.day!=null?(overdue?`<span style="color:#E8A33D">Day ${e.day} · missed</span>`:`Day ${e.day}`):"";
+    const when=e.day!=null?(overdue?`<span style="color:#E8A33D">Day ${esc(e.day)} · missed</span>`:`Day ${esc(e.day)}`):"";
     const meta=[when, e.period?esc(e.period):"", certLabel(e), dirLabel(e), locName?icon("pin")+" "+esc(locName):"", e.source==='auto'?'auto':""].filter(Boolean).join(" · ");
     const isToday=!e.done && e.day===today;
     return `<div class="card" style="padding:8px;${isToday?'border-color:var(--accent)':''}">
@@ -16952,10 +17307,10 @@ function openCalendar(){
           ${calLived(e)&&e.result?`<div class="desc" style="color:var(--good);opacity:.8">${icon("check")} ${esc(e.result)}</div>`:""}
           ${e.done&&!calLived(e)?`<div class="desc" style="color:#E8A33D;opacity:.8">${_calOutcomeLabel(e)}${e.result?" — "+esc(e.result):""}</div>`:""}</div>
         <div class="qbtns">
-          ${!e.done?`<button class="btn small" title="Attend now" onclick="attendPlan('${e.id}')">▶</button>`:""}
-          <button class="btn sec small" title="Edit" onclick="addCalManual('${e.id}')">${icon("edit")}</button>
-          <button class="btn sec small" title="${e.done?'reopen':'mark done'}" onclick="toggleCalDone('${e.id}')">${e.done?icon("undo"):icon("check")}</button>
-          <button class="btn danger sec small" onclick="delCalEntry('${e.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+          ${!e.done?`<button class="btn small" title="Attend now" onclick="attendPlan('${escJs(e.id)}')">▶</button>`:""}
+          <button class="btn sec small" title="Edit" onclick="addCalManual('${escJs(e.id)}')">${icon("edit")}</button>
+          <button class="btn sec small" title="${e.done?'reopen':'mark done'}" onclick="toggleCalDone('${escJs(e.id)}')">${e.done?icon("undo"):icon("check")}</button>
+          <button class="btn danger sec small" onclick="delCalEntry('${escJs(e.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
         </div></div></div>`;
   };
   const rows=all.length?all.map(entryRow).join("")
@@ -17020,7 +17375,7 @@ function _calBrewingSection(chat){
   const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment"};
   const row=i=>`<div class="card" style="padding:8px">
       <div class="qtxt"><b>${esc(i.holderName||"someone")}${i.targetName?` → ${esc(i.targetName)}`:""}</b>
-        <div class="desc">${esc(i.kind||"motive")} · ${esc(intentPrio(i))} priority · ${esc(statusLbl[i.status]||i.status||"")}${i.born!=null?` · since Day ${i.born}`:(i.day!=null?` · since Day ${i.day}`:"")}</div>
+        <div class="desc">${esc(i.kind||"motive")} · ${esc(intentPrio(i))} priority · ${esc(statusLbl[i.status]||i.status||"")}${i.born!=null?` · since Day ${esc(i.born)}`:(i.day!=null?` · since Day ${esc(i.day)}`:"")}</div>
         ${i.aim?`<div class="desc" style="opacity:.8">${esc(String(i.aim).slice(0,200))}</div>`:""}
         ${i.trigger?`<div class="desc" style="opacity:.6">from: ${esc(String(i.trigger).slice(0,160))}</div>`:""}</div></div>`;
   return `<h3 style="margin-top:14px">${icon("globe")} Brewing
@@ -17032,7 +17387,7 @@ function _calOffstageSection(chat){
   if(!log.length)return "";
   const row=e=>`<div class="card" style="padding:8px">
       <div class="qtxt"><b>${esc(e.headline||String(e.event||"").slice(0,80))}</b>
-        <div class="desc">Day ${e.day}${e.period?", "+esc(e.period):""}${e.place?" · "+esc(e.place):""}${e.who?" · "+esc(e.who):""}</div>
+        <div class="desc">Day ${esc(e.day)}${e.period?", "+esc(e.period):""}${e.place?" · "+esc(e.place):""}${e.who?" · "+esc(e.who):""}</div>
         ${e.event&&e.headline?`<div class="desc" style="opacity:.8">${esc(String(e.event).slice(0,220))}</div>`:""}</div></div>`;
   return `<h3 style="margin-top:14px">${icon("news")} The living universe
       <span class="desc" data-help style="display:inline;font-weight:400">(what happened while you were elsewhere — you do not know these in scene)</span></h3>
@@ -17062,8 +17417,8 @@ function _calPromiseSection(chat){
         ${pr.note?`<div class="desc" style="opacity:.7">${esc(pr.note)}</div>`:""}
         <div class="desc">${meta}</div></div>
       <div class="qbtns">
-        ${pr.status==="open"?`<button class="btn sec small" title="Release them from this" onclick="releasePromise('${pr.id}')">${icon("check")}</button>`:""}
-        <button class="btn danger sec small" title="Delete" onclick="delPromise('${pr.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+        ${pr.status==="open"?`<button class="btn sec small" title="Release them from this" onclick="releasePromise('${escJs(pr.id)}')">${icon("check")}</button>`:""}
+        <button class="btn danger sec small" title="Delete" onclick="delPromise('${escJs(pr.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
       </div></div></div>`;
   };
   return `<div style="margin-top:14px"><div class="desc" style="font-weight:600;margin-bottom:4px">Promises &amp; standing commitments</div>
@@ -17102,7 +17457,7 @@ function _calWorldSection(chat){
         <div class="desc">${meta}</div>
         ${(e.detail||e.origin)&&!e.done?`<div class="desc" style="opacity:.75">${esc(String(e.detail||e.origin).slice(0,180))}</div>`:""}
         ${e.done&&e.result?`<div class="desc" style="color:var(--good);opacity:.8">${icon("check")} ${esc(e.result)}</div>`:""}</div>
-      <div class="qbtns">${!e.done?`<button class="btn sec small" title="Edit" onclick="addCalManual('${e.id}')">${icon("edit")}</button><button class="btn danger sec small" title="Cancel this plan" onclick="delCalEntry('${e.id}')"><svg class="ic"><use href="#i-x"/></svg></button>`:""}</div></div></div>`;
+      <div class="qbtns">${!e.done?`<button class="btn sec small" title="Edit" onclick="addCalManual('${escJs(e.id)}')">${icon("edit")}</button><button class="btn danger sec small" title="Cancel this plan" onclick="delCalEntry('${escJs(e.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>`:""}</div></div></div>`;
   };
   return `<h3 style="margin-top:14px">${icon("news")} World plans <span class="desc" data-help style="display:inline;font-weight:400">(between characters or solo — happen offstage, on their own)</span></h3>
     ${open.map(row).join("")||""}${recent.map(row).join("")||""}`;
@@ -17284,7 +17639,7 @@ function addCalManual(editId){
       const byNameIds=parts0.map(byName).filter(Boolean).map(c=>c.id);
       new Set(all.concat(byNameIds)).forEach(id=>{
         if(primary.has(id))return;
-        const cb=m.querySelector(`#caMore input[data-more="${id}"]`); if(cb)cb.checked=true;
+        const cb=m.querySelector(`#caMore input[data-more="${esc(id)}"]`); if(cb)cb.checked=true;
       });
     }
   }
@@ -19299,7 +19654,7 @@ function openStoryState(){
         const here=presentIdSet.has(fromId);
         const persona=state.personas.find(x=>x.id===fromId);
         const count=targets.length;
-        const header=`<div class="relNameRow" onclick="ssToggleChar('${fromId}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-top:6px">
+        const header=`<div class="relNameRow" onclick="ssToggleChar('${escJs(fromId)}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-top:6px">
           <span style="font-size:17px">${esc(p.avatar||"🎭")}</span>
           <span style="flex:1;min-width:0">
             <b>${esc(p.name)}</b>${here?` <span class="pill" style="font-size:9px">here now</span>`:""}
@@ -19347,9 +19702,9 @@ function openStoryState(){
           ` <span class="pill" style="font-size:9px">${esc(ownerLabel(key))}</span>`;
         rows.push(`<div class="kvline"><span>${esc(t.name)}${ownerTag} <b>${v}${t.max!=null?"/"+t.max:""}</b>${st&&st.text?` <span class="desc">— ${esc(st.text)}</span>`:""}</span>
           <span style="display:flex;gap:4px">
-            <button class="btn sec small" onclick="nudgeTracker('${t.id}',-1,'${key}')">−1</button>
-            <button class="btn sec small" onclick="nudgeTracker('${t.id}',1,'${key}')">+1</button>
-            <button class="btn sec small" onclick="setTrackerVal('${t.id}','${key}')">set</button>
+            <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',-1,'${escJs(key)}')">−1</button>
+            <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',1,'${escJs(key)}')">+1</button>
+            <button class="btn sec small" onclick="setTrackerVal('${escJs(t.id)}','${escJs(key)}')">set</button>
           </span></div>`);
       }
     }
@@ -19421,10 +19776,10 @@ function openStoryState(){
             ${others.length?` \u00b7 also heard by ${esc(others.slice(0,4).join(", "))}`:""}
           </div>
           <span style="display:flex;gap:4px;flex-wrap:wrap">
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','settled')">They believe you</button>
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','believed')">They believe it</button>
-            <button class="btn sec small" onclick="ssResolveGossip('${g.id}','dead')">Never happened</button>
-            <button class="btn sec small" onclick="ssCoolGossip('${g.id}')">Cool off</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','settled')">They believe you</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','believed')">They believe it</button>
+            <button class="btn sec small" onclick="ssResolveGossip('${escJs(g.id)}','dead')">Never happened</button>
+            <button class="btn sec small" onclick="ssCoolGossip('${escJs(g.id)}')">Cool off</button>
           </span>
         </div>`;
       }).join("");
@@ -19569,7 +19924,7 @@ function editUniverse(id){
   {const sel=document.getElementById('ueUserHome');
    if(sel){
      sel.innerHTML=`<option value="">Stay where I am</option>`+
-       _ueLocs.map(l=>`<option value="${l.id}">${esc(l.name)}${l.type==='home'?' (home)':''}</option>`).join("");
+       _ueLocs.map(l=>`<option value="${esc(l.id)}">${esc(l.name)}${l.type==='home'?' (home)':''}</option>`).join("");
      sel.value=u.playerHomeLocId||"";
    }}
   renderUeUserOutfits();   // v140.1 — after the home is chosen: it decides whether the home rows show
@@ -19597,7 +19952,7 @@ function renderTrackerEditor(){
     const meth={llm:"AI",endday:"End Day",trigger_then_day:"event→daily"}[trackerMethod(t)]||"AI";
     row.innerHTML=`<div class="kvline" style="padding:0">
       <div style="min-width:0"><b>${esc(t.name||"(unnamed)")}</b>
-        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${t.min!=null?t.min:0}–${t.max!=null?t.max:100} · ${beh}${t.perDay?` · ${t.perDay>0?"+":""}${t.perDay}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${t.publicAt}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
+        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${t.min!=null?t.min:0}–${t.max!=null?t.max:100} · ${beh}${t.perDay?` · ${t.perDay>0?"+":""}${esc(t.perDay)}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${esc(t.publicAt)}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0">
         <button class="btn sec small" type="button" data-edit>Edit</button>
@@ -19615,7 +19970,7 @@ function toggleTrackerGenForm(){
   if(f){ f.remove(); return; }   // already open → close (× / click-outside / toggle button)
   const uni=editingUniverse; if(!uni){ toast("Save the universe first"); return; }
   const opts=['<option value="__story__">The story (no owner)</option>']
-    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`)).join("");
+    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join("");
   // A centered popup overlay (not an inline block at the bottom of the universe editor).
   f=document.createElement('div'); f.id='tgForm';
   f.style.cssText="position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.6)";
@@ -19725,7 +20080,7 @@ function _teRenderCharList(selectedIds){
   const chars=_teUniverseChars();
   if(!chars.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; return; }
   box.innerHTML=chars.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-    <input type="checkbox" class="teCharChk" value="${p.id}" ${sel.has(p.id)?"checked":""}>
+    <input type="checkbox" class="teCharChk" value="${esc(p.id)}" ${sel.has(p.id)?"checked":""}>
     <span>${esc(p.avatar||"🎭")} ${esc(p.name)}</span></label>`).join("");
 }
 function teSetVis(v){
@@ -19871,7 +20226,7 @@ function renderLocEditor(){
     const resNames=(l.residents||[]).map(id=>(state.personas.find(p=>p.id===id)||{}).name).filter(Boolean).join(", ");
     const row=document.createElement('div'); row.className="card"; row.style.padding="8px";
     const thumb=l.image
-      ? `<img src="${l.image}" data-view style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:zoom-in">`
+      ? `<img src="${escUrl(l.image)}" data-view style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:zoom-in">`
       : `<div data-gen style="width:100%;height:120px;border-radius:10px;margin-bottom:8px;background:var(--surface);border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;cursor:pointer">${icon("image")} No image — tap to generate</div>`;
     row.innerHTML=`${thumb}
       <div class="kvline" style="padding:0">
@@ -20031,7 +20386,7 @@ function editLocation(i){
   if(!cands.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; }
   else{
     box.innerHTML=cands.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
-      <input type="checkbox" class="leResChk" value="${p.id}" ${cur.has(p.id)?"checked":""}>
+      <input type="checkbox" class="leResChk" value="${esc(p.id)}" ${cur.has(p.id)?"checked":""}>
       <span>${esc(p.avatar||"🎭")} ${esc(p.name)}</span></label>`).join("");
   }
   // Sub-areas (private zones). Ensure an entrance, then render the editable list.
@@ -20050,7 +20405,7 @@ function renderLeSubs(){
     const lock=s.entrance;
     const mult=(typeof s.gossipMult==="number")?Math.max(0,Math.min(1,s.gossipMult)):1;
     const imgCell=s.image
-      ? `<img src="${s.image}" class="leSubImg" data-si="${si}" title="View / replace area image" style="width:40px;height:40px;object-fit:cover;border-radius:8px;cursor:zoom-in">`
+      ? `<img src="${escUrl(s.image)}" class="leSubImg" data-si="${si}" title="View / replace area image" style="width:40px;height:40px;object-fit:cover;border-radius:8px;cursor:zoom-in">`
       : `<button class="btn sec small leSubGenImg" type="button" data-si="${si}" title="Generate an image for this area">${icon("sparkle")}</button>`;
     return `<div class="kvline" style="padding:4px 0;gap:8px;flex-wrap:wrap;align-items:center">
       ${imgCell}
@@ -20295,9 +20650,9 @@ function renderUePrompts(){
         <div style="font-size:13px">${esc(reg.label)}${reg.json?' <span class="pill" style="font-size:9px">JSON</span>':''}</div>
         <div class="pill" style="font-size:10px;margin-top:3px;border-color:${overridden?'var(--accent)':'var(--border)'};color:${overridden?'var(--accent)':'var(--muted)'}">${overridden?'Custom for this universe':'Default (global)'}</div>
       </div>
-      <button class="btn sec small" type="button" style="width:auto;padding:6px 10px" onclick="openPromptEdit('${reg.key}','universe')">Edit</button>
-      <button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Paste the current global prompt into this universe as a copy" onclick="setUePromptToGlobal('${reg.key}')">Set to default</button>
-      ${overridden?`<button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Revert to global (inherit, track future global edits)" onclick="clearUePrompt('${reg.key}')">↺</button>`:''}`;
+      <button class="btn sec small" type="button" style="width:auto;padding:6px 10px" onclick="openPromptEdit('${escJs(reg.key)}','universe')">Edit</button>
+      <button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Paste the current global prompt into this universe as a copy" onclick="setUePromptToGlobal('${escJs(reg.key)}')">Set to default</button>
+      ${overridden?`<button class="btn sec small" type="button" style="width:auto;padding:6px 8px" title="Revert to global (inherit, track future global edits)" onclick="clearUePrompt('${escJs(reg.key)}')">↺</button>`:''}`;
     box.appendChild(row);
   });
 }
@@ -20475,7 +20830,7 @@ function renderPersonas(){
     const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":(p.latent?" latent":""));
     const desc=p.personality||p.scenario||p.backstory||"";
     const visual=p.image
-      ? `<img class="cc-img" src="${p.image}" alt="">`
+      ? `<img class="cc-img" src="${escUrl(p.image)}" alt="">`
       : `<div class="cc-emoji">${esc(p.avatar||"🎭")}</div>`;
     const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">removed</div>`:(p.latent?`<div class="cc-dead-badge" title="Undiscovered — /seek to reveal">undiscovered</div>`:"");
     const reviveBtn=p.removed?`<button class="cc-revive" title="Revive" data-revive>Revive</button>`:"";
@@ -20484,7 +20839,7 @@ function renderPersonas(){
       <div class="cc-grad"></div>
       ${deadBadge}
       <button class="cc-edit" title="Edit" data-edit><svg class="ic"><use href="#i-edit"/></svg></button>
-      ${p.removed?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${p.id}" style="display:none"></span></button>`}
+      ${p.removed?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${esc(p.id)}" style="display:none"></span></button>`}
       ${reviveBtn}
       <div class="cc-info">
         <div class="cc-name">${esc(p.name)}</div>
@@ -20557,9 +20912,9 @@ function openCharacterPage(id){
   if(diaryDays.length){
     const dcover=p.diaryCover||p.image||null;
     diaryHtml=`<div class="cpSection"><div class="subhead">${icon("book")} Diary <span class="desc">${diaryDays.length} day${diaryDays.length===1?"":"s"} · ${diaries.length} entr${diaries.length===1?"y":"ies"}</span></div>
-      <div class="bookGrid"><div class="bookCard" onclick="_charPageClose();openDiaryReader('${p.id}')">
+      <div class="bookGrid"><div class="bookCard" onclick="_charPageClose();openDiaryReader('${escJs(p.id)}')">
         <div class="bk-spine"></div>
-        ${dcover?`<img class="bk-img" src="${dcover}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
+        ${dcover?`<img class="bk-img" src="${escUrl(dcover)}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
         <div class="bk-grad"></div>
         <div class="bk-info"><div class="bk-name">${esc(p.name)}</div><div class="bk-sub">Tap to read</div></div>
       </div></div></div>`;
@@ -20567,7 +20922,7 @@ function openCharacterPage(id){
   // ---- Images block: thumbnail grid → swipe viewer ----
   let imgHtml="";
   if(imgs.length){
-    const cells=imgs.map((r,i)=>`<div class="galCell"><img src="${r.url}" data-cpimg="${i}" alt=""></div>`).join("");
+    const cells=imgs.map((r,i)=>`<div class="galCell"><img src="${escUrl(r.url)}" data-cpimg="${i}" alt=""></div>`).join("");
     imgHtml=`<div class="cpSection"><div class="subhead">${icon("image")} Images <span class="desc">${imgs.length}</span></div><div class="grid cpGrid">${cells}</div></div>`;
   }
   // ---- Videos block ----
@@ -20575,7 +20930,7 @@ function openCharacterPage(id){
   if(vids.length){
     const cells=vids.map(v=>{
       const remote=(typeof httpsMedia==="function")?httpsMedia(v.url):v.url;
-      return `<div class="galVidWrap"><video src="${remote}" controls playsinline loop preload="metadata" referrerpolicy="no-referrer" style="width:100%;border-radius:12px;border:1px solid var(--border);background:#000"></video>${v.prompt?`<div class="desc" style="margin-top:4px">${esc(String(v.prompt).slice(0,120))}</div>`:""}</div>`;
+      return `<div class="galVidWrap"><video src="${escUrl(remote)}" controls playsinline loop preload="metadata" referrerpolicy="no-referrer" style="width:100%;border-radius:12px;border:1px solid var(--border);background:#000"></video>${v.prompt?`<div class="desc" style="margin-top:4px">${esc(String(v.prompt).slice(0,120))}</div>`:""}</div>`;
     }).join("");
     vidHtml=`<div class="cpSection"><div class="subhead">${icon("film")} Videos <span class="desc">${vids.length}</span></div><div class="cpVids">${cells}</div></div>`;
   }
@@ -20589,16 +20944,16 @@ function openCharacterPage(id){
     <button class="x" onclick="_charPageClose()">×</button>
     <div class="card editCard">
       <div class="cpHead">
-        <div class="cpAvatar">${cover?`<img src="${cover}" alt="">`:`<span class="cpEmoji">${esc(p.avatar||"🎭")}</span>`}</div>
+        <div class="cpAvatar">${cover?`<img src="${escUrl(cover)}" alt="">`:`<span class="cpEmoji">${esc(p.avatar||"🎭")}</span>`}</div>
         <div style="flex:1;min-width:0">
           <h3 style="margin:0">${esc(p.name)}${p.removed?` <span class="desc">(removed)</span>`:""}</h3>
           <div class="desc" style="margin-top:2px">${uni?esc((uni.avatar||"🌌")+" "+uni.name):""}</div>
         </div>
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
-        <button class="btn sec small" onclick="_charPageClose();editPersona('${p.id}')">${icon("edit")} Edit character</button>
-        <button class="btn sec small" onclick="_charPageClose();openTextWith('${p.id}')">${icon("message")} Text</button>
-        ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${p.id}')">${icon("book")} Read diary</button>`:""}
+        <button class="btn sec small" onclick="_charPageClose();editPersona('${escJs(p.id)}')">${icon("edit")} Edit character</button>
+        <button class="btn sec small" onclick="_charPageClose();openTextWith('${escJs(p.id)}')">${icon("message")} Text</button>
+        ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${escJs(p.id)}')">${icon("book")} Read diary</button>`:""}
       </div>
       ${field("Personality",p.personality)}
       ${field("Backstory",p.backstory)}
@@ -20643,7 +20998,7 @@ function renderRefStrip(elId,list,fallback,onRemove){
     const cell=document.createElement('div');
     cell.className="refSlot"+(src?"":" empty");
     if(src){
-      cell.innerHTML=`<img src="${esc(src)}" referrerpolicy="no-referrer" alt="">`+
+      cell.innerHTML=`<img src="${escUrl(src)}" referrerpolicy="no-referrer" alt="">`+
         `<span class="rsTag">${i===0?"profile":"ref "+(i+1)}</span>`;
       const x=document.createElement('button');
       x.type="button"; x.className="rsDel"; x.textContent="×";
@@ -21014,7 +21369,7 @@ function renderPeVisitLocs(p){
     const tag=l.type==='home'?' <span class="desc">(home)</span>':'';
     const note=isHome?' <span class="desc">— always (lives here)</span>':'';
     return `<label class="peVisitRow">
-      <input type="checkbox" class="peVisitChk" value="${l.id}" ${checked?'checked':''} ${isHome?'disabled':''}>
+      <input type="checkbox" class="peVisitChk" value="${esc(l.id)}" ${checked?'checked':''} ${isHome?'disabled':''}>
       <span>${esc(l.name)}${tag}${note}</span></label>`;
   }).join("");
   el.innerHTML=rows;
@@ -21114,7 +21469,7 @@ let uvImageData=null;   // working universe picture for the open panel
 function renderUniversePicPreview(){
   const el=document.getElementById('uvImgPreview');if(!el)return;
   const u=universeById(state.curUniverse);
-  if(uvImageData){el.innerHTML=`<img src="${uvImageData}" style="width:100%;height:100%;object-fit:cover;border-radius:16px">`;}
+  if(uvImageData){el.innerHTML=`<img src="${escUrl(uvImageData)}" style="width:100%;height:100%;object-fit:cover;border-radius:16px">`;}
   else{el.textContent=(u&&u.avatar)||"🌌";}
 }
 function clearUniversePic(){uvImageData=null;renderUniversePicPreview();}
@@ -21806,7 +22161,7 @@ function _openRelGenPopup(p){
     <textarea id="relGenGuide" style="min-height:90px" placeholder="e.g. She is ${esc(state.user||"the player")}'s wife of ten years, quietly resentful. A cousin to Polat. Treats Mümtaz as a rival."></textarea>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
       <button class="btn sec small" onclick="document.getElementById('relGenPop').remove()">Cancel</button>
-      <button class="btn small" id="relGenGo" onclick="_runRelGen('${p.id}')">Generate</button>
+      <button class="btn small" id="relGenGo" onclick="_runRelGen('${escJs(p.id)}')">Generate</button>
     </div></div>`;
   pop.addEventListener('click',e=>{ if(e.target===pop)pop.remove(); });
   document.body.appendChild(pop);
@@ -22812,7 +23167,7 @@ function _outfitTableHTML(o,slots,setter,words){
   const row=(group,key,label,val)=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">
       <div class="desc" style="min-width:104px;font-size:10px;padding-top:6px">${esc(label)}</div>
       <input class="fld" style="flex:1;font-size:11px" value="${esc(val||"")}" placeholder="not written yet"
-        data-outfit="${group}|${esc(key)}" oninput="${setter}('${group}','${escJs(key)}',this.value)">
+        data-outfit="${group}|${esc(key)}" oninput="${setter}('${escJs(group)}','${escJs(key)}',this.value)">
     </div>`;
   let h=`<div style="margin-top:6px"><b style="font-size:11px">Locations</b>`
     +slots.locations.map(l=>row("byLoc",l.id,l.name,(o.byLoc||{})[l.id])).join("")+`</div>`;
@@ -28844,19 +29199,19 @@ function renderImageRail(){
     return;
   }
   const media = m.video
-    ? `<video src="${m.video}" controls playsinline loop onloadeddata="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')"></video>`
-    : `<img src="${m.img}" referrerpolicy="no-referrer" onload="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')" onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<div class=\\'railEmpty\\' style=\\'border:none\\'>Image couldn\\'t load here.<br>Tap the bubble on the left to view it.</div>')" onclick="viewSceneImage('${m.mid}')">`;
+    ? `<video src="${escUrl(m.video)}" controls playsinline loop onloadeddata="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')"></video>`
+    : `<img src="${escUrl(m.img)}" referrerpolicy="no-referrer" onload="this.closest('.railImg')&&(this.closest('.railImg').dataset.loaded='1')" onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<div class=\\'railEmpty\\' style=\\'border:none\\'>Image couldn\\'t load here.<br>Tap the bubble on the left to view it.</div>')" onclick="viewSceneImage('${escJs(m.mid)}')">`;
   const tag = pinned
     ? `<span class="railTag pinned"><svg class="ic" style="width:12px;height:12px"><use href="#i-pin"/></svg> Pinned</span>`
     : `<span class="railTag">Latest</span>`;
   const pinLabel = pinned ? "Unpin" : "Pin";
   const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
-  const frameBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Change frame & regenerate" onclick="pickFrame('${m.mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`:"";
+  const frameBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Change frame & regenerate" onclick="pickFrame('${escJs(m.mid)}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`:"";
   // v27: Video (+ Scene) live in one dropdown.
-  const ddBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${m.mid}')">${icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`:"";
+  const ddBtn=(m.img&&!m.video)?`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${escJs(m.mid)}')">${icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`:"";
   rail.innerHTML=`<div class="railImg">${tag}${media}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-      <button class="pinBtn ${pinned?"on":""}" title="${pinLabel}" onclick="togglePin('${m.mid}')"><svg class="ic"><use href="#i-pin"/></svg></button>
+      <button class="pinBtn ${pinned?"on":""}" title="${pinLabel}" onclick="togglePin('${escJs(m.mid)}')"><svg class="ic"><use href="#i-pin"/></svg></button>
       ${ddBtn}${frameBtn}
     </div>`;
 }
@@ -29655,7 +30010,7 @@ function openCast(){
       }
     }
     const row=document.createElement('div');row.className="card";row.style.cssText="flex-direction:row;align-items:center;gap:10px;padding:10px";
-    row.innerHTML=`<span class="avatarChip lg" style="font-size:22px">${p.image?`<img src="${esc(p.image)}" alt="">`:esc(p.avatar||"🎭")}</span>
+    row.innerHTML=`<span class="avatarChip lg" style="font-size:22px">${p.image?`<img src="${escUrl(p.image)}" alt="">`:esc(p.avatar||"🎭")}</span>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600">${esc(p.name)}</div>
         <div class="desc" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${present?'<span class="dot on"></span> nearby':'<span class="dot off"></span> away'}${areaLabel} · ${esc((lookProse(p.look)||p.personality||"").slice(0,28))}</div>
@@ -29898,7 +30253,7 @@ function findMsg(mid){
 // Small avatar HTML (image if available, else emoji) for a persona — used by bubbles & typing.
 function avatarHTML(sp){
   if(!sp) return "";
-  if(sp.image) return `<span class="avatarChip"><img src="${esc(sp.image)}" alt=""></span>`;
+  if(sp.image) return `<span class="avatarChip"><img src="${escUrl(sp.image)}" alt=""></span>`;
   return `<span class="avatarChip">${esc(sp.avatar||"🎭")}</span>`;
 }
 // Compact status strip shown under a character reply: Day · Period · Location · trackers.
@@ -29918,7 +30273,7 @@ function statusStripHTML(m){
   if(loc)bits.push(`<span>${icon("pin")} ${esc(loc)}</span>`);
   let trk="";
   if(trackers.length){
-    trk=`<span class="ss-trk">`+trackers.map(t=>`${esc(t.name)} ${t.val}`).join(" · ")+`</span>`;
+    trk=`<span class="ss-trk">`+trackers.map(t=>`${esc(t.name)} ${esc(t.val)}`).join(" · ")+`</span>`;
   }
   return `<div class="statusStrip">${bits.join('<span class="ss-dot">·</span>')}${trk?'<span class="ss-dot">·</span>'+trk:""}</div>`;
 }
@@ -30010,7 +30365,7 @@ function bubble(m){
   // Per-message edit/delete controls (real chat lines only — not GM/narrator/day markers,
   // which return earlier). Kept tiny and muted so they don't crowd the bubble.
   const _dubBtn = (m.role==='assistant')
-    ? `<button class="msgAct" title="Dub (speak aloud)" data-dub="${m.mid}" onclick="dubMessage('${m.mid}')">${icon("volume")}</button>`
+    ? `<button class="msgAct" title="Dub (speak aloud)" data-dub="${esc(m.mid)}" onclick="dubMessage('${escJs(m.mid)}')">${icon("volume")}</button>`
     : "";   // v19.51: the talking-video button moved into the image's sceneTools bar — the meta-row
             // copy was gated on media EXISTING AT RENDER TIME, but images land async via
             // refreshBubble (which never rebuilt the meta row), so the button effectively never showed.
@@ -30018,9 +30373,9 @@ function bubble(m){
      (reIllustrate → illustrate with force), one tap from the row the other actions live in. A reply
      that already has a picture is drawn again. Phone texts carry no picture. */
   const _imgBtn=(m.role==='assistant'&&!m.textMsg)
-    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${m.mid}" onclick="reIllustrate('${m.mid}')">${icon("image")}</button>`
+    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${esc(m.mid)}" onclick="reIllustrate('${escJs(m.mid)}')">${icon("image")}</button>`
     : "";
-  const actions=`<span class="msgActions">${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${m.mid}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${m.mid}')">${icon("trash")}</button></span>`;
+  const actions=`<span class="msgActions">${_imgBtn}${_dubBtn}<button class="msgAct" title="Edit" onclick="editMessage('${escJs(m.mid)}')">${icon("edit")}</button><button class="msgAct" title="Delete" onclick="deleteMessage('${escJs(m.mid)}')">${icon("trash")}</button></span>`;
   b.innerHTML=`<div class="meta" data-name="${esc(name)}">${avatar}${esc(name)}${tempTag}${gmTag}${voiceTag}${textTag}${whisperTag}${actions}</div><div class="body"></div>`;
   if(!_revealing)b.querySelector('.body').innerHTML=msgBodyHTML(_dispText(m.content),b);
   if(m.role==='assistant'){
@@ -30367,7 +30722,7 @@ function _stickyImg(m){
   return null;
 }
 function _stickyHTML(st,note,extra){
-  return `<div class="scene sticky"><img src="${st.url}" referrerpolicy="no-referrer" onclick="viewSceneImage('${st.mid}')">
+  return `<div class="scene sticky"><img src="${escUrl(st.url)}" referrerpolicy="no-referrer" onclick="viewSceneImage('${escJs(st.mid)}')">
           <div class="stickyTag">${note}</div>${extra||""}</div>`;
 }
 function sceneHTML(m){
@@ -30380,16 +30735,16 @@ function sceneHTML(m){
   }
   const _c=(state.chats&&state.curChat)?state.chats[state.curChat]:null;
   const _pinned=!!(_c&&_c.pinnedMid===mid);
-  const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${mid}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
+  const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${escJs(mid)}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
   // ---- video states take over the scene area once started ----
   if(m.vidState==="loading")
     return `<div class="scene loading"><div class="spin"></div><span id="vidstat_${mid}">Animating scene…</span></div>`;
   if(m.video)
-    return `<div class="scene"><video id="vid_${mid}" src="${m.video}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
+    return `<div class="scene"><video id="vid_${mid}" src="${escUrl(m.video)}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-              <button class="btn sec small ${m.vidLoop===false?"":"on"}" onclick="toggleVidLoop('${mid}',this)" title="Loop playback"><svg class="ic"><use href="#i-loop"/></svg></button>
-              <button class="btn sec small" onclick="showMediaPrompt('${mid}')" title="Show the generation prompt"><svg class="ic"><use href="#i-info"/></svg></button>
-              <button class="btn sec small" onclick="downloadVideo('${mid}')" title="Save video"><svg class="ic"><use href="#i-download"/></svg></button>
+              <button class="btn sec small ${m.vidLoop===false?"":"on"}" onclick="toggleVidLoop('${escJs(mid)}',this)" title="Loop playback"><svg class="ic"><use href="#i-loop"/></svg></button>
+              <button class="btn sec small" onclick="showMediaPrompt('${escJs(mid)}')" title="Show the generation prompt"><svg class="ic"><use href="#i-info"/></svg></button>
+              <button class="btn sec small" onclick="downloadVideo('${escJs(mid)}')" title="Save video"><svg class="ic"><use href="#i-download"/></svg></button>
               ${pinBtn}</div></div>`;
   // ---- image states ----
   if(m.imgState==="loading"){
@@ -30399,26 +30754,26 @@ function sceneHTML(m){
   }
   if(m.imgState==="error"){
     const st=_stickyImg(m);
-    const retry=`<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("warn")} Retry</button></div>`;
+    const retry=`<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("warn")} Retry</button></div>`;
     return st ? _stickyHTML(st,"Couldn't illustrate this one",retry)
-              : `<div class="scene"><div class="retry">${icon("warn")} Couldn't illustrate.<button class="btn sec small" onclick="reIllustrate('${mid}')">Retry</button></div></div>`;
+              : `<div class="scene"><div class="retry">${icon("warn")} Couldn't illustrate.<button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">Retry</button></div></div>`;
   }
   if(m.img){
     // v27: Video (+ Scene) live in one dropdown under the image.
-    const ddBtn=`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${mid}')">${m.vidState==="error"?icon("warn"):icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`;
-    const v=`${ddBtn} <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${mid}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${mid}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
+    const ddBtn=`<button class="btn sec small" title="Video · Scene" onclick="openMediaMenu(event,'${escJs(mid)}')">${m.vidState==="error"?icon("warn"):icon("film")} <svg class="ic" style="margin:0;width:11px;height:11px"><use href="#i-chevron-down"/></svg></button>`;
+    const v=`${ddBtn} <button class="btn sec small" title="Talking video — the character lip-syncs this line" onclick="dubAsVideo('${escJs(mid)}')">${icon("speech")}</button> <button class="btn sec small" title="Show the generation prompt" onclick="showMediaPrompt('${escJs(mid)}')"><svg class="ic"><use href="#i-info"/></svg></button>`;
     const _fr=(m.ratio&&RATIOS[m.ratio])?m.ratio:curFrameKey();
-    const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${mid}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
-    return `<div class="scene"><img src="${m.img}" referrerpolicy="no-referrer" onerror="imgFallback('${mid}',this)" onclick="viewSceneImage('${mid}')">
+    const frameBtn=`<button class="btn sec small" title="Change frame & regenerate this scene" onclick="pickFrame('${escJs(mid)}')">${icon("frame")} ${esc(frameShort(_fr))}</button>`;
+    return `<div class="scene"><img src="${escUrl(m.img)}" referrerpolicy="no-referrer" onerror="imgFallback('${escJs(mid)}',this)" onclick="viewSceneImage('${escJs(mid)}')">
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${v}${frameBtn}${pinBtn}</div></div>`;
   }
   // No image yet and not auto-illustrating -> offer a per-request generate button
   // (also while "Pause images" is on: auto-gen is halted, but a manual request still works)
   {const st=_stickyImg(m);
    const gen=(!state.autoImg||state.imgPauseOn)
-     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("image")} Generate image</button></div>` : "";
+     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>` : "";
    if(st) return _stickyHTML(st,"Still this",gen);
-   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="reIllustrate('${mid}')">${icon("image")} Generate image</button></div>`;}
+   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>`;}
   return "";
 }
 function refreshBubble(mid){
@@ -30522,7 +30877,7 @@ function refreshBubble(mid){
       // Can't embed here (no CORS, mixed-content, or expired URL). Offer the working direct link
       // instead of a dead frame — the video itself generated fine.
       const fb=document.createElement('div');fb.style.cssText="padding:10px;font-size:13px;line-height:1.4";
-      fb.innerHTML=`▶️ Video ready. <a href="${remote}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Tap to open ↗</a>`;
+      fb.innerHTML=`▶️ Video ready. <a href="${escUrl(remote)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Tap to open ↗</a>`;
       if(vid.parentNode){ vid.parentNode.insertBefore(fb,vid); vid.remove(); }
     };
     const bar=document.createElement('div');bar.className="sceneTools";bar.style.cssText="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center";
@@ -31394,7 +31749,7 @@ function openTextInbox(){
     const u=unreadTextCount(chat,p.id);
     const last=textThreadMsgs(chat,p.id).slice(-1)[0];
     const prev=last?esc(String(last.content).slice(0,42)):'<span class="desc">No messages yet</span>';
-    return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left;width:100%" onclick="openTextWith('${p.id}')">
+    return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left;width:100%" onclick="openTextWith('${escJs(p.id)}')">
       <span style="font-size:20px">${esc(p.avatar||'🎭')}</span>
       <span style="flex:1;min-width:0"><b>${esc(p.name)}</b><br><span style="font-size:12px;opacity:.7">${prev}</span></span>
       ${u?`<span class="calBadge" style="position:static">${u}</span>`:""}</button>`;
@@ -34539,10 +34894,10 @@ async function submitVideo(prompt,firstFrameDataUrl){
   const entry=dbg("Video generation (OpenRouter)","OpenRouter",OR+"/videos",
     Object.assign({},body,firstFrameDataUrl?{frame_images:"[image data omitted]"}:{}));
   let res;
-  try{res=await fetch(OR+"/videos",{method:"POST",
+  try{res=await fetchWithTimeout(OR+"/videos",{method:"POST",
     headers:{"Authorization":"Bearer "+state.key,"Content-Type":"application/json","HTTP-Referer":"https://storymind.app","X-Title":"StoryMind"},
-    body:JSON.stringify(body)});}
-  catch(e){dbgDone(entry,"error","Network error");throw{friendly:"Network error submitting video."};}
+    body:JSON.stringify(body)},{timeoutMs:120000});}
+  catch(e){dbgDone(entry,"error",(e&&e.kind==="timeout")?"Timed out submitting":"Network error");throw{friendly:"Network error submitting video."};}
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:httpMsg(res.status)};}
   const d=await res.json();
   if(!d.id&&!d.polling_url){dbgDone(entry,"error","No job returned");throw{friendly:"Video service didn't return a job."};}
@@ -34558,14 +34913,18 @@ async function pollVideo(job,setStat){
     const elapsed=Math.round((Date.now()-start)/1000);
     setStat(`Generating video… ${elapsed}s`);
     let res;
-    try{res=await fetch(pollUrl,{headers:{"Authorization":"Bearer "+state.key}});}
+    /* (!) v144.1 — the bearer only goes to OpenRouter itself. polling_url and unsigned_urls come
+       from the response and can name a CDN or storage host; they used to get the OpenRouter key too. */
+    try{res=await fetchWithTimeout(pollUrl,{headers:_orAuthFor(pollUrl)},{timeoutMs:30000});}
     catch(e){continue;}
     if(!res.ok){ if(res.status>=500) continue; throw{friendly:httpMsg(res.status)}; }
-    const s=await res.json();
+    let s; try{ s=await res.json(); }catch(e){ continue; }
     if(s.status==="completed"){
       const contentUrl=(s.unsigned_urls&&s.unsigned_urls[0])||(OR+"/videos/"+jobId+"/content?index=0");
       setStat("Downloading…");
-      const vres=await fetch(contentUrl,{headers:{"Authorization":"Bearer "+state.key}});
+      let vres;
+      try{ vres=await fetchWithTimeout(contentUrl,{headers:_orAuthFor(contentUrl)},{timeoutMs:180000}); }
+      catch(e){ throw{friendly:"Couldn't download the finished video."}; }
       if(!vres.ok)throw{friendly:"Couldn't download the finished video."};
       const blob=await vres.blob();
       return URL.createObjectURL(blob);
@@ -34690,7 +35049,7 @@ function openGalleryPicker(opts){
       const on=picked.has(r.id);
       cell.style.cssText="position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;cursor:pointer;border:2px solid "+(on?"var(--accent)":"transparent");
       cell.innerHTML=r.url
-        ? `<img src="${r.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
+        ? `<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`
         : `<div class="desc" style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px">…</div>`;
       if(on){ const t=document.createElement('div');
         t.style.cssText="position:absolute;top:4px;right:4px;background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;line-height:20px;text-align:center;font-size:12px";
@@ -35175,12 +35534,12 @@ function renderStoryBook(){
   if(!chat||!el)return;
   const ch=bookStructure(chat);
   if(sel)sel.innerHTML=ch.map(c=>{ const n=c.scenes.reduce((a,s)=>a+s.panels.length,0);
-    return `<option value="${c.day}"${c.day===_bookDay?" selected":""}>Day ${c.day} · ${n} picture${n===1?"":"s"}</option>`; }).join("");
+    return `<option value="${esc(c.day)}"${c.day===_bookDay?" selected":""}>Day ${esc(c.day)} · ${n} picture${n===1?"":"s"}</option>`; }).join("");
   {const b=document.getElementById('bookEdBtn'); if(b){ b.classList.toggle('on',!!state.bookEditor); b.title=state.bookEditor?"AI editor on — tap to turn off":"AI editor off — tap to turn on"; }}
   {const t=document.getElementById('bookLayTxt'); if(t)t.textContent=bookLayout()==="page"?"Comic page":"Webtoon";}
   const chap=ch.find(c=>c.day===_bookDay)||ch[ch.length-1];
   if(!chap){ el.innerHTML=""; return; }
-  el.innerHTML=`<h2 class="bkDay">Day ${chap.day}</h2>`+chap.scenes.map(s=>`<section class="bkScene" data-sid="${esc(s.id)}"></section>`).join("");
+  el.innerHTML=`<h2 class="bkDay">Day ${esc(chap.day)}</h2>`+chap.scenes.map(s=>`<section class="bkScene" data-sid="${esc(s.id)}"></section>`).join("");
   chap.scenes.forEach(s=>{
     _bookRenderScene(chat,s);
     if(state.bookEditor&&state.key&&!_bookEdit(chat,s)&&!_bookBusy.has(s.id))_bookQueueEdit(chat,s,false);
@@ -35246,7 +35605,7 @@ function _bookRenderScene(chat,s){
         +(v.caption?`<figcaption class="bkCap">${esc(v.caption)}</figcaption>`:"")+`<div class="bkBubStack">`;
       v.bubbles.forEach((b,bi)=>{
         const pos=(chat.bookPos||{})[p.mid+":"+bi];
-        h+=`<div class="bkBub${bookIsPlayer(b.speaker)?" alt":""}${_bookBubCls(b.text)}${pos?" free":""}" data-key="${esc(p.mid+":"+bi)}"${pos?` style="left:${pos.x}%;top:${pos.y}%"`:""}><b>${esc(b.speaker)}</b>${esc(b.text)}</div>`;
+        h+=`<div class="bkBub${bookIsPlayer(b.speaker)?" alt":""}${_bookBubCls(b.text)}${pos?" free":""}" data-key="${esc(p.mid+":"+bi)}"${pos?` style="left:${+pos.x||0}%;top:${+pos.y||0}%"`:""}><b>${esc(b.speaker)}</b>${esc(b.text)}</div>`;
       });
       h+=`</div></figure>`;
     }
@@ -35595,7 +35954,7 @@ async function _mcRun(seq){
       const est=_mcReadMs(it.v.caption)+it.v.bubbles.reduce((a,b)=>a+_mcReadMs(b.text),0);
       const kb=["mcKb1","mcKb2","mcKb3","mcKb4"][_mc.i%4];
       stage.innerHTML=`<div class="mcFrame">`+(vid
-        ?`<video class="mcMedia" src="${esc(vid)}" autoplay muted playsinline loop></video>`
+        ?`<video class="mcMedia" src="${escUrl(vid)}" autoplay muted playsinline loop></video>`
         :`<img class="mcMedia ${kb}" alt="" style="animation-duration:${Math.max(4,Math.round(est/1000)+3)}s">`)
         +`</div><div class="mcTop"><div class="mcCap" hidden></div></div><div class="mcBot"><div class="mcBub" hidden></div></div>`;
       const media=stage.querySelector('.mcMedia');
@@ -35889,7 +36248,7 @@ function _renderGalImages(el){
     [...counts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,n])=>{
       const card=document.createElement('div'); card.className="charCard"; card.onclick=()=>openGalFolder(name);
       card.innerHTML=`
-        <img class="cc-img" src="${cover.get(name)}" alt="">
+        <img class="cc-img" src="${escUrl(cover.get(name))}" alt="">
         <div class="cc-grad"></div>
         <div class="cc-info"><div class="cc-name">${esc(name)}</div><div class="cc-sub">${n} image${n===1?"":"s"}</div></div>`;
       grid.appendChild(card);
@@ -35974,7 +36333,7 @@ function _renderGalImages(el){
 // fragment nudges engines that only paint a frame after a seek.
 function _vidThumbHTML(url,cls){
   const u=esc(httpsMedia(url))+"#t=0.001";
-  return `<video ${cls?`class="${cls}" `:""}src="${u}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
+  return `<video ${cls?`class="${cls}" `:""}src="${escUrl(u)}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
 }
 function _sceneOwner(s){ return (s&&s.characterName)||""; }
 /* v28.1 — SCENES ARE PER CHARACTER. A scene is created inside one character's video tab and carries
@@ -36222,9 +36581,9 @@ function renderSceneEditor(){
   whenWrap.appendChild(wta); box.appendChild(whenWrap);
   const act=document.createElement('div'); act.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
   act.innerHTML=`
-    <button class="btn small" ${clips.length?"":"disabled"} onclick="playSceneModal('${s.id}')">${icon("play")} Play</button>
-    <button class="btn sec small" ${clips.length?"":"disabled"} onclick="closeSceneEditor();playSceneInChat('${s.id}')">${icon("pin")} Play over story</button>
-    <button class="btn danger small" onclick="deleteScene('${s.id}')">${icon("trash")} Delete</button>`;
+    <button class="btn small" ${clips.length?"":"disabled"} onclick="playSceneModal('${escJs(s.id)}')">${icon("play")} Play</button>
+    <button class="btn sec small" ${clips.length?"":"disabled"} onclick="closeSceneEditor();playSceneInChat('${escJs(s.id)}')">${icon("pin")} Play over story</button>
+    <button class="btn danger small" onclick="deleteScene('${escJs(s.id)}')">${icon("trash")} Delete</button>`;
   box.appendChild(act);
   const lh=document.createElement('div'); lh.className="desc"; lh.style.cssText="font-weight:700;color:var(--text)";
   lh.textContent=`Play order · ${clips.length} clip${clips.length===1?"":"s"}`;
@@ -36471,7 +36830,7 @@ function renderPlayground(){
       recs.forEach((r,i)=>{
         const cell=document.createElement('div');
         cell.style.cssText="position:relative;width:74px;height:74px;border-radius:10px;overflow:hidden;border:2px solid var(--accent);background:var(--surface)";
-        cell.innerHTML=r.url?`<img src="${r.url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`:"";
+        cell.innerHTML=r.url?`<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" alt="">`:"";
         const n=document.createElement('div');
         n.textContent=String(i+1);
         n.style.cssText="position:absolute;left:2px;top:2px;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;background:var(--accent);color:#fff;font-size:11px";
@@ -36795,9 +37154,9 @@ function _i2vRefRow(kind){
       const c=document.createElement('div');
       c.style.cssText="position:relative;width:72px;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#000";
       if(kind==="image"&&r.url){
-        c.innerHTML=`<img src="${esc(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:72px;object-fit:cover;display:block">`;
+        c.innerHTML=`<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:72px;object-fit:cover;display:block">`;
       }else if(kind==="video"&&r.url){
-        c.innerHTML=`<video src="${esc(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:72px;object-fit:cover;display:block"></video>`;
+        c.innerHTML=`<video src="${escUrl(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:72px;object-fit:cover;display:block"></video>`;
       }else{
         c.style.height="72px"; c.style.display="flex"; c.style.alignItems="center"; c.style.justifyContent="center";
         c.innerHTML=`<span style="color:#fff;opacity:.75">${icon(kind==="audio"?"volume":"film")}</span>`;
@@ -36829,8 +37188,8 @@ function _i2vRefRow(kind){
         const c=document.createElement('div');
         c.style.cssText="position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#000;cursor:pointer";
         if(r.url) c.innerHTML=kind==="image"
-          ? `<img src="${esc(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:block">`
-          : `<video src="${esc(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`;
+          ? `<img src="${escUrl(r.url)}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:block">`
+          : `<video src="${escUrl(r.url)}#t=0.001" preload="metadata" muted playsinline style="width:100%;height:100%;object-fit:cover;display:block"></video>`;
         else c.style.opacity=".35";
         if(r.url) c.onclick=()=>_i2vRefFromGallery(kind,r);
         g.appendChild(c);
@@ -37841,7 +38200,7 @@ function openMediaMenu(ev,mid){
   if(document.getElementById('mediaMenu')){ closeMediaMenu(); return; }
   const menu=document.createElement('div'); menu.className="mediaMenu"; menu.id="mediaMenu";
   menu.innerHTML=`
-    <button onclick="closeMediaMenu();animateScene('${mid}')">${icon("film")}<span>Animate<small>Turn this image into a video clip</small></span></button>
+    <button onclick="closeMediaMenu();animateScene('${escJs(mid)}')">${icon("film")}<span>Animate<small>Turn this image into a video clip</small></span></button>
     <button onclick="closeMediaMenu();openScenePicker({mode:'play'})">${icon("scenes")}<span>Scene<small>Play one of your scenes over the story</small></span></button>`;
   document.body.appendChild(menu);
   const t=ev.currentTarget||ev.target;
@@ -40112,7 +40471,7 @@ function _mapRenderCanvas(){
   // Background: an AI-generated map image if the universe has one, else the drawn parchment SVG.
   let bg="";
   if(u.mapImage){
-    bg=`<image href="${esc(u.mapImage)}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid slice"/>`;
+    bg=`<image href="${escUrl(u.mapImage)}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid slice"/>`;
   }else{
     let h=0; for(const c of String(u.id))h=(h*31+c.charCodeAt(0))>>>0;
     const rnd=()=>{ h^=h<<13;h>>>=0;h^=h>>17;h^=h<<5;h>>>=0; return (h%1000)/1000; };
@@ -40248,7 +40607,7 @@ function _mapLocPanel(locId){
   const here=chat.locationId===locId;
   const inside=charactersAtLocation(chat,locId)||[];
   const rows=inside.map(p=>{
-    const av=p.image?`<img src="${esc(p.image)}" alt="">`:`<span class="mapPopEmoji sm">${esc(p.avatar||"🎭")}</span>`;
+    const av=p.image?`<img src="${escUrl(p.image)}" alt="">`:`<span class="mapPopEmoji sm">${esc(p.avatar||"🎭")}</span>`;
     const atHere=here; // if the location IS the player's location, Go/Bring are moot
     return `<div class="mapCharRow">
       <button class="mapCharAv" title="View ${esc(p.name)}" onclick="_mapCharState('${escJs(p.id)}')">${av}</button>
@@ -40284,7 +40643,7 @@ function _mapTravelFromPanel(locId){
 // info (their standing/goals + their offstage intents). Reuses _renderPeRelationships into a target.
 function _mapCharState(charId){
   const chat=curChat(); const p=(state.personas||[]).find(x=>x.id===charId); if(!chat||!p)return;
-  const av=p.image?`<img src="${esc(p.image)}" alt="">`:`<span class="mapPopEmoji">${esc(p.avatar||"🎭")}</span>`;
+  const av=p.image?`<img src="${escUrl(p.image)}" alt="">`:`<span class="mapPopEmoji">${esc(p.avatar||"🎭")}</span>`;
   // Living-engine intents owned by this character.
   const kindIcon={grievance:icon("bolt"),ambition:icon("crown"),desire:icon("heart"),loyalty:icon("shield"),scheme:icon("dagger")};
   const statusLbl={brewing:"brewing",ready:"about to act",armed:"waiting for the moment",spent:"resolved / faded",active:"active"};
@@ -41346,7 +41705,7 @@ function questEditUI(qid){
        <textarea class="fld" id="qeProg" style="min-height:90px" placeholder="day 3: Selim admitted he sold the deed."></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeQuestEdit()">Cancel</button>
-       <button class="btn" onclick="questEditSave('${q.id}')">${icon("save")} Save quest</button>
+       <button class="btn" onclick="questEditSave('${escJs(q.id)}')">${icon("save")} Save quest</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeQuestEdit(); });
@@ -41431,7 +41790,7 @@ function openQuestDebugModal(){
       const loc=q.locationId?(locById(q.locationId)?"loc ✓":"loc ?"):(q.location?"loc pending":"no loc");
       const npc=q.npcId?((state.personas||[]).some(p=>p&&p.id===q.npcId)?"npc ✓":"npc ?"):(q.npcName?"npc pending":"no npc");
       const n=(q.progress||[]).length;
-      return `<div class="desc" style="margin:2px 0">#${q.seq??"?"} <b>${esc(q.title||"")}</b> — ${st} · ${loc} · ${npc} · ${n} memory note${n===1?"":"s"}</div>`;
+      return `<div class="desc" style="margin:2px 0">#${esc(q.seq??"?")} <b>${esc(q.title||"")}</b> — ${st} · ${loc} · ${npc} · ${n} memory note${n===1?"":"s"}</div>`;
     }).join("");
     const live=quests.some(q=>q&&q.arc===a&&!q.done&&q.startActive!==false);
     return `<div class="card" style="padding:10px">
@@ -41518,7 +41877,7 @@ function openQuestsModal(){
                     :(q.startActive!==false?`<span style="color:var(--accent2)">active</span>`
                     :`<span style="opacity:.5">locked</span>`);
         // v22.9 — quest memory (progress log) + meeting-style actions on every quest row.
-        const prog=(q.progress||[]).slice(-3).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+        const prog=(q.progress||[]).slice(-3).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
         const live=(!q.done && q.startActive!==false);
         return `<div class="card" style="padding:8px;${q.done?'opacity:.6':''}">
           <div class="qrow">
@@ -41528,11 +41887,11 @@ function openQuestsModal(){
               ${prog}
               ${q.done&&q.result?`<div class="desc" style="color:${q.failed||q.cancelled?"#c0556b":"var(--good)"};opacity:.8">${q.failed||q.cancelled?icon("x"):icon("check")} ${esc(q.result)}</div>`:""}</div>
             <div class="qbtns">
-              ${live&&(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${q.id}')">▶</button>`:""}
-              <button class="btn sec small" title="Edit" onclick="questEditUI('${q.id}')">${icon("edit")}</button>
-              ${live?`<button class="btn sec small" title="Mark this quest done (the next step follows)" onclick="questMarkDoneUI('${q.id}')">${icon("check")}</button>`:""}
-              ${live?`<button class="btn sec small" title="Abandon this quest (closed as abandoned; the story goes on from there)" onclick="questAbandonUI('${q.id}')">Abandon</button>`:""}
-              <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+              ${live&&(q.locationId||q.location)?`<button class="btn small" title="Go to the quest's place" onclick="questTravel('${escJs(q.id)}')">▶</button>`:""}
+              <button class="btn sec small" title="Edit" onclick="questEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+              ${live?`<button class="btn sec small" title="Mark this quest done (the next step follows)" onclick="questMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>`:""}
+              ${live?`<button class="btn sec small" title="Abandon this quest (closed as abandoned; the story goes on from there)" onclick="questAbandonUI('${escJs(q.id)}')">Abandon</button>`:""}
+              <button class="btn danger sec small" title="Delete quest" onclick="questDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
             </div>
           </div></div>`;
       }).join("");
@@ -41556,7 +41915,7 @@ function openQuestsModal(){
       const askLine=(q.targetId==="__user__"&&q.ask)
         ?`<div class="desc">${icon("message")} wants from ${esc(state.user||"you")}: ${esc(q.ask)} <span class="pill" style="font-size:9px">${esc((q.approach||"either").replace("_"," "))}</span>${gateLbl&&q.approach!=="text"?` <span class="pill" style="font-size:9px">${gateLbl}</span>`:""}${q.delivered?` <span class="pill" style="font-size:9px">asked${q.awaitingUser?" · awaiting answer":""}</span>`:""}</div>`
         :"";
-      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${pp.day}: ${esc(pp.text)}</div>`).join("");
+      const prog=(q.progress||[]).slice(-2).map(pp=>`<div class="desc" style="opacity:.8">· Day ${esc(pp.day)}: ${esc(pp.text)}</div>`).join("");
       return `<div class="card" style="padding:8px;${q.status!=="active"?'opacity:.6':''}">
         <div class="qrow">
           <div class="qtxt"><b>${esc(q.holderName||"?")}</b>${(!q.solitary&&(q.source!=="task"||q.targetName))?` → ${esc(tgt)}`:""} <span class="desc" style="display:inline">· ${q.source==="task"?`<span class="pill" style="font-size:9px">task</span> `:""}${st}</span>
@@ -41565,9 +41924,9 @@ function openQuestsModal(){
             ${askLine}${prog}
             ${q.status!=="active"&&q.result?`<div class="desc" style="color:${q.status==="failed"?"#c0556b":"var(--good)"};opacity:.85">${icon("check")} ${esc(q.result)}</div>`:""}</div>
           <div class="qbtns">
-            <button class="btn sec small" title="Edit" onclick="charQuestEditUI('${q.id}')">${icon("edit")}</button>
-            ${q.status==="active"?`<button class="btn sec small" title="Mark this pursuit resolved" onclick="charQuestMarkDoneUI('${q.id}')">${icon("check")}</button>`:""}
-            <button class="btn danger sec small" title="Delete" onclick="charQuestDeleteUI('${q.id}')"><svg class="ic"><use href="#i-x"/></svg></button>
+            <button class="btn sec small" title="Edit" onclick="charQuestEditUI('${escJs(q.id)}')">${icon("edit")}</button>
+            ${q.status==="active"?`<button class="btn sec small" title="Mark this pursuit resolved" onclick="charQuestMarkDoneUI('${escJs(q.id)}')">${icon("check")}</button>`:""}
+            <button class="btn danger sec small" title="Delete" onclick="charQuestDeleteUI('${escJs(q.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
           </div>
         </div></div>`;
     }).join("");
@@ -42749,8 +43108,8 @@ function charQuestMarkDoneUI(id){
        <textarea class="fld" id="cqResult" style="min-height:64px"></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeCharQuestResolve()">Cancel</button>
-       <button class="btn danger sec" onclick="charQuestResolveSave('${q.id}',true)">Failed</button>
-       <button class="btn" onclick="charQuestResolveSave('${q.id}',false)">${icon("check")} Achieved</button>
+       <button class="btn danger sec" onclick="charQuestResolveSave('${escJs(q.id)}',true)">Failed</button>
+       <button class="btn" onclick="charQuestResolveSave('${escJs(q.id)}',false)">${icon("check")} Achieved</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestResolve(); });
@@ -42797,7 +43156,7 @@ function charQuestEditUI(id){
        <textarea class="fld" id="cqeProg" style="min-height:80px"></textarea></div>
      <div class="row" style="margin-top:4px">
        <button class="btn sec" onclick="_closeCharQuestEdit()">Cancel</button>
-       <button class="btn" onclick="charQuestEditSave('${q.id}')">${icon("save")} Save</button>
+       <button class="btn" onclick="charQuestEditSave('${escJs(q.id)}')">${icon("save")} Save</button>
      </div>
    </div>`;
   m.addEventListener('click',e=>{ if(e.target===m)_closeCharQuestEdit(); });
@@ -44880,7 +45239,14 @@ function prefilter(query,limit,poolOverride){
 function embedModelName(){ return (state.embedModel&&state.embedModel.trim())||"openai/text-embedding-3-small"; }
 // Uses the main OpenRouter key by default (OpenRouter DOES expose /embeddings) — no separate key needed.
 // An optional custom key/endpoint (state.embedKey / state.embedUrl) overrides for other providers.
-function embedKeyVal(){ return (state.embedKey&&state.embedKey.trim())||state.key||""; }
+/* (!) v144.1 — the OpenRouter key is only ever sent TO OpenRouter. With a custom endpoint and no key of
+   its own, the fallback used to post the OpenRouter bearer to whatever server embedUrl named. */
+function embedUrlVal(){ return (state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings"); }
+function embedKeyVal(){
+  const own=(state.embedKey&&state.embedKey.trim()); if(own)return own;
+  try{ if(new URL(embedUrlVal()).origin===new URL(OR).origin) return state.key||""; }catch(e){}
+  return "";
+}
 function embedConfigured(){ return !!(state.embedOn && embedKeyVal()); }
 const _embCache=new Map();   // (model::text) -> Float32Array — session cache; dedupes identical strings
 let _embBusy=false;
@@ -44892,17 +45258,19 @@ async function embedText(text,opts){
   const model=embedModelName(), ck=model+"::"+t;
   if(_embCache.has(ck))return _embCache.get(ck);
   const body={model,input:t.slice(0,8000),encoding_format:"float"};
-  const url=(state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings");
+  const url=embedUrlVal();
   const entry=(opts&&opts.noLog)?null:dbg((opts&&opts.dbgLabel)||("Embeddings — "+model),"OpenRouter",url,body);
   try{
-    const r=await fetch(url,{method:"POST",
+    // v144.1 — with a ceiling (body included): a stalled endpoint used to hold retrieval, and the turn, for ever.
+    const g=await fetchWithTimeout(url,{method:"POST",
       headers:{"Content-Type":"application/json","Authorization":"Bearer "+embedKeyVal()},
-      body:JSON.stringify(body)});
+      body:JSON.stringify(body)},{timeoutMs:(opts&&opts.timeoutMs)||30000,read:"json"});
+    const r=g.res;
     if(!r.ok){
-      _embLastErr="HTTP "+r.status+" "+String(await r.text().catch(()=>"")).slice(0,300);
+      _embLastErr="HTTP "+r.status+" "+String(g.text||"").slice(0,300);
       dbgDone(entry,"error",_embLastErr); return null;
     }
-    const j=await r.json();
+    const j=g.data;
     const v=j&&j.data&&j.data[0]&&j.data[0].embedding;
     if(!Array.isArray(v)||!v.length){
       _embLastErr="No embedding vector in response ("+String(JSON.stringify(j)).slice(0,200)+")";
@@ -44956,7 +45324,7 @@ async function ensureMemEmbeddings(ownerId,limit){
   // in the bounded debug log instead of pushing out the chat payloads.
   const batch=need.slice(0,limit||24);
   const entry=dbg("Embeddings — memory bank backfill ("+batch.length+" of "+need.length+" pending)","OpenRouter",
-    (state.embedUrl&&state.embedUrl.trim())||(OR+"/embeddings"),
+    embedUrlVal(),
     {model:embedModelName(),memoriesToEmbed:batch.length,totalMissingVectors:need.length,
      sample:batch.slice(0,3).map(m=>String(memSearchText(m)).slice(0,120))});
   let done=0;
@@ -45183,7 +45551,7 @@ function renderMemory(){
       const card=document.createElement('div'); card.className="charCard"; card.onclick=()=>{memFilterOwner=id;renderMemory();};
       const img=ownerImg(id);
       card.innerHTML=`
-        ${img?`<img class="cc-img" src="${img}" alt="">`:`<div class="cc-emoji">${esc(ownerAvatar(id))}</div>`}
+        ${img?`<img class="cc-img" src="${escUrl(img)}" alt="">`:`<div class="cc-emoji">${esc(ownerAvatar(id))}</div>`}
         <div class="cc-grad"></div>
         <div class="cc-info"><div class="cc-name">${esc(ownerName(id))}</div><div class="cc-sub">${n} memor${n===1?"y":"ies"}</div></div>`;
       grid.appendChild(card);
@@ -45231,8 +45599,8 @@ function renderMemory(){
       ${m.importance!==undefined?`<div class="desc">importance ${imp}%</div>`:""}
       ${tags?`<div class="chips" style="gap:4px">${tags}</div>`:""}
       <div style="display:flex;gap:6px;margin-top:6px">
-        <button class="btn sec small" onclick='openMemEditor("${m.id}")'>Edit</button>
-        <button class="btn danger sec small" onclick="delMemory('${m.id}')">Delete</button>
+        <button class="btn sec small" onclick='openMemEditor("${escJs(m.id)}")'>Edit</button>
+        <button class="btn danger sec small" onclick="delMemory('${escJs(m.id)}')">Delete</button>
       </div>`;
     el.appendChild(c);
   });
@@ -45275,7 +45643,7 @@ function renderDiary(){
     const cover=p.diaryCover||p.image||null;
     card.innerHTML=`
       <div class="bk-spine"></div>
-      ${cover?`<img class="bk-img" src="${cover}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
+      ${cover?`<img class="bk-img" src="${escUrl(cover)}" alt="">`:`<div class="bk-emoji">${esc(p.avatar||"📖")}</div>`}
       <div class="bk-grad"></div>
       <div class="bk-info">
         <div class="bk-name">${esc(p.name)}</div>
@@ -45375,7 +45743,8 @@ function openDiaryReader(ownerId,day){
   // bar (title + close) and one bottom chip bar (nav · font · read-aloud · paper look) float ON
   // the paper as translucent ink chips. Font chip CYCLES the handwriting; the palette chip opens the paper-look
   // popover (user prompt → generated texture as the page background, persisted globally).
-  const _paperBg=state.diaryPaperUrl?`background-image:url('${state.diaryPaperUrl.replace(/'/g,"%27")}');background-size:cover;background-position:center;`:"";
+  // v144.1 — inside a style="" attribute: validated, quoted for CSS, then HTML-escaped (a " ended the attribute).
+  const _paperBg=safeMediaUrl(state.diaryPaperUrl)?`background-image:url(${esc(cssUrl(state.diaryPaperUrl))});background-size:cover;background-position:center;`:"";
   const m=document.createElement('div'); m.id="diaryReaderModal"; m.className="modal show";
   m.innerHTML=`
     <div class="diaryReader"><div class="paperWrap paperPage" style="--diary-font:${curFont.css};--diary-size:${curFont.size}px;${_paperBg}">
@@ -45391,7 +45760,7 @@ function openDiaryReader(ownerId,day){
         <span class="diaryChip" style="cursor:default">Day ${day}${days.length>1?` · ${dayIdx+1}/${days.length}`:""}</span>
         <button class="diaryChip" ${nextDay==null?"disabled":""} onclick="${nextDay==null?"":`openDiaryReader('${ownerId}',${nextDay})`}" title="Next day">›</button>
         <button class="diaryChip" onclick="cycleDiaryFont()" title="Handwriting: ${esc(curFont.label||curFont.id)}" style="font-family:${curFont.css}">Aa</button>
-        <button class="diaryChip" data-diaryread onclick="dubDiary('${ownerId}')" title="Read aloud"><svg class="ic"><use href="#i-volume"/></svg></button>
+        <button class="diaryChip" data-diaryread onclick="dubDiary('${escJs(ownerId)}')" title="Read aloud"><svg class="ic"><use href="#i-volume"/></svg></button>
         <button class="diaryChip" onclick="toggleDiaryPaperPop()" title="Paper look">${icon("palette")}</button>
       </div>
     </div></div>`;
@@ -45742,7 +46111,7 @@ function renderOvrFields(){
 function renderProvField(host,fn,cfg){
   const cur=PROVIDERS[String(cfg.prov||"")]?String(cfg.prov):"or";
   const opts=Object.keys(PROVIDERS).map(id=>
-    `<option value="${id}"${id===cur?' selected':''}>${esc(PROVIDERS[id].label)}</option>`).join("");
+    `<option value="${esc(id)}"${id===cur?' selected':''}>${esc(PROVIDERS[id].label)}</option>`).join("");
   host.innerHTML=`
     <div class="kvline" style="padding:0"><label style="margin:0"><svg class="ic"><use href="#i-brain"/></svg> Provider</label>
       <select data-prov class="fld" style="width:auto;padding:3px 8px">${opts}</select></div>
@@ -46119,9 +46488,9 @@ function _plqBlockInner(pKey,b){
       <textarea class="fld" id="${taId}" data-pkey="${key}" oninput="plqInput(this)">
 ${esc(state[key]||"")}</textarea>
       <div class="plqWarnHost">${_phWarnHtml(state[key]||"",promptPlaceholders(key))}</div>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${key}')">Reset to default</button>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${taId}','${key}')">${icon("sparkle")} Write with AI</button>
-      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${taId}','${key}',event)">{{&nbsp;}} Placeholder</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${escJs(key)}')">Reset to default</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${escJs(taId)}','${escJs(key)}')">${icon("sparkle")} Write with AI</button>
+      <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${escJs(taId)}','${escJs(key)}',event)">{{&nbsp;}} Placeholder</button>
       ${used.length>1?`<div class="plqShared">Shared prompt — also used in: ${esc(used.join(", "))}. Editing it here edits it everywhere.</div>`:""}
     </details>`+_plqTplNote(b);
   }
@@ -46338,13 +46707,13 @@ function phMenuForPrompt(taId,promptKey,ev){
   if(ev)ev.stopPropagation();
   const toks=promptPlaceholders(promptKey);
   if(!toks.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">This prompt gets <b>no substitutions</b> — a typed {{token}} would be sent to the model literally.</div>`); return; }
-  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${taId}','${t}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
+  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${escJs(taId)}','${escJs(t)}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
 }
 function phMenuForTpl(taId,tplKey,ev){
   if(ev)ev.stopPropagation();
   const toks=tplPlaceholders(tplKey);
   if(!toks.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">This fragment gets <b>no substitutions</b> — a typed {{token}} would be sent literally.</div>`); return; }
-  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${taId}','${t}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
+  _phMenuShow(ev,toks.map(t=>`<button type="button" onclick="_phInsert('${escJs(taId)}','${escJs(t)}')"><code>{{${t}}}</code><span class="desc">${esc(_phDoc(t))}</span></button>`).join(""));
 }
 /* ---- block-level remove / re-add (reply payloads only) ---- */
 function plqRemoveBlock(pKey,bId){
@@ -46376,7 +46745,7 @@ function phAddMenu(pKey,ev){
   if(!removed.length){ _phMenuShow(ev,`<div class="phGuideRow" style="border:none">All placeholder parts are already in this payload. Remove one with ✕ and it becomes re-addable here.</div>`); return; }
   _phMenuShow(ev,removed.map(id=>{
     const b=d.blocks[id];
-    return `<button type="button" onclick="plqAddBlock('${pKey}','${id}')"><b>${esc(b.label)}</b><span class="desc">${esc(b.desc||"")}</span></button>`;
+    return `<button type="button" onclick="plqAddBlock('${escJs(pKey)}','${escJs(id)}')"><b>${esc(b.label)}</b><span class="desc">${esc(b.desc||"")}</span></button>`;
   }).join(""));
 }
 /* ---- the guide card's placeholder dictionary (Settings → Payloads, top card) ---- */
@@ -46582,11 +46951,11 @@ function renderEngineTemplates(){
         <div id="epPieces_${k}"></div>
         <textarea id="epTpl_${k}" rows="12" spellcheck="false"
           style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
-          oninput="epTplInput('${k}')">${esc(ptTemplate(tk))}</textarea>
+          oninput="epTplInput('${escJs(k)}')">${esc(ptTemplate(tk))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${k}')">Preview</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epEditPrompt('${k}')">Edit this engine's prompt</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${k}')">Reset to default</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epPreview('${escJs(k)}')">Preview</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epEditPrompt('${escJs(k)}')">Edit this engine's prompt</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="epResetTpl('${escJs(k)}')">Reset to default</button>
         </div>
         <div id="epPrev_${k}" style="margin-top:8px"></div>
       </details>`;
@@ -46681,11 +47050,11 @@ function _ptPieceRow(name,label,desc,kind,ctx){
   return `<div style="padding:8px 9px;border-bottom:1px solid var(--border)">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
       <code style="font-size:13.5px;color:var(--accent);cursor:pointer" title="Tap to copy {{call//${esc(name)}}}"
-            onclick="ptShowCallName('${name}')">${esc(name)}</code>
+            onclick="ptShowCallName('${escJs(name)}')">${esc(name)}</code>
       <span class="desc" style="flex:1;min-width:130px">${esc(label||"")}</span>
     </div>
     <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${name}')">copy</button>
+      <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="${t}" onclick="ptShowCallName('${escJs(name)}')">copy</button>
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${usedCall}">used by</button>
       <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" onclick="${editCall}">edit</button>
     </div>
@@ -46749,8 +47118,8 @@ function _ptFragBox(k){
     <textarea class="fld plqTpl" id="${tid}" data-btpl="${k}" oninput="plqTplInput(this)"${_tall}>
 ${esc(blkTpl(k))}</textarea>
     <div class="plqWarnHost">${_phWarnHtml(blkTpl(k),tplPlaceholders(k),!!_box)}</div>
-    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${k}')">Reset</button>
-    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${tid}','${k}',event)">{{&nbsp;}} Placeholder</button>
+    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqTplReset('${escJs(k)}')">Reset</button>
+    <button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:4px" title="Insert a placeholder this fragment supports" onclick="phMenuForTpl('${escJs(tid)}','${escJs(k)}',event)">{{&nbsp;}} Placeholder</button>
   </div>`;
 }
 
@@ -46845,7 +47214,7 @@ function ptEditPiece(name){
      and does not move here: it keeps its own box in Reply payloads. The piece that carries it gets
      a way back to it, so "edit" never leaves half the piece behind. */
   const ownPrompt=(blk&&blk.kind==="prompt")
-    ? `<button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:8px" onclick="ptJumpToPrompt('${name}')">Your own prompt text is in Reply payloads — open it</button>`
+    ? `<button class="btn sec small" style="width:auto;padding:4px 8px;margin-top:8px" onclick="ptJumpToPrompt('${escJs(name)}')">Your own prompt text is in Reply payloads — open it</button>`
     : "";
   const extra=(!blk||!Array.isArray(blk.tpls)||!blk.tpls.length)?REPLY_EXTRA_TPLS[name]:null;
   if(Array.isArray(extra) && extra.length){
@@ -46894,7 +47263,7 @@ function epEditPrompt(key){
   _ptOpenAncestors(det); det.open=true;
   try{ renderEnginePayloadEditor(card.key); }catch(e){}
   _ptFlash(det);
-  toast("Opened “"+esc(card.label||card.key).replace(/&amp;/g,"&")+"”");
+  toast("Opened “"+(card.label||card.key)+"”");   // v144.1 — toast is text: esc() would show &quot; for a quote
 }
 
 /* ============================================================================================
@@ -47031,12 +47400,12 @@ function renderPayloadTemplates(){
         <div class="desc" data-help style="margin:0 0 6px"><b>Separate your own wording from a call with a BLANK LINE, not <code>{{gap}}</code>.</b> A paragraph — everything between two blank lines — is dropped whole when every call inside it comes back empty, and <code>{{gap}}</code> is a blank line that deliberately does <i>not</i> end the paragraph. That is right for a heading that should vanish with its block, and wrong for your own prose: written next to <code>{{gap}}</code>, it disappears on every turn that call has nothing to say. Use <code>{{gap}}</code> only inside one piece you want to vanish as a unit.</div>
         <textarea id="ptTpl_${kind}" rows="16" spellcheck="false"
           style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.45"
-          oninput="ptTplInput('${kind}')">${esc(ptTemplate(kind))}</textarea>
+          oninput="ptTplInput('${escJs(kind)}')">${esc(ptTemplate(kind))}</textarea>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${kind}')">Preview with my story</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptStripHeaders('${kind}')">Erase the app's wording</button>
-          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${kind}')">Reset to default</button>
-          ${ptHasPreset(kind)?`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptRestoreTpl('${kind}')" title="The hand-written layout that ships with this build \u2014 grouped headings, every heading its own editable fragment.">Restore authored layout</button>`:""}
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptPreview('${escJs(kind)}')">Preview with my story</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptStripHeaders('${escJs(kind)}')">Erase the app's wording</button>
+          <button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptResetTpl('${escJs(kind)}')">Reset to default</button>
+          ${ptHasPreset(kind)?`<button class="btn sec small" style="width:auto;padding:6px 10px" onclick="ptRestoreTpl('${escJs(kind)}')" title="The hand-written layout that ships with this build \u2014 grouped headings, every heading its own editable fragment.">Restore authored layout</button>`:""}
         </div>
         <div id="ptPrev_${kind}" style="margin-top:8px"></div>
       </details>`;
@@ -47140,8 +47509,8 @@ function renderPayloadList(){
       const d=PAYLOAD_DEFS[pk];
       return `<details class="acc" data-plq="${pk}"><summary><b>${esc(d.label)}</b> <span class="desc" style="display:inline">— ${payloadOrder(pk).length-1} parts</span></summary>
         <div class="desc" data-help style="margin:6px 0">${esc(d.desc)}</div>
-        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="resetPayloadOrder('${pk}')">Reset order to default</button>
-        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="phAddMenu('${pk}',event)">＋ Placeholder</button>
+        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="resetPayloadOrder('${escJs(pk)}')">Reset order to default</button>
+        <button class="btn sec small" style="width:auto;padding:6px 10px;margin-bottom:2px" onclick="phAddMenu('${escJs(pk)}',event)">＋ Placeholder</button>
         <div class="plqBody" id="plqBody_${pk}"></div>
       </details>`;
     }).join("");
@@ -47162,21 +47531,21 @@ function renderPayloadEditor(pKey){
     const isHist=(id==="__history__");
     const isDyn=!isHist&&b.kind==="dyn";
     const badge=isHist?icon("message")+" dialogue":(b.kind==="prompt"?icon("edit")+" text — editable":icon("puzzle")+" placeholder — live data");
-    return `<div class="plqRow${isHist?" plqHist":isDyn?" plqDyn":""}" data-p="${pKey}" data-b="${id}">
+    return `<div class="plqRow${isHist?" plqHist":isDyn?" plqDyn":""}" data-p="${pKey}" data-b="${esc(id)}">
       <div class="plqHead">
         <code class="plqName" title="Tap to copy {{call//${isHist?"dialogue_history":id}}}"
-              onclick="event.stopPropagation();ptShowCallName('${isHist?"dialogue_history":id}')">${isHist?"dialogue_history":id}</code>
+              onclick="event.stopPropagation();ptShowCallName('${escJs(isHist?"dialogue_history":id)}')">${isHist?"dialogue_history":id}</code>
         <span class="plqLabel">${esc(b.label)}</span>
         <span class="plqBadge">${badge}</span>
       </div>
       <div class="plqBtns">
-        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Copy the name you type to call this piece in a payload template" onclick="event.stopPropagation();ptShowCallName('${isHist?"dialogue_history":id}')">copy</button>
-        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Which payload templates use this piece" onclick="event.stopPropagation();ptShowUsedBy('${isHist?"dialogue_history":id}')">used by</button>
-        ${(!isHist&&(Array.isArray(b.tpls)&&b.tpls.length||b.kind==="prompt"))?`<button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Open this piece's wording in the payload template's piece list" onclick="event.stopPropagation();ptEditPiece('${id}')">wording</button>`:""}
+        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Copy the name you type to call this piece in a payload template" onclick="event.stopPropagation();ptShowCallName('${escJs(isHist?"dialogue_history":id)}')">copy</button>
+        <button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Which payload templates use this piece" onclick="event.stopPropagation();ptShowUsedBy('${escJs(isHist?"dialogue_history":id)}')">used by</button>
+        ${(!isHist&&(Array.isArray(b.tpls)&&b.tpls.length||b.kind==="prompt"))?`<button type="button" class="btn sec small" style="width:auto;padding:3px 10px" title="Open this piece's wording in the payload template's piece list" onclick="event.stopPropagation();ptEditPiece('${escJs(id)}')">wording</button>`:""}
         <span class="plqArrows">
-          <button type="button" title="Move up" onclick="movePayloadBlock('${pKey}','${id}',-1)">▲</button>
-          <button type="button" title="Move down" onclick="movePayloadBlock('${pKey}','${id}',1)">▼</button>
-          ${isDyn?`<button type="button" title="Remove this placeholder from the payload (re-add with ＋ Placeholder)" onclick="plqRemoveBlock('${pKey}','${id}')">${icon("x")}</button>`:""}
+          <button type="button" title="Move up" onclick="movePayloadBlock('${escJs(pKey)}','${escJs(id)}',-1)">▲</button>
+          <button type="button" title="Move down" onclick="movePayloadBlock('${escJs(pKey)}','${escJs(id)}',1)">▼</button>
+          ${isDyn?`<button type="button" title="Remove this placeholder from the payload (re-add with ＋ Placeholder)" onclick="plqRemoveBlock('${escJs(pKey)}','${escJs(id)}')">${icon("x")}</button>`:""}
         </span>
       </div>
       ${b.desc?`<div class="plqDesc">${esc(b.desc)}${isHist?" Everything above is sent BEFORE it, everything below AFTER it.":""}</div>`:""}
@@ -47213,7 +47582,7 @@ function renderEnginePayloadEditor(eKey){
     const badge=b.kind==="prompt"?icon("edit")+" editable":icon("settings")+" dynamic";
     return `<div class="plqRow">
       <div class="plqHead">
-        ${b.kind==="prompt"?`<code class="plqName" title="The prompt key — its engine template is filed under this name" onclick="event.stopPropagation();ptCopyPlain('${b.promptKey}','Prompt key')">${esc(b.promptKey)}</code>`:""}
+        ${b.kind==="prompt"?`<code class="plqName" title="The prompt key — its engine template is filed under this name" onclick="event.stopPropagation();ptCopyPlain('${escJs(b.promptKey)}','Prompt key')">${esc(b.promptKey)}</code>`:""}
         <span class="plqLabel">${esc(label||"")}</span>
         <span class="plqBadge">${badge}</span>
       </div>
@@ -47903,7 +48272,7 @@ function updateStorage(){let b=0;for(let i=0;i<localStorage.length;i++){const k=
   }
 }
 function testConnection(){saveSettings(false);const b=document.getElementById('testBtn');b.textContent="Testing…";b.disabled=true;
-  chatCompletion([{role:"user",content:"Say OK"}],state.model,{max:5,dbg:"Connection test"}).then(()=>toast("Connected")).catch(e=>toast(""+(e.friendly||"Failed"))).finally(()=>{b.textContent="Test Connection";b.disabled=false;});}
+  chatCompletion([{role:"user",content:"Say OK"}],state.model,{max:5,foreground:true,dbg:"Connection test"}).then(()=>toast("Connected")).catch(e=>toast(""+(e.friendly||"Failed"))).finally(()=>{b.textContent="Test Connection";b.disabled=false;});}
 /* v107.1 — the NanoGPT half of the same check. It borrows the Roleplay model name, which may not
    exist on NanoGPT; a "model not found" still proves the key and the endpoint, so the message says
    what was actually established rather than a flat "Failed". */
@@ -47913,7 +48282,7 @@ function testNanoConnection(){
   if(!String(state.nanoKey||"").trim()){ toast("Add your NanoGPT API key first"); return; }
   b.textContent="Testing…"; b.disabled=true;
   const model=(state.nanoTestModel||state.model||"chatgpt-4o-latest");
-  chatCompletion([{role:"user",content:"Say OK"}],model,{max:5,prov:"nano",dbg:"NanoGPT connection test"})
+  chatCompletion([{role:"user",content:"Say OK"}],model,{max:5,prov:"nano",foreground:true,dbg:"NanoGPT connection test"})
     .then(()=>toast("NanoGPT connected"))
     .catch(e=>{
       const m=String((e&&e.friendly)||"");
@@ -47924,8 +48293,6 @@ function testNanoConnection(){
     .finally(()=>{ b.textContent="Test NanoGPT"; b.disabled=false; });
 }
 
-/* ---- data ---- */
-function exportChats(){const blob=new Blob([JSON.stringify({chats:state.chats,memory:state.memory},null,2)],{type:"application/json"});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download="storymind_story.json";a.click();toast("Exported");}
 
 /* ===================== Full backup: Export / Import EVERYTHING =====================
    One bundle = all settings/prompts (localStorage) + the growing collections (chats,
@@ -47942,9 +48309,11 @@ const BACKUP_VERSION=1;
 async function buildBackup(opts){
   // Flush any pending chat write so the bundle is current.
   flushPersistChats();
-  const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); ls[k]=localStorage.getItem(k);}
+  // v144.1 — opts.noKeys leaves the API keys out (Export everything asks; snapshots keep them).
+  const ls={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(opts&&opts.noKeys&&SECRET_LS_KEYS.includes(k))continue; ls[k]=localStorage.getItem(k);}
   const b={
     app:"StoryMind", backupVersion:BACKUP_VERSION, date:Date.now(),
+    includesApiKeys:!(opts&&opts.noKeys),
     localStorage:ls,
     collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[], gossip:state.gossip||[] }
   };
@@ -47957,16 +48326,28 @@ async function buildBackup(opts){
   b.media={ images, videos, statics };
   return b;
 }
+/* (!) v144.1 — "Export everything" silently carried every API key, and a backup file is exactly the
+   thing people send to someone to ask for help. It asks now; "without keys" is the first choice, and
+   importing a key-less backup keeps the keys already on the device (see applyBackupBundle). */
 async function exportAll(){
   try{
+    const how=await uiChoose("A backup file holds your chats, characters and settings. Your API keys only go in if you choose so — never share a file that has them.",
+      [{label:"Without API keys (safer)",value:"nokeys"},{label:"Include my API keys",value:"keys"}],
+      {title:"Export everything",icon:"download"});
+    if(how!=="nokeys"&&how!=="keys")return;
     toast("Building backup…");
-    const bundle=await buildBackup();
-    const blob=new Blob([JSON.stringify(bundle)],{type:"application/json"});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    const bundle=await buildBackup({noKeys:how==="nokeys"});
     const d=new Date(); const stamp=d.getFullYear()+""+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0")+"_"+String(d.getHours()).padStart(2,"0")+String(d.getMinutes()).padStart(2,"0");
-    a.download="storymind_backup_"+stamp+".json"; a.click();
-    toast("Backup exported");
+    _downloadBlob(new Blob([JSON.stringify(bundle)],{type:"application/json"}),"storymind_backup_"+stamp+".json");
+    toast("Backup exported"+(how==="keys"?" (includes API keys)":""));
   }catch(e){ console.warn("exportAll failed",e); toast("Export failed"); }
+}
+// v144.1 — one download path; the object URL is revoked once the click has been handed to the browser.
+function _downloadBlob(blob,name){
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(e){} },60000);
 }
 /* ---- Automatic rolling backup (kept inside IndexedDB) ----
    A safety net that needs no user action: after meaningful changes (debounced) and on
@@ -47987,60 +48368,115 @@ function scheduleAutoBackup(){
    Snapshots are text-only now (see buildBackup), the write is CHECKED, and a failure is said out
    loud once so a broken safety net cannot pass for a quiet one. */
 let _autoBkWarned=false;
+/* v144.1 — A SNAPSHOT ONLY WHEN SOMETHING CHANGED. Every tab switch took a full snapshot, so six
+   identical copies could push out the one from before the mistake. _dataRev counts collection saves
+   and store writes; a snapshot is skipped when it has not moved since the last one (boot counts as
+   "already snapshotted"). Resolves true when the current state is covered by a snapshot. */
+let _dataRev=0, _snapRev=null;
 async function doAutoBackup(){
   /* v109.1 — a snapshot is never written by a session that could not read your data: it would
      roll a good snapshot off the end and replace it with an empty one. */
-  if(!collectionsSafe) return;
+  if(!collectionsSafe) return false;
+  const rev=_dataRev+"/"+_lsRev;
+  if(_snapRev===rev) return true;
   try{
     const bundle=await buildBackup({noMedia:true});
     const slot="autobackup_"+Date.now();
     const wrote=await mediaDB.kvSet(slot,bundle);
     if(!wrote) throw new Error("the snapshot could not be written (storage full?)");
+    _snapRev=rev;
     // Trim old auto-backups beyond AUTO_KEEP.
     const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("autobackup_")===0).sort();
     while(keys.length>AUTO_KEEP){ const old=keys.shift(); await mediaDB.kvDelete(old); }
     _autoBkWarned=false;
+    return true;
   }catch(e){
     console.warn("auto-backup failed",e);
     if(!_autoBkWarned){ _autoBkWarned=true;
       try{ toast("Automatic snapshots are failing — use Settings → Backup → Export everything"); }catch(_){}
     }
+    return false;
   }
 }
 async function listAutoBackups(){
   const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("autobackup_")===0).sort().reverse();
   return keys.map(k=>({key:k,date:+k.split("_")[1]}));
 }
-// Open the file picker for "Import everything". (Was missing — the button did nothing.)
-function importAllPrompt(){ const el=document.getElementById('importFile'); if(el){ el.value=""; el.click(); } }
-// Shared apply path for a full backup bundle (file import AND auto-backup restore use this).
-// Validates shape, replaces settings + collections + media wholesale, then reloads.
-async function applyBackupBundle(b){
-  if(!b||b.app!=="StoryMind"||!b.collections) throw new Error("Not a StoryMind backup");
-  // 1) settings/prompts → localStorage (replace wholesale)
-  if(b.localStorage){
-    try{ localStorage.clear(); }catch(e){}
-    for(const k in b.localStorage){ try{ localStorage.setItem(k,b.localStorage[k]); }catch(e){} }
+/* v144.1 — the shape a full backup must have before anything is replaced. Throws a readable reason. */
+function validateBackupBundle(b){
+  const isObj=x=>!!x&&typeof x==="object"&&!Array.isArray(x);
+  if(!isObj(b)||b.app!=="StoryMind"||!isObj(b.collections)) throw new Error("Not a StoryMind backup");
+  const v=+b.backupVersion;
+  if(!(v>=1)) throw new Error("Not a full backup (no backup format version)");
+  if(v>BACKUP_VERSION) throw new Error("This backup was made by a newer StoryMind (format "+v+"). Update the app, then import it.");
+  const c=b.collections, bad=w=>{ throw new Error("Damaged backup: "+w); };
+  if(c.chats!==undefined){
+    if(!isObj(c.chats)) bad("chats is not a set of chats");
+    for(const id in c.chats){ const ch=c.chats[id]; if(!isObj(ch)||(ch.messages!==undefined&&!Array.isArray(ch.messages))) bad("chat "+id+" is malformed"); }
   }
-  // 2) growing collections → IndexedDB kv
-  const c=b.collections||{};
-  await mediaDB.kvSet("chats",c.chats||{});
-  await mediaDB.kvSet("memory",c.memory||[]);
-  await mediaDB.kvSet("gossip",c.gossip||[]);
-  await mediaDB.kvSet("universes",c.universes||null);
-  await mediaDB.kvSet("personas",c.personas||null);
-  await mediaDB.kvSet("scenes",c.scenes||[]);
-  // 3) media → IndexedDB stores
-  if(b.media){
-    await mediaDB.putAll("images",b.media.images||[]);
-    await mediaDB.putAll("videos",b.media.videos||[]);
-    // v25.3 — static art bytes; on next boot rehydrateStaticImages re-links entities to them.
-    if(Array.isArray(b.media.statics)){
-      for(const r of b.media.statics){ if(r&&r.key&&r.data){ try{ await mediaDB.kvSet(r.key,r.data); }catch(e){} } }
+  ["memory","gossip","scenes"].forEach(k=>{ if(c[k]!==undefined&&c[k]!==null&&!Array.isArray(c[k])) bad(k+" is not a list"); });
+  ["universes","personas"].forEach(k=>{ if(c[k]!==undefined&&c[k]!==null&&!Array.isArray(c[k])) bad(k+" is not a list"); });
+  // media fields with a non-media scheme are blanked (not rejected: the rest of the backup is good)
+  sanitizeImportedMedia(c.universes); sanitizeImportedMedia(c.personas); sanitizeImportedMedia(c.chats); sanitizeImportedMedia(c.scenes);
+  if(b.media&&typeof b.media==="object"){ sanitizeImportedMedia(b.media.images); sanitizeImportedMedia(b.media.videos); }
+  if(b.localStorage!==undefined){
+    if(!isObj(b.localStorage)) bad("settings are malformed");
+    for(const k in b.localStorage){ if(typeof b.localStorage[k]!=="string") bad("setting "+k+" is not text"); }
+  }
+  if(b.media!==undefined&&b.media!==null){
+    if(!isObj(b.media)) bad("media is malformed");
+    ["images","videos","statics"].forEach(k=>{ if(b.media[k]!==undefined&&!Array.isArray(b.media[k])) bad("media."+k+" is not a list"); });
+  }
+  return true;
+}
+// Shared apply path for a full backup bundle (file import AND auto-backup restore use this).
+/* (!) v144.1 — ALL OR NOTHING. This used to clear localStorage first, swallow every failed setItem,
+   ignore every kvSet result and take no safety copy on a file import — a damaged file or a full disk
+   left half an old install and half a new one, with no way back. And during the 700 ms before the
+   reload the pagehide flush and the background engines could write the OLD state over the restore.
+   Now: validate first (nothing touched on a bad file); take a safety snapshot; switch persistence
+   off for the rest of this page's life; write settings with a rollback copy; commit every collection
+   and the media in ONE IndexedDB transaction; on any failure put the settings back and say so. API
+   keys the bundle does not carry are kept. */
+async function applyBackupBundle(b){
+  validateBackupBundle(b);
+  if(_tabReadOnly) throw new Error("StoryMind is open in another tab — close it and reload this one first");
+  // 0) a safety snapshot of what is here now (a no-op when an identical one already exists)
+  if(collectionsSafe){
+    const snap=await doAutoBackup();
+    if(!snap && !(await uiConfirm("A safety snapshot of your current data couldn't be taken, so this can't be undone.",{title:"Import anyway?",ok:"Import anyway",danger:true}))) return false;
+  }
+  const wasSafe=collectionsSafe;
+  collectionsSafe=false; _roWarned=true;          // nothing may write the old state from here on
+  if(_persistChatsTimer){ clearTimeout(_persistChatsTimer); _persistChatsTimer=null; }
+  if(_autoBkTimer){ clearTimeout(_autoBkTimer); _autoBkTimer=null; }
+  // 1) settings/prompts → localStorage, with an in-memory copy to roll back to
+  let lsBefore=null;
+  const rollbackLs=()=>{ if(!lsBefore)return; try{
+    for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!(k in lsBefore)) localStorage.removeItem(k); }
+    for(const k in lsBefore){ try{ localStorage.setItem(k,lsBefore[k]); }catch(_){} } }catch(_){} };
+  try{
+    if(b.localStorage){
+      lsBefore={}; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); lsBefore[k]=localStorage.getItem(k); }
+      const next=Object.assign({},b.localStorage);
+      SECRET_LS_KEYS.forEach(k=>{ if(!(k in next)&&(k in lsBefore)) next[k]=lsBefore[k]; });   // keys the file left out stay
+      for(const k in lsBefore){ if(!(k in next)) localStorage.removeItem(k); }
+      for(const k in next){ try{ localStorage.setItem(k,next[k]); }catch(e){ throw new Error("settings could not be written ("+((e&&e.name)||"storage full")+")"); } }
     }
+    // 2) collections + static art + (when present) the gallery, in one transaction
+    const c=b.collections;
+    const kv={ chats:c.chats||{}, memory:c.memory||[], gossip:c.gossip||[], universes:c.universes||null, personas:c.personas||null, scenes:c.scenes||[] };
+    // v25.3 — static art bytes; on next boot rehydrateStaticImages re-links entities to them.
+    if(b.media&&Array.isArray(b.media.statics)) b.media.statics.forEach(r=>{ if(r&&typeof r.key==="string"&&r.data) kv[r.key]=r.data; });
+    await mediaDB.restoreAtomic(kv, b.media?{images:b.media.images||[],videos:b.media.videos||[]}:null);
+  }catch(e){
+    rollbackLs();
+    collectionsSafe=wasSafe; _roWarned=false;
+    throw new Error("nothing was changed — "+((e&&e.message)||e));
   }
   toast("Restored — reloading");
   setTimeout(()=>location.reload(),700);
+  return true;
 }
 async function importAllFile(file){
   if(!file) return;
@@ -48076,17 +48512,13 @@ async function restoreAutoBackup(key){
   try{
     const bundle=await mediaDB.kvGet(key);
     if(!bundle) throw new Error("Snapshot not found");
-    // Safety snapshot of the current state before overwriting (best-effort).
-    try{ await doAutoBackup(); }catch(e){ console.warn("[backup] pre-restore safety snapshot failed:",e&&e.message||e); }
-    await applyBackupBundle(bundle);
+    await applyBackupBundle(bundle);   // takes the safety snapshot of the current state itself (v144.1)
   }catch(e){ console.warn("[backup] restore failed:",e&&e.message||e); toast("Restore failed: "+(e.message||"error")); }
 }
 /* ===== Granular export / import sets ===== */
 function _downloadJSON(obj,name){
-  const blob=new Blob([JSON.stringify(obj)],{type:"application/json"});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   const d=new Date(); const stamp=d.getFullYear()+""+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0")+"_"+String(d.getHours()).padStart(2,"0")+String(d.getMinutes()).padStart(2,"0");
-  a.download=name+"_"+stamp+".json"; a.click();
+  _downloadBlob(new Blob([JSON.stringify(obj)],{type:"application/json"}),name+"_"+stamp+".json");   // v144.1 — the URL is revoked
 }
 // ROLEPLAY: the current universe's chats + the memories tied to it, plus the universe and its
 // cast so the bundle is self-contained and importable into a fresh install.
@@ -48108,6 +48540,7 @@ async function exportRoleplay(){
 }
 async function importRoleplayFile(b){
   if(!b||b.kind!=="roleplay") throw new Error("Not a roleplay export");
+  sanitizeImportedMedia(b.universe); sanitizeImportedMedia(b.personas); sanitizeImportedMedia(b.chats);   // v144.1
   if(!(await uiConfirm("Its universe, characters, chats and memories are added. Existing data is kept; items with the same id are overwritten.",{title:"Import this roleplay?",icon:"download",ok:"Import"}))) return false;
   // Merge universe + personas (so the roleplay is playable), then chats + memories.
   if(b.universe){ const i=state.universes.findIndex(u=>u.id===b.universe.id); if(i>=0)state.universes[i]=b.universe; else state.universes.push(b.universe); persistUniverses(); }
@@ -48135,6 +48568,8 @@ async function exportUniverses(){
 }
 async function importUniversesFile(b){
   if(!b||b.kind!=="universes") throw new Error("Not a universes export");
+  if(!Array.isArray(b.universes||[])||(b.personas!=null&&!Array.isArray(b.personas))) throw new Error("Damaged universes export");
+  sanitizeImportedMedia(b.universes); sanitizeImportedMedia(b.personas);   // v144.1
   let incoming=b.universes||[];
   if(!incoming.length){ toast("No universes in that file"); return false; }
   const names=incoming.map(u=>u.name||u.id).join(", ");
@@ -48257,8 +48692,18 @@ function exportPrompts(){
 async function importPromptsFile(b){
   if(!b||b.kind!=="prompts") throw new Error("Not a prompts export");
   if(!(await uiConfirm("It replaces your prompts and model/setting choices. Chats, characters and memories are untouched.",{title:"Import this prompt pack?",ok:"Import & replace",danger:true}))) return false;
-  if(b.prompts){ for(const key in b.prompts){ const kk=K[key]; if(kk)store.setRaw(kk,b.prompts[key]); } }
-  if(b.settings){ for(const key in b.settings){ const kk=K[key]; if(kk)store.setRaw(kk,b.settings[key]); } }
+  /* (!) v144.1 — ONLY WHAT exportPrompts WRITES. Any K key used to be accepted, so a shared "prompt
+     pack" could set sm_key, sm_embedurl (every memory posted to someone else's server, with the
+     OpenRouter key as the bearer) or any other setting. Prompts must be registry prompts, settings
+     must be PROMPT_PACK_KEYS, and every value must be a string (it is written raw). */
+  const okPrompt=new Set(PROMPT_REGISTRY.map(r=>r.key)), okSetting=new Set(PROMPT_PACK_KEYS);
+  let skipped=0;
+  const put=(src,ok)=>{ if(!src||typeof src!=="object")return;
+    for(const key in src){ const kk=K[key], v=src[key];
+      if(!kk||!ok.has(key)||typeof v!=="string"){ skipped++; continue; }
+      if(!store.setRaw(kk,v)) throw new Error("storage is full — the pack was only partly imported"); } };
+  put(b.prompts,okPrompt); put(b.settings,okSetting);
+  if(skipped){ try{ console.warn("[import] prompt pack: ignored "+skipped+" key(s) outside the prompt/setting allowlist"); }catch(_){} }
   return true;
 }
 // ---- Import dispatcher: one hidden <input>, routed by what the user clicked. ----
@@ -48266,6 +48711,8 @@ let _importMode="all";
 function importPick(mode){ _importMode=mode||"all"; const el=document.getElementById('importFile'); if(el){ el.value=""; el.click(); } }
 async function importDispatch(file){
   if(!file)return;
+  // v144.1 — a read-only tab (another tab is the writer) cannot import: nothing would be saved.
+  if(_tabReadOnly){ toast("StoryMind is open in another tab — close it and reload this one to import"); return; }
   try{
     if(_importMode==="all"){ await importAllFile(file); return; }   // its own confirm + reload
     const b=JSON.parse(await file.text());
@@ -48399,14 +48846,40 @@ function finishOnboard(){
 
 /* ---- init ---- */
 async function init(){
-  await preloadCollections();   // hydrate growing collections from IndexedDB (with one-time LS migration)
-  loadState();applyTheme();applyUiScale();
+  try{
+    _tabReadOnly=!(await acquireWriterLock());   // v144.1 — a second tab plays read-only
+    await preloadCollections();   // hydrate growing collections from IndexedDB (with one-time LS migration)
+    if(_tabReadOnly){ collectionsSafe=false; collectionsError="StoryMind is open in another tab"; _showTabReadOnly(); }
+    loadState();
+    _snapRev=_dataRev+"/"+_lsRev;   // v144.1 — the state as loaded counts as snapshotted (see doAutoBackup)
+  }catch(e){ bootFatal(e); return; }   // v144.1 — the state could not be loaded: say so, offer an export
+  applyTheme();applyUiScale();
   // v28.9 — fold pre-ledger GOSSIP memories into the rumor ledger, so an existing universe's
   // never-closing suspicions become things that can actually be closed.
   try{ migrateGossipLedger(); }catch(e){}
   try{ migrateImgRules(); }catch(e){}      // v30 — strip per-rule model/provider/LoRA, set casts
   if(store.raw(K.onboarded,null)!=="1"){document.getElementById('onboard').classList.add('show');}
   else{init2();}
+}
+/* v144.1 — R-OBS-1 "Fatal": the state cannot be loaded. It used to leave a blank page. The screen
+   writes nothing; persistence is switched off so no half-loaded state can be saved over the real one. */
+function bootFatal(e){
+  collectionsSafe=false;
+  try{ console.error("[boot] failed:",e); }catch(_){}
+  try{ _logUnhandled("boot",e); }catch(_){}
+  const s=document.getElementById('fatalScreen'), m=document.getElementById('fatalMsg');
+  if(m)m.textContent=String((e&&(e.stack||e.message))||e||"unknown error").slice(0,1200);
+  if(s)s.classList.add('show');
+}
+// Download whatever can still be read — settings (without API keys) and each collection on its own.
+async function fatalExport(){
+  const out={app:"StoryMind",kind:"recovery",date:Date.now(),localStorage:{},collections:{}};
+  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&!SECRET_LS_KEYS.includes(k)) out.localStorage[k]=localStorage.getItem(k); } }
+  catch(e){ out.localStorageError=String((e&&e.message)||e); }
+  for(const k of ["chats","memory","universes","personas","gossip","scenes"]){
+    try{ out.collections[k]=await mediaDB.kvGetStrict(k); }catch(e){ out.collections[k+"_error"]=String((e&&e.message)||e); }
+  }
+  try{ _downloadJSON(out,"storymind_recovery"); }catch(e){ try{ toast("Couldn't build the download: "+((e&&e.message)||e)); }catch(_){} }
 }
 function init2(){
   syncSettingsUI();loadModels(false);
@@ -48504,7 +48977,10 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=
    (debounced) AND ON APP-BACKGROUND". Only the first was ever wired: scheduleAutoBackup had
    exactly one caller, the debounced chat persist. Backgrounding the app on a phone is the moment
    a snapshot is most worth having, and it is also the moment the tab may not come back. */
-window.addEventListener('pagehide',()=>{ flushPersistChats(); try{ doAutoBackup(); }catch(_){} });
+/* v144.1 — but not on pagehide: the page is going away, an async snapshot started there cannot finish,
+   and a half-built one only costs main-thread time on the way out. visibilitychange (backgrounding,
+   where the page lives on) keeps it. */
+window.addEventListener('pagehide',()=>{ flushPersistChats(); });
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden'){ flushPersistChats(); try{ doAutoBackup(); }catch(_){} }
 });
@@ -49025,7 +49501,7 @@ function openCallPicker(){
     list.innerHTML=cast.map(p=>{
       const av=esc(p.avatar||'🎭'), nm=esc(p.name);
       const voiceTag=p.voiceId?'':' <span style="opacity:.5;font-size:11px">(default voice)</span>';
-      return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left" onclick="startCallWith('${p.id}')"><span style="font-size:22px">${av}</span> <span>${nm}${voiceTag}</span></button>`;
+      return `<button class="btn sec" style="justify-content:flex-start;gap:10px;text-align:left" onclick="startCallWith('${escJs(p.id)}')"><span style="font-size:22px">${av}</span> <span>${nm}${voiceTag}</span></button>`;
     }).join("");
   }
   openModal('callPickerModal');
@@ -49035,7 +49511,7 @@ function startCallWith(pid){
   if(!p){ toast("Character not found"); return; }
   closeModal('callPickerModal');
   // populate overlay — character's generated image if present, else their emoji
-  {const pic=document.getElementById('vcPic'); if(pic){ if(p.image){ pic.style.backgroundImage=`url("${p.image}")`; pic.textContent=''; } else { pic.style.backgroundImage='none'; pic.textContent=p.avatar||'🎭'; } }}
+  {const pic=document.getElementById('vcPic'); if(pic){ if(p.image){ pic.style.backgroundImage=`url(${cssUrl(p.image)})`; pic.textContent=''; } else { pic.style.backgroundImage='none'; pic.textContent=p.avatar||'🎭'; } }}
   {const n=document.getElementById('vcName'); if(n)n.textContent=p.name;}
   {const tr=document.getElementById('vcTranscript'); if(tr){ tr.innerHTML=''; tr.style.display='none'; }}
   vcStatus("Connecting…");
@@ -49238,7 +49714,8 @@ async function commitCallMemory(callee, transcript){
 }
 /* ===== END VOICE CALL ===== */
 
-init();
+// v144.1 — init had no .catch: a throw after the state loaded is logged instead of vanishing.
+init().catch(e=>{ _logUnhandled("init",e); try{ toast("Something failed while starting — see Debug"); }catch(_){} });
 </script>
 </body>
 </html>

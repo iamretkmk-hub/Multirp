@@ -6,7 +6,7 @@
    four a place cannot express. currentOutfit() resolves exactly one and hands it to both.
    Run: node tests/outfits.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
-const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 (async()=>{
   const b=await chromium.launch({executablePath:BIN});
   const pg=await b.newPage({viewport:{width:412,height:915}});

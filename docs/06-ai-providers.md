@@ -2,6 +2,11 @@
 
 ## `chatCompletion(messages, model, opts)` — every text call goes through here
 
+**Which API** (v107.1): each agent's `fnCfg` bucket names its provider — OpenRouter (default) or
+**NanoGPT** (`PROVIDERS`, key `sm_nanokey`); `opts.rp` reads the "rp" bucket, `opts.prov` forces
+one. Both speak the OpenAI chat shape; OpenRouter-only fields (`reasoning` object, `provider`
+routing, Gemini `safety_settings`) are sent only to OpenRouter.
+
 Anatomy of the request body (OpenRouter `/chat/completions`):
 
 - `model`, `messages`, `temperature` (`opts.temp` ?? `state.temp`), `max_tokens`
@@ -37,8 +42,24 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   filter and emit canned "无法…" refusals). `allow_fallbacks` keeps it non-breaking.
 - **Gemini safety**: for `google/gemini-*` models (unless toggled off), all four
   `safety_settings` categories are sent as `BLOCK_NONE`.
-- **Retries**: network errors and 429/5xx retried up to `opts.retries ?? 2` with backoff;
-  4xx fail fast with a friendly message (`httpMsg`).
+- **Timeouts** (v99.1, v144.1): every attempt has a ceiling, `opts.timeoutMs ?? 180000`, enforced
+  by `fetchWithTimeout`, which also covers reading the body. A timed-out attempt is **not
+  retried** when the ceiling is ≥ 60 s (a stall, not a blip). The empty-response rescue has the
+  same ceiling (`opts.rescueTimeoutMs`).
+- **Retries**: network errors and 429/5xx retried up to `opts.retries ?? 2` with jittered
+  backoff; a 429's `Retry-After` is honoured (over 30 s → fail with the wait named). 4xx fail
+  fast with a friendly message (`httpMsg`).
+- **A 200 that is not a reply** (v144.1): a non-JSON body, or a body carrying only `{error}`,
+  fails with a named message and a failed debug row — it no longer throws a raw `SyntaxError` or
+  triggers the paid rescue.
+- **Background limits** (v144.1): calls without `opts.rp`/`opts.foreground` share a semaphore of
+  `MC_BG_MAX` = 4 in flight per provider. A 401/402/403 trips a 2-minute circuit breaker
+  (`_mcBreak`, one toast) during which background calls to that provider are skipped; it lifts
+  at once when the key changes. Roleplay replies are never queued or paused.
+- **Stop** (v144.1): roleplay calls register an `AbortController`; the stop button next to Send
+  (`#stopBtn`, `stopReply()`) aborts them → `{friendly:"Stopped.", stopped:true}`, no retry, and
+  later roleplay calls in the same turn are refused until the send button is re-enabled.
+- **Usage**: `d.usage` (prompt/completion tokens) is recorded on the debug row and shown there.
 - **Empty-response rescue**: if content comes back empty, one automatic retry with
   `max_tokens = max(1600, 3×)`. When the first response was **thinking-only** (empty content
   but a reasoning trace present), the retry *also* forces `reasoning:{enabled:false,
@@ -103,6 +124,14 @@ Per-rule dispatch (see doc 10 for the pipeline): `effImgProvider(rule)` /
 
 Media helpers: `httpsMedia`/`toPlayableVideo` (protocol fixups), `blobToDataURL`,
 `_isUrl/atlasOut` (result extraction).
+
+v144.1 transport rules for these: submits and polls go through `fetchWithTimeout` (submit
+120–180 s, poll 30 s); the OpenRouter bearer is sent only to OpenRouter's own origin
+(`_orAuthFor` — `pollVideo`'s `polling_url`/`unsigned_urls` can name a CDN); the ModelsLab key
+is posted only to ModelsLab hosts (`_mlHostOk`). Embeddings (`embedText`) have a 30 s ceiling,
+and fall back to the OpenRouter key only when the endpoint is OpenRouter (`embedKeyVal`).
+Any stored URL rendered into `src=`/`href=`/`url()` passes `escUrl`/`cssUrl` (data:image|video|
+audio, blob:, http(s) only).
 
 ## Speech
 

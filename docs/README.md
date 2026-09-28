@@ -1,8 +1,10 @@
 # StoryMind (Multirp) — Architecture Documentation
 
-This folder is the complete developer map of the app, current as of **v29.1**. The entire
-application lives in **one file** — `index.html` (~30,100 lines: CSS → HTML → one
-`<script>`), plus a tiny optional service worker (`sw.js`). These documents explain how every subsystem works, how it shows up
+This folder is the developer map of the app. It was written at **v29.1** and has been kept
+current in places since; the app is now at **v144** and `index.html` is **~49,000 lines** (CSS →
+HTML → one `<script>`), plus a tiny optional service worker (`sw.js`). Where a subsystem changed
+after v29.1 and its doc was not updated, the source's version-tagged comments are the authority.
+These documents explain how every subsystem works, how it shows up
 in the UI, what data each AI payload carries, how the pieces couple to each other, and what
 breaks when you change something in the wrong place.
 
@@ -71,8 +73,11 @@ breaks when you change something in the wrong place.
    by string. Renames orphan data silently (see doc 13).
 3. **Migrations are additive and idempotent.** Old saves must keep working byte-identically —
    the app self-heals (e.g. `payloadOrder()` re-inserts unknown blocks); follow that pattern.
-4. **Every new network call gets `dbg()`/`dbgDone()`.** The Debug screen is the app's only
-   diagnostic surface on a phone.
+4. **Every new network call gets `dbg()`/`dbgDone()`** and a ceiling (`fetchWithTimeout`). The
+   Debug screen is the app's only diagnostic surface on a phone.
 5. **Bump both version stamps on release:** the `#buildStamp` text in Settings' header
-   (`v29.1` at time of writing) *and* `CACHE_VERSION` in `sw.js` (`storymind-v141`) — without
+   (`v144.0` at time of writing) *and* `CACHE_VERSION` in `sw.js` (`storymind-v404`) — without
    the sw bump, installed clients keep serving the old cached build.
+6. **Check every write.** `kvSet`/`putAll` return `false` on failure; route collection writes
+   through `_kvPersist` (checked, retried, reported) and never write media before
+   `hydrateMedia()` has read the stores (`_mediaSafe`).

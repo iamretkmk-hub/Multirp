@@ -13,7 +13,7 @@
 
    Run: node tests/engine-values.test.js */
 const {chromium}=require('playwright');
-const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const fs=require('fs'), path=require('path');
 
 function argsAt(src,i){            // the text inside a call whose "(" has just been consumed

@@ -210,7 +210,8 @@ const {chromium}=require('playwright');
   ok("the text builder reads through that helper, not off the top level", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function _commitTextArc"),src.indexOf("async function _commitTextArc")+2600);
-      return /_memReconcileList\(raw\)/.test(fn) && /typeof j\.importance==="number"/.test(fn)
+      // v144.1 — importance is read through memImpNorm, still taking `importance` beside `importance_score`
+      return /_memReconcileList\(raw\)/.test(fn) && /memImpNorm\(j\.importance_score!=null\?j\.importance_score:j\.importance/.test(fn)
         ? true : "_commitTextArc still reads j.content off the raw answer"; })());
 
   /* v76.1 — the Gamemaster is allowed to decline, and declining must not be narrated.

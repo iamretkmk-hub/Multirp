@@ -8,9 +8,9 @@
    memories the prompt asks for lost two of them. */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -31,6 +31,8 @@ const {chromium}=require('playwright');
       ownerId:"p_c",character:"Nil",date:Date.now()-(60-i)*1000,gameDay:1,gamePeriod:"Morning",
       source:"auto",universeId:uni.id,chatId:state.curChat});
     state.condenseOn=true; state.key="k";
+    // v144.1 — the condenser never merges the current day+period; these are day 1, the chat is past it
+    { const c=curChat(); if(c){ c.gameDay=5; c.period="Evening"; } }
     const dbgBefore=dbgLog.length;
     window.chatCompletion=async()=>reply;
     const before=memoriesOf("p_c").length;

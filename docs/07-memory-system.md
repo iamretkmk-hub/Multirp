@@ -138,13 +138,18 @@ paper backgrounds (`genDiaryPaper`), fonts, and read-aloud (`dubDiary`).
 
 ## Long-term condensation (`maybeCondenseMemories`)
 
-Per character, when the raw bank reaches `memMaxBeforeCondense` (default 50): the newest
-`memCondenseStart` (30) stay verbatim; older ones (excluding DIARY/LONGTERM) are **clustered
-by similarity** — embedding cosine ≥ 0.82 when semantic memory is on, else word-set Jaccard
-≥ 0.5 — and each cluster of ≥2 is merged by the `condensePrompt` model into ONE `LONGTERM`
-memory (originals deleted, merged one stamped with the earliest day, `condensedFrom` count).
-Bounded to 4 clusters per pass; fully best-effort. Manual trigger: Memory screen → Condense
-(`condenseAllNow`).
+Per character, when the **raw** bank (everything but DIARY/LONGTERM/CONSOLIDATED) reaches
+`memMaxBeforeCondense` (default 50): the newest `memCondenseStart` (30) by **story time** (day,
+then part of the day) stay verbatim; older ones are **clustered by similarity** — embedding
+cosine ≥ 0.82 when semantic memory is on, else word-set Jaccard ≥ 0.5 — and each cluster of ≥2
+is merged by the `condensePrompt` model into ONE `LONGTERM` memory (originals deleted; the merge
+keeps the earliest day, `daySpan`/`periodSpan`, the people and the source message ids, and a
+`condensedFrom` count). Never merged (v144.1): the current day+period, superseded decisions,
+rumour-linked memories (`gossipId`/`openSuspicion`), bystander glimpses (`observerOnly`) and
+memories the player wrote. Soft caps: past 60 LONGTERM entries the oldest (beyond 40) are offered
+for a second merge; past 120 diaries a Debug note is written (diaries are not trimmed). Bounded to
+4 clusters per pass; runs after the arc commit, outside the memory lock; fully best-effort.
+Manual trigger: Memory screen → Condense (`condenseAllNow`).
 
 ## Retrieval (`retrieveMemories(userText, chat, ownerId)` — every reply)
 
@@ -208,8 +213,12 @@ Opt-in (`embedOn`). `embedText` calls the OpenRouter embeddings endpoint (model
 `embedModel` → `openai/text-embedding-3-small`) using the main OpenRouter key; vectors are
 cached per memory keyed to the model (`memVec`) and to the text they were made from (`vecSig`);
 `ensureMemEmbeddings(ownerId, batch)` back-fills missing and stale vectors in the background after
-each retrieval. Any failure ⇒ silent lexical fallback
-(`_embLastErr` surfaces in the retrieval trace).
+each retrieval — in ONE batched request (`embedTextBatch`, up to 32 inputs); after a failure the
+backfill stands down for 5 minutes. Diaries are never embedded (they are never injected). Any
+failure ⇒ silent lexical fallback (`_embLastErr` surfaces in the retrieval trace). A memory
+without a vector yet scores its word overlap on a fixed scale capped at 0.6, so it cannot outrank
+a strong semantic match; the cosine rescale is gated by the absolute match, so an irrelevant pool
+scores low across the board.
 
 ## Injection into payloads
 

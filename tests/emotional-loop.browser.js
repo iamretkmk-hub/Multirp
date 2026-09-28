@@ -10,10 +10,10 @@
    Run: node tests/emotional-loop.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -181,7 +181,7 @@ const {chromium}=require('playwright');
   ok("sharing a scene clears the clock", await pg.evaluate(()=>
       /o\.lastSeenDay=chat\.gameDay\|\|1; o\.neglectDays=0;/.test(String(runShortTermRel))));
   ok("and the pass runs at day end, before the evaluation that reads the memories",
-     await pg.evaluate(()=>/runNeglectDrift\(chat,day\)/.test(String(endDayBackground))));
+     await pg.evaluate(()=>/runNeglectDrift\(chat,day\)/.test(String(endDayBackground)+String(window._endDayBackgroundRun||""))));   // v144.1 — the body is _endDayBackgroundRun
 
   console.log("\n[the six blocks are named by timescale, and ordered by authority]");
   /* They used to collide: three said "feeling", three said "now"/"this turn", two shouted with a
@@ -325,7 +325,7 @@ const {chromium}=require('playwright');
     ok("nothing is deleted from the card either way", await pg.evaluate(()=>
        !!(state.personas[0].afterHeatBy&&state.personas[0].afterHeatBy.Emre)));
 
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("the engine reads the per-person record first",
        /const byName=\(p\.afterHeatBy&&p\.afterHeatBy\[otherName\]\)/.test(src)
          ? true : "the reckoning still reads the single slot alone");
@@ -351,7 +351,7 @@ const {chromium}=require('playwright');
      yourself when you cannot see what you said. */
   console.log("\n[the quest text can see what it already sent]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("each sent ask is recorded on the quest",
        /\(q\.texts=q\.texts\|\|\[\]\)\.push\(\{day:today,period:chatPeriod\(chat\)\|\|"",text:briefDesc\(msgTxt,240\)\}\)/.test(src)
          ? true : "the message itself is still not kept");

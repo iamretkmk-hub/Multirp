@@ -6,12 +6,12 @@
    four a place cannot express. currentOutfit() resolves exactly one and hands it to both.
    Run: node tests/outfits.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
-const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 (async()=>{
   const b=await chromium.launch({executablePath:BIN});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -198,7 +198,7 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
     return r;
   });
   ok("both buttons open it instead of firing straight away", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /onclick="openOutfitBrief\(false\)"/.test(src) && /onclick="openOutfitBrief\(true\)"/.test(src)
           && !/onclick="generateOutfits\(true\)"/.test(src)
         ? true : "a button still calls the generator directly"; })());
@@ -232,7 +232,7 @@ const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrom
       try{ await generateOutfits(true,""); } finally { window.chatCompletion=real; }
       return !/WHAT THE PLAYER ASKED FOR/.test(data) ? true : "an empty brief still ships a block"; }));
   ok("it is saved with the rest of the card", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /outfitBrief:\(editingPersona&&editingPersona\.outfitBrief\)\|\|undefined/.test(src)
         ? true : "savePersona drops it"; })());
   ok("a world with nowhere to be is refused before the box opens", await pg.evaluate(()=>{

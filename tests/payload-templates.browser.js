@@ -1,11 +1,11 @@
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage();
   const errs=[];
   pg.on('console',m=>{ if(m.type()==='error'&&!/Failed to load resource|net::ERR_/.test(m.text())) errs.push(m.text()); });
   pg.on('pageerror',e=>errs.push('PAGEERROR: '+e.message));
-  await pg.goto('file:///home/user/Multirp/index.html');
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
   await pg.waitForTimeout(2500);
 
   let pass=0,fail=0;

@@ -11,9 +11,9 @@
    The rule is one constant now, included by all five, so they cannot drift apart again. */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -131,7 +131,8 @@ const {chromium}=require('playwright');
         "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other",
         "bio_wardrobe_other","quest_intro","last_line_footer","drive_ego","heat_breaks_voiced",
         "heat_breaks_silent","resistance_body","rails_header",
-        "mem_plan_self","mem_plan_with","mem_plan_asked"]);   // memory text — the memory bank is first person
+        "mem_plan_self","mem_plan_with","mem_plan_asked",     // memory text — the memory bank is first person
+        "mem_noshow_stood_up","mem_noshow_user","mem_noshow_declined"]);   // v144.1 — likewise
       const FP=/(?<![A-Za-z])(I|I'm|I've|my|My|MY|me|Me|mine|myself)(?![A-Za-z])/;
       const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!EXEMPT.has(k)
         && typeof BLOCK_TPL_DEFAULTS[k]==="string" && FP.test(BLOCK_TPL_DEFAULTS[k]));
@@ -146,7 +147,7 @@ const {chromium}=require('playwright');
       return /SECOND PERSON/.test(t) && /CHANGE THE PERSON\. CHANGE NOTHING ELSE/.test(t)
         && /EVERYONE ELSE STAYS IN THE THIRD PERSON/.test(t) ? true : "x_card_voice is not what it should be"; }));
   ok("the button is in the editor and calls it", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /id="peVoiceFix"[^>]*onclick="repairCardVoice\(\)"/.test(src)
         ? true : "no Fix the voice button wired to repairCardVoice"; })());
   /* It first landed inside the collapsed "Create with AI" panel, where it measured 0×0 — a repair
@@ -162,7 +163,7 @@ const {chromium}=require('playwright');
       if(r.left<0||r.right>window.innerWidth) return "the button overflows the viewport";
       return true; }));
   ok("the director notes are never sent, so they cannot be rewritten", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function repairCardVoice");
       const fn=src.slice(i,i+3200);
       return (!/peInstructions/.test(fn) && !/peInterject/.test(fn))
@@ -205,7 +206,7 @@ const {chromium}=require('playwright');
       const okk=el("pePersonality").value==="I am blunt."; state.key=hadKey;
       return okk ? true : "the card was damaged by a bad answer"; }));
   ok("a want-list that comes back the wrong length is rejected", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function repairCardVoice");
       const fn=src.slice(i,i+3600);
       return /lines\.length===live\.length/.test(fn) ? true : "the want-list length is not checked"; })());
@@ -242,14 +243,14 @@ const {chromium}=require('playwright');
       if(_charQuests(uni).some(x=>x.id==="q_INVENTED")) return "an invented pursuit was written";
       return true; }));
   ok("only the ids that were sent can be written", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function repairCardVoice");
       const fn=src.slice(i,i+5200);
       return /const q=r&&byId\.get\(String\(r\.id\|\|""\)\); if\(!q\)return;/.test(fn)
         ? true : "a returned pursuit id is not checked against the ones sent"; })());
 
   ok("savePersona re-applies the repaired want-list after the stale-list rule", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("function savePersona");
       const fn=src.slice(i,i+6000);
       const dropAt=fn.indexOf("delete editingPersona.goalsLive");
@@ -303,7 +304,7 @@ const {chromium}=require('playwright');
 
   /* The purge could be dispatched twice before the first came back — 62s each, in one session. */
   ok("the purge cannot be dispatched twice at once", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function runPromisePurge");
       const fn=src.slice(i,i+3400);
       return /if\(chat\._prPurgeBusy\)return;\s*\n\s*chat\._prPurgeBusy=1;/.test(fn)
@@ -369,13 +370,13 @@ const {chromium}=require('playwright');
       state.narrMaxSpans=had; state.narrRetryOn=hadOn;
       return hitAt2 ? true : "a cap of 2 no longer fires on two spans, so the revert was pointless"; }));
   ok("loadState, the field and saveSettings all say 3", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const load=/narrMaxSpans:store\.get\(K\.narrMaxSpans,3\)/.test(src);
       const field=/id="setNarrMaxSpans"[^>]*value="3"/.test(src);
       const save=/setNarrMaxSpans'\)\.value\|\|3\)/.test(src);
       return (load&&field&&save) ? true : `loadState:${load} field:${field} saveSettings:${save}`; })());
   ok("the switch is still off by default", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /function narrRetryOn\(\)\{ return state\.narrRetryOn===true; \}/.test(src)
         ? true : "the narration retry is no longer opt-in"; })());
 

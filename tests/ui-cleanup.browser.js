@@ -22,7 +22,7 @@ const fs=require('fs'), path=require('path');
                +(code.match(/window\.(confirm|prompt|alert)\s*\(/g)||[]).length;
   ok("no confirm( / prompt( / alert( call remains", natives===0, natives+" found");
 
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const natived=[]; pg.on('dialog',d=>{ natived.push(d.message()); d.dismiss().catch(()=>{}); });

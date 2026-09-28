@@ -1,6 +1,6 @@
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,400));} };
 
@@ -8,7 +8,7 @@ const {chromium}=require('playwright');
     const ctx=await b.newContext({viewport:vp,hasTouch:true,isMobile:true});
     const pg=await ctx.newPage();
     const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-    await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+    await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
     await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
     await pg.waitForTimeout(800);
     // A run of PLAIN replies — no image anywhere. This is the case that had no route at all.

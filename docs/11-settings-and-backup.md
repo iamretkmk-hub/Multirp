@@ -27,11 +27,11 @@ Prompts edited in Settings → Payloads save **instantly** through their own han
 
 | Set | Functions | Contents |
 |---|---|---|
-| **Everything** | `exportAll` / `importAllFile` → `buildBackup`/`applyBackupBundle` | ALL of localStorage (⚠️ **including API keys** — treat backup files as secrets), the IDB collections (chats, memory, universes, personas, scenes), gallery media, static image bytes. Import replaces wholesale + reloads. |
-| **Automatic snapshots** | `scheduleAutoBackup`/`doAutoBackup`/`renderAutoBackups`/`restoreAutoBackup` | The same full bundle, kept **inside IndexedDB** (last 3, ~once/min after changes + on background). Restore takes a safety snapshot of current state first. |
+| **Everything** | `exportAll` / `importAllFile` → `buildBackup`/`applyBackupBundle` | localStorage (v144.1: export **asks** whether to include the API keys and TTS relay URL — `SECRET_LS_KEYS`; "without" is the first choice), the IDB collections (chats, memory, gossip, universes, personas, scenes), gallery media, static image bytes. Import (v144.1) **validates first** (`validateBackupBundle`: shapes, `backupVersion` ≤ `BACKUP_VERSION`) and touches nothing on a bad file; takes a safety snapshot; turns persistence off; writes settings with a rollback copy (API keys the file lacks are kept); commits collections + media in **one** IndexedDB transaction (`mediaDB.restoreAtomic`); on failure rolls settings back and reports "nothing was changed"; then reloads. Media fields with script schemes are blanked on import (`sanitizeImportedMedia`). |
+| **Automatic snapshots** | `scheduleAutoBackup`/`doAutoBackup`/`renderAutoBackups`/`restoreAutoBackup` | A **text-only** bundle (no gallery media, v110.1), kept **inside IndexedDB** — the last `AUTO_KEEP` = **6**, ~once/min after changes and when the app goes to the background. v144.1: skipped when nothing changed since the last one (`_dataRev`/`_lsRev`), never started on `pagehide`. Restore goes through `applyBackupBundle`, which snapshots the current state first. |
 | **Roleplay** | `exportRoleplay`/`importRoleplayFile` | Current universe's chats + its memories + the universe & cast (self-contained; static images inlined). |
 | **Universes** | `exportUniverses`/`importUniversesFile` | Worlds + characters, no chats. |
-| **Prompts & settings** | `exportPrompts`/`importPromptsFile` | The prompt pack: prompt overrides + payload layouts/fragments + related settings. |
+| **Prompts & settings** | `exportPrompts`/`importPromptsFile` | The prompt pack: prompt overrides + payload layouts/fragments + related settings. Import (v144.1) writes **only** `PROMPT_REGISTRY` keys and `PROMPT_PACK_KEYS`, string values only — a pack cannot set API keys or the embeddings endpoint. |
 
 Dispatch: one hidden `<input type=file>` + `importPick(kind)`/`importDispatch(file)`.
 
@@ -41,7 +41,20 @@ diaries, relationships, feelings, schemes/intents, meetings, tracker values, que
 chronicle but **keeps** the world, cast cards, locations and transcripts.
 
 The Debug screen has its own export (`exportDebug`) with `scrubSecrets` — that one is safe to
-share; full backups are not.
+share; a full backup is only safe to share when exported "without API keys".
+
+## Storage safety (v109.1 → v144.1)
+
+- **Read-only sessions.** `collectionsSafe` is false until the boot read is known good, while a
+  second tab is open (`acquireWriterLock`, Web Locks / BroadcastChannel; `#tabRoBar` explains),
+  after a boot failure, and during a restore. Every `persist*` asks `canPersistCollections()`.
+- **Checked writes.** Collection writes go through `_kvPersist`: the `kvSet` result is checked,
+  a failure toasts once, a run of failures warns once more, and the write is retried with backoff
+  (`_retryWriteLater`, reading the current value). The chat save signature (`_lastPersistSig`)
+  is recorded only after a successful write.
+- **Media after hydration.** `persistImages`/`persistVideos` (`putAll` clears the store) and
+  `persistScenes` wait for `hydrateMedia()` to have read the stores (`_mediaSafe`); a write asked
+  for earlier is made once hydration succeeds, and never if it failed.
 
 ## Storage meter & PWA
 

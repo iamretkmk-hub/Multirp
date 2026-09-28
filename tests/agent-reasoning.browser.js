@@ -8,12 +8,12 @@
    overrides already were, and every bucket ships as Auto so an untouched install is unchanged. */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,400));} };
   const ctx=await b.newContext({viewport:{width:412,height:915},hasTouch:true,isMobile:true});
   const pg=await ctx.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
 
@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
                text:async()=>JSON.stringify({choices:[{message:{content:"ok"}}]}) };
     };
   });
-  const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+  const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
   const send=opts=>pg.evaluate(async o=>{
       window.__bodies=[];
       try{ await chatCompletion([{role:"user",content:"hi"}],"deepseek/deepseek-v4-pro",o); }catch(e){}

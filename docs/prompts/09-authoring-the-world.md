@@ -281,7 +281,7 @@ USER'S REQUEST — prioritize creating the places they describe (adapt them to f
 
 ---
 
-## `latentNpc` — Latent NPCs (first visit)
+## `latentNpc` — First-visit NPCs (active residents, not latent)
 
 Mints up to 2 inhabitants for a location on the player's FIRST visit (owner, bouncer, dungeon boss). Placeholders: world, loc, desc, type, cast, quests. Returns a JSON array of 0-2 compact character cards.
 
@@ -527,16 +527,16 @@ Keep it to ~150-250 words of plain, usable direction — the actual texture of c
 
 ## `genrePackAuthor` — Genre-pack author (per-universe)
 
-Writes a universe's GENRE PACK (voice/drama/stakes/relInterpretation/diaryVoice/pacing, injected as blocks into every genre-sensitive engine) plus the player-facing universe guide, in ONE call so they stay aligned. Placeholders: {{setting}}, {{directing}}, {{cast}}, {{user}}, {{trackers}}, {{systems}}. JSON out.
+Writes a universe's GENRE PACK (voice/drama/stakes/relInterpretation/diaryVoice/pacing, injected as blocks into every genre-sensitive engine) plus the player-facing universe guide, in ONE call so they stay aligned. Placeholders: {{setting}}, {{directing}}, {{cast}}, {{user}}, {{trackers}}. JSON out.
 
 | | |
 |---|---|
 | **Fires** | logged as `Genre pack ·` |
 | **Runs on** | `authoringModel()` · bucket `unigen` · temp `fnTemp("unigen",0.8)` · max `fnTok("unigen",3800)` |
-| **Placeholders** | declared: `{{cast}}`, `{{directing}}`, `{{setting}}`, `{{systems}}`, `{{trackers}}`, `{{user}}`<br>supplied: `directing`, `setting`, `user`<br>⚠️ declared but never supplied: `{{cast}}`, `{{systems}}`, `{{trackers}}` |
+| **Placeholders** | declared: `{{cast}}`, `{{directing}}`, `{{setting}}`, `{{trackers}}`, `{{user}}`<br>supplied: `directing`, `setting`, `user`<br>⚠️ declared but never supplied: `{{cast}}`, `{{trackers}}` |
 | **Sections** | `ask`, `request` |
 | **Returns** | `voice`, `drama`, `stakes`, `pacing`, `guide` |
-| **Size** | 2216 characters |
+| **Size** | 2182 characters |
 
 ````text
 You design the GENRE PACK for a roleplay universe: six short flavor texts injected into the engine's prompts so every system (character voices, the hidden drama director, confrontation judges, relationship scoring, diaries, pacing) plays the SAME genre - plus a player-facing guide.
@@ -552,7 +552,6 @@ THE CAST:
 
 THE PLAYER: {{user}}
 STORY TRACKERS: {{trackers}}
-GAME SYSTEMS ENABLED: {{systems}}
 
 Write ALL of the following. Sections 1-6 are MODEL-FACING: write them in ENGLISH, imperative voice, 3-6 short lines each, concrete and specific to THIS world - never generic advice like "be dramatic".
 1. "voice" - prose register and tone for character replies: sentence rhythm, vocabulary flavor, how openly emotions show, what the narration lingers on in this genre.

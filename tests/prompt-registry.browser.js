@@ -11,7 +11,7 @@
    Run: node tests/prompt-registry.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -190,7 +190,7 @@ const {chromium}=require('playwright');
         && /CHANGE THE PERSON\. CHANGE NOTHING ELSE/.test(up("x_card_voice")))
         ? true : "the stale copy survived the Save"; }));
   ok("the sweep runs after the hand-written writes, or it would be undone", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("function saveSettings");
       const fn=src.slice(i,src.indexOf("\n}",i));
       const sweep=fn.lastIndexOf("store.del(K[r.key])");

@@ -5,10 +5,10 @@
    Run: node tests/payload-contradiction.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -151,11 +151,15 @@ const {chromium}=require('playwright');
      await pg.evaluate(()=>{
       const src='"Ah—" _Dayanamiyorum._';
       return normalizeChannels(src,{heat:true})===src ? true : normalizeChannels(src,{heat:true}); }));
+  /* v144.1 — the three spoken paths share one generator (generateCharacterReply), so the check is
+     that each of them goes through it and that it runs the normalizer, heat-exempt. */
   ok("and all three spoken paths run it before storing", await pg.evaluate(()=>{
       const miss=[];
-      if(!/normalizeChannels\(stripChannelLabel\(reply\)\)/.test(String(sendMessage))) miss.push("solo");
-      if(!/normalizeChannels\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
-      if(!/\{heat:_wasHeat\}/.test(String(playCharacterTurn))) miss.push("multi heat-exempt");
+      if(!/generateCharacterReply\(/.test(String(sendMessage))) miss.push("solo");
+      if(!/generateCharacterReply\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
+      if(!/generateCharacterReply\(/.test(String(playSingleReaction))) miss.push("gm reaction");
+      if(!/normalizeChannels\(/.test(String(generateCharacterReply))) miss.push("generator");
+      if(!/\{heat:wasHeat\}/.test(String(generateCharacterReply))) miss.push("heat-exempt");
       return miss.length?miss.join(", "):true; }));
 
   console.log("\n[exposure is not leak-chance]");
@@ -451,7 +455,7 @@ const {chromium}=require('playwright');
         && blkTpl("intent_aim_self")===BLOCK_TPL_DEFAULTS.intent_aim_self
         ? true : "a new fragment does not resolve to its shipped default"; }));
   ok("and the aim fragment is listed beside its two siblings", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /"intent_aim_warm","intent_aim_cool","intent_aim_self"\]/.test(src)
         ? true : "intent_aim_self is not on the your_bio extras list"; })());
 

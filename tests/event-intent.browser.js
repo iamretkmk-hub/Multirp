@@ -10,7 +10,7 @@
    Run: node tests/event-intent.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -54,12 +54,12 @@ const {chromium}=require('playwright');
           && /no "she decides"/.test(t) && /no third person, no name/.test(t)
         ? true : "the voice rule was lost in the rewrite"; }));
   ok("the title can no longer stand in for the reason", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /const why=String\(pl\.detail\|\|""\)\.slice\(0,240\)/.test(src)
           && !/const why=String\(pl\.detail\|\|pl\.title\)/.test(src)
         ? true : "it still falls back to the title"; })());
   ok("and the provenance line says so when there is none", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /no reason was recorded when it was made/.test(src)
         ? true : "an empty purpose still reads as a complete premise"; })());
 
@@ -163,7 +163,7 @@ const {chromium}=require('playwright');
   ok("the bar is stated to cover kept lines, not only added ones", await pg.evaluate(()=>
       /applies to every line you keep, not only to lines you add/.test(up("goalsCurator")||"") ));
   ok("the settled calendar is for closing wants, not opening them", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /Read these to CLOSE wants, not to find new ones/.test(src)
         ? true : "the WHAT THEY ALREADY DID label still reads as a source"; })());
 
@@ -226,7 +226,7 @@ const {chromium}=require('playwright');
       return /KNOWN PLACES in this world: Site Coffee House/.test(t)
         ? true : "places arrives empty at the call site"; }));
   ok("the fill is wired in the resolver, not only in this test", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf('fillTpl(up("calExec")'));
       return /places:_pulsePlaces\(chat\)/.test(fn.slice(0,600))
         ? true : "the resolver does not pass places"; })());

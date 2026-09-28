@@ -17,10 +17,10 @@
    Run: node tests/storage-safety.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
   let pass=0,fail=0;
@@ -105,23 +105,22 @@ const {chromium}=require('playwright');
 
   console.log("\n[the open itself]");
   ok("a blocked open now settles instead of hanging for ever", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /req\.onblocked=\(\)=>rej\(/.test(src)
         ? true : "indexedDB.open still has no onblocked handler"; })());
   ok("and a rejected open is not memoised for the life of the page", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /dbp=p\.catch\(e=>\{ dbp=null; throw e; \}\)/.test(src)
         ? true : "one bad open still poisons every later read and write"; })());
 
   console.log("\n[nothing in the update path clears anything]");
   ok("the banner only reloads", await pg.evaluate(()=>
       /location\.reload\(\)/.test(String(updReload)) && !/clear|delete/i.test(String(updReload)) ));
-  ok("localStorage.clear lives only behind the restore confirm", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+  // v144.1 — the restore no longer clears wholesale either: it replaces key by key with a rollback copy.
+  ok("nothing clears localStorage wholesale (the restore replaces key by key, with a rollback)", (()=>{
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const hits=(src.match(/localStorage\.clear\(\)/g)||[]).length;
-      const i=src.indexOf("localStorage.clear()");
-      const fn=src.lastIndexOf("async function applyBackupBundle",i);
-      return (hits===1 && fn>-1 && i-fn<800) ? true : hits+" call sites"; })());
+      return (hits===0 && /rollbackLs\(\)/.test(src)) ? true : hits+" call sites"; })());
 
   /* v110.1 — and the safety net that was supposed to catch all of this had never fired once.
      Reported by the same player: after losing a playthrough, the snapshot list was EMPTY.
@@ -151,7 +150,7 @@ const {chromium}=require('playwright');
         ? true : j.slice(0,200); }));
   ok("restoring one leaves the gallery alone, because it names no media", await pg.evaluate(()=>{
       const src=String(applyBackupBundle);
-      return /if\(b\.media\)\{/.test(src)
+      return /restoreAtomic\(kv, b\.media\?/.test(src)
         ? true : "applyBackupBundle would wipe the media stores for a media-less bundle"; }));
 
   console.log("\n[a failed snapshot is said out loud, not logged and forgotten]");
@@ -174,11 +173,13 @@ const {chromium}=require('playwright');
       return n===0 ? true : "warned "+n+" more times after the first"; }));
 
   console.log("\n[it fires when the comment always said it did]");
+  /* v144.1 — backgrounding still takes one; pagehide (the page is going away) only flushes, because an
+     async snapshot started there cannot finish. */
   ok("backgrounding the app takes one — the moment it matters most on a phone", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
-      const ph=/addEventListener\('pagehide',\(\)=>\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
+      const ph=/addEventListener\('pagehide',\(\)=>\{ flushPersistChats\(\); \}\)/.test(src);
       const vis=/visibilityState==='hidden'\)\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
-      return (ph&&vis) ? true : "pagehide="+ph+" visibilitychange="+vis; })());
+      return (ph&&vis) ? true : "pagehide flush-only="+ph+" visibilitychange="+vis; })());
   ok("a real snapshot lands and is listed", await pg.evaluate(async()=>{
       collectionsSafe=true;
       for(const k of (await mediaDB.kvKeys()).filter(x=>String(x).indexOf("autobackup_")===0)) await mediaDB.kvDelete(k);

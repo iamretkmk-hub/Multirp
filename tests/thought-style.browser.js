@@ -1,13 +1,13 @@
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,300));} };
 
   for(const theme of ["dark","light"]){
     const pg=await b.newPage({viewport:{width:412,height:915}});
     const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-    await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+    await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
     await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
     await pg.waitForTimeout(800);
     await pg.evaluate(t=>{
@@ -62,7 +62,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[the markup itself]");
   const pg=await b.newPage({viewport:{width:412,height:915}});
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
   ok("md tags a thought and leaves narration alone", await pg.evaluate(()=>{
       const h=md('*a step closer* "a line" _a thought_');
       return h.indexOf('<em class="thg">a thought</em>')>-1

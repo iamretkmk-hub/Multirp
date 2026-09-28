@@ -15,7 +15,7 @@
    Run: node tests/intents-multi.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -126,7 +126,7 @@ const {chromium}=require('playwright');
     window.__reply["Intent tick"]=new Error("offline");
     await runIntentEngine(c,5,c.universeId,{tick:true,period:"Night"});
     const one=c.intents[0].strength;
-    c.intents[0].strength=0.6; c.intents[0].fedDay=1;
+    c.intents[0].strength=0.6; c.intents[0].fedDay=1; c.intents[0].lastTick=4;   // v144.1 — a day is ticked once; replay it
     window.__reply["Intent tick"]={strength_delta:0.1,recruit:[],ready:false};   // an older one-motive prompt
     await runIntentEngine(c,5,c.universeId,{tick:true,period:"Night"});
     return {one, two:c.intents[0].strength};

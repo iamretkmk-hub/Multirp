@@ -4,7 +4,7 @@
    templates on would silently change what a background engine receives.
    Run: node tests/engine-parity.test.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
-const BIN=process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 (async()=>{
   const b=await chromium.launch({executablePath:BIN});
   const pg=await b.newPage();

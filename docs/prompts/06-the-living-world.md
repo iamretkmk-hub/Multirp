@@ -81,7 +81,7 @@ Resolves a due calendar plan that does NOT include the player — a char↔char 
 | **Placeholders** | declared: `{{day}}`, `{{knows}}`, `{{origin}}`, `{{period}}`, `{{place}}`, `{{sheets}}`, `{{ties}}`, `{{title}}`, `{{user}}`, `{{who}}`, `{{world}}`<br>supplied: `day`, `period`, `place`, `sheets`, `ties`, `title`, `user`, `who`, `world`<br>⚠️ declared but never supplied: `{{knows}}`, `{{origin}}` |
 | **Sections** | `promises`, `ask` |
 | **Returns** | `headline`, `event`, `memories`, `name`, `content`, `emotion`, `importance`, `rel`, `from`, `to`, `trust`, `affection`, `respect`, `fear` |
-| **Size** | 2487 characters |
+| **Size** | 3307 characters |
 
 ````text
 You resolve a scheduled event of a roleplay world that takes place WITHOUT the player ({{user}}). The time has come; narrate what actually happened, offstage.
@@ -104,6 +104,7 @@ RULES
 - {{user}} is NOT present. If the plan only makes sense with them, resolve what happens in their absence (someone waits, is stood up, sends word, or proceeds alone).
 - The result must matter: someone now knows, owes, fears, wants, or plans something they didn't before.
 - "followup": ONLY when this outcome genuinely sets up a specific NEXT commitment (a return visit, a promised answer, a threatened reckoning). Never re-schedule the same meeting, never invent a routine hangout. Most events need no followup — return null.
+- A followup is between the participants only — never with {{user}}: {{user}} was not here and agreed to nothing. Its "day" is Day {{day}} or at most four days after it.
 
 Return ONLY JSON:
 {
@@ -292,8 +293,8 @@ When a motive is ready to act on, the holder chooses HOW (direct, public spectac
 | **Runs on** | `model` · bucket `mem` · temp `fnTemp("mem",0.6)` · max `fnTok("mem",300)` |
 | **Placeholders** | declared: `{{aim}}`, `{{allies}}`, `{{holder}}`, `{{kind}}`, `{{leverage}}`, `{{nature}}`, `{{strength}}`, `{{target}}`, `{{trigger}}`, `{{valence}}`, `{{world}}`<br>supplied: `aim`, `by`, `holder`, `kind`, `nature`, `strength`, `target`, `trigger`, `valence`<br>⚠️ declared but never supplied: `{{allies}}`, `{{leverage}}`, `{{world}}`<br>supplied but unused: `by` |
 | **Sections** | `data` |
-| **Returns** | `method`, `approach`, `gate`, `patience`, `params`, `proxy`, `leverage`, `venue` |
-| **Size** | 3424 characters |
+| **Returns** | `method`, `approach`, `gate`, `patience`, `params`, `proxy`, `leverage`, `venue`, `rumor` |
+| **Size** | 3672 characters |
 
 ````text
 A character has decided they will ACT on a private motive. Your job is to decide HOW — the strategy, in character. You are not narrating anything; you are choosing the method and the shape of their move.
@@ -329,7 +330,8 @@ HOW DRAMA WORKS IN THIS WORLD (shape the method to fit this tone): {{world}}
   "params": {
     "proxy": "exact ally/person name if method is proxy, else null",
     "leverage": "the secret/debt/thing held if method is leverage, else null",
-    "venue": "the kind of public setting if public_spectacle, else null"
+    "venue": "the kind of public setting if public_spectacle, else null",
+    "rumor": "if method is undermine_first: the talk that gets spread about {{target}} — one short clause saying what people will hear ABOUT them (e.g. 'that they owe money all over town'), never the plan, the method or who started it; else null"
   }
 }
 "gate" is what must be true for them to make their move: "target_alone" for ambush_isolation, "in_public" for public_spectacle, "prep_done" for undermine_first (the groundwork must land first), "target_present" or "none" otherwise. "patience" is how long they'll wait for the right moment versus forcing it now (low = impatient, acts at the first chance even if imperfect).

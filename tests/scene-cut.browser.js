@@ -7,7 +7,7 @@
    Run: node tests/scene-cut.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -134,16 +134,16 @@ const {chromium}=require('playwright');
 
   console.log("\n[the button]");
   ok("it is in the map hub bar", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /id="mapCutBtn" onclick="sceneCutFromMenu\(this\)/.test(src) ? true : "no button"; })());
   ok("a second tap cannot open two scenes at once", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('async function sceneCutFromMenu');
       const fn=src.slice(i,src.indexOf('\n}\n',i));
       return /if\(btn&&btn\.disabled\)return;/.test(fn) && /btn\.disabled=true/.test(fn)
         ? true : "the button is re-entrant"; })());
   ok("a failure leaves the map open", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('async function sceneCutFromMenu');
       const fn=src.slice(i,src.indexOf('\n}\n',i));
       return /if\(okd\)\{ try\{ _mapClose\(\)/.test(fn) ? true : "it closes even when nothing opened"; })());
@@ -183,7 +183,7 @@ const {chromium}=require('playwright');
       catch(e){} finally{ window.fetch=real; }
       return dbgLog.slice(-1)[0].result==="HTTP 401"; }));
   ok("the ceiling is generous by default, tight where it blocks the UI", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /opts\.timeoutMs!=null\)\?opts\.timeoutMs:180000/.test(src)
           && /timeoutMs:75000,retries:1,dbg:"Drop me into a scene/.test(src)
         ? true : "the ceilings are not set"; })());

@@ -15,7 +15,8 @@ AI providers with the user's own API keys.
 
 | Provider | Used for | Key stored in |
 |---|---|---|
-| OpenRouter | all text LLM calls + embeddings + (optional) image models | `sm_key` |
+| OpenRouter | text LLM calls (default for every agent) + embeddings + (optional) image models | `sm_key` |
+| NanoGPT | text LLM calls for any agent whose card picks it (v107.1, `fnCfg[bucket].prov="nano"`) | `sm_nanokey` |
 | ModelsLab | images / video | `sm_segkey` |
 | AtlasCloud | images / video / xAI TTS / Kling lip-sync | `sm_atlaskey` |
 | fal.ai | z-image LoRA images | `sm_falkey` |
@@ -26,7 +27,7 @@ AI providers with the user's own API keys.
 ## File layout
 
 ```
-index.html   — the entire app: ~650 lines CSS, ~1400 lines HTML, ~28,000 lines JS
+index.html   — the entire app (v144: ~49,000 lines): ~1,000 lines CSS, ~1,700 lines HTML, ~46,000 lines JS
 sw.js        — optional service worker: caches the app shell, network-first; never caches API calls
 docs/        — this documentation
 ```
@@ -37,7 +38,7 @@ global** and discipline comes from banner comments + naming conventions, not mod
 
 ## index.html anatomy
 
-| Region | Lines (v29.1) | Content |
+| Region | Lines (v29.1 — v144 is ~49k lines; same order, every region larger) | Content |
 |---|---|---|
 | `<style>` | ~25–657 | All CSS. Theming via CSS variables on `body[data-theme]`. Landscape two-column layout, video gallery, playground styles at the end. |
 | SVG symbol defs | ~660–742 | The line-icon system: `<symbol id="i-*">` sprites referenced by `<use href="#i-…">`. |
@@ -72,9 +73,13 @@ not by number.)*
 
 ```
 window load
- └─ init()                          (async)
-     ├─ preloadCollections()        hydrate chats/memory/universes/personas from IndexedDB kv
-     │                              (with a one-time migration from legacy localStorage)
+ └─ init()                          (async; a throw while loading → bootFatal(): a screen that
+     │                               explains and offers "Download what's recoverable")
+     ├─ acquireWriterLock()         v144.1 — first tab writes; a later tab runs read-only
+     │                              (collectionsSafe=false, #tabRoBar) so tabs can't overwrite
+     ├─ preloadCollections()        hydrate chats/memory/universes/personas/gossip from IndexedDB kv
+     │                              (strict reads; unreadable → read-only session; one-time
+     │                              migration from legacy localStorage only for absent keys)
      ├─ loadState()                 build the global `state` from localStorage + defaults;
      │                              fresh-install seeding (bundled default universe);
      │                              data migrations (sub-areas, presence ids, quests…)
@@ -86,7 +91,8 @@ init2()
  ├─ loadModels(false)               OpenRouter model list → <datalist> (24h cache)
  ├─ _wireAudioUnlock()              prime audio on first user gesture (mobile autoplay)
  ├─ applyUniverseProfile(...)       resolve per-universe player identity (name/look/bio)
- ├─ hydrateMedia()                  async: images/videos/scenes from IndexedDB → state
+ ├─ hydrateMedia()                  async: images/videos/scenes from IndexedDB → state (strict
+ │                                  reads; media writes wait for it — `_mediaSafe`)
  ├─ startSceneFor(...)              if no current chat, open the current universe's story
  └─ renderChat(); updateChatHeader(); autoIllustrateLast() if the greeting isn't illustrated
 ```
@@ -100,16 +106,17 @@ only), `navigator.storage.persist()`, and a custom "Install app" button.
 
 ## Versioning & release checklist
 
-- `#buildStamp` in the Settings header shows the app version (`v29.1`). The codebase's
+- `#buildStamp` in the Settings header shows the app version (`v144.0` at time of writing). The codebase's
   banner comments reference feature versions constantly (`v19.4 — NARRATION MODE`), which is
   how history is tracked in a single file.
-- `sw.js` `CACHE_VERSION` (`storymind-v141`) **must be bumped with every upload**, otherwise
-  installed clients keep the previous cached `index.html` (network-first mitigates this online,
-  but offline clients pin to cache).
-- There is no test suite. The de-facto regression harness is: (a) the dev-time drift guards
-  that `console.warn` at boot (`[blockTpls] drift`, `[payloads] prompts not mapped`), and
-  (b) the byte-equivalence discipline documented in the payload section (default layout +
-  default fragments must reproduce the legacy payload exactly).
+- `sw.js` `CACHE_VERSION` (`storymind-v404` at time of writing) **must be bumped with every
+  upload**, otherwise installed clients keep the previous cached `index.html` (network-first
+  mitigates this online, but offline clients pin to cache). The worker caches only `ok`
+  responses and keeps the previous cache when an install fails.
+- Tests: `tests/` holds ~100 plain Node + Playwright scripts; `node tests/run-all.js` runs them
+  all (see `tests/README.md`), and `.github/workflows/tests.yml` runs them on every push and PR.
+  The dev-time drift guards that `console.warn` at boot (`[blockTpls] drift`,
+  `[payloads] prompts not mapped`) and the payload byte-equivalence discipline still apply.
 
 ## Global runtime objects worth knowing
 

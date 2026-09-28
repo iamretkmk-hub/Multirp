@@ -1,9 +1,9 @@
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -159,11 +159,11 @@ const {chromium}=require('playwright');
      never existed. */
   console.log("\n[the relationship actually reaches this engine]");
   ok("relOf is gone; nothing calls a function that was never defined", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const calls=(src.match(/\brelOf\s*\(/g)||[]).length;
       return calls===0?true:calls+" live call(s) to relOf remain"; })());
   ok("relObj is what the engine reads, like every other consumer", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /const o=targetId\?relObj\(chat,p\.id,targetId\):null;/.test(src)
         ? true : "the writer does not read relObj(chat,p.id,targetId)"; })());
   ok("the signature moves when the feelings move", await pg.evaluate(()=>{
@@ -182,7 +182,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[the scene block is a scene, not the director's brief]");
   ok("the psyche mode exists and is what the writer asks for", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /bits\.scene=directorContext\(chat,"psyche"\)/.test(src)
         ? true : "the writer still asks for another mode"; })());
   ok("it carries the scene and the earshot and nothing else", await pg.evaluate(()=>{
@@ -212,7 +212,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[one rendering of the social graph, not three]");
   ok("the writer asks for the sheets alone", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /bits\.ties=relSheetBlockFull\(p,\{everyone:true,sheetsOnly:true\}\)/.test(src)
         ? true : "ties is not scoped to the sheets"; })());
   ok("sheetsOnly drops the note that restates them, and only for this caller", await pg.evaluate(()=>{
@@ -235,7 +235,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[the two pulls stopped presuming a transgression]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     const psy=(src.match(/const DEFAULT_PSYCHE=`([\s\S]*?)`;/)||[])[1]||"";
     ok("an ordinary moment is allowed to be ordinary",
        /Most moments are not transgressions/.test(psy)?true:"no size rule");
@@ -282,7 +282,7 @@ const {chromium}=require('playwright');
       const r=chat._psyche[p.id];
       return (r.sig==="NEW" && /said out loud/.test(r.toward) && r.against==="") ? true : JSON.stringify(r); }));
   ok("thinking room scales with the effort asked for", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /_room=\{low:1200,medium:2400,high:4800\}/.test(src)
         ? true : "the reasoning headroom is still a flat +1200"; })());
 
@@ -305,7 +305,7 @@ const {chromium}=require('playwright');
       if(/Berker/.test(t)) return "an unrelated pair leaked in";
       return true; }));
   ok("the drives writer asks for that list, not the director's", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function _writePsyche");
       const fn=src.slice(i,src.indexOf("\nasync function",i+10));
       return /bits\.promises=promiseContextForNames\(chat,\[p\.name\]\)/.test(fn)
@@ -442,24 +442,24 @@ const {chromium}=require('playwright');
            && out.indexOf("{{call//promise_ended}}")<out.indexOf("# DECIDED"))
         ? true : JSON.stringify(out); }));
   ok("and the migration is in the source, gated on its own key", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /sm_prended_tail_v1/.test(src) && /moved JUST ENDED into the tail/.test(src)
         ? true : "the one-off is not wired"; })());
 
   /* v90.1 — the four promise fragments, reset to the shipped wording on request. */
   console.log("\n[the promise fragments are back on the shipped wording]");
   ok("the one-off is in the source, gated on its own key", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /sm_prfrag_reset_v1/.test(src)
         && /reset "\+had\.length\+" promise fragment/.test(src)
         ? true : "the reset is not wired"; })());
   ok("it names exactly the four, and nothing else", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const m=src.match(/const _pk=\[([^\]]*)\]/);
       return m && m[1]==='"promise_header","promise_yours","promise_owed","promise_ended"'
         ? true : "the list is "+(m?m[1]:"missing"); })());
   ok("it photographs the set first, so Undo this reset works", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('sm_prfrag_reset_v1');
       const fn=src.slice(i,i+900);
       return /_tplSnapshot\(/.test(fn) && fn.indexOf("_tplSnapshot")<fn.indexOf("delete state.blockTpls")
@@ -472,20 +472,20 @@ const {chromium}=require('playwright');
   /* v91.1 — the person rule covered social_fact and the payload read description. */
   console.log("\n[both fields the relationship judge writes are second person]");
   ok("the description is asked for as \"you\", where it is asked for", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("Judge the LASTING relationship as a whole");
       const msg=src.slice(i,i+2600);
       return /1-2 sentence "description"[\s\S]{0,140}?written TO \$\{fromP\.name\} as "you"/.test(msg)
         ? true : "the description ask still names her in the third person"; })());
   ok("the rule names BOTH fields, not social_fact alone", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("Judge the LASTING relationship as a whole");
       const msg=src.slice(i,i+2600);
       return /BOTH of those fields are written in the SECOND PERSON/.test(msg)
           && !/Write the social_fact in the\s+SECOND PERSON too/.test(msg)
         ? true : "the rule is still scoped to one field"; })());
   ok("and its worked example is the failure that happened", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("Judge the LASTING relationship as a whole");
       const msg=src.slice(i,i+2600);
       return /"She has cut him off" is WRONG/.test(msg) ? true : "the example was not updated"; })());
@@ -509,7 +509,7 @@ const {chromium}=require('playwright');
       return /what a person does or allows in the moment binds nothing/.test(t)
         ? true : "the ACT rule the new clause refers to is gone"; }));
   ok("a stored copy of the old default is refreshed", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /_refreshPipe\("promisePrompt","open-ended COMMITMENTS people make","THE ANSWER DECIDES"/.test(src)
         ? true : "no pipe — a saved override keeps the old rule forever"; })());
 

@@ -12,7 +12,7 @@
    Run: node tests/solo-turn.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -86,12 +86,12 @@ const {chromium}=require('playwright');
 
   console.log("\n[a turn typed alone is a real turn]");
   ok("the player's line is stored before anything routes", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('chat.messages.push({mid:newMid(),role:"user",content:text');
       const j=src.indexOf('if(present.length===0){',i);
       return (i>0&&j>i) ? true : "the message is pushed after the empty-cast branch"; })());
   ok("the empty-cast branch runs the whole director pipeline", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       /* anchored on sendMessage's own comment — "if(present.length===0){" also matches the header
          renderer, which is a different function entirely. */
       const i=src.indexOf('// ----- Nobody nearby: the user is speaking to themselves');
@@ -99,13 +99,13 @@ const {chromium}=require('playwright');
       return i>0 && /noteNobodyHere\(chat\)/.test(br) && /await postTurn\(chat\)/.test(br)
         ? true : "postTurn is not called when alone"; })());
   ok("postTurn checks due meetings and then the Gamemaster", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('async function postTurn(chat){');
       const fn=src.slice(i,src.indexOf('\n}',i));
       return /resolveDueMeetings\(chat\)/.test(fn) && /maybeGamemaster\(chat\)/.test(fn)
           && /maybeWorldPulse\(chat\)/.test(fn) ? true : "the pipeline lost a stage"; })());
   ok("the Gamemaster shortens its cadence when nobody is present", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /if\(presentCast\(chat\)\.length===0\) every=Math\.min\(every,2\)/.test(src)
         ? true : "being alone no longer speeds the Gamemaster up"; })());
   /* v96.1 — assert the GATE, not the absence of the word "period": the pulse now also kicks off a
@@ -120,7 +120,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[the one-off that frees what is already stuck]");
   ok("it is wired, on its own key", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /sm_calprompted_v1/.test(src) && /a crashed attempt had tombstoned/.test(src)
         ? true : "no migration"; })());
   ok("it frees prompted-but-not-done and leaves done alone", await pg.evaluate(()=>{

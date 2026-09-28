@@ -10,7 +10,7 @@ const http=require('http'),fs=require('fs'),path=require('path');
   /* Served over HTTP, not file:// — the update check fetches index.html back, and a file://
      page cannot fetch its own directory. This is also the only way to prove the streaming read
      works against a real response body. */
-  const ROOT='/home/user/Multirp';
+  const ROOT=require('path').resolve(__dirname,'..');
   const srv=http.createServer((rq,rs)=>{
     const f=path.join(ROOT,decodeURIComponent(rq.url.split('?')[0]).replace(/^\/+/,'')||'index.html');
     fs.readFile(f,(e,d)=>{ if(e){rs.statusCode=404;rs.end('no');return;}
@@ -18,7 +18,7 @@ const http=require('http'),fs=require('fs'),path=require('path');
   });
   await new Promise(r=>srv.listen(0,'127.0.0.1',r));
   const BASE='http://127.0.0.1:'+srv.address().port+'/';
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,400));} };
   const ctx=await b.newContext({viewport:{width:412,height:915},hasTouch:true,isMobile:true});

@@ -17,10 +17,10 @@
    Run: node tests/storage-safety.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
   let pass=0,fail=0;
@@ -105,11 +105,11 @@ const {chromium}=require('playwright');
 
   console.log("\n[the open itself]");
   ok("a blocked open now settles instead of hanging for ever", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /req\.onblocked=\(\)=>rej\(/.test(src)
         ? true : "indexedDB.open still has no onblocked handler"; })());
   ok("and a rejected open is not memoised for the life of the page", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /dbp=p\.catch\(e=>\{ dbp=null; throw e; \}\)/.test(src)
         ? true : "one bad open still poisons every later read and write"; })());
 
@@ -117,7 +117,7 @@ const {chromium}=require('playwright');
   ok("the banner only reloads", await pg.evaluate(()=>
       /location\.reload\(\)/.test(String(updReload)) && !/clear|delete/i.test(String(updReload)) ));
   ok("localStorage.clear lives only behind the restore confirm", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const hits=(src.match(/localStorage\.clear\(\)/g)||[]).length;
       const i=src.indexOf("localStorage.clear()");
       const fn=src.lastIndexOf("async function applyBackupBundle",i);
@@ -175,7 +175,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[it fires when the comment always said it did]");
   ok("backgrounding the app takes one — the moment it matters most on a phone", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const ph=/addEventListener\('pagehide',\(\)=>\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
       const vis=/visibilityState==='hidden'\)\{ flushPersistChats\(\); try\{ doAutoBackup\(\); \}/.test(src);
       return (ph&&vis) ? true : "pagehide="+ph+" visibilitychange="+vis; })());

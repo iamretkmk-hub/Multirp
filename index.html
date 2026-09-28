@@ -8639,6 +8639,31 @@ function loadState(){
      of places, one grew a fitness centre this world does not have, and a treadmill problem in it. */
   _refreshPipe("calExec","You resolve a scheduled event of a roleplay world","ALLOWED TO RESOLVE PLAINLY",DEFAULT_CAL_EXEC);
   _refreshPipe("offstageEvent","You direct the OFFSTAGE life of a roleplay world","only what you were told is true",DEFAULT_OFFSTAGE_EVT);
+  /* v144.1 — QC-report prompt fixes. One slot per area so the fixes stay separate. */
+  // ---- v144.1 refresh: ROLEPLAY CORE ----
+  // (end ROLEPLAY CORE)
+  //
+  //
+  // ---- v144.1 refresh: LIVING WORLD + INTENTS ----
+  // (end LIVING WORLD + INTENTS)
+  //
+  //
+  // ---- v144.1 refresh: CALENDAR + PROMISES + TEXTS ----
+  // (end CALENDAR + PROMISES + TEXTS)
+  //
+  //
+  // ---- v144.1 refresh: QUESTS + GAMEMASTER ----
+  // (end QUESTS + GAMEMASTER)
+  //
+  //
+  // ---- v144.1 refresh: MEMORY + RELATIONSHIPS ----
+  // (end MEMORY + RELATIONSHIPS)
+  //
+  //
+  // ---- v144.1 refresh: INFRASTRUCTURE ----
+  // (end INFRASTRUCTURE)
+  //
+  //
   /* v37.2 — also readable, not just logged. A pipe that stands down means its migration never
      runs: everyone who edited that prompt (or is carrying an old stored default) silently keeps
      the old text forever. That is worth being able to assert, so the list is exposed. */
@@ -8760,6 +8785,8 @@ const DURABLE_CHAT_KEYS=new Set([
   "_lastPlacementDay",  // the day the companion locks were last reset
   "_presenceLastRun",   // the turn count the presence check last ran at
   "_textTickPeriod",    // the period the proactive-text tick last ran for
+  "_textArc",           // v144.1 — where each phone thread's memory arc starts (lost on save, the whole
+                        //   thread used to be re-remembered as a new memory after every reload)
   "_wpKey"              // the day the cached world positions were computed for
 ]);
 function _slimChat(c){
@@ -9607,7 +9634,13 @@ function closeModal(id){document.getElementById(id).classList.remove('show');}
   });
   try{ mo.observe(document.body,{childList:true,subtree:true}); }catch(_){}
 })();
-function esc(s){return(s||"").replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+/* (!) v144.1 — esc() escapes quotes as well. It is used inside "…" attributes (title=, value=,
+   data-*, src=) far more often than in text, and escaping only & < > let a name like Jack "Ace" end
+   the attribute — or an imported universe's image field run script. For a value that lands inside a
+   JS string in an inline handler — onclick="f('${…}')" — use escJs(): the HTML parser decodes
+   &#39; back to ' BEFORE the JS runs, so HTML escaping alone cannot keep such a value inside it. */
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function escJs(s){return esc(String(s==null?"":s).replace(/[\\'"\n\r\u2028\u2029<>]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0")));}
 /* Reusable "instructions" popup for AI generation. Opens a modern, centered modal with a single
    instruction textarea and resolves with the entered text (possibly "" when the user just presses
    Generate) or null if the user cancels / dismisses. Every "Generate …" button routes through this
@@ -22454,7 +22487,7 @@ function _outfitTableHTML(o,slots,setter,words){
   const row=(group,key,label,val)=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">
       <div class="desc" style="min-width:104px;font-size:10px;padding-top:6px">${esc(label)}</div>
       <input class="fld" style="flex:1;font-size:11px" value="${esc(val||"")}" placeholder="not written yet"
-        data-outfit="${group}|${esc(key)}" oninput="${setter}('${group}','${esc(key)}',this.value)">
+        data-outfit="${group}|${esc(key)}" oninput="${setter}('${group}','${escJs(key)}',this.value)">
     </div>`;
   let h=`<div style="margin-top:6px"><b style="font-size:11px">Locations</b>`
     +slots.locations.map(l=>row("byLoc",l.id,l.name,(o.byLoc||{})[l.id])).join("")+`</div>`;
@@ -28556,11 +28589,64 @@ async function maybeShowRecap(chat){
 // at the runtime roots (curCast, presentIds, offstage placement, GM summon) — NOT in the editor's
 // personasInUniverse, so the removed card stays visible and revivable in the character list.
 function isActiveChar(p){ return !!p && !p.removed && !p.latent; }   // v19.997: latent NPCs are hidden from ALL play until /seek reveals them
-function curCast(){
-  const chat=state.curChat&&state.chats[state.curChat];
+/* (!) v144.1 — curCast takes the chat it is asked about. It used to read the OPEN chat's universe
+   whatever it was handed, so a reply landing after the player switched universe pruned the old chat's
+   present list against the new universe's cast (and saved it). Background work must pass its chat. */
+function curCast(chatArg){
+  const chat=chatArg||(state.curChat&&state.chats[state.curChat]);
   const uid=(chat&&chat.universeId)||state.curUniverse;
   const out=personasInUniverse(uid).filter(isActiveChar);   // dead/removed excluded from play
   return out;   // may be empty; that's allowed
+}
+/* ===== SHARED MATCHING + LOCKS (v144.1) =====
+   NAME MATCHING. Names used to be found with String.includes — "Can" matched "Canan", "Ercan" and the
+   word "can", "Ali" matched "realize" — so memories, relationship moves and quest knowledge went to the
+   wrong person. These compare Turkish-folded, case-insensitive, on whole words (Unicode letter
+   boundaries: JS \b does not treat ö/ç/ş as letters). A Turkish suffix after an apostrophe (Can'a,
+   Ayla'yla) still counts as the name. */
+function _nmFold(s){ return asciiFold(String(s==null?"":s)).toLowerCase().replace(/\s+/g," ").trim(); }
+function _nmRe(name){
+  const n=_nmFold(name); if(!n)return null;
+  return new RegExp("(?<![\\p{L}\\p{N}])"+n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"(?![\\p{L}\\p{N}])","u");
+}
+// Does `text` mention `name` as a whole word?
+function nameInText(text,name){ const re=_nmRe(name); return !!re && re.test(_nmFold(text)); }
+// Is `a` the same name as `b`? Exact after folding; a lone first name matches a full name's first word
+// only when `allowFirst` (the caller decides whether that is safe).
+function sameName(a,b,allowFirst){
+  const x=_nmFold(a), y=_nmFold(b); if(!x||!y)return false;
+  if(x===y)return true;
+  if(allowFirst){ const fx=x.split(" ")[0], fy=y.split(" ")[0]; if(!x.includes(" ")&&x===fy)return true; if(!y.includes(" ")&&y===fx)return true; }
+  return false;
+}
+/* Pick the ONE item in `pool` a model-written name refers to: exact name first, then a unique first-name
+   match, then a unique whole-word match, then a unique prefix of 3+ letters. Ambiguity returns null —
+   a wrong person is worse than no person. `nameOf` reads the name off an item (default: .name). */
+function findByName(pool,name,nameOf){
+  const get=nameOf||(x=>x&&x.name); const n=_nmFold(name); if(!n||!Array.isArray(pool))return null;
+  const L=pool.filter(Boolean);
+  const exact=L.filter(x=>_nmFold(get(x))===n); if(exact.length)return exact[0];
+  const first=L.filter(x=>sameName(get(x),n,true)); if(first.length===1)return first[0];
+  const word=L.filter(x=>nameInText(get(x),n)||nameInText(n,get(x))); if(word.length===1)return word[0];
+  if(n.length>=3){ const pre=L.filter(x=>_nmFold(get(x)).startsWith(n)); if(pre.length===1)return pre[0]; }
+  return null;
+}
+/* PER-CHAT ENGINE LOCKS. Turns, End Day, the time-of-day engines, memory building and texts were all
+   fire-and-forget with no guard, so a second Enter, a second End Day or two quick travels ran the same
+   work twice at once. `chatBusy(chat,key)` asks; `withChatLock(chat,key,fn)` runs fn exclusively:
+     {skip:true}  — if busy, do nothing and resolve to undefined (turn-like work the player repeats)
+     default      — queue behind the running one (engine work that must not be lost)
+   Locks are in memory only: a reload clears them, which is what we want. */
+const _chatLocks=new Map();
+function chatBusy(chat,key){ const id=chat&&(chat.id||chat); return !!(id&&_chatLocks.has(id+"\u0000"+key)); }
+function withChatLock(chat,key,fn,opts){
+  const id=chat&&(chat.id||chat); if(!id)return Promise.resolve().then(fn);
+  const k=id+"\u0000"+key, prev=_chatLocks.get(k);
+  if(prev&&opts&&opts.skip)return Promise.resolve(undefined);
+  const run=(prev||Promise.resolve()).catch(()=>{}).then(()=>fn());
+  const tail=run.catch(()=>{}).then(()=>{ if(_chatLocks.get(k)===tail)_chatLocks.delete(k); });
+  _chatLocks.set(k,tail);
+  return run;
 }
 // Who is CURRENTLY present (in earshot). Defaults to EMPTY — nobody nearby unless
 // the Gamemaster or a user OOC command brings someone in.
@@ -28569,7 +28655,7 @@ function presentIds(chat){
   if(!chat)return [];
   if(!Array.isArray(chat.presentIds))chat.presentIds=[];
   // keep presence within the universe cast or temporary event characters
-  const castSet=new Set(curCast().map(c=>c.id));
+  const castSet=new Set(curCast(chat).map(c=>c.id));
   const tempIds=new Set((chat.tempChars||[]).map(t=>t.id));
   // An active event's participant may be a real persona from OUTSIDE the current
   // universe cast (the Gamemaster can pull anyone in). Don't filter them out, or
@@ -31400,7 +31486,7 @@ function cmdPaletteSync(){
   if(q===null||!list.length){ cmdPaletteHide(); return; }
   if(_cmdSel>=list.length)_cmdSel=0;
   host.innerHTML=list.map((c,i)=>`<div class="cmdRow${i===_cmdSel?" sel":""}" role="option" data-cmd="${esc(c.cmd)}"
-      onmousedown="event.preventDefault();cmdPalettePick('${esc(c.cmd)}')">
+      onmousedown="event.preventDefault();cmdPalettePick('${escJs(c.cmd)}')">
       <div><code>/${esc(c.cmd)}</code>${c.arg?` <span class="cmdArg">${esc(c.arg)}</span>`:""}</div>
       <div class="cmdDesc">${esc(c.desc)}</div></div>`).join("");
   host.classList.remove('hide');
@@ -34799,8 +34885,8 @@ function _bookRenderScene(chat,s){
       h+=`</div></figure>`;
     }
   });
-  h+=`</div><div class="bkTools"><button type="button" class="btn sec small" onclick="openBookPlayer('${esc(s.id)}')"><svg class="ic"><use href="#i-play"/></svg> Play from here</button><button type="button" class="btn sec small" onclick="bookSaveVideo('${esc(s.id)}')"><svg class="ic"><use href="#i-film"/></svg> Save video</button><button type="button" class="btn sec small" onclick="bookSavePage('${esc(s.id)}')"><svg class="ic"><use href="#i-image"/></svg> Save page</button>`
-    +(state.key?`<button type="button" class="btn sec small" onclick="bookReedit('${esc(s.id)}')"${busy?" disabled":""}><svg class="ic"><use href="#i-sparkle"/></svg> ${e?"Re-edit":"Edit with AI"}</button>`:"")+`</div>`;
+  h+=`</div><div class="bkTools"><button type="button" class="btn sec small" onclick="openBookPlayer('${escJs(s.id)}')"><svg class="ic"><use href="#i-play"/></svg> Play from here</button><button type="button" class="btn sec small" onclick="bookSaveVideo('${escJs(s.id)}')"><svg class="ic"><use href="#i-film"/></svg> Save video</button><button type="button" class="btn sec small" onclick="bookSavePage('${escJs(s.id)}')"><svg class="ic"><use href="#i-image"/></svg> Save page</button>`
+    +(state.key?`<button type="button" class="btn sec small" onclick="bookReedit('${escJs(s.id)}')"${busy?" disabled":""}><svg class="ic"><use href="#i-sparkle"/></svg> ${e?"Re-edit":"Edit with AI"}</button>`:"")+`</div>`;
   sec.innerHTML=h;
   sec.querySelectorAll('img[data-mid]').forEach(async img=>{
     const mid=img.dataset.mid, src=await _bookImgSrc(chat,mid);
@@ -37434,28 +37520,39 @@ function unquoteWrap(t){
 function parseJSON(raw){
   if(raw==null)return null;
   let t=String(raw).trim();
-  // normalize smart quotes the model sometimes emits
-  t=t.replace(/[\u201c\u201d]/g,'"').replace(/[\u2018\u2019]/g,"'");
   // strip <think>…</think> reasoning blocks
   t=t.replace(/<think>[\s\S]*?<\/think>/gi,"").trim();
   // strip code fences
   t=t.replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/,"").trim();
-  // find first { or [ and scan to its matching close (string-aware, so trailing
-  // commentary that contains braces/brackets can't corrupt the captured JSON)
-  const a=t.indexOf("{"),b=t.indexOf("[");
-  let s=a<0?b:b<0?a:Math.min(a,b);
-  if(s<0)return null;
-  let depth=0,inStr=false,esc=false,end=-1;
-  for(let i=s;i<t.length;i++){const ch=t[i];
-    if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}
-    if(ch==='"')inStr=true;
-    else if(ch==="{"||ch==="[")depth++;
-    else if(ch==="}"||ch==="]"){depth--;if(depth===0){end=i;break;}}
-  }
-  const body=end>=0?t.slice(s,end+1):t.slice(s);
-  try{return JSON.parse(body);}catch(e){}
-  // last resort: original greedy grab
-  const g=t.match(/[{[][\s\S]*[}\]]/);if(g){try{return JSON.parse(g[0]);}catch(e){}}
+  /* (!) v144.1 — the text is parsed AS IT IS first. Smart quotes used to be flattened to " before
+     anything else, which ended every JSON string that quoted speech typographically — Emre “Geldim”
+     diye seslenir — so memories, judges, suggestions and Scene Writer beats that quoted dialogue were
+     silently dropped. Curly quotes are now only repaired where they stand in for JSON's own
+     delimiters (next to { [ , : ] }), and flattened wholesale only as a last resort. */
+  const scan=src=>{
+    const a=src.indexOf("{"),b=src.indexOf("[");
+    const s=a<0?b:b<0?a:Math.min(a,b);
+    if(s<0)return undefined;
+    // find the matching close (string-aware, so trailing commentary with braces can't corrupt it)
+    let depth=0,inStr=false,esc=false,end=-1;
+    for(let i=s;i<src.length;i++){const ch=src[i];
+      if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}
+      if(ch==='"')inStr=true;
+      else if(ch==="{"||ch==="[")depth++;
+      else if(ch==="}"||ch==="]"){depth--;if(depth===0){end=i;break;}}
+    }
+    const body=end>=0?src.slice(s,end+1):src.slice(s);
+    try{return JSON.parse(body);}catch(e){}
+    const g=src.match(/[{[][\s\S]*[}\]]/);if(g){try{return JSON.parse(g[0]);}catch(e){}}
+    return undefined;
+  };
+  let r=scan(t); if(r!==undefined)return r;
+  // Curly quotes acting as JSON delimiters: after { [ , : or before : , } ]
+  const structural=t.replace(/([{\[,:]\s*)[\u201c\u201d]/g,'$1"').replace(/[\u201c\u201d](\s*[:,}\]])/g,'"$1');
+  if(structural!==t){ r=scan(structural); if(r!==undefined)return r; }
+  // Last resort: the old blanket normalisation (a reply written entirely in smart quotes).
+  const flat=t.replace(/[\u201c\u201d]/g,'"').replace(/[\u2018\u2019]/g,"'");
+  if(flat!==t){ r=scan(flat); if(r!==undefined)return r; }
   // All parse strategies failed — this is a genuine "model returned unparseable output" signal, so
   // leave a breadcrumb (the silent no-op the debugger flagged). Truncated so the console stays usable.
   try{ console.warn("[parseJSON] unparseable model output:", String(raw).slice(0,160)); }catch(_){}
@@ -39791,13 +39888,13 @@ function _mapLocPanel(locId){
     const av=p.image?`<img src="${esc(p.image)}" alt="">`:`<span class="mapPopEmoji sm">${esc(p.avatar||"🎭")}</span>`;
     const atHere=here; // if the location IS the player's location, Go/Bring are moot
     return `<div class="mapCharRow">
-      <button class="mapCharAv" title="View ${esc(p.name)}" onclick="_mapCharState('${esc(p.id)}')">${av}</button>
-      <div class="mapCharName" onclick="_mapCharState('${esc(p.id)}')">${esc(p.name)}</div>
+      <button class="mapCharAv" title="View ${esc(p.name)}" onclick="_mapCharState('${escJs(p.id)}')">${av}</button>
+      <div class="mapCharName" onclick="_mapCharState('${escJs(p.id)}')">${esc(p.name)}</div>
       <div class="mapCharActs">
-        <button class="iconBtn2" title="Go to them" ${atHere?"disabled":""} onclick="_mapCharGo('${esc(locId)}')"><svg class="ic"><use href="#i-map"/></svg></button>
-        <button class="iconBtn2" title="Bring here" ${atHere?"disabled":""} onclick="_mapCharBring('${esc(p.id)}')"><svg class="ic"><use href="#i-masks"/></svg></button>
-        <button class="iconBtn2" title="Call" onclick="_mapCharCall('${esc(p.id)}')"><svg class="ic"><use href="#i-phone"/></svg></button>
-        <button class="iconBtn2" title="Text" onclick="_mapClose();_mapCharPopClose();openTextWith('${esc(p.id)}')"><svg class="ic"><use href="#i-message"/></svg></button>
+        <button class="iconBtn2" title="Go to them" ${atHere?"disabled":""} onclick="_mapCharGo('${escJs(locId)}')"><svg class="ic"><use href="#i-map"/></svg></button>
+        <button class="iconBtn2" title="Bring here" ${atHere?"disabled":""} onclick="_mapCharBring('${escJs(p.id)}')"><svg class="ic"><use href="#i-masks"/></svg></button>
+        <button class="iconBtn2" title="Call" onclick="_mapCharCall('${escJs(p.id)}')"><svg class="ic"><use href="#i-phone"/></svg></button>
+        <button class="iconBtn2" title="Text" onclick="_mapClose();_mapCharPopClose();openTextWith('${escJs(p.id)}')"><svg class="ic"><use href="#i-message"/></svg></button>
       </div>
     </div>`;
   }).join("");
@@ -39806,7 +39903,7 @@ function _mapLocPanel(locId){
     <div class="mapPopHead">
       <div style="flex:1"><div class="mapPopName">${esc((loc.name||"").split("(")[0].trim())}</div>
         <div class="desc">${inside.length?(inside.length+" here"):"nobody here right now"}</div></div>
-      ${here?`<span class="mapHereTag">You are here</span>`:`<button class="iconBtn2 big" title="Travel here" onclick="_mapTravelFromPanel('${esc(locId)}')"><svg class="ic"><use href="#i-compass"/></svg></button>`}
+      ${here?`<span class="mapHereTag">You are here</span>`:`<button class="iconBtn2 big" title="Travel here" onclick="_mapTravelFromPanel('${escJs(locId)}')"><svg class="ic"><use href="#i-compass"/></svg></button>`}
       <button class="x xIn" type="button" aria-label="Close" onclick="_mapCharPopClose()">×</button>
     </div>
     <div class="mapCharList">${rows||`<div class="desc" style="padding:10px 2px">No one is here right now.</div>`}</div>
@@ -39838,13 +39935,13 @@ function _mapCharState(charId){
       <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start">
         <div style="min-width:0">${ic} <b>${esc(it.kind||"drive")}</b>${tgt?` → ${esc(tgt)}`:""} <span class="desc">(${esc(intentPrio(it))} priority · ${esc(statusLbl[it.status]||it.status||"")}${it.strength!=null?" · "+Math.round(it.strength*100)+"%":""})</span>${line?`<div class="desc">${esc(String(line).slice(0,200))}</div>`:""}</div>
         <div style="display:flex;gap:3px;flex-shrink:0">
-          <button class="btn sec small" title="Edit" onclick="editIntent('${esc(p.id)}','${esc(it.id)}')">${icon("edit")}</button>
-          <button class="btn danger sec small" title="Delete" onclick="deleteIntent('${esc(p.id)}','${esc(it.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
+          <button class="btn sec small" title="Edit" onclick="editIntent('${escJs(p.id)}','${escJs(it.id)}')">${icon("edit")}</button>
+          <button class="btn danger sec small" title="Delete" onclick="deleteIntent('${escJs(p.id)}','${escJs(it.id)}')"><svg class="ic"><use href="#i-x"/></svg></button>
         </div></div></div>`;
   }).join("");
   const engine=`<div class="desc" style="margin:10px 0 2px">Living engine — what's driving them (edit if something's off):</div>`
     +(intentRows||`<div class="desc" style="opacity:.7">Nothing brewing right now.</div>`)
-    +`<button class="btn sec small" style="margin-top:6px" onclick="editIntent('${esc(p.id)}','')">＋ Add a drive</button>`;
+    +`<button class="btn sec small" style="margin-top:6px" onclick="editIntent('${escJs(p.id)}','')">＋ Add a drive</button>`;
   const pop=document.createElement('div'); pop.id="mapStatePop"; pop.className="mapCharPop";
   pop.innerHTML=`<div class="mapCharPopCard" style="max-width:440px;max-height:86vh;overflow-y:auto">
     <div class="mapPopHead">${av}<div style="flex:1"><div class="mapPopName">${esc(p.name)}</div><div class="desc">Story state</div></div>
@@ -45997,8 +46094,8 @@ function voiceCheckUI(){
     +`<br><span style="opacity:.75">A <span style="color:var(--bad,#e5484d)">red</span> dot is a slip — the sentence speaks as two people, or guesses somebody's gender. A grey dot is wording that differs from the house style and may well be deliberate. This checks PERSON only; it cannot see grammar.</span></div>`
     +rows.map(r=>`<div style="padding:8px 10px;border-bottom:1px solid var(--border)">`
         +`<div style="font-size:11px"><code style="color:var(--accent)">${esc(r.key)}</code> `
-        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:6px" onclick="voiceCheckOpen('${esc(r.key)}')">open</button>`
-        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:4px" onclick="voiceCheckReset('${esc(r.key)}')">reset it</button></div>`
+        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:6px" onclick="voiceCheckOpen('${escJs(r.key)}')">open</button>`
+        +`<button class="btn sec small" style="width:auto;padding:2px 8px;margin-left:4px" onclick="voiceCheckReset('${escJs(r.key)}')">reset it</button></div>`
         +r.problems.map(x=>`<div class="desc" style="margin-top:4px">${pill(x.level)} <b>${esc(x.rule)}</b>`
             +(x.hit?` — <code>${esc(x.hit)}</code>`:``)+`<br><span style="opacity:.8">${esc(x.msg)}</span></div>`).join("")
       +`</div>`).join("")
@@ -47279,7 +47376,7 @@ async function renderAutoBackups(){
       const label=d.toLocaleDateString()+" "+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
       return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">`+
              `<span style="font-size:13px">${esc(label)}</span>`+
-             `<button class="btn sec small" onclick="restoreAutoBackup('${esc(b.key)}')">Restore</button></div>`;
+             `<button class="btn sec small" onclick="restoreAutoBackup('${escJs(b.key)}')">Restore</button></div>`;
     }).join("");
   }catch(e){ console.warn("[backup] listing auto-backups failed:",e&&e.message||e); box.innerHTML="<div class='desc'>Couldn't read snapshots.</div>"; }
 }

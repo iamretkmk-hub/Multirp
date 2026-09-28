@@ -13,7 +13,7 @@
    Run: node tests/text-channel.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -150,7 +150,7 @@ const {chromium}=require('playwright');
      tell texting someone across town from texting someone in the same room. */
   console.log("\n[the proactive composer knows when and where]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("the thread carries a day/period stamp per line",
        /const when=\(m\.gday!=null\)\?`Day \$\{m\.gday\}/.test(src)
          ? true : "thread lines are still unstamped");
@@ -190,7 +190,7 @@ const {chromium}=require('playwright');
       ]},"h1",()=>"Hakan",5);
       return !/SECRET_MARKER/.test(t) ? true : "it leaked another holder's intent"; }));
   ok("the call site actually passes it", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /open_intents:holderIntentRecord\(chat,holderId,nameById,day\)/.test(src)
         ? true : "intentForm still sends no open_intents"; })());
 
@@ -208,7 +208,7 @@ const {chromium}=require('playwright');
       const l=_memReconcileList(j);
       return ((l.length?l[0]:j).content==="He never replied.") ? true : JSON.stringify(j); }));
   ok("the text builder reads through that helper, not off the top level", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function _commitTextArc"),src.indexOf("async function _commitTextArc")+2600);
       return /_memReconcileList\(raw\)/.test(fn) && /typeof j\.importance==="number"/.test(fn)
         ? true : "_commitTextArc still reads j.content off the raw answer"; })());
@@ -219,7 +219,7 @@ const {chromium}=require('playwright');
      one-word answer, because a Gamemaster BEAT is always a sentence and never one short token. */
   console.log("\n[a Gamemaster that declines the turn says nothing]");
   ok("a bare refusal never reaches the story", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const m=src.match(/const _bare=clean\.replace\([^\n]*\n\s*if\(\/\^\(skip\|none\|nothing\|no\[\\s-\]\?event\|pass\)\$\/i\.test\(_bare\)/);
       return m ? true : "a Gamemaster answering SKIP is still posted as a Narrator line"; })());
   ok("only a bare refusal is swallowed", await pg.evaluate(()=>{
@@ -249,7 +249,7 @@ const {chromium}=require('playwright');
   ok("empty and tiny inputs do not throw", await pg.evaluate(()=>
       unquoteWrap("")==="" && unquoteWrap(null)==="" && unquoteWrap('"')==='"' ));
   ok("no story-text site still strips quotes by regex", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function narratePlayerTurn")>=0
         ? src.indexOf("async function narratePlayerTurn") : 0);
       const near=src.match(/dbg:"Auto-RP player narrator"\}\);\s*\n\s*const clean=unquoteWrap\(out\);/);
@@ -279,7 +279,7 @@ const {chromium}=require('playwright');
       const sc=_slimChat({id:"x",messages:[],_somethingNew:1});
       return !("_somethingNew" in sc) ? true : "a new underscore field was persisted by default"; }));
   ok("the purge persists its marker even when it rewrote nothing", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function runPromisePurge");
       const fn=src.slice(i,i+3000);
       return /chat\._prPurged=PROMISE_PURGE_RULES;[\s\S]{0,260}markChatDirty\(chat\); persistChats\(\);/.test(fn)

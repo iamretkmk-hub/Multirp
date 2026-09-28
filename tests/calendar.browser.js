@@ -3,12 +3,12 @@
    name at most two tagged participants, and "go and talk to Hakan about it" had nowhere to live. */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,400));} };
   const ctx=await b.newContext({viewport:{width:412,height:915},hasTouch:true,isMobile:true});
   const pg=await ctx.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
   await pg.evaluate(()=>{
@@ -228,12 +228,12 @@ const {chromium}=require('playwright');
       const after=(u.locations||[]).length;
       return (!hit && before===after)?true:"hit="+(hit&&hit.name)+" created="+(after-before); }));
   ok("the meeting record keeps the resolved name and flags an unresolved one", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /where:_where, locationId:loc\?loc\.id:null, whereRaw:\(loc\?"":_rawWhere\)/.test(src)
           && /const _where=loc\?loc\.name:"";/.test(src)
         ? true : "the raw free text is still persisted as the place"; })());
   ok("a later-day meeting in the room they are standing in is not asserted", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /if\(loc && day!=null && day>today && chat\.locationId && loc\.id===chat\.locationId\) loc=null;/.test(src)
         ? true : "the current location is still asserted for a future meeting"; })());
 

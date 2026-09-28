@@ -8,7 +8,7 @@
    Run: node tests/img-pov-path.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const app='file://'+require('path').resolve(__dirname,'..','index.html');
@@ -311,12 +311,12 @@ const {chromium}=require('playwright');
         const thin=L.filter(k=>!(up(k)||"").trim() || up(k).length<80);
         return thin.length===0?true:"empty or stub: "+thin.join(", "); },LAYERS));
     ok("none of them is still a constant in the code", (()=>{
-        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         const left=["IMG_WRITER_FOUNDATION","IMG_WRITER_FRAME_GUIDE","IMG_WRITER_POV_GUIDE"]
           .filter(n=>new RegExp("const "+n+"\\s*=").test(src));
         return left.length===0?true:"still in code: "+left.join(", "); })());
     ok("the request reads them through the registry", (()=>{
-        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         const n=(src.match(/up\("imgFrameGuide"\)/g)||[]).length;
         return n===2?true:"frame guide read at "+n+" of the 2 image paths"; })());
     ok("no layer ships its newlines escaped into visible text", await pg.evaluate(L=>{
@@ -358,33 +358,33 @@ const {chromium}=require('playwright');
       return /LOOK STRAIGHT INTO THE LENS/.test(t) && !/never look at the camera/i.test(t)
         ? true : "the gaze override is missing or still cites the phantom rule"; }));
   ok("the spoken-input rule is a prompt now, not a call-site string", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /\(\(opts&&opts\.verbatim\)\?"\\n\\n"\+up\("narrateVerbatim"\):""\)/.test(src)
         ? true : "the auto-RP narrator still builds it inline"; })());
 
   console.log("\n[v100.1 — the location is the writer's, and the face is named]");
   ok("the place is no longer pasted onto the tail", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("const _appC=_imgSpeakerAppearance(speaker,{refDriven:_refDriven});");
       const blk=src.slice(i,i+1600);
       return !/const _locC=_imgLocationClause\(chat\)/.test(blk)
           && /const _det=\[_appC,_litC\]/.test(blk)
         ? true : "the location clause is still on the deterministic tail"; })());
   ok("but the lighting still is — it follows the clock, not the room", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /const _litC=_imgLightingClause\(chat\);/.test(src) ? true : "the lighting went too"; })());
   ok("the writer is handed the place as facts to render", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /WHERE THIS FRAME HAPPENS/.test(src)
           && /Do not copy the sentence above; it is a description for a reader, not prompt words/.test(src)
         ? true : "the request does not carry the place"; })());
   ok("and it is in the user message, before the continuity reference", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       // v128.1 — the cast block (x_img_cast) may lead it; the place still comes before continuity
       // v140.1 — and the player's outfit block after the cast
       return /const usr=(_castBlock\+)?(_playerDress\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
   ok("the continuity note no longer claims the location is automatic", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)
           && /the LOCATION is yours to write/.test(src)
         ? true : "the continuity note still lies about it"; })());
@@ -424,7 +424,7 @@ const {chromium}=require('playwright');
       return /At most ONE physical-state marker where relevant/.test(t)
           && /NEVER describe streaming tears/.test(t) ? true : "a rule was lost in the rewrite"; }));
   ok("a stored copy of the old default picks both up", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /_refreshPipe\("rewritePrompt","FACIAL EXPRESSION & PHYSICAL STATE","WHERE IT HAPPENS/.test(src)
         ? true : "no pipe — a saved override keeps the old rules"; })());
 

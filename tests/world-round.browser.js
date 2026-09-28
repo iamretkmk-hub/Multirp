@@ -11,7 +11,7 @@
    Run: node tests/world-round.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -75,10 +75,10 @@ const {chromium}=require('playwright');
       const chat=curChat(); chat.gameDay=5;
       return whereaboutsToday(chat,"p_a").length===0 ? true : "yesterday survived the night"; }));
   ok("end of day drops it explicitly too", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /chat\.dayLog=null;/.test(src) ? true : "endDay never clears the ledger"; })());
   ok("the player's own scene is what writes it, every turn", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('async function postTurn(chat){');
       return /noteWhereabouts\(chat,_here\.concat\(\["__user__"\]\)\)/.test(src.slice(i,i+700))
         ? true : "postTurn does not record the scene"; })());
@@ -160,13 +160,13 @@ const {chromium}=require('playwright');
       try{ await runWorldRound(chat,null); } finally { window.chatCompletion=real; }
       return chat._roundAt==="4|Evening" ? true : String(chat._roundAt); }));
   ok("nothing it writes is pushed to the transcript", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('async function runWorldRound');
       const fn=src.slice(i,src.indexOf('\n}\n',i));
       return /_logSilentWorldEvent\(/.test(fn) && !/_pushWorldEvent\(/.test(fn)
         ? true : "the round can reach the screen"; })());
   ok("it is hooked into the pulse ahead of the single-pair encounter", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       /* the whole function, not a fixed window — its comments grow and a slice that clips the
          second call reports a false failure. */
       const i=src.indexOf('async function maybeWorldPulse');
@@ -206,13 +206,13 @@ const {chromium}=require('playwright');
       return /Never invent a secret, a betrayal, a confession, an accident or a person/.test(t)
         ? true : "invention is still open"; }));
   ok("it runs cooler than the single-pair encounter", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const r=src.slice(src.indexOf('async function runWorldRound'));
       const o=src.slice(src.indexOf('async function runOffstageInteraction'));
       const t=x=>{ const m=x.match(/temp:fnTemp\("mem",([\d.]+)\)/); return m?+m[1]:null; };
       return (t(r)!==null && t(o)!==null && t(r)<t(o)) ? true : "round="+t(r)+" pair="+t(o); })());
   ok("and the two engines' opposite jobs are written down", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /THE TWO ENGINES HAVE OPPOSITE JOBS AND BOTH ARE RIGHT/.test(src)
         ? true : "nothing stops a later reader levelling them"; })());
 
@@ -221,7 +221,7 @@ const {chromium}=require('playwright');
       /I settled on something I mean to do/.test(blkTpl("mem_plan_self"))
    && /and I agreed on it/.test(blkTpl("mem_plan_with")) ));
   ok("no Turkish wrapper prose survives in the code", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8')
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8')
         .replace(/\/\*[\s\S]*?\*\//g," ");
       return !/Kendime bir plan koydum|Sebebim:|Derdi \u015fu/.test(src)
         ? true : "the hand-written Turkish memory is still built in code"; })());
@@ -233,7 +233,7 @@ const {chromium}=require('playwright');
   ok("the title is quoted, so a story-language name sits inside an English record",
      await pg.evaluate(()=>/"\{\{title\}\}"/.test(blkTpl("mem_plan_self")) ));
   ok("the reason is turned to the first person on the way in", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /const _why=toFirstPerson\(String\(why\|\|""\)\.trim\(\)\)/.test(src)
         ? true : "a second-person reason still lands in a first-person memory"; })());
   ok("the companion records only that it was arranged, not the other's private reason",
@@ -261,7 +261,7 @@ const {chromium}=require('playwright');
   ok("and everything else it returns is named an engine record", await pg.evaluate(()=>
       /Everything else you return is an engine record and is plain English/.test(up("goalPursuit")||"") ));
   ok("the call sends the mixed directive, not the all-English one", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /epSend\("goalPursuit",tpl\+"\\n\\n"\+mixedLangDirective\(\["title"\]\)/.test(src)
         ? true : "the directive still contradicts the prompt"; })());
 
@@ -285,7 +285,7 @@ const {chromium}=require('playwright');
       finally{ runWorldRound=realR; runCalendarExecutor=realC; runOffstageInteraction=realO; }
       return hit===1?true:"an ordinary turn called the round "+hit+" times"; }));
   ok("the call site names nothing that is not in scope there", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function maybeWorldPulse"));
       const body=fn.slice(0,fn.indexOf("\n}\n"));
       if(/runWorldRound\(chat,uni\)/.test(body))return "it still passes the undefined `uni`";
@@ -293,13 +293,13 @@ const {chromium}=require('playwright');
 
   console.log("\n[v102.1 — nothing silently starves the round]");
   ok("the entry cap follows the cast, not a constant", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function runWorldRound"));
       const body=fn.slice(0,fn.indexOf("\n}\n"));
       if(/entries\.slice\(0,8\)/.test(body))return "a nine-person cast still loses somebody";
       return /entries\.slice\(0,Math\.max\(\d+,pool\.length\)\)/.test(body)?true:"the cap is not tied to the pool"; })());
   ok("the token budget grows with the cast", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const fn=src.slice(src.indexOf("async function runWorldRound"));
       const body=fn.slice(0,fn.indexOf("\n}\n"));
       if(/fnTok\("mem",1800\)/.test(body))return "still one flat budget for any size of cast";

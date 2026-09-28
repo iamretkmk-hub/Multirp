@@ -10,7 +10,7 @@
    Run: node tests/provider-select.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const reqs=[];
@@ -29,7 +29,7 @@ const {chromium}=require('playwright');
     r.fulfill({status:200,contentType:'application/json',
       body:JSON.stringify({choices:[{message:{content:"OK"},finish_reason:"stop"}]})});
   });
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2400);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
@@ -144,14 +144,14 @@ const {chromium}=require('playwright');
 
   console.log("\n[the live call resolves the same bucket, on its own]");
   ok("it no longer hardcodes an OpenRouter URL", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return !/VC_OR_URL/.test(src) ? true : "VC_OR_URL is still referenced"; })());
   ok("it builds its endpoint from the call bucket's provider", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /_capi=provFor\("call"\)/.test(src) && /_capi\.base\+"\/chat\/completions"/.test(src)
         ? true : "the call still does not resolve a provider"; })());
   ok("and only sends latency routing where that means something", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /if\(_cOR\)\{ reqBody\.reasoning=vcReasoning\(\); reqBody\.provider=\{sort:"latency"\}; \}/.test(src)
         ? true : "latency routing is unconditional again"; })());
 
@@ -229,11 +229,11 @@ const {chromium}=require('playwright');
       const b=document.getElementById('refreshModelsBtn');
       return !!b && /loadModels\(true\)/.test(b.getAttribute('onclick')||""); }));
   ok("saving the key reloads it, so the models appear without a restart", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('store.setRaw(K.nanoKey');
       return /loadModels\(false\)/.test(src.slice(i,i+400)) ? true : "saving does not reload the list"; })());
   ok("so does switching a card to a provider whose catalogue is not loaded", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf('state.fnCfg[fn].prov = sel.value');
       return /loadModels\(false\)/.test(src.slice(i,i+300)) ? true : "the picker does not reload the list"; })());
   ok("and the count is shown, so a half-loaded list is visible", await pg.evaluate(async()=>{

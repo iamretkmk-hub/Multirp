@@ -5,12 +5,12 @@
    Also: the "you don't know them yet" block is gone, and feelings read as sentences. */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,400));} };
   const ctx=await b.newContext({viewport:{width:412,height:915},hasTouch:true,isMobile:true});
   const pg=await ctx.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
-  await pg.goto('file:///home/user/Multirp/index.html'); await pg.waitForTimeout(2300);
+  await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
   await pg.evaluate(()=>{
@@ -140,7 +140,7 @@ const {chromium}=require('playwright');
      the only way it could, by inventing a person to carry the sound. */
   console.log("\n[the classifier's event type reaches the scene writer]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("the default takes a type placeholder", await pg.evaluate(()=>
         up("sceneWriter").indexOf("{{type}}")>=0));
     ok("and branches on all three kinds", await pg.evaluate(()=>{
@@ -206,7 +206,7 @@ const {chromium}=require('playwright');
      near-duplicate narration. */
   console.log("\n[a satisfied ask closes the event, whatever the turn]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("the resolve branch no longer gates on the minimum",
        /\n    if\(resolved\)\{\n      \/\/ For a confrontation/.test(src)
          ? true : "the min gate is still in front of resolveActiveEvent");
@@ -250,7 +250,7 @@ const {chromium}=require('playwright');
     ok("and a different part of the same day is not",
        await q("We agreed to meet at five in the salon after she finishes at the gym.",4,"Morning",["Emre"])===false);
     ok("the arc commit consults it before writing", (()=>{
-        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         return /const _dup=memNearDuplicate\(p\.id,mem\.content,day,period,mem\.people\);/.test(src)
           ? true : "commitMemoryArc still only checks for an exact repeat"; })());
   }
@@ -265,7 +265,7 @@ const {chromium}=require('playwright');
       const t="She left before the rain started.";
       return toFirstPerson(t)===t?true:toFirstPerson(t); }));
   ok("the decision memory goes through it", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /content:toFirstPerson\(text\), type:"DECISION"/.test(src)
         ? true : "the reckoning is still stored verbatim"; })());
 
@@ -287,7 +287,7 @@ const {chromium}=require('playwright');
       state.storyLang=was;
       return h.length===0?true:"flagged in an English story: "+h.join(", "); }));
   ok("the scene writer retries once and keeps the first answer if the retry fails", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /Scene writer: advance \(language retry\)/.test(src)
           && /if\(_j2&&_j2\.narration!=null\) out=_again;/.test(src)
         ? true : "the retry is missing or replaces the answer unconditionally"; })());
@@ -303,7 +303,7 @@ const {chromium}=require('playwright');
       dbgDone(e,"ok","r");
       return (e.ms===e.done-t0 && t0>=e.t)?true:"ms="+e.ms+" t="+e.t+" sentAt="+t0+" done="+e.done; }));
   ok("the request re-stamps it per attempt", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /dbgDispatched\(entry\);\s+\/\/ v73\.1/.test(src)
         ? true : "the dispatch clock is not re-stamped on a retry"; })());
 

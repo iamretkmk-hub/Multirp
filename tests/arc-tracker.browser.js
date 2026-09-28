@@ -11,7 +11,7 @@
    Run: node tests/arc-tracker.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const app='file://'+require('path').resolve(__dirname,'..','index.html');
@@ -196,7 +196,7 @@ Your DEFAULT is always "ongoing" + "same".`;
     ok("never in the span at all → no memory invented for them",
        await run([],[[],[],[],[]])===0);
     ok("the commit does not read presence-now as the cast", (()=>{
-        const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+        const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         return /const memCast=cast\.filter\(p=>p&&\(spanPresent\.has\(p\.id\)\|\|p\.temp\)\)/.test(src)
           ? true : "commitMemoryArc still filters on presentIds alone"; })());
   }

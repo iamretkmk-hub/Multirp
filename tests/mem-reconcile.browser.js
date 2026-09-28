@@ -11,7 +11,7 @@
    Run: node tests/mem-reconcile.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   const app='file://'+require('path').resolve(__dirname,'..','index.html');
@@ -158,16 +158,16 @@ const {chromium}=require('playwright');
      fragments forever. */
   console.log("\n[end day reconciles the stretches the clock never closed]");
   ok("reconcilePeriodFor is reachable from End Day, not only from a period change", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const calls=(src.match(/await reconcilePeriodFor\(/g)||[]).length;
       const inEndDay=/PERIOD RECONCILE \(v68\.1\)[\s\S]{0,1200}?await reconcilePeriodFor\(/.test(src);
       return (calls>=2 && inEndDay) ? true : "callers="+calls+" inEndDay="+inEndDay; })());
   ok("the period-change hook still bails on a day roll, so the two never double up", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /if\(\(chat\.gameDay\|\|1\)!==prevDay\)return;/.test(src)
         ? true : "onPeriodChanged no longer defers the day roll"; })());
   ok("End Day stamps the arc with the period that ENDED, not the new morning", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /await flushMemoryArc\(chat, day, endPeriod\|\|undefined\)/.test(src)
           && /const endPeriod=\(typeof chatPeriod==="function"\)\?chatPeriod\(chat\):"";/.test(src)
         ? true : "the closing arc still takes the new day's period"; })());
@@ -218,7 +218,7 @@ const {chromium}=require('playwright');
       const src=null;
       return (window.__stalePipes||[]).length===0 ? true : "stale: "+(window.__stalePipes||[]).join(", "); }));
   ok("the audited copy in the pack is reached too", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const a=/_refreshPipe\("memBuild","Capture the CONCRETE, referenceable substance","A CONVERSATION IS NOT ITS TRANSCRIPT"/.test(src);
       const b=/_refreshPipe\("memBuild","format demonstrations from other households","A CONVERSATION IS NOT ITS TRANSCRIPT"/.test(src);
       return (a&&b) ? true : `shipped lineage:${a} pack lineage:${b}`; })());

@@ -8,7 +8,7 @@
    Run: node tests/engine-wire.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
-  const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+  const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
   const pg=await b.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
@@ -204,7 +204,7 @@ const {chromium}=require('playwright');
   ok("{{open_quests}} is in the shipped default", await pg.evaluate(()=>
       up("charQuestGen").indexOf("{{open_quests}}")>=0));
   ok("and the call site fills it", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /open_quests:openQuestLines\(uni,day\)/.test(src)?true:"the designer is still sent nothing"; })());
   ok("an empty world says so rather than shipping a blank", await pg.evaluate(()=>
       /nothing is being pursued/.test(openQuestLines({id:"u_none"},5))));
@@ -221,7 +221,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[done_when has a consumer]");
   {
-    const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+    const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
     ok("the designer is asked for a checkable condition", await pg.evaluate(()=>
         /done_when/.test(up("charQuestGen"))));
     ok("the spawn stores it on the quest",
@@ -252,7 +252,7 @@ const {chromium}=require('playwright');
   ok("{{target_place}} is in the default", await pg.evaluate(()=>
       up("charQuestStep").indexOf("{{target_place}}")>=0));
   ok("and the call site resolves it from world positions", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /target_place:\(locById\(pos\[target\.id\]\)\|\|\{\}\)\.name/.test(src)
         ? true : "only the holder's place is sent"; })());
   ok("every placeholder both quest prompts use is one their call site fills", await pg.evaluate(()=>{
@@ -280,7 +280,7 @@ const {chromium}=require('playwright');
       const bad=Object.keys(cases).filter(k=>normalizeEmotion(k)!==cases[k]);
       return bad.length===0?true:"wrong for: "+bad.map(k=>k+"->"+normalizeEmotion(k)).join(", "); }));
   ok("both write paths into the bank normalise it", (()=>{
-      const src=require('fs').readFileSync('/home/user/Multirp/index.html','utf8');
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /emotion:normalizeEmotion\(m\.emotion\)/.test(src)
           && /emotion:normalizeEmotion\(j\.emotion\)/.test(src)
         ? true : "a write path still stores the raw token"; })());

@@ -29,7 +29,7 @@ You read the IMMEDIATE emotional reaction of one character to a recent moment in
 
 READ THEM HOLISTICALLY, NOT IN ISOLATION. The same beat means different things depending on the mix and on the character's standing long-term sentiment (given to you as context only): physical closeness with someone they trust reads as desire/comfort; the same closeness from someone they distrust reads as agitation or fear, not desire. A provocation lands harder on a proud character. Weigh the combination, not each axis alone.
 
-These are STATES, not judgments. Do not factor in or re-score long-term trust, love, or respect — only the immediate reaction to the last few lines. Most ordinary beats move these only a little (±5 to ±15). A genuinely charged moment can move one sharply (±20 to ±40). If nothing notable happened for an axis, return 0 for it.
+These are STATES, not judgments. Do not factor in or re-score long-term trust, love, or respect — only the immediate reaction to the last few lines. Most ordinary beats move these only a little (±5 to ±15). A genuinely charged moment can move one sharply (±20 to ±40). ±40 is the ceiling for one read, and every number is a change from the current value, never the new level: desire at 30 rising a little is 5, not 35. If nothing notable happened for an axis, return 0 for it.
 
 You are given the character's current short-term values, their standing sentiment (context), and the recent moment.
 
@@ -103,13 +103,13 @@ You are the RELATIONSHIP TRACKER for an ongoing roleplay. You track, for one cha
 ### Deep Axes (Trust & Affection)
 These are the **bedrock** of the relationship. They move **slowly**, resist change, and when they do shift, the impact is profound — they color every interaction and how the other axes are *expressed*.
 
-- **Trust** is the hardest to earn and the hardest to repair. Trivial gestures do not move it. Only **consistent patterns over time** shift trust in small increments, but a **single major event** — a betrayal, a rescue, a secret kept or revealed, a lie discovered, a promise kept against all odds — can cause a **drastic jump** (±20 to ±40). Trust lost is trust that must be rebuilt slowly, if at all. High trust acts as a **multiplier** on affection and comfort: when trust is high, affection feels safe to express; when trust is low, even love feels like a weapon the other person might use.
+- **Trust** is the hardest to earn and the hardest to repair. Trivial gestures do not move it. Only **consistent patterns over time** shift trust in small increments, but a **single major event** — a betrayal, a rescue, a secret kept or revealed, a lie discovered, a promise kept against all odds — can cause a **drastic jump** (±15 to ±25 — the most any one evaluation can move an axis). Trust lost is trust that must be rebuilt slowly, if at all. High trust acts as a **multiplier** on affection and comfort: when trust is high, affection feels safe to express; when trust is low, even love feels like a weapon the other person might use.
 - **Affection (Love)** is similarly slow and weighty, but distinct from trust. Affection is the *emotional bond* — warmth, fondness, the ache of missing someone. You can love someone you don't trust (tragic, painful) and trust someone you don't love (reliable but cold). Affection shifts through **emotional resonance**: shared vulnerability, tenderness, cruelty, rejection, a thoughtful gift, a cutting word. Like trust, it resists change unless the moment is genuinely significant. Once affection is deep, it can survive long periods of neglect — but it can also curdle into something bitter if trust collapses.
 
 ### Surface Axis (Desire)
 Desire is **volatile, reactive, and fickle**. It spikes and crashes on a hair trigger — a look, a touch, a scent, a careless word, a moment of revealed beauty or ugliness. It burns hot but leaves the foundation largely undisturbed.
 
-- Ordinary beats can move desire ±5 to ±15. A real moment can swing it ±15 to ±30. Major events can send it careening ±30 to ±50.
+- Ordinary beats can move desire ±5 to ±10. A real moment can swing it ±10 to ±20. A major event can send it the full ±25.
 - But desire is **less effective** than deep axes: a spike of desire doesn't automatically make the character trust more, love more, or respect more. It can exist entirely on its own, and often does. High desire with low trust creates **conflicted, tortured attraction**. High desire with high affection creates **passionate, consuming love**. High desire with high fear creates **dangerous, thrilling, self-destructive pull**.
 - Desire also **decays** faster than any other axis if not fed — it cools when the stimulus is gone, drifting back toward zero or toward whatever the deep axes would naturally support.
 
@@ -157,15 +157,15 @@ You are given the ENTIRE day's interaction (as this character witnessed it), and
 
 | Axis | Ordinary beat | Real moment | Major event | Notes |
 |------|--------------|-------------|-------------|-------|
-| **trust** | 0 to ±3 | ±3 to ±10 | ±20 to ±40 (jumps drastically) | Hard to move; major events hit hard |
-| **affection** | 0 to ±5 | ±5 to ±15 | ±15 to ±35 | Similar to trust, slightly more responsive to emotional beats |
-| **respect** | 0 to ±5 | ±5 to ±15 | ±15 to ±30 | Steady, not easily shaken |
-| **familiarity** | 0 to ±5 | ±5 to ±12 | ±12 to ±25 | Grows with real shared time/disclosure; rarely drops (only on revealed deception about who they are) |
-| **jealousy** | 0 to ±5 | ±5 to ±15 | ±15 to ±30 | Needs attachment + a threat to move positive; reassurance/security moves it negative |
-| **desire** | ±5 to ±15 | ±15 to ±30 | ±30 to ±50 | Volatile, fast-moving, fickle; also decays quickly if not fed |
+| **trust** | 0 to ±3 | ±3 to ±10 | ±15 to ±25 (jumps drastically) | Hard to move; major events hit hard |
+| **affection** | 0 to ±5 | ±5 to ±15 | ±15 to ±25 | Similar to trust, slightly more responsive to emotional beats |
+| **respect** | 0 to ±5 | ±5 to ±15 | ±15 to ±25 | Steady, not easily shaken |
+| **familiarity** | 0 to ±5 | ±5 to ±12 | ±12 to ±20 | Grows with real shared time/disclosure; rarely drops (only on revealed deception about who they are) |
+| **jealousy** | 0 to ±5 | ±5 to ±15 | ±15 to ±25 | Needs attachment + a threat to move positive; reassurance/security moves it negative |
+| **desire** | ±5 to ±10 | ±10 to ±20 | ±20 to ±25 | Volatile, fast-moving, fickle; also decays quickly if not fed |
 | **comfort** | 0 to ±5 | ±5 to ±15 | ±15 to ±25 | Eroded by fear, rebuilt by calm |
-| **fear** | 0 to ±5 | ±5 to ±20 | ±20 to ±40 | Spikes fast, decays slowly |
-| **agitation** | 0 to ±8 | ±8 to ±20 | ±20 to ±40 | Spikes on provocation, decays fast; record the day's residue |
+| **fear** | 0 to ±5 | ±5 to ±15 | ±15 to ±25 | Spikes fast, decays slowly |
+| **agitation** | 0 to ±8 | ±8 to ±15 | ±15 to ±25 | Spikes on provocation, decays fast; record the day's residue |
 
 - A character can **hide** what they feel while still feeling it. Judge the underlying feeling, not the polite surface.
 - When fear is high (>40), the character's **observable behavior** will be filtered through that fear regardless of the other numbers.
@@ -176,7 +176,7 @@ You are given the ENTIRE day's interaction (as this character witnessed it), and
 
 Given the character's CURRENT axis values and the full day's interaction, you will:
 
-1. Decide a **delta** for each axis.
+1. Decide a **delta** for each axis — a CHANGE from the current value, NEVER THE NEW LEVEL. If trust is 40 and the day warmed it a little, return 3, not 43. No delta goes past ±25; anything larger is cut to ±25.
 2. Write a short, vivid **description** (1–2 sentences) of how this character now feels about the target, reflecting the *resulting numbers* and how any fear shapes their expression.
 
 (!) WRITE IT IN THE SECOND PERSON, addressing the character directly as "you" / "your" — never "he", "she", "they", or their name. This text is handed straight to the actor voicing that character, inside a card that opens "You are <name>", under a heading that calls it the real foundation of their behaviour. A sentence about "she" arriving there teaches the actor to write about themselves in the third person, and it comes out in the reply.

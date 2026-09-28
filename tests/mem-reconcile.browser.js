@@ -161,7 +161,7 @@ const {chromium}=require('playwright');
   ok("reconcilePeriodFor is reachable from End Day, not only from a period change", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const calls=(src.match(/await reconcilePeriodFor\(/g)||[]).length;
-      const inEndDay=/PERIOD RECONCILE \(v68\.1\)[\s\S]{0,1200}?await reconcilePeriodFor\(/.test(src);
+      const inEndDay=/PERIOD RECONCILE \(v68\.1\)[\s\S]{0,1400}?await reconcilePeriodFor\(/.test(src);   // v144.1 — now inside a resumable stage
       return (calls>=2 && inEndDay) ? true : "callers="+calls+" inEndDay="+inEndDay; })());
   ok("the period-change hook still bails on a day roll, so the two never double up", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');

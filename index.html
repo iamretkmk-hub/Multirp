@@ -4709,8 +4709,6 @@ Return: {"verdict": "settled"|"believed"|"open", "why": "one short clause"}
 // "intent" covers a grievance (you insulted me → revenge), an ambition (I want the throne), a
 // desire, a loyalty, a scheme. All abstract bookkeeping until it surfaces.
 
-// FORMATION — at End Day, read a character's charged memories of the day and decide whether they now
-// hold a NEW intent worth acting on. Most days: nothing. Strong provocations: a real motive.
 /* ===== v30.3 — GOALS & AMBITIONS, MAINTAINED =====================================================
    A character's <goals_and_ambitions> used to be three separate things stacked in the payload: the
    authored goals field (frozen at creation), a <your_quests> dump that grew by concatenation, and a
@@ -4763,6 +4761,9 @@ Most days add nothing. If nothing changed, return the section unchanged — that
 Return ONLY strict JSON:
 {"goals":["<line 1>","<line 2>", ...], "changed":"<one short clause naming what you dropped or added, or 'no change'>"}`;
 
+// FORMATION — at every change of the time of day (and at day end, for the last stretch), read a
+// character's charged memories of that stretch and decide whether they now hold a NEW intent worth
+// acting on, revising the ones they carry. Most stretches: nothing. Strong provocations: a real motive.
 const DEFAULT_INTENT_FORM=`You decide whether a character, after today, now privately WANTS something enough to act on it later — a motive that will quietly drive them when the player isn't looking. A motive can pull them TOWARD someone (warmth, loyalty, desire, a wish to mend or protect) just as easily as AGAINST them (a grievance, a rivalry, a cold ambition). Read the relationship, not just the events.
 
 CHARACTER: {{char}}
@@ -5032,7 +5033,8 @@ HOW DRAMA WORKS IN THIS WORLD (shape the method to fit this tone): {{world}}
   "params": {
     "proxy": "exact ally/person name if method is proxy, else null",
     "leverage": "the secret/debt/thing held if method is leverage, else null",
-    "venue": "the kind of public setting if public_spectacle, else null"
+    "venue": "the kind of public setting if public_spectacle, else null",
+    "rumor": "if method is undermine_first: the talk that gets spread about {{target}} — one short clause saying what people will hear ABOUT them (e.g. 'that they owe money all over town'), never the plan, the method or who started it; else null"
   }
 }
 "gate" is what must be true for them to make their move: "target_alone" for ambush_isolation, "in_public" for public_spectacle, "prep_done" for undermine_first (the groundwork must land first), "target_present" or "none" otherwise. "patience" is how long they'll wait for the right moment versus forcing it now (low = impatient, acts at the first chance even if imperfect).`;
@@ -8727,6 +8729,11 @@ function loadState(){
   //
   //
   // ---- v144.1 refresh: LIVING WORLD + INTENTS ----
+  /* The executor's followup is between its participants and bounded in time (the code enforces
+     both; the prompt now says so). The planner returns the rumour an undermine_first scheme
+     spreads, so the planted memory carries the talk, not the plan. */
+  _refreshPipe("calExec","You resolve a scheduled event of a roleplay world","agreed to nothing",DEFAULT_CAL_EXEC);
+  _refreshPipe("contemplate","A character has decided they will ACT on a private motive","never the plan, the method or who started it",DEFAULT_CONTEMPLATE);
   // (end LIVING WORLD + INTENTS)
   //
   //
@@ -8908,7 +8915,9 @@ const DURABLE_CHAT_KEYS=new Set([
                         //   player who reloads often never reached the read at all)
   "_textArc",           // v144.1 — where each phone thread's memory arc starts (lost on save, the whole
                         //   thread used to be re-remembered as a new memory after every reload)
-  "_wpKey"              // the day the cached world positions were computed for
+  "_wpKey",             // the day (v144.1: day|period) the cached world positions were computed for
+  "_dayEndDoneFor",     // v144.1 — the day whose day-end background has already started (never twice)
+  "_trackersTickedFor"  // v144.1 — the day the per-day tracker increments were last applied for
 ]);
 function _slimChat(c,cachedMsgs){
   const sc={...c,messages:cachedMsgs||(c.messages||[]).map(m=>{
@@ -13554,6 +13563,7 @@ RULES
 - The plan's own purpose is what resolves, and it is ALLOWED TO RESOLVE PLAINLY. Two people who met to sign something may simply sign it and be pleased; that is a complete event and the commonest one. What makes a resolution matter is the purpose landing one way or the other — not a new problem arriving to give the scene a shape. Never manufacture a complication, a condition or a snag to make the event feel eventful: whatever you write here becomes true in this world, and the characters will still be carrying it days from now.
 - Never invent a person, a place, an institution or a side-issue you were not given. Only the people listed exist, only the places listed exist, and only what you were told is true.
 - "followup": ONLY when this outcome genuinely sets up a specific NEXT commitment (a return visit, a promised answer, a threatened reckoning). Never re-schedule the same meeting, never invent a routine hangout. Most events need no followup — return null.
+- A followup is between the participants only — never with {{user}}: {{user}} was not here and agreed to nothing. Its "day" is Day {{day}} or at most four days after it.
 
 Return ONLY JSON:
 {
@@ -13727,7 +13737,7 @@ const PROMPT_REGISTRY=[
    hint:"Produces a structured JSON memory from a complete arc (content, people, emotion, feelings, details). Scores importance on the whole arc. Use {{char}} and {{user}}."},
   {key:"trackerGen", label:"Tracker generator", def:()=>DEFAULT_TRACKER_GEN, json:true,
    hint:"Builds a full tracker (name, method, range, stage texts) from a free-form description + segment count. Placeholders: world, brief, segments, owner. Returns one tracker JSON object."},
-  {key:"latentNpc", label:"Latent NPCs (first visit)", def:()=>DEFAULT_LATENT_NPC, json:true,
+  {key:"latentNpc", label:"First-visit NPCs", def:()=>DEFAULT_LATENT_NPC, json:true,
    hint:"Mints up to 2 inhabitants for a location on the player's FIRST visit (owner, bouncer, dungeon boss). Placeholders: world, loc, desc, type, cast, quests. Returns a JSON array of 0-2 compact character cards."},
   {key:"sceneCut", label:"Drop me into a scene", def:()=>DEFAULT_SCENE_CUT, json:true,
    hint:"Opens a conversation that is ALREADY RUNNING between the player and one character \u2014 no greeting, no arrival, no explaining how they got there. WHO it is with is scored in code (somebody left out, somebody not seen for a while, somebody with an actual reason), never chosen here. Placeholders: char, user, sheet, tie, view, last_seen, live, memories, today, char_at, user_at, places, day, period, world. Returns JSON {place, narration, line}."},
@@ -14793,9 +14803,15 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     if(planted)persistMemory();
   }catch(e){/* best-effort: a failed leak never blocks travel */}
 }
-/* v19.91 — LATENT NPC seeder: one attempt per location, ever (loc.npcSeeded). Fire-and-forget on
+/* v19.91 — FIRST-VISIT NPC seeder: one attempt per location, ever (loc.npcSeeded). Fire-and-forget on
    arrival so travel never waits. Mints at most (2 - current residents) personas, makes them
-   residents (residency places them here for presence/world-pulse/GM), never blocks or retries. */
+   residents (residency places them here for presence/world-pulse/GM), never blocks or retries.
+   v144.1 — NOT LATENT, despite the prompt key ("latentNpc", kept so stored prompts still load):
+   these are the place's ordinary, active inhabitants — the owner, the bouncer — met on arrival, not
+   hidden characters for /seek (those are minted by the quest system with latent:true). And they
+   are placed HERE for this first visit: the travel that triggered the seeder had already rolled the
+   day's positions before they existed, so they belonged to the place yet stood nowhere until the
+   next reroll. */
 async function maybeSeedLocationNpcs(chat){
   try{
     if(!state.npcSeedOn||!state.key||!chat||!chat.locationId)return;
@@ -14825,7 +14841,7 @@ async function maybeSeedLocationNpcs(chat){
       state.bioModel,{fn:"bio",temp:fnTemp("bio",0.85),max:fnTok("bio",900),frequency_penalty:0,presence_penalty:0,dbg:"Latent NPCs — "+(loc.name||"")});
     const arr=parseJSON(out); if(!Array.isArray(arr))return;
     const have=new Set(cast.map(p=>p.name.toLowerCase()));
-    let made=0;
+    let made=0; const newIds=[];
     for(const c of arr.slice(0,room)){
       if(!c||!c.name||have.has(String(c.name).toLowerCase()))continue;
       const pid="p_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
@@ -14835,7 +14851,16 @@ async function maybeSeedLocationNpcs(chat){
         style:String(c.style||"").slice(0,200),look:String(c.look||"").slice(0,400),
         instructions:"",interject:String(c.interject||"").slice(0,200),image:null});
       loc.residents=(loc.residents||[]).concat(pid);
-      have.add(String(c.name).toLowerCase()); made++;
+      have.add(String(c.name).toLowerCase()); made++; newIds.push(pid);
+    }
+    // v144.1 — in today's placement at their place (see the note above), unless a world rule bars them.
+    if(newIds.length){
+      const u2=universeById(chat.universeId);
+      newIds.forEach(pid=>{ const np=state.personas.find(x=>x&&x.id===pid);
+        if(!np||(u2&&ruleBlocksChar(u2,np,loc.id)))return;
+        if(chat.dayPlacement&&chat.dayPlacement.positions)chat.dayPlacement.positions[pid]=loc.id;
+        if(chat.worldPositions)chat.worldPositions[pid]=loc.id; });
+      markChatDirty(chat); persistChats();
     }
     if(made){ persistPersonas(); persistUniverses(); toast(`${made===1?"Someone belongs":"People belong"} to this place…`); }
   }catch(e){}
@@ -15114,12 +15139,13 @@ function moveToSub(subId,companionIds){
   toast(`Now in the ${s.name}`);
 }
 // ============================ CHARACTER SCHEDULES ============================
-// DETERMINISTIC placement (no randomness). A character is "at" a location ONLY if they are a
-// listed resident of it. This guarantees a character can never turn up somewhere they were not
-// assigned to or manually brought by the user. Characters with no residence are "off-screen"
-// (position null) and only enter a scene when the user explicitly brings them (/bring) or the
-// Gamemaster summons a named resident. The old weighted random `rollPosition` was the source of
-// characters appearing in places at random — it is gone.
+// PLACEMENT (v144.1 — this comment used to say "deterministic, no randomness", which stopped being
+// true when the daily roll came back). A character can only be placed at a location they are
+// ALLOWED to be at: a home they are a resident of, or a place ticked on their card as one they
+// usually visit (allowedLocs). Within that set rollPlacement picks one with weighted dice
+// (placementWeights: their schedule's points, a home floor, world rules applied). Characters with no
+// allowed place fall back to their home, or are "off-screen" (position null) and only enter a scene
+// when the user brings them (/bring) or the Gamemaster summons a named resident.
 function personaHome(p){
   const loc=curLocations().find(l=>Array.isArray(l.residents)&&l.residents.includes(p.id));
   return loc?loc.id:null;
@@ -15189,13 +15215,19 @@ function worldRulesText(uni){
   return "WORLD RULES (absolute — the engine enforces these mechanically; NEVER narrate a violation or stage a barred arrival):\n"+lines.join("\n");
 }
 
-function placementWeights(p){
+/* v144.1 — `period`: weigh by THAT part of the day's schedule row when it has points for an allowed
+   place (the gym in the Morning, home at Night); otherwise, and when no period is given, the rows
+   are summed as before. Placement used to be one roll for the whole day from the summed points, so
+   nobody followed their schedule through the day. */
+function placementWeights(p,period){
   const ids=allowedLocs(p); if(!ids.length)return {};
   const w={}; ids.forEach(id=>{ w[id]=0; });
   const sched=p&&p.schedule;
   if(sched&&typeof sched==="object"){
-    for(const period of PERIODS){
-      const row=sched[period]; if(!row||typeof row!=="object")continue;
+    const rowPts=row=>{ let n=0; if(row&&typeof row==="object")for(const id in row){ if(id in w&&+row[id]>0)n+=+row[id]; } return n; };
+    const rows=(period&&rowPts(sched[period])>0)?[period]:PERIODS;
+    for(const per of rows){
+      const row=sched[per]; if(!row||typeof row!=="object")continue;
       for(const id in row){ if(id in w){ const v=+row[id]; if(v>0)w[id]+=v; } }
     }
   }
@@ -15212,8 +15244,8 @@ function placementWeights(p){
   return w;
 }
 // Roll ONE location for a character from their weighted allowed set. Pure dice — no LLM.
-function rollPlacement(p){
-  const w=placementWeights(p); const ids=Object.keys(w);
+function rollPlacement(p,period){
+  const w=placementWeights(p,period); const ids=Object.keys(w);
   if(!ids.length)return personaHome(p); // nothing ticked → fall back to home (or null → off-screen)
   let total=0; ids.forEach(id=>{ total+=w[id]; });
   if(total<=0)return personaHome(p);
@@ -15221,26 +15253,41 @@ function rollPlacement(p){
   for(const id of ids){ r-=w[id]; if(r<=0)return id; }
   return ids[ids.length-1];
 }
-// Build (or reuse) the LOCKED placement for the current game-day: one rolled location per
-// character, fixed for the whole day. Companions the player has taken along (chat.companionLock)
-// override their rolled spot and stay wherever the player currently is.
+// Build (or reuse) the LOCKED placement for the current part of the day: one rolled location per
+// character, fixed until the time of day moves on (or a travel forces a reroll). Companions the
+// player has taken along (chat.companionLock) override their rolled spot and stay wherever the
+// player currently is.
+/* v144.1 — PER PART OF THE DAY, not per day: characters follow their schedule through the day (see
+   placementWeights). The cache key is day|period. A reroll that happens only because the clock
+   moved on (not a travel, not a new day) keeps the player's scene intact — whoever is with the
+   player stays where the player is — and keeps anyone the player walked away from today where they
+   were left (v123.1). A placement saved before this (no period on it) stays valid for its day. */
 function resolveWorldPositions(chat,force){
   const c=chat||curChat(); if(!c)return {};
-  const day=c.gameDay||1;
-  const fresh=(force || !c.dayPlacement || c.dayPlacement.day!==day);
-  // (Re)roll the day's placement if it's missing or stale (a new day began).
+  const day=c.gameDay||1, per=chatPeriod(c);
+  const dp=c.dayPlacement;
+  const newPeriod=!!(dp&&dp.day===day&&dp.period!=null&&dp.period!==per);
+  const fresh=(force || !dp || dp.day!==day || newPeriod);
+  const legacy=!fresh&&!!(dp&&dp.day===day&&dp.period==null);
+  // (Re)roll the placement if it's missing or stale (a new day, or a new part of the day, began).
   if(fresh){
     const rolled={};
     (state.personas||[]).filter(p=>p.universeId===c.universeId && isActiveChar(p)).forEach(p=>{
-      rolled[p.id]=rollPlacement(p);   // dice over allowed set, or home/null
+      rolled[p.id]=rollPlacement(p,per);   // dice over allowed set, or home/null
     });
-    c.dayPlacement={day,positions:rolled};
+    if(newPeriod&&!force){
+      try{ presentIds(c).forEach(id=>{ if(c.locationId)rolled[id]=c.locationId; }); }catch(e){}
+      const lb=c.leftBehind;
+      if(lb&&lb._day===day)Object.keys(lb).forEach(id=>{ if(id!=="_day"&&lb[id]&&lb[id].locId&&id in rolled)rolled[id]=lb[id].locId; });
+    }
+    c.dayPlacement={day,period:per,positions:rolled};
     if(c._lastPlacementDay!==day){ c.companionLock={}; c._lastPlacementDay=day; } // companions reset each new day
   }
-  // If the day's positions are already materialized and nothing forced a reroll, keep them —
+  // If the positions are already materialized and nothing forced a reroll, keep them —
   // momentary scene moves (presence tracker entries/exits, GM summon/send) live on this object
   // and must not be wiped on every read.
-  if(!fresh && c.worldPositions && c._wpKey===`${day}`) return c.worldPositions;
+  const key=`${day}|${per}`;
+  if(!fresh && c.worldPositions && (c._wpKey===key || (legacy&&c._wpKey===`${day}`))) return c.worldPositions;
   const pos={};
   const rolled=(c.dayPlacement&&c.dayPlacement.positions)||{};
   (state.personas||[]).filter(p=>p.universeId===c.universeId && isActiveChar(p)).forEach(p=>{
@@ -15250,7 +15297,7 @@ function resolveWorldPositions(chat,force){
   if(c.companionLock&&c.locationId){
     for(const id in c.companionLock){ if(c.companionLock[id])pos[id]=c.locationId; }
   }
-  c.worldPositions=pos; c._wpKey=`${day}`;
+  c.worldPositions=pos; c._wpKey=legacy?`${day}`:key;
   return pos;
 }
 function charactersAtLocation(chat,locId){
@@ -18229,9 +18276,12 @@ function checkTrackerPublicity(chat,day){
     for(const ownerKey of trackerOwnerKeys(chat,t)){
       if(ownerKey==="__story__")continue;   // story trackers are already shared with everyone
       const v=trackerVal(chat,t,ownerKey);
-      if(!trackerIsPublic(t,v))continue;
       const flagKey=t.id+"|"+ownerKey;
-      if(chat.trackerPublic[flagKey])continue;   // already went public once — don't re-announce
+      /* v144.1 — once it falls back under the line the announcement is cleared, so crossing it AGAIN
+         (a second pregnancy, a wound reopening) is news again. Knowers who already hold the exact
+         line are not given it twice (the memory check below). */
+      if(!trackerIsPublic(t,v)){ if(chat.trackerPublic[flagKey]){ delete chat.trackerPublic[flagKey]; markChatDirty(chat); } continue; }
+      if(chat.trackerPublic[flagKey])continue;   // already public and still over the line — don't re-announce
       const scope=t.publicScope||"seen";
       let knowers=[];
       if(scope==="universe"){
@@ -19959,7 +20009,7 @@ function ssResolveGossip(id,how){
 function ssCoolGossip(id){
   const g=gossipById(id); if(!g)return;
   g.heat=Math.max(0,(g.heat||0)-0.35);
-  if(g.heat<=0.05){ resolveGossip(id,"dead"); toast("Rumor faded out"); }
+  if(g.heat<=0.05){ resolveGossip(id,"dead",null,{cooled:true}); toast("Rumor faded out"); }   // v144.1 — faded, not disproved
   else { persistGossip(); toast("Cooled off"); }
   openStoryState();
 }
@@ -23759,11 +23809,31 @@ function recordGossip(o){
   L.push(g); persistGossip();
   return g;
 }
+/* v144.1 — WHO HAS THE STAKE when the gossip prompt did not say (a customised copy from before the
+   stakeholder field existed). The recipient used to be assumed, which let any bystander who was
+   told come and confront the player. A rumour about a character matters to someone TIED to them:
+   the recipient when they are, else the subject's first active tie (not the witness); with nobody
+   tied, the recipient as before. A rumour about the player keeps the recipient — being told about
+   the player is exactly what the old prompt meant by "someone who'd care". */
+function _gossipGuessStake(rp,aboutIds,roster,witness){
+  const subj=(aboutIds||[]).filter(id=>id&&id!=="__user__");
+  if(!rp||!subj.length)return rp?rp.id:null;
+  const byId=id=>(roster||[]).find(p=>p&&p.id===id);
+  const tied=(p,id)=>{ const o=byId(id); return !!((p.relationships&&p.relationships[id])||(o&&o.relationships&&o.relationships[p.id])); };
+  if(subj.some(id=>tied(rp,id)))return rp.id;
+  const other=(roster||[]).find(p=>p&&isActiveChar(p)&&p.id!==rp.id&&(!witness||p.id!==witness.id)
+    &&subj.indexOf(p.id)<0&&subj.some(id=>tied(p,id)));
+  return other?other.id:rp.id;
+}
 // Close a rumor by hand or by judgement. `how` is one of settled | believed | dead.
 // Settling REWRITES the linked memories from an open question into a closed one, because the
 // question-shaped text is what made characters keep asking.
-function resolveGossip(id,how,note){
+function resolveGossip(id,how,note,opts){
   const g=gossipById(id); if(!g)return false;
+  /* (!) v144.1 — COOLED IS NOT DISPROVED. A rumour that simply stopped being talked about (decay)
+     was rewritten in every carrier's memory as "This turned out to be nothing" — a verdict nobody
+     reached. It now says only what happened: the talk died down. */
+  const cooled=!!(opts&&opts.cooled);
   g.status=(GOSSIP_STATUS.indexOf(how)>=0?how:"dead");
   g.resolvedDay=curGameDay();
   if(note)g.playerStance=String(note).slice(0,200);
@@ -23777,21 +23847,35 @@ function resolveGossip(id,how,note){
     const was=String(m.content||"").trim();
     if(g.status==="settled") m.content=`I asked about this and I believe them: ${was}`;
     else if(g.status==="believed") m.content=`I asked about this and I did not believe the answer: ${was}`;
+    else if(cooled) m.content=`People stopped talking about this: ${was}`;
     else m.content=`This turned out to be nothing: ${was}`;
-    m.gossipClosed=g.status;
+    m.gossipClosed=cooled?"cooled":g.status;
   });
+  if(cooled)g.cooled=true;
   persistGossip(); persistMemory();
   return true;
 }
-// Heat bleeds away each in-game day; a cold rumor is dead. Called at End Day.
-function decayGossip(day){
+// Heat bleeds away each in-game day; a cold rumor is dead. Called at day end.
+/* (!) v144.1 — for the universe whose day ended. Every universe's rumours used to cool whenever any
+   chat ended a day, so playing one world quietly killed the talk in all the others. A closed rumour
+   is also pruned from the ledger once it has been closed for GOSSIP_KEEP_DAYS: nothing reads a dead
+   entry (its memories were closed when it was), and the ledger used to grow forever. */
+const GOSSIP_KEEP_DAYS=14;
+function decayGossip(day,uid){
   const d=Math.max(0,+state.gossipDecay||0);
   let changed=false;
+  const mine=g=>!uid||!g.universeId||g.universeId===uid;
   gossipAll().forEach(g=>{
-    if(!g||g.status==="settled"||g.status==="believed"||g.status==="dead")return;
+    if(!g||!mine(g)||g.status==="settled"||g.status==="believed"||g.status==="dead")return;
     g.heat=Math.max(0,(g.heat||0)-d); changed=true;
-    if(g.heat<=0.05){ resolveGossip(g.id,"dead"); }
+    if(g.heat<=0.05){ resolveGossip(g.id,"dead",null,{cooled:true}); if(typeof day==="number")g.resolvedDay=day; }
   });
+  if(typeof day==="number"){
+    const before=state.gossip.length;
+    state.gossip=gossipAll().filter(g=>!(g&&mine(g)&&(g.status==="settled"||g.status==="believed"||g.status==="dead")
+      &&typeof g.resolvedDay==="number"&&day-g.resolvedDay>GOSSIP_KEEP_DAYS));
+    if(state.gossip.length!==before)changed=true;
+  }
   if(changed)persistGossip();
 }
 /* One-time migration: every pre-ledger GOSSIP memory becomes a ledger entry so old saves get the
@@ -24370,16 +24454,21 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
        line then stated the same want a second time, a few lines below it in the same sheet, in a
        different register — and once the curator had reworded it, the two disagreed about what she
        wanted. The goal list is canonical; this renders only an aim it has not absorbed yet. */
-    const own=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent" && i.aim);
+    /* (!) v144.1 — THE NEXT ONE, NOT NOTHING. Only the heaviest motive was looked at, and when the
+       goal list had absorbed it nothing was shown — so a character carrying three motives brought
+       none of the other two into a scene. Absorbed ones are passed over; a character allowed more
+       than one motive shows up to two, the heaviest first. */
+    const own=chat.intents.filter(i=>i.holderId===selfId && i.status!=="spent" && i.aim)
+      .sort((a,b)=>intentWeight(b)-intentWeight(a));
     if(own.length){
-      const it=own.sort((a,b)=>intentWeight(b)-intentWeight(a))[0];
       const _selfP=(state.personas||[]).find(x=>x&&x.id===selfId);
       const _wants=_selfP?liveGoalsLines(_selfP):[];
-      if(!_wants.some(w=>_prSameThing(String(it.aim||""),w)||_prSameThing(w,String(it.aim||""))))
-        out.quietWant=fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm"
-                                     :it.valence==="hostile"?"intent_aim_cool":"intent_aim_self"),
+      const fresh=own.filter(it=>!_wants.some(w=>_prSameThing(String(it.aim||""),w)||_prSameThing(w,String(it.aim||""))));
+      out.quietWant=fresh.slice(0,intentsPerChar()>1?2:1).map(it=>
+        fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm"
+                       :it.valence==="hostile"?"intent_aim_cool":"intent_aim_self"),
           {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),
-           kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)});
+           kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)})).join(" ");
     }
   }catch(e){}
   return out;
@@ -26738,7 +26827,7 @@ const ENGINE_PAYLOAD_DEFS=[
   {key:"tracker_gen",label:"Tracker Generator",desc:"Builds a complete tracker (mechanics + stage texts) from a plain description and a segment count, straight into the universe editor for review.",blocks:[
     {kind:"prompt",promptKey:"trackerGen"},
     {kind:"dyn",label:"World + the user's brief",scope:"universe",desc:"Built live: the universe setting, the description typed in the tracker editor, the chosen owner and segment count."}]},
-  {key:"latent_npcs",label:"Latent NPCs (first visit)",desc:"When the player first visits a location, up to 2 fitting inhabitants are minted as real characters (owner, bouncer, dungeon boss) and made residents there. Quest venues get their key figure.",blocks:[
+  {key:"latent_npcs",label:"First-visit NPCs",desc:"When the player first visits a location, up to 2 fitting inhabitants are minted as real characters (owner, bouncer, dungeon boss) and made residents there. Quest venues get their key figure.",blocks:[
     {kind:"prompt",promptKey:"latentNpc"},
     {kind:"dyn",label:"Location + cast + quests",scope:"chat",desc:"Built live on arrival: the location's description/type, the existing cast (dedupe), active quests."}]},
   {key:"world_pulse",label:"World Pulse (offstage life)",desc:"The world going about its business while the player is elsewhere. Once per part of the day a ROUND covers everybody offstage and unclaimed and partitions them \u2014 together or alone, mostly doing something ordinary \u2014 and on top of that a charged pair may still cross paths, characters pursue their own goals when the moment fits, and user-less calendar plans execute when due. Participants get real memories, relationship changes and a line in their day; a round may also leave a plan or a promise behind. Almost none of it reaches the screen, and the player is never present.",blocks:[
@@ -32336,7 +32425,8 @@ function handleOOC(chat,text){
     }
     // Drop any companion-lock and live intents tied to them so the director engines don't chase a corpse.
     if(chat.companionLock)delete chat.companionLock[p.id];
-    if(Array.isArray(chat.intents))chat.intents.forEach(i=>{ if(i.holderId===p.id)i.status="spent"; });
+    // v144.1 — and the ones aimed AT them: a motive against a dead person has nothing left to do.
+    if(Array.isArray(chat.intents))chat.intents.forEach(i=>{ if(i.holderId===p.id||i.targetId===p.id)_spendIntent(i,chat.gameDay||1,i.holderId===p.id?"holder gone":"target gone"); });
     if(chat.worldPositions)chat.worldPositions[p.id]=null;
     persistChats();persistPersonas();appendNewBubbles();updateChatHeader();
     if(typeof renderPersonas==="function")try{renderPersonas();}catch(e){}
@@ -38656,17 +38746,37 @@ function parseJSON(raw){
 function fillTpl(s,map){return s.replace(/\{\{(\w+)\}\}/g,(m,k)=>map[k]!==undefined?map[k]:m);}
 
 /* ===== END DAY ===== advance the in-game day and summarize it into a memory ===== */
+/* v144.1 — the per-day tracker tick, once per day whichever way the day ended (End Day, or travel
+   past Night via _quietDayEnd): a second day end for the same day added a second day to every
+   per-day counter. Keyed on the NEW day, which both callers have already rolled to. */
+function _tickTrackersOnce(chat){
+  if(!chat)return;
+  const d=chat.gameDay||1;
+  if(chat._trackersTickedFor===d)return;
+  chat._trackersTickedFor=d; markChatDirty(chat);
+  tickTrackersForDay(chat);
+}
+/* (!) v144.1 — ONE END DAY AT A TIME, ONCE PER DAY. The confirm was followed by an awaited narration
+   call and only THEN did the day advance, with nothing in flight to stop a second tap (the map
+   button, the Story-mode chip, a double click): two runs ended the same day twice — two diaries per
+   character, trackers ticked twice (a pregnancy gained two days), gossip decayed twice, the intent
+   tick ran twice. The lock is taken before the narration call; the day is re-read after it, so a
+   day that ended some other way meanwhile (travelling past Night) is not ended again. */
 async function endDay(){
-  const chat=curChat();
+  const chat=curChat(); if(!chat)return;
+  if(chatBusy(chat,"endDay")){ try{ toast("The day is already ending\u2026"); }catch(_){} return; }
   const day=chat.gameDay||1;
   /* v68.1 — the part of the day being ended, read BEFORE the roll below resets it to Morning.
      Without it the final arc was committed with the just-ended DAY and the NEW day's period, so
      the one memory that closes a day was filed under a stretch it did not happen in. */
   const endPeriod=(typeof chatPeriod==="function")?chatPeriod(chat):"";
   if(!(await uiConfirm(`${calPendingTodaySummary(chat)}This advances the story to Day ${day+1}. Characters who were here today will write a private diary, and their relationships will be re-evaluated — both happen in the background, so the new day starts right away.`,{title:`End Day ${day}?`,icon:"moon",ok:"End the day"})))return;
-
+  return withChatLock(chat,"endDay",()=>_endDayRun(chat,day,endPeriod),{skip:true});
+}
+async function _endDayRun(chat,day,endPeriod){
+  if((chat.gameDay||1)!==day)return;   // this day already ended while the confirm was open
   const uni=(chat&&chat.universeId)||state.curUniverse||null;
-  const fallbackName=(curCast()[0]&&curCast()[0].name)||"Narrator";
+  const fallbackName=(curCast(chat)[0]&&curCast(chat)[0].name)||"Narrator";
 
   // ---- SNAPSHOT THE DAY *BEFORE* ADVANCING ----
   // Critical: diaries and the long-axis relationship pass both read "today's messages" via the
@@ -38687,9 +38797,10 @@ async function endDay(){
   }
 
   // 2) ADVANCE THE DAY IMMEDIATELY — the player is unblocked here; everything below runs after.
+  if((chat.gameDay||1)!==day)return;   // (!) v144.1 — it ended some other way during the narration call
   chat.gameDay=day+1;
   chat.period="Morning"; chat.timeOfDay="Morning";   // a new day starts in the morning
-  tickTrackersForDay(chat);   // apply per-day tracker increments (e.g. pregnancy day count)
+  _tickTrackersOnce(chat);   // apply per-day tracker increments (e.g. pregnancy day count) — once per day
   // NEW DAY LOCATION RESET. If this universe has a designated player home, the player wakes there.
   // Otherwise they stay where they were — but in either case we reset to the ENTRANCE sub-area so
   // they don't begin the day stuck in a back room (e.g. the gym's lifting station).
@@ -38733,16 +38844,17 @@ async function endDay(){
   endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod).catch(()=>{});
 }
 
-// Everything End Day does AFTER the day has visibly advanced. Runs in the background.
-// Order matters: diaries are written from the day's experiential memories first, THEN the
-// long-axis relationship pass runs (it deliberately excludes the diary it just wrote). They are
-// independent of each other's *output* but we sequence them so cost/rate-limit stays sane.
-// ===== LIVING UNIVERSE layer 2: gossip propagation (End Day) =====
+// ===== LIVING UNIVERSE layer 2: gossip propagation (day end — End Day or a day that ends on the road) =====
 // Charged bystander observations from today become rumors that travel through the relationship
 // graph to people who'd care. Each planted rumor is a VAGUE, open suspicion (a question, not a
 // verdict) stored as a memory in the recipient — so it colors their next scene and (later) can
 // motivate a confrontation, while staying winnable. Lightweight: a few LLM calls, capped per day.
-async function runGossipPropagation(chat,day,uni){
+/* (!) v144.1 — a day-N memory from ANOTHER chat in the same universe is a different timeline's day N.
+   Memories are banked per universe, so "today's charged memories" used to include another story's
+   day 3 whenever this one reached day 3. Day-scoped feeds (gossip, the motive former and tick) read
+   this chat's memories only; a memory with no chatId (older saves) still counts. */
+function _memOfChat(m,chat){ return !m||!m.chatId||!chat||!chat.id||m.chatId===chat.id; }
+async function runGossipPropagation(chat,day,uni,period){
   if(!state.gossipOn||!state.key||!state.mem)return;
   const uid=uni||(chat&&chat.universeId)||state.curUniverse||null;
   const thresh=(state.gossipThreshold!=null?state.gossipThreshold:0.6);
@@ -38754,7 +38866,7 @@ async function runGossipPropagation(chat,day,uni){
   // as fresh first-hand sightings (that would flood the cap with duplicates of the same rumor).
   const charged=state.memory.filter(m=>
       m.gameDay===day && m.type==="OBSERVATION" && m.source!=="location_rumor" &&
-      (!m.universeId||!uid||m.universeId===uid) &&
+      (!m.universeId||!uid||m.universeId===uid) && _memOfChat(m,chat) &&
       typeof m.charge==="number" && m.charge>=thresh
     ).sort((a,b)=>(b.charge||0)-(a.charge||0)).slice(0,cap);
   if(!charged.length)return;
@@ -38818,6 +38930,11 @@ async function runGossipPropagation(chat,day,uni){
           tags:["gossip","rumor",(g.motive||"").toLowerCase()].filter(Boolean),
           type:"GOSSIP",
           ownerId:rid, character:rp.name, date:Date.now(), gameDay:day, source:"gossip",
+          /* (!) v144.1 — stamped with the part of the day that ENDED. rememberMemory used to stamp
+             the open chat's period, which at day end is already the NEW day's Morning — so the
+             day-end motive former (which reads the ended period) never saw a rumour, and rumours
+             never became motives. */
+          gamePeriod:period||"",
           gossipFrom:witness.name, gossipMotive:(g.motive||""), openSuspicion:true,
           suspicion:(typeof g.suspicion_strength==="number"?g.suspicion_strength:0.6),
           universeId:uid, chatId:(chat&&chat.id)||null
@@ -38826,7 +38943,12 @@ async function runGossipPropagation(chat,day,uni){
           // v28.9 — the rumor goes in the LEDGER first. The ledger decides whether the world has
           // room for it (a paraphrase of a live rumor just adds a carrier; a stakeholder already
           // drowning in suspicions takes no more), and only then does a memory get planted.
-          const stakeId=(g.stakeholder?idByName(g.stakeholder):null)||rid;
+          /* v144.1 — a prompt written before the stakeholder field (a hand-customised copy) names no
+             stakeholder at all. Falling back to the recipient made every bystander who was told
+             entitled to confront the player about it; see _gossipGuessStake. A stakeholder that is
+             named but unknown still falls back to the recipient, as before. */
+          const _sk=(g.stakeholder!=null&&String(g.stakeholder).trim())?idByName(g.stakeholder):undefined;
+          const stakeId=(_sk===undefined)?_gossipGuessStake(rp,about,roster,witness):(_sk||rid);
           const led=recordGossip({
             text:mem.content, subject:about.length?about:["__user__"],
             stakeholderId:stakeId, carrierId:rid, from:witness.name,
@@ -38835,7 +38957,7 @@ async function runGossipPropagation(chat,day,uni){
           if(led){
             mem.gossipId=led.id;
             if(led.memIds&&led.memIds.indexOf(mem.id)<0)led.memIds.push(mem.id);
-            rememberMemory(mem);
+            rememberMemory(mem,{chat});
           }
         }
       }
@@ -38849,6 +38971,9 @@ async function runGossipPropagation(chat,day,uni){
 function maybeSpawnConfrontation(chat,uni){
   if(!chat||chat.dnd||state.confrontOn===false||!state.sceneOn)return false;
   if(chat.activeEvent && !chat.activeEvent.resolved)return false;
+  // (!) v144.1 — the privacy lock holds arrivals: nobody comes to your door mid-intimacy. The
+  // suspicion is not consumed; it waits for the next chance.
+  if(typeof sceneIsPrivateMoment==="function"&&sceneIsPrivateMoment(chat))return false;
   const uid=uni||(chat&&chat.universeId)||state.curUniverse||null;
   // candidate suspicions: gossip-planted, open, charged, not already used for a confrontation
   // v28.9 — a confrontation is a stakeholder's move. A bystander who merely heard the talk does
@@ -38893,10 +39018,12 @@ function maybeSpawnConfrontation(chat,uni){
   return false;
 }
 
-// ===== LIVING UNIVERSE layer 4: the intent engine (End Day) =====
-// Three passes: (1) FORM new intents from today's charged memories, (2) TICK existing intents
-// (harden/fade, recruit allies), (3) when an intent is READY, spawn a layer-3 confrontation. All
-// abstract — nothing is narrated until it surfaces. Intents live on chat.intents.
+// ===== LIVING UNIVERSE layer 4: the intent engine =====
+// Three passes: (1) FORM new intents from the charged memories of the part of the day that just
+// ended (every change of the time of day, via runPeriodEngines), (2) TICK existing intents
+// (harden/fade, recruit allies — day end only), (3) a READY intent is ARMED and waits for its moment;
+// checkArmedPlans surfaces it in the live scene. All abstract — nothing is narrated until it
+// surfaces. Intents live on chat.intents.
 
 // Turn a slow-axis swing (the per-axis delta recorded by evalRelationship on its last run) into a
 // plain-English direction phrase, so the intent former reads HOW the standing moved today — the
@@ -38951,9 +39078,13 @@ function holderRelationshipBlock(chat,holder,day,nameById){
 // single step (cursor 0) so it degrades to "make the move directly" while still recording the
 // chosen method, approach, and gate. Best-effort: if it fails, the intent simply has no plan and
 // pass 3 surfaces it the old way (direct).
-async function contemplatePlan(chat,it,roster,nameById,uid){
+/* v144.1 — `day` is the day being ticked (the day that just ENDED at day end). The plan's expiry
+   used to count from chat.gameDay, which by then is already the next day, so every plan lived a day
+   longer than its patience allowed. `period` is that part of the day, for the planted rumour's stamp. */
+async function contemplatePlan(chat,it,roster,nameById,uid,day,period){
   if(!chat||!it||!state.key)return;
   if(it.plan)return;   // already planned — don't re-contemplate
+  const _d=(typeof day==="number")?day:(chat.gameDay||1);
   const holder=roster.find(p=>p.id===it.holderId); if(!holder)return;
   const model=(state.gossipModel&&state.gossipModel.trim())?state.gossipModel:state.memModel;
   // Leverage the holder might use: their own pressure-point sheet entry toward no one in particular
@@ -38983,7 +39114,8 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
     const params=(j.params&&typeof j.params==="object")?j.params:{};
     // Resolve a proxy name → id if one was named and is real.
     let proxyId=null;
-    if(method==="proxy"&&params.proxy){ const pid=(()=>{ const k=String(params.proxy).toLowerCase().trim(); const p=roster.find(x=>(x.name||"").toLowerCase().trim()===k); return p?p.id:null; })(); proxyId=pid; }
+    // v144.1 — only someone still in play can carry it (a latent or removed character cannot).
+    if(method==="proxy"&&params.proxy){ const p=findByName(roster.filter(x=>isActiveChar(x)&&x.id!==holder.id&&x.id!==it.targetId),String(params.proxy)); proxyId=p?p.id:null; }
     // The plan. Multi-step shape, single step for now. A method that needs cross-system execution
     // (proxy/undermine_first) is recorded but, this slice, still EXECUTES directly — flagged via
     // needsActivation so the next slice can light it up without reshaping anything.
@@ -39002,7 +39134,7 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
       // Plant the groundwork rumor once. If it succeeds, prepend a completed "prep" step so the plan
       // reads as two-phase and the strike's gate becomes prep_done.
       try{
-        spawnedRumorId=plantDirectedRumor(chat,it,roster,nameById,uid,params,j.approach);
+        spawnedRumorId=plantDirectedRumor(chat,it,roster,nameById,uid,params,j.approach,{day:_d,period});
       }catch(e){ spawnedRumorId=null; }
       if(spawnedRumorId){
         steps[0].gate={type:"prep_done",note:"the groundwork must land before the move"};
@@ -39021,8 +39153,8 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
                venue:(method==="public_spectacle"?(params.venue||null):null),
                spawnedRumorId },
       patience:(typeof j.patience==="number"?Math.max(0,Math.min(1,j.patience)):0.5),
-      expires:(chat.gameDay||1)+ (typeof j.patience==="number"&&j.patience>0.6?5:3),
-      formedDay:(chat.gameDay||1),
+      expires:_d+ (typeof j.patience==="number"&&j.patience>0.6?5:3),
+      formedDay:_d,
       // Only the GATED strike (wait-for-the-moment execution) is still pending → that's the
       // multi-step slice. proxy/undermine_first are otherwise active now.
       needsActivation:false
@@ -39038,25 +39170,31 @@ async function contemplatePlan(chat,it,roster,nameById,uid){
 // caller stores the returned id on params.spawnedRumorId and never re-plants while it's set).
 // Recipient: someone in the holder's circle who is close to the TARGET (so the rumor reaches people
 // who'd care). Returns the new memory id, or null if it couldn't plant.
-function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
+function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach,when){
   if(!chat||!it)return null;
   if(it.plan&&it.plan.params&&it.plan.params.spawnedRumorId)return it.plan.params.spawnedRumorId; // already planted
   const holder=roster.find(p=>p.id===it.holderId); if(!holder)return null;
+  const day=(when&&typeof when.day==="number")?when.day:(chat.gameDay||1);
   // Choose a recipient: prefer someone the holder knows who is ALSO tied to the target; else anyone
   // in the holder's circle; never the holder, the target, or the player as recipient (v1 plants in NPCs).
+  // v144.1 — and never a latent or removed character: they are out of play.
   const targetId=it.targetId;
   const holderRels=holder.relationships||{};
-  const circle=Object.keys(holderRels).filter(id=>id&&id!==holder.id&&id!==targetId&&id!=="__user__"&&roster.some(p=>p.id===id));
+  const circle=Object.keys(holderRels).filter(id=>id&&id!==holder.id&&id!==targetId&&id!=="__user__"&&roster.some(p=>p.id===id&&isActiveChar(p)));
   if(!circle.length)return null;
   const tiedToTarget=circle.filter(id=>{ const p=roster.find(x=>x.id===id); return p&&p.relationships&&p.relationships[targetId]; });
   const rid=(tiedToTarget[0]||circle[0]);
   const rp=roster.find(p=>p.id===rid); if(!rp)return null;
   const targetName=targetId==="__user__"?state.user:(nameById(targetId)||"someone");
   // The rumor text: a vague, planted suspicion about the target, in the recipient's first-person
-  // "I heard…" voice (matching organic gossip), seeded from the holder's angle. Kept generic enough
-  // to be genre-blind; the holder's approach colours it.
-  const seed=(approach||it.aim||"").toString().slice(0,140);
-  const rumor=`I heard something about ${targetName} — ${seed?seed:"that not everything about them adds up"}. I don't know if it's true, but it's stuck with me.`;
+  // "I heard…" voice (matching organic gossip). Kept generic enough to be genre-blind.
+  /* (!) v144.1 — WHAT IS SAID, NOT WHAT IS PLANNED. The seed used to be the schemer's `approach` (or
+     their aim), so the recipient's memory read "I heard something about Emre — wait until he's alone,
+     then corner him": the plan itself, handed to a bystander who then knew it. The contemplation
+     prompt now returns params.rumor — the talk that gets spread about the target — and without one
+     the text is a plain, contentless doubt. Engine record, so English like the organic gossip. */
+  const talk=String((params&&params.rumor)||"").trim().replace(/^i heard( that)?\s*/i,"").replace(/[.!?]+$/,"").slice(0,160);
+  const rumor=`I heard something about ${targetName} — ${talk?talk:"that not everything about them adds up"}. I don't know if it's true, but it's stuck with me.`;
   const strength=Math.max(0.5,Math.min(0.85,(it.strength!=null?it.strength:0.6)));
   const mem={
     id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
@@ -39065,7 +39203,7 @@ function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
     tags:["gossip","rumor","planted",(it.kind||"").toLowerCase()].filter(Boolean),
     type:"GOSSIP",
     people:memPeople(targetName),   // a rumour is about its target, not about whoever now carries it
-    ownerId:rid, character:rp.name, date:Date.now(), gameDay:(chat.gameDay||1), source:"planted",
+    ownerId:rid, character:rp.name, date:Date.now(), gameDay:day, gamePeriod:(when&&when.period)||"", source:"planted",
     gossipFrom:holder.name, gossipMotive:(it.kind||""), openSuspicion:true,
     suspicion:strength, plantedByIntent:it.id, plantedAgainst:targetId,
     universeId:uid, chatId:(chat&&chat.id)||null
@@ -39077,12 +39215,12 @@ function plantDirectedRumor(chat,it,roster,nameById,uid,params,approach){
   const led=recordGossip({
     text:mem.content, subject:[targetId], stakeholderId:(targetId&&targetId!=="__user__")?targetId:rid,
     carrierId:rid, from:holder.name, motive:it.kind||"", heat:strength,
-    day:(chat.gameDay||1), universeId:uid, source:"planted"
+    day, universeId:uid, source:"planted"
   });
   if(!led)return null;
   mem.gossipId=led.id;
   if(led.memIds.indexOf(mem.id)<0)led.memIds.push(mem.id);
-  rememberMemory(mem); persistMemory();
+  rememberMemory(mem,{chat}); persistMemory();
   return mem.id;
 }
 
@@ -39157,9 +39295,13 @@ function _planIncludesUser(e){
 }
 function _pulsePersonasByName(chat,names){
   const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p));
-  const out=[]; String(names||"").split(/[,&]| and | ve /i).map(s=>s.trim().toLowerCase()).filter(Boolean).forEach(n=>{
-    const p=pool.find(x=>x.name.toLowerCase()===n||x.name.toLowerCase().includes(n));
-    if(p&&!out.includes(p))out.push(p);
+  /* (!) v144.1 — whole names only. `includes` resolved "Can" to Canan or Ercan, so the world round,
+     offstage events, the calendar executor and goal pursuit gave memories and relationship moves to
+     the wrong person. findByName, then a guard: a bare prefix ("Can" → "Canan") is not the same
+     person — only an exact name, a first name or a whole word of the name counts. */
+  const out=[]; String(names||"").split(/[,&]| and | ve /i).map(s=>s.trim()).filter(Boolean).forEach(n=>{
+    const p=findByName(pool,n);
+    if(p&&(sameName(p.name,n,true)||nameInText(p.name,n))&&!out.includes(p))out.push(p);
   });
   return out;
 }
@@ -39190,7 +39332,10 @@ function normalizeEmotion(x){
   if(_EMO_ALIAS[t])return _EMO_ALIAS[t];
   return "neutral";
 }
-function _plantWorldMemory(chat,uni,p,m,day,placeName,who){
+/* v144.1 — `period`: the part of the day the event happened in, captured before the engine's model
+   call. Without it rememberMemory stamped whatever the open chat's clock read when the answer landed
+   (the next period, or the next day's Morning at day end). */
+function _plantWorldMemory(chat,uni,p,m,day,placeName,who,period){
   if(!p||!m||!m.content)return;
   rememberMemory({
     people:memPeople(p.name, Array.isArray(m.people)?m.people:[], who||[]),
@@ -39199,9 +39344,9 @@ function _plantWorldMemory(chat,uni,p,m,day,placeName,who){
     emotion:normalizeEmotion(m.emotion),
     importance:Math.max(0.3,Math.min(1,+m.importance||0.6)),
     tags:[], type:"EXPERIENCE", ownerId:p.id, character:p.name,
-    date:Date.now(), gameDay:day, source:"world_pulse",
+    date:Date.now(), gameDay:day, gamePeriod:period||"", source:"world_pulse",
     universeId:uni?uni.id:chat.universeId, chatId:chat.id||null
-  });
+  },{chat});
   persistMemory();
 }
 function _applyWorldRel(chat,relArr,byName){
@@ -39247,9 +39392,9 @@ function _worldEventTouchesPlayer(chat,j,a,b){
   return "";
 }
 // Silent events still shape the world; the directors read this so they know what has been going on.
-function _logSilentWorldEvent(chat,j,place,day){
+function _logSilentWorldEvent(chat,j,place,day,period){
   if(!Array.isArray(chat.worldLog))chat.worldLog=[];
-  chat.worldLog.push({day,period:chatPeriod(chat),place:place||"",
+  chat.worldLog.push({day,period:period||chatPeriod(chat),place:place||"",
                       headline:String(j.headline||"").slice(0,90),
                       event:String(j.event||"").slice(0,400),
                       kind:String(j.kind||""),severity:+j.severity||0});
@@ -39383,11 +39528,10 @@ function _pulseMarkBusy(chat,ids){ const b=_pulseBusySet(chat); (ids||[]).forEac
 // A character with a calendar plan due RIGHT NOW is claimed by that plan — the spontaneous-encounter
 // engine must leave them alone (the executor owns their next beat).
 function _pulseHasDuePlan(chat,p){
-  const nm=p.name.toLowerCase();
+  // v144.1 — by id, then whole-name ("Can" is not in a plan for "Canan").
   return chatCalendar(chat).some(e=>{
     if(!e||e.done||!planDueNow(chat,e))return false;
-    const who=String(e.who||"").toLowerCase();
-    return who.includes(nm)||String(e.executor||"").toLowerCase()===nm;
+    return planCharIds(e).indexOf(p.id)>=0||nameInText(e.who,p.name)||sameName(e.executor,p.name);
   });
 }
 // What a character privately wants right now — their live intents, fed to the encounter judge so
@@ -39424,7 +39568,7 @@ async function runOffstageInteraction(chat,uni){
   const pos=chat.worldPositions||{};
   const byLoc={};
   pool.forEach(p=>{ const l=pos[p.id]; if(!l||l===chat.locationId)return; (byLoc[l]=byLoc[l]||[]).push(p); });
-  const day=chat.gameDay||1;
+  const day=chat.gameDay||1, per=chatPeriod(chat);   // v144.1 — captured before the call; see below
   chat.pulseTried=chat.pulseTried||{};
   let best=null;
   const casualCands=[];
@@ -39465,7 +39609,7 @@ async function runOffstageInteraction(chat,uni){
     a_to_b:_pulseTie(chat,best.a,best.b),b_to_a:_pulseTie(chat,best.b,best.a),
     a_wants:_pulseWants(chat,best.a),b_wants:_pulseWants(chat,best.b),
     a_knows:_pulseKnows(chat,best.a,best.b.name,day),b_knows:_pulseKnows(chat,best.b,best.a.name,day),
-    place, places:_pulsePlaces(chat), day:String(day), period:chatPeriod(chat), user:state.user||"the player",
+    place, places:_pulsePlaces(chat), day:String(day), period:per, user:state.user||"the player",
     world:String(curWorldSetting()||"").slice(0,700)
   });
   const _prB=promiseContextForNames(chat,[best.a.name,best.b.name]);
@@ -39473,6 +39617,14 @@ async function runOffstageInteraction(chat,uni){
     state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (offstage interaction)"});
   const j=parseJSON(out);
   if(!j||!j.happened)return false;
+  /* (!) v144.1 — THE POOL WAS BUILT BEFORE A LONG CALL. If either of them joined the player while it
+     ran, they were still moved elsewhere and handed "I was at the gym with…" while standing in the
+     player's scene. The event was written about the two of them, so it is dropped whole. And if
+     the clock moved on meanwhile, the event belongs to the stretch it was written for: memories and
+     the whereabouts ledger take that period, and nobody is pinned or claimed in the new one. */
+  const _on=new Set(presentIds(chat));
+  if(_on.has(best.a.id)||_on.has(best.b.id))return false;
+  const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
   const uniObj=uni||universeById(chat.universeId);
   const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
   // PHYSICAL PLACEMENT — the event pins both characters to where it happened. If the model chose a
@@ -39481,16 +39633,18 @@ async function runOffstageInteraction(chat,uni){
   let evLocId=best.loc, evPlace=place;
   const venue=String(j.venue||"").trim();
   if(venue){ const vl=locByName(venue); if(vl&&vl.id!==chat.locationId){ evLocId=vl.id; evPlace=vl.name; } }
-  if(chat.worldPositions){ chat.worldPositions[best.a.id]=evLocId; chat.worldPositions[best.b.id]=evLocId; }
-  _pulseMarkBusy(chat,[best.a.id,best.b.id]);
+  if(sameStretch){
+    if(chat.worldPositions){ chat.worldPositions[best.a.id]=evLocId; chat.worldPositions[best.b.id]=evLocId; }
+    _pulseMarkBusy(chat,[best.a.id,best.b.id]);
+  }
   // v96.1 — and both of them now know where they spent this part of the day, and with whom.
-  try{ noteWhereabouts(chat,[best.a.id,best.b.id],
-    {placeId:evLocId,place:evPlace,what:String(j.headline||"").slice(0,90)}); }catch(_){}
+  if(sameDay)try{ noteWhereabouts(chat,[best.a.id,best.b.id],
+    {period:per,placeId:evLocId,place:evPlace,what:String(j.headline||"").slice(0,90)}); }catch(_){}
   // The world always updates. Whether the PLAYER hears about it is a separate question.
   const why=_worldEventTouchesPlayer(chat,j,best.a,best.b);
   if(why) _pushWorldEvent(chat,j.headline,j.event);
-  else    _logSilentWorldEvent(chat,j,evPlace,day);
-  (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p)_plantWorldMemory(chat,uniObj,p,m,day,evPlace,[best.a.name,best.b.name]); });
+  else    _logSilentWorldEvent(chat,j,evPlace,day,per);
+  (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p&&(p.id===best.a.id||p.id===best.b.id))_plantWorldMemory(chat,uniObj,p,m,day,evPlace,[best.a.name,best.b.name],per); });
   _applyWorldRel(chat,j.rel,byName);
   return true;
 }
@@ -39670,13 +39824,22 @@ async function runSceneCut(chat){
   return true;
 }
 /* One round of the whole offstage cast, once per part of the day. See DEFAULT_WORLD_ROUND. */
+/* v144.1 — one round in flight per chat (a turn and a change of the time of day can both reach
+   here), and a round that FAILED — a timeout, an answer that does not parse — is tried once more
+   in the same part of the day. _roundAt used to be set before the call, so one bad answer cost the
+   whole cast that stretch of their day. A well-formed answer, even an empty one, is final. */
 async function runWorldRound(chat,uni){
+  if(!chat)return 0;
+  return (await withChatLock(chat,"worldRound",async()=>{
+  let tr=null, mark="";
   try{
-    if(state.roundOn===false||!chat||!state.key)return 0;
+    if(state.roundOn===false||!state.key)return 0;
     const day=chat.gameDay||1, per=chatPeriod(chat);
-    const mark=day+"|"+per;
+    mark=day+"|"+per;
     if(chat._roundAt===mark)return 0;               // one round per part of the day, always
-    chat._roundAt=mark; markChatDirty(chat);
+    tr=(chat._roundTry&&chat._roundTry.mark===mark)?chat._roundTry:(chat._roundTry={mark,n:0});
+    if(tr.n>=2){ chat._roundAt=mark; return 0; }    // tried twice already: this stretch is over
+    tr.n++; markChatDirty(chat);
     resolveWorldPositions(chat);
     const onstage=new Set(presentIds(chat));
     /* Everyone the world can move: in this universe, active, not in the player's scene, not
@@ -39684,13 +39847,23 @@ async function runWorldRound(chat,uni){
        keeps this and the older single-pair pulse from writing over each other. */
     const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)
       &&!onstage.has(p.id)&&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p));
-    if(pool.length<1)return 0;
+    if(pool.length<1){ chat._roundAt=mark; return 0; }
     const pos=chat.worldPositions||{};
     const placeOf=pp=>{ const l=pos[pp.id]; return (l&&locById(l))?locById(l).name:"somewhere in this world"; };
-    const cast=pool.map(pp=>`${pp.name} \u2014 at ${placeOf(pp)}\n${_pulseSheet(pp)}`).join("\n\n");
+    const cast=pool.map(pp=>`${pp.name} — at ${placeOf(pp)}\n${_pulseSheet(pp)}`).join("\n\n");
+    /* (!) v144.1 — THE TIES ARE SHARED OUT, NOT CUT. A cast of n has n(n-1) directed ties and the
+       payload holds 60; slicing the list in order gave the first few people all of theirs and the
+       last ones none (nine people is 72). Taken round-robin, one per person per pass, real ties
+       before the empty "barely know each other" ones — so everybody's most relevant ties get in. */
+    const tieRows=pool.map(a=>{
+      const rows=pool.filter(b=>b!==a).map(b=>{ const t=_pulseTie(chat,a,b)||"";
+        return {s:`${a.name}→${b.name}: ${t}`,real:!!t.replace(/[;\s]/g,"")}; });
+      return rows.filter(r=>r.real).concat(rows.filter(r=>!r.real));
+    });
     const ties=[];
-    for(let i=0;i<pool.length;i++)for(let j2=0;j2<pool.length;j2++)
-      if(i!==j2)ties.push(`${pool[i].name}\u2192${pool[j2].name}: ${_pulseTie(chat,pool[i],pool[j2])}`);
+    for(let k=0;ties.length<60&&tieRows.some(r=>r.length>k);k++)
+      for(const rows of tieRows){ if(ties.length>=60)break; if(rows[k])ties.push(rows[k]); }
+    ties.sort((x,y)=>(y.real?1:0)-(x.real?1:0));
     const wants=pool.map(pp=>{ const w=_pulseWants(chat,pp); return w?`${pp.name}: ${w}`:""; }).filter(Boolean).join("\n")
       ||"(nothing brewing in anybody right now)";
     const uniId=(chat&&chat.universeId)||null;
@@ -39699,7 +39872,7 @@ async function runWorldRound(chat,uni){
       return `${pp.name}:\n${lines.length?lines.join("\n"):"  - (nothing notable recently)"}`;
     }).join("\n");
     const tpl=fillTpl(up("worldRound"),{
-      cast, ties:ties.slice(0,60).join(" | ")||"(none on record)", wants, knows,
+      cast, ties:ties.map(t=>t.s).join(" | ")||"(none on record)", wants, knows,
       places:_pulsePlaces(chat), day:String(day), period:per,
       user:state.user||"the player", world:String(curWorldSetting()||"").slice(0,700)
     });
@@ -39713,8 +39886,17 @@ async function runWorldRound(chat,uni){
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.6),max:fnTok("mem",Math.min(6000,900+pool.length*420)),
       frequency_penalty:0,presence_penalty:0,dbg:"The day around you (whole-cast round)"});
     const j=parseJSON(out);
-    const entries=(j&&Array.isArray(j.entries))?j.entries:[];
+    if(!j||!Array.isArray(j.entries)){ if(tr.n>=2)chat._roundAt=mark; return 0; }   // failed: once more
+    chat._roundAt=mark; markChatDirty(chat);
+    const entries=j.entries;
     if(!entries.length)return 0;
+    /* (!) v144.1 — THE POOL WAS BUILT BEFORE A LONG CALL. Somebody who joined the player while it
+       ran is in the player's scene now: an entry naming them is dropped whole (it was written about
+       the group), rather than moving them elsewhere and handing them "I was at the gym with Hakan".
+       If the clock moved on meanwhile, the round still belongs to the stretch it was written for:
+       memories and the whereabouts ledger take that period; nobody is pinned or claimed in the new one. */
+    const nowOn=new Set(presentIds(chat));
+    const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
     const uniObj=uni||universeById(chat.universeId);
     const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
     /* (!) THE PARTITION IS ENFORCED HERE, NOT TRUSTED. The prompt asks for each name once; a model
@@ -39738,32 +39920,40 @@ async function runWorldRound(chat,uni){
              String(en.headline||"").slice(0,60)); }catch(_){}
         continue;
       }
+      if(named.some(pp=>nowOn.has(pp.id))){
+        try{ console.warn("[worldRound] entry dropped — somebody in it joined the player's scene meanwhile:",
+             String(en.headline||"").slice(0,60)); }catch(_){}
+        continue;
+      }
       const who=named;
       who.forEach(pp=>placed.add(pp.id));
       const loc=locByName(String(en.place||"").trim());
       const evLocId=(loc&&loc.id!==chat.locationId)?loc.id:(pos[who[0].id]||null);
       const evPlace=(evLocId&&locById(evLocId))?locById(evLocId).name:String(en.place||"").trim();
-      if(chat.worldPositions&&evLocId) who.forEach(pp=>{ chat.worldPositions[pp.id]=evLocId; });
-      _pulseMarkBusy(chat,who.map(pp=>pp.id));
-      try{ noteWhereabouts(chat,who.map(pp=>pp.id),
-        {placeId:evLocId,place:evPlace,what:String(en.headline||"").slice(0,90)}); }catch(_){}
+      if(sameStretch){
+        if(chat.worldPositions&&evLocId) who.forEach(pp=>{ chat.worldPositions[pp.id]=evLocId; });
+        _pulseMarkBusy(chat,who.map(pp=>pp.id));
+      }
+      if(sameDay)try{ noteWhereabouts(chat,who.map(pp=>pp.id),
+        {period:per,placeId:evLocId,place:evPlace,what:String(en.headline||"").slice(0,90)}); }catch(_){}
       // Never on screen: the round is the world going about its business, not news.
-      _logSilentWorldEvent(chat,{headline:en.headline,event:en.event,kind:en.kind,severity:0},evPlace,day);
+      _logSilentWorldEvent(chat,{headline:en.headline,event:en.event,kind:en.kind,severity:0},evPlace,day,per);
       (Array.isArray(en.memories)?en.memories:[]).slice(0,4).forEach(m=>{
         const pp=byName(m&&m.name);
-        if(pp&&who.some(w=>w.id===pp.id))_plantWorldMemory(chat,uniObj,pp,m,day,evPlace,who.map(w=>w.name));
+        if(pp&&who.some(w=>w.id===pp.id))_plantWorldMemory(chat,uniObj,pp,m,day,evPlace,who.map(w=>w.name),per);
       });
       _applyWorldRel(chat,en.rel,byName);
-      try{ _roundPlan(chat,en.plan,who,day); }catch(_){}
+      try{ _roundPlan(chat,en.plan,who,day,per); }catch(_){}
       try{ _roundPromise(chat,en.promise,byName,day); }catch(_){}
       ran++;
     }
     if(ran){ markChatDirty(chat); persistChats(); }
     return ran;
-  }catch(e){ return 0; }
+  }catch(e){ if(tr&&tr.n>=2&&mark)chat._roundAt=mark; return 0; }
+  },{skip:true}))||0;
 }
 // A plan an entry left behind, onto the same calendar every other plan lives on.
-function _roundPlan(chat,pl,who,day){
+function _roundPlan(chat,pl,who,day,period){
   if(!pl||!state.calOn)return;
   const title=String(pl.title||"").trim(); if(!title)return;
   const detail=String(pl.detail||pl.why||"").trim();
@@ -39773,7 +39963,7 @@ function _roundPlan(chat,pl,who,day){
   const loc=pl.where?locByName(String(pl.where)):null;
   addCalendarEntry(chat,{
     kind:"meeting", title:title.slice(0,120), detail:detail.slice(0,300),
-    origin:`agreed offstage on day ${day} (${chatPeriod(chat)}): ${detail}`.slice(0,300),
+    origin:`agreed offstage on day ${day} (${period||chatPeriod(chat)}): ${detail}`.slice(0,300),
     day:day+d, period:PERIODS.includes(pl.period)?pl.period:"",
     who:(Array.isArray(pl.who)&&pl.who.length?pl.who:who.map(p=>p.name)).join(", "),
     where:String(pl.where||"").trim(), locationId:loc?loc.id:null,
@@ -39798,8 +39988,17 @@ function _roundPromise(chat,pr,byName,day){
     shows_as:String(pr.shows_as||pr.showsAs||"")
   },day);
 }
+/* (!) v144.1 — A PLAN IS DONE WHEN IT HAPPENED, NOT WHEN IT WAS ASKED ABOUT. It was marked done before
+   the call, and a timeout or an unparseable answer `continue`d past it — so the plan was gone, and
+   the calendar showed it as lived. Now it is marked done only when the event lands; a failure keeps
+   it pending for the next check, and after CALEXEC_TRIES failed attempts it closes as "didn't
+   happen" (outcome missed, no result) instead of looping forever. One executor run per chat at a
+   time (a turn and a change of the time of day can both reach here), which is the in-flight guard
+   the early `done` used to be. */
+const CALEXEC_TRIES=2;
 async function runCalendarExecutor(chat,uni){
-  if(!state.calOn)return 0;
+  if(!state.calOn||!chat)return 0;
+  return (await withChatLock(chat,"calExec",async()=>{
   // Due plans that don't include the player — char↔char meetings AND solo character errands (goal-
   // pursuit moves, quest tasks). A due plan whose participants are already claimed by another event
   // THIS period stays pending and resolves on a later check — never two events for one person at once.
@@ -39810,13 +40009,12 @@ async function runCalendarExecutor(chat,uni){
     const onstage=new Set(presentIds(chat));
     if(_pulseIsBusy(chat,parts.map(p=>p.id)))continue;               // claimed this period → wait
     if(parts.some(p=>onstage.has(p.id)))continue;                    // in the player's scene → the plan waits
-    e.done=true; e.prompted=true; persistChats(); updateCalendarBadge();
-    const day=chat.gameDay||1;
+    const day=chat.gameDay||1, per=chatPeriod(chat)||"";
+    const gaveUp=()=>{ e.execTries=(e.execTries||0)+1;
+      if(e.execTries>=CALEXEC_TRIES){ e.done=true; e.prompted=true; e.outcome="missed"; e.completedDay=day; e.completedPeriod=per; updateCalendarBadge(); }
+      markChatDirty(chat); persistChats(); };
     const uniId=(chat&&chat.universeId)||null;
     const place=e.locationId?((locById(e.locationId)||{}).name||e.where||""):(e.where||"");
-    // v96.1 — a plan that actually ran is a place these people were, together.
-    try{ noteWhereabouts(chat,parts.map(pp=>pp.id),
-      {placeId:e.locationId||null,place,what:String(e.title||"").slice(0,90)}); }catch(_){}
     const ties=[]; for(let i=0;i<parts.length;i++)for(let j=0;j<parts.length;j++)if(i!==j)ties.push(`${parts[i].name}→${parts[j].name}: ${_pulseTie(chat,parts[i],parts[j])}`);
     // v25.x — each participant's OWN recent memories, labeled per holder, so the resolution grows
     // from what they actually lived (and knowledge stays private to its holder).
@@ -39832,7 +40030,7 @@ async function runCalendarExecutor(chat,uni){
     const tpl=fillTpl(up("calExec"),{
       title:e.title,
       who:e.who||parts.map(p=>p.name).join(", "),
-      place:place?` — at ${place}`:"",day:String(day),period:chatPeriod(chat),
+      place:place?` — at ${place}`:"",day:String(day),period:per,
       /* v106.1 — it was resolving events with no idea which places exist. Both its siblings get
          this list; it got the one venue and nothing to check an invention against. */
       places:_pulsePlaces(chat),
@@ -39845,42 +40043,73 @@ async function runCalendarExecutor(chat,uni){
       const _prB=promiseContextForNames(chat,parts.map(pp=>pp.name));
       const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
         state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (calendar executor)"});
-      const j=parseJSON(out); if(!j||!j.event){ e.result=e.result||""; continue; }
+      const j=parseJSON(out); if(!j||!j.event){ gaveUp(); continue; }
+      if(e.done)continue;                                              // settled some other way meanwhile
+      // Somebody joined the player while the call ran: they are here, not there. The plan waits.
+      const _on=new Set(presentIds(chat));
+      if(parts.some(p=>_on.has(p.id)))continue;
+      const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
+      e.done=true; e.prompted=true; updateCalendarBadge();
+      // v96.1 — a plan that actually ran is a place these people were, together.
+      if(sameDay)try{ noteWhereabouts(chat,parts.map(pp=>pp.id),
+        {period:per,placeId:e.locationId||null,place,what:String(e.title||"").slice(0,90)}); }catch(_){}
       const uniObj=uni||universeById(chat.universeId);
       const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
       // PHYSICAL PLACEMENT — the participants really went there: pin them to the plan's place for
       // the rest of the period so the player can travel there and find them, aware of what happened.
       const evLoc=e.locationId?locById(e.locationId):(e.where?locByName(e.where):null);
-      if(evLoc&&chat.worldPositions){ parts.forEach(p=>{ chat.worldPositions[p.id]=evLoc.id; }); }
-      _pulseMarkBusy(chat,parts.map(p=>p.id));
-      e.result=briefDesc(String(j.event||""),300); e.completedDay=day; e.completedPeriod=chatPeriod(chat)||"";
-      _pushWorldEvent(chat,j.headline||e.title,j.event);
-      (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p)_plantWorldMemory(chat,uniObj,p,m,day,(evLoc&&evLoc.name)||place,parts.map(pp=>pp.name)); });
-      _applyWorldRel(chat,j.rel,byName);
-      if(j.followup&&j.followup.title&&Number.isFinite(+j.followup.day)&&(+j.followup.day)>=day){
-        const fwho=String(j.followup.who||e.who||"").slice(0,120);
-        const fUser=(state.user||"").toLowerCase();
-        addCalendarEntry(chat,{kind:"meeting",title:String(j.followup.title).slice(0,120),day:+j.followup.day,
-          period:PERIODS.includes(j.followup.period)?j.followup.period:"",who:fwho,
-          origin:`Follow-up of "${String(j.headline||e.title).slice(0,80)}" (day ${day}): ${String(j.event||"").slice(0,220)}`,
-          withUser:!!(fUser&&fwho.toLowerCase().includes(fUser)),source:"world"});
+      if(sameStretch){
+        if(evLoc&&chat.worldPositions){ parts.forEach(p=>{ chat.worldPositions[p.id]=evLoc.id; }); }
+        _pulseMarkBusy(chat,parts.map(p=>p.id));
       }
+      e.result=briefDesc(String(j.event||""),300); e.completedDay=day; e.completedPeriod=per;
+      _pushWorldEvent(chat,j.headline||e.title,j.event);
+      (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p&&parts.some(x=>x.id===p.id))_plantWorldMemory(chat,uniObj,p,m,day,(evLoc&&evLoc.name)||place,parts.map(pp=>pp.name),per); });
+      _applyWorldRel(chat,j.rel,byName);
+      _calExecFollowup(chat,j,e,parts,day);
       ran++;
-    }catch(err){}
+    }catch(err){ gaveUp(); }
   }
   return ran;
+  },{skip:true}))||0;
+}
+/* (!) v144.1 — A FOLLOW-UP FROM AN OFFSTAGE EVENT IS BETWEEN ITS PARTICIPANTS. One naming the player
+   was filed withUser:true with no executor and no day bound — a meeting with the player that the
+   player never agreed to, arriving as "It's time for…" days later (or years, with no bound). A
+   commitment with the player can only be made in the player's presence, so the player is taken
+   out of the list; what remains must be real, active characters, one of whom acts. The day is
+   bounded to the next four days, the same bound goal pursuit uses. */
+function _calExecFollowup(chat,j,e,parts,day){
+  const f=j&&j.followup;
+  if(!f||!f.title||!Number.isFinite(+f.day)||(+f.day)<day)return null;
+  const un=String(state.user||"").trim();
+  const names=String(f.who||e.who||"").split(/\s*(?:,|&|\band\b|\bve\b)\s*/i).map(x=>x.trim()).filter(Boolean)
+    .filter(n=>!(un&&(sameName(n,un,true)||nameInText(n,un)))&&!/^(the )?(player|user|you)$/i.test(n));
+  const people=_pulsePersonasByName(chat,names.join(", "));
+  if(!people.length)return null;
+  const fDay=Math.max(day,Math.min(day+4,Math.round(+f.day)));
+  return addCalendarEntry(chat,{kind:"meeting",title:String(f.title).slice(0,120),day:fDay,
+    period:PERIODS.includes(f.period)?f.period:"",who:people.map(p=>p.name).join(", ").slice(0,120),
+    charIds:people.map(p=>p.id),
+    origin:`Follow-up of "${String(j.headline||e.title).slice(0,80)}" (day ${day}): ${String(j.event||"").slice(0,220)}`,
+    executor:people[0].name, executorId:people[0].id,
+    withUser:false,source:"world"});
 }
 // GOAL PURSUIT — v25.x redesign: instead of narrating an instant offstage step, each candidate
 // character decides their NEXT MOVE — from personality, goals, brewing intents, memories and how
 // they currently stand with everyone (slow bonds + momentary mood) — and that move lands on the
 // CALENDAR as a plan (solo errand or a meeting with ONE other character, never the player). The
 // world-pulse calendar executor then resolves it offstage when its time comes, narrated on screen
-// with real memories for the participants — the same lifecycle as a character quest. Runs at day
-// end (planning the next day); duplicates are refused by addCalendarEntry's participant guard.
-async function runGoalPursuit(chat,day,uni){
+// with real memories for the participants — the same lifecycle as a character quest. Runs at every
+// change of the time of day (runPeriodEngines, v129.1), at most once a day per character; duplicates are refused by addCalendarEntry's participant guard.
+/* v144.1 — `period` is the part of the day being closed. At day end chatPeriod(chat) already reads
+   the NEXT day's Morning, so the prompt and each plan's origin said "day N, Morning" for a move
+   planned on the night of day N. */
+async function runGoalPursuit(chat,day,uni,period){
   try{
     if(!state.pulseOn||state.goalPursuitOn===false||!chat||!state.key)return 0;
     uni=uni||universeById(chat.universeId); if(!uni)return 0;
+    const nowPer=period||chatPeriod(chat);
     resolveWorldPositions(chat);
     const onstage=new Set(presentIds(chat));
     // Candidates: active characters, off the current stage, who actually HAVE goals to pursue.
@@ -39889,6 +40118,12 @@ async function runGoalPursuit(chat,day,uni){
     let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!onstage.has(p.id)&&String(engineGoals(p)||"").trim());
     if(!pool.length)return 0;
     chat.goalActed=chat.goalActed||{};
+    /* (!) v144.1 — ASKED IS A DAY'S QUESTION TOO. Only a character who ACTED was recorded, so one who
+       answered acted:false was asked again at every change of the time of day — up to five calls a
+       day each, for the same "not today". goalAsked records the day they were asked, whatever the answer. */
+    chat.goalAsked=chat.goalAsked||{};
+    pool=pool.filter(p=>chat.goalAsked[p.id]!==day);
+    if(!pool.length)return 0;
     const cap=Math.max(1,Math.min(12,+state.pulseMax||4));
     // Prioritise those who haven't acted on a goal recently (space each character out), then those
     // with the most charged recent activity (something's in motion for them). Keep the evaluated set
@@ -39902,7 +40137,6 @@ async function runGoalPursuit(chat,day,uni){
     if(!pool.length)return 0;
     const pos=chat.worldPositions||{};
     const rosterNames=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)).map(p=>p.name);
-    const planNames=e=>String(e.who||"").toLowerCase();
     let ran=0; const claimed=new Set();   // characters already given a plan in THIS run
     for(const p of pool){
       if(ran>=cap)break;
@@ -39921,8 +40155,7 @@ async function runGoalPursuit(chat,day,uni){
         if(ties.length>=6)break; }
       // Plans already on their calendar — shown to the model AND used to skip a character whose
       // near future is already committed (prevents plan pile-up on one person).
-      const nm=p.name.toLowerCase();
-      const already=chatCalendar(chat).filter(e=>e&&!e.done&&e.day!=null&&e.day>=day&&e.day<=day+3&&(planNames(e).includes(nm)||String(e.executor||"").toLowerCase()===nm));
+      const already=chatCalendar(chat).filter(e=>e&&!e.done&&e.day!=null&&e.day>=day&&e.day<=day+3&&(planCharIds(e).indexOf(p.id)>=0||nameInText(e.who,p.name)||sameName(e.executor,p.name)));
       if(already.length>=2)continue;
       const plannedBlock=already.map(e=>`- "${e.title}" day ${e.day}${e.period?` (${e.period})`:""}${e.who?` with ${e.who}`:""}`).join("\n")||"(none)";
       const tpl=fillTpl(up("goalPursuit"),{
@@ -39932,7 +40165,7 @@ async function runGoalPursuit(chat,day,uni){
         ties:ties.join("\n")||"(no notable ties on record)",
         planned:plannedBlock,
         place:place||"wherever they usually are", places:_pulsePlaces(chat),
-        day:String(day), period:chatPeriod(chat),
+        day:String(day), period:nowPer,
         user:state.user||"the player", world:String(curWorldSetting()||"").slice(0,700)
       });
       let j=null;
@@ -39947,6 +40180,7 @@ async function runGoalPursuit(chat,day,uni){
         const out=await chatCompletion(epSend("goalPursuit",tpl+"\n\n"+mixedLangDirective(["title"]),{promises:(_prB?`WORDS ${p.name} IS BOUND BY (open-ended commitments — never choose a move that breaks one unless breaking it IS the move, and then say so plainly):\n${_prB}`:"")}),
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (goal pursuit) · "+p.name});
         j=parseJSON(out);
+        chat.goalAsked[p.id]=day; markChatDirty(chat);   // answered, whatever it said
       }catch(err){}
       if(!j||!j.acted)continue;
       // ---- NEW CONTRACT: a PLAN that lands on the calendar ----
@@ -39976,7 +40210,7 @@ async function runGoalPursuit(chat,day,uni){
           kind:"meeting", title:String(pl.title).slice(0,120),
           detail:String(pl.detail||"").slice(0,300),
           // v25.2 — PROVENANCE: who made this plan, when, and out of what — the executor's premise.
-          origin:`${p.name} planned this on day ${day} (${chatPeriod(chat)}), pursuing their own goals${why?`: ${why}`:" — no reason was recorded when it was made"}`,
+          origin:`${p.name} planned this on day ${day} (${nowPer}), pursuing their own goals${why?`: ${why}`:" — no reason was recorded when it was made"}`,
           day:pDay, period:per,
           who:[p.name].concat(comp?[comp.name]:[]).join(", "),
           where:String(pl.where||"").trim(), locationId:loc?loc.id:null,
@@ -40017,11 +40251,11 @@ async function runGoalPursuit(chat,day,uni){
           _plantWorldMemory(chat,uni,p,{
             content:fillTpl(blkTpl(comp?"mem_plan_with":"mem_plan_self"),
               {who:comp?comp.name:"",title:entry.title,at:_at,why:_why}),
-            emotion:"determined",importance:0.45},day,whereName,_planCast);
+            emotion:"determined",importance:0.45},day,whereName,_planCast,nowPer);
           if(comp)_plantWorldMemory(chat,uni,comp,{
             content:fillTpl(blkTpl("mem_plan_asked"),
               {who:p.name,title:entry.title,at:_at,why:_why}),
-            emotion:"concerned",importance:0.4},day,whereName,_planCast);
+            emotion:"concerned",importance:0.4},day,whereName,_planCast,nowPer);
           markChatDirty(chat); updateCalendarBadge();
           ran++;
         }
@@ -40037,14 +40271,10 @@ async function runGoalPursuit(chat,day,uni){
       if(!mems.some(m=>m&&m.name&&String(m.name).toLowerCase()===p.name.toLowerCase())){
         mems.unshift({name:p.name,content:String(j.event||"").slice(0,240),emotion:"determined",importance:0.6});
       }
-      mems.forEach(m=>{ const q=byName(m&&m.name); if(q)_plantWorldMemory(chat,uni,q,m,day,place,mems.map(x=>x&&x.name)); });
+      mems.forEach(m=>{ const q=byName(m&&m.name); if(q)_plantWorldMemory(chat,uni,q,m,day,place,mems.map(x=>x&&x.name),nowPer); });
       _applyWorldRel(chat,j.rel,byName);
-      if(j.followup&&j.followup.title&&Number.isFinite(+j.followup.day)&&(+j.followup.day)>=day){
-        addCalendarEntry(chat,{kind:"meeting",title:String(j.followup.title).slice(0,120),day:+j.followup.day,
-          period:PERIODS.includes(j.followup.period)?j.followup.period:"",who:String(j.followup.who||p.name).slice(0,120),
-          origin:`Set up by ${p.name}'s move "${String(j.headline||"").slice(0,80)}" (day ${day}): ${String(j.event||"").slice(0,220)}`,
-          source:"world"});
-      }
+      // v144.1 — same rule as the executor's follow-ups: participants only, never the player, bounded.
+      _calExecFollowup(chat,j,{title:j.headline||"",who:p.name},[p],day);
       ran++;
     }
     if(ran)persistChats();
@@ -40139,10 +40369,15 @@ async function runIntentEngine(chat,day,uni,opts){
   const uid=uni||(chat&&chat.universeId)||state.curUniverse||null;
   if(!Array.isArray(chat.intents))chat.intents=[];
   const roster=(state.personas||[]).filter(p=>!uid||p.universeId===uid);
+  /* (!) v144.1 — WHO A MOTIVE CAN NAME IS WHO IS IN PLAY. The former's roster, target lookup and the
+     tick's recruit list were the whole universe, latent and removed included: a motive could point at
+     an NPC the player has not found yet ("X comes to you about Nil"), recruit a dead ally, or target
+     someone removed. nameById still reads everyone (old intents keep their labels). */
+  const live=roster.filter(isActiveChar);
   const nameById=id=>id==="__user__"?state.user:((roster.find(p=>p.id===id)||{}).name||null);
   const idByName=nm=>{ const k=(nm||"").toLowerCase().trim();
     if(k===(state.user||"").toLowerCase().trim()||k==="player"||k==="user")return "__user__";
-    const p=roster.find(x=>(x.name||"").toLowerCase().trim()===k); return p?p.id:null; };
+    const p=live.find(x=>(x.name||"").toLowerCase().trim()===k); return p?p.id:null; };
   const model=(state.gossipModel&&state.gossipModel.trim())?state.gossipModel:state.memModel;
   const perChar=intentsPerChar();
 
@@ -40155,6 +40390,11 @@ async function runIntentEngine(chat,day,uni,opts){
   const dayChargedBy={};
   state.memory.forEach(m=>{
     if(m.gameDay!==day||(m.universeId&&uid&&m.universeId!==uid))return;
+    if(!_memOfChat(m,chat))return;                                    // v144.1 — this story's day, not another chat's
+    /* (!) v144.1 — a diary (or a condensed era) re-tells the day; it is not a new event. Carrying no
+       period, it passed the filter below, so every diarist cost a former call every day end, quiet
+       day or not — and its summary of already-read memories counted twice. */
+    if(memSpansTime(m))return;
     if(onlyPeriod&&m.gamePeriod&&m.gamePeriod!==onlyPeriod)return;   // v129.1 — the part of the day that just ended
     const imp=typeof m.importance==="number"?m.importance:0.5;
     const ch=typeof m.charge==="number"?m.charge:0;
@@ -40192,7 +40432,7 @@ async function runIntentEngine(chat,day,uni,opts){
     const mems=(dayChargedBy[holderId]&&dayChargedBy[holderId].length)
       ? dayChargedBy[holderId].slice(0,6).map(m=>`- ${memText(m)}`).join("\n")
       : "(no single event stood out — judge from how the feelings below moved)";
-    const rosterList=roster.filter(p=>p.id!==holderId).map(p=>p.name).concat(state.user).join(", ");
+    const rosterList=live.filter(p=>p.id!==holderId).map(p=>p.name).concat(state.user).join(", ");
     const relBlock=holderRelationshipBlock(chat,holder,day,nameById)||"(no notable relationships on record)";
     try{
       const out=await chatCompletion(epSend("intentForm",fillTpl(up("intentForm"),{
@@ -40267,13 +40507,16 @@ async function runIntentEngine(chat,day,uni,opts){
     const byHolder={};
     chat.intents.forEach(it=>{
       if(it.status==="spent"||it.status==="armed")return;        // armed: matured & waiting on a gate
-      if(it.lastTick===day&&it.born===day)return;                 // formed today → let it sit a day
+      /* formed today → let it sit a day. (!) v144.1 — and ticked today already → not again: a second
+         day end for the same day (or a resumed one) used to fester every motive twice. */
+      if(it.lastTick===day)return;
       (byHolder[it.holderId]=byHolder[it.holderId]||[]).push(it);
     });
     for(const hid of Object.keys(byHolder)){
       const list=byHolder[hid].sort((x,y)=>intentWeight(y)-intentWeight(x));
       const holder=roster.find(p=>p.id===hid);
       if(!holder){ list.forEach(it=>_spendIntent(it,day,"holder gone")); continue; }
+      if(!isActiveChar(holder))continue;   // v144.1 — hidden (latent) holders wait; removed ones were spent by /remove
       let entries=[];
       try{
         const motives=list.map(it=>{
@@ -40283,13 +40526,13 @@ async function runIntentEngine(chat,day,uni,opts){
           const allies=(it.allies||[]).map(nameById).filter(Boolean).join(", ");
           return `- [${it.id}] a ${it.kind} toward ${it.targetName||nameById(it.targetId)||"someone"} — ${it.aim||"(no aim)"} (sparked by: ${it.trigger||"?"}; strength ${(+it.strength||0).toFixed(2)}, priority ${intentPrio(it)}, ${age} day${age===1?"":"s"} old, ${idle?`nothing has fed it for ${idle} day${idle===1?"":"s"}`:"fed today"}${allies?`; with ${allies}`:""})`;
         }).join("\n");
-        const today=(state.memory||[]).filter(m=>m&&m.ownerId===hid&&m.gameDay===day&&(!m.universeId||!uid||m.universeId===uid))
+        const today=(state.memory||[]).filter(m=>m&&m.ownerId===hid&&m.gameDay===day&&(!m.universeId||!uid||m.universeId===uid)&&_memOfChat(m,chat))
           .slice(-8).map(m=>`- ${memText(m)}`).join("\n")||"(nothing of note happened to them today)";
         const feelings=(holderRelationshipBlock(chat,holder,day,nameById)||"").split("\n")
           .filter(l=>list.some(it=>{ const t=it.targetName||nameById(it.targetId); return t&&l.indexOf("→ "+t+":")!==-1; }))
           .join("\n")||"(nothing on record)";
         const involved=new Set([hid].concat(list.map(it=>it.targetId)));
-        const cand=roster.filter(p=>!involved.has(p.id))
+        const cand=live.filter(p=>!involved.has(p.id))
           .map(p=>{ const tie=(holder.relationships&&holder.relationships[p.id]&&holder.relationships[p.id].tie)||"";
                     return `- ${p.name}${tie?` (${holder.name}'s ${tie})`:""}`; })
           .join("\n")||"(no one available)";
@@ -40327,7 +40570,7 @@ async function runIntentEngine(chat,day,uni,opts){
         else if(r&&r.ready===true&&it.strength>=0.55){
           it.status="ready";
           // The motive has matured into a decision to act → CONTEMPLATE how (method + plan), once.
-          try{ await contemplatePlan(chat,it,roster,nameById,uid); }catch(e){console.warn("[intent] contemplatePlan failed — intent stays plan-less (will surface directly):",e&&e.message||e);}
+          try{ await contemplatePlan(chat,it,roster,nameById,uid,day,onlyPeriod); }catch(e){console.warn("[intent] contemplatePlan failed — intent stays plan-less (will surface directly):",e&&e.message||e);}
         }
         else { it.status="brewing"; }
       }
@@ -40342,25 +40585,7 @@ async function runIntentEngine(chat,day,uni,opts){
   // holder comes to the PLAYER *about* the third party (to recruit, warn, confide, or use them). The
   // player stays central; we never play NPC-vs-NPC scenes the player only watches.
   chat.intents.filter(i=>i.status==="ready"&&i.strength>=0.55)
-    .forEach(it=>{
-      const c2c = it.targetId && it.targetId!=="__user__";
-      it.status="armed";
-      it.c2c=!!c2c;   // marks "surface by pulling the player in about the target"
-      if(!it.plan){
-        // char-to-char default gate: holder with the player, target NOT in the room (you don't
-        // approach the player about someone who's standing right there). Player-targeted keeps target_present.
-        const defGate = c2c ? "holder_with_player_target_absent" : "target_present";
-        it.plan={ method:"direct", approach:"", steps:[{phase:"strike",intent_action:(it.valence==="warm"?"offer":"confront"),gate:{type:defGate,note:""},status:"pending",result:null}], cursor:0, params:{}, patience:0.5, expires:(day||1)+3, formedDay:(day||1), needsActivation:false };
-      } else if(c2c){
-        // An existing plan whose gate assumes the target is the one present needs the c2c gate instead
-        // (the target is the SUBJECT, not the person the holder addresses).
-        const step=it.plan.steps&&it.plan.steps[it.plan.cursor||0];
-        if(step&&step.gate&&(step.gate.type==="target_present"||step.gate.type==="target_alone")){
-          step.gate.type="holder_with_player_target_absent";
-        }
-      }
-      if(it.armedDay==null)it.armedDay=day;
-    });
+    .forEach(it=>{ it.status="armed"; _armIntent(it,day); });
   // Prune: live motives are bounded per character by the former; of the spent ones each character
   // keeps their last three, so the former knows what they already acted on or let go.
   { const keep=new Set(), seen={};
@@ -40371,6 +40596,28 @@ async function runIntentEngine(chat,day,uni,opts){
   persistChats();
 }
 
+/* Give an armed intent what firing needs: the c2c flag and, when it has no contemplated plan, the
+   default one. v144.1 — shared with the hand editor: an intent set to "armed" by hand had no plan,
+   and checkArmedPlans only looks at armed intents WITH one — so it never fired, never expired and,
+   being armed, could never be crowded out. */
+function _armIntent(it,day){
+  const c2c = it.targetId && it.targetId!=="__user__";
+  it.c2c=!!c2c;   // marks "surface by pulling the player in about the target"
+  if(!it.plan){
+    // char-to-char default gate: holder with the player, target NOT in the room (you don't
+    // approach the player about someone who's standing right there). Player-targeted keeps target_present.
+    const defGate = c2c ? "holder_with_player_target_absent" : "target_present";
+    it.plan={ method:"direct", approach:"", steps:[{phase:"strike",intent_action:(it.valence==="warm"?"offer":"confront"),gate:{type:defGate,note:""},status:"pending",result:null}], cursor:0, params:{}, patience:0.5, expires:(day||1)+3, formedDay:(day||1), needsActivation:false };
+  } else if(c2c){
+    // An existing plan whose gate assumes the target is the one present needs the c2c gate instead
+    // (the target is the SUBJECT, not the person the holder addresses).
+    const step=it.plan.steps&&it.plan.steps[it.plan.cursor||0];
+    if(step&&step.gate&&(step.gate.type==="target_present"||step.gate.type==="target_alone")){
+      step.gate.type="holder_with_player_target_absent";
+    }
+  }
+  if(it.armedDay==null)it.armedDay=day;
+}
 // Evaluate whether an armed plan's CURRENT step gate is satisfied by the live scene. Pure state read,
 // no AI call. The gate is the moment the plan has been waiting for.
 function evaluateGate(chat,plan,targetId,holderId){
@@ -40394,7 +40641,19 @@ function evaluateGate(chat,plan,targetId,holderId){
       // characters are currently in the room.
       return present.length===0;
     case "in_public":     return present.length>=1;  // at least one other character around as audience
-    case "prep_done":     return step.gate&&step.gate.type==="prep_done" ? true : false; // prep step set done at contemplation
+    case "prep_done":{
+      /* (!) v144.1 — "the groundwork must land before the move", and this returned true the moment
+         it was planted (it tested the gate's own type against itself), so the strike could fire the
+         turn after the rumour was sown. The talk needs a day to travel: the gate opens once a day
+         has passed since the planting — or at once if the rumour is already over (closed or gone),
+         since then there is nothing left to wait for. */
+      const rid=plan.params&&plan.params.spawnedRumorId;
+      const rm=rid?(state.memory||[]).find(m=>m&&m.id===rid):null;
+      const planted=(rm&&typeof rm.gameDay==="number")?rm.gameDay:(+plan.formedDay||0);
+      if(((chat&&chat.gameDay)||1)>planted)return true;
+      const g=rm&&rm.gossipId?gossipById(rm.gossipId):null;
+      return !rm||!!(g&&(g.status==="settled"||g.status==="believed"||g.status==="dead"));
+    }
     case "holder_with_player_target_absent":
       // CHAR-TO-CHAR: the holder comes to the PLAYER about the target. This can fire only when the
       // TARGET is NOT present (you don't recruit/warn the player against someone standing right there).
@@ -40408,8 +40667,11 @@ function evaluateGate(chat,plan,targetId,holderId){
 // its contemplated plan (method framing + proxy swap). ONE code path, called by the per-turn
 // checkpoint (and reusable elsewhere) so End-Day and in-scene surfacing can never drift apart.
 function surfaceIntent(chat,it,roster,nameById){
-  const holder=roster.find(p=>p.id===it.holderId); if(!holder)return false;
-  const allyNames=(it.allies||[]).map(nameById).filter(Boolean);
+  const holder=roster.find(p=>p.id===it.holderId); if(!holder||!isActiveChar(holder))return false;
+  // v144.1 — only people still in play: a target, proxy or ally who has since been hidden or removed
+  // cannot be brought into (or named in) the scene.
+  if(it.targetId&&it.targetId!=="__user__"){ const tp=roster.find(p=>p.id===it.targetId); if(!tp||!isActiveChar(tp))return false; }
+  const allyNames=(it.allies||[]).filter(id=>{ const a=roster.find(p=>p.id===id); return a&&isActiveChar(a); }).map(nameById).filter(Boolean);
   const withWho=allyNames.length?` (with ${allyNames.join(", ")})`:"";
   const plan=it.plan||null;
   const method=plan&&plan.method||"direct";
@@ -40428,7 +40690,7 @@ function surfaceIntent(chat,it,roster,nameById){
   let actor=holder, onBehalfOf="";
   if(method==="proxy" && plan && plan.params && plan.params.proxyId){
     const pr=roster.find(p=>p.id===plan.params.proxyId);
-    if(pr && pr.id!==it.targetId){ actor=pr; onBehalfOf=` on ${holder.name}'s behalf`; }
+    if(pr && isActiveChar(pr) && pr.id!==it.targetId){ actor=pr; onBehalfOf=` on ${holder.name}'s behalf`; }
   }
   const actorNature=actor.personality?String(actor.personality).slice(0,200):"";
   const carried=onBehalfOf?` (carried on ${holder.name}'s behalf)`:"";
@@ -40490,10 +40752,18 @@ function checkArmedPlans(chat){
   if(!chat||chat.dnd||state.intentOn===false||state.confrontOn===false||!state.sceneOn)return false;
   if(chat.activeEvent && !chat.activeEvent.resolved)return false;
   if(!Array.isArray(chat.intents))return false;
+  // (!) v144.1 — THE PRIVACY LOCK HOLDS ARRIVALS, and a surfacing plan is an arrival. The turn after
+  // End Day a confrontation could walk into the middle of an intimate scene. The plan stays armed.
+  if(typeof sceneIsPrivateMoment==="function"&&sceneIsPrivateMoment(chat))return false;
   const uid=(chat&&chat.universeId)||state.curUniverse||null;
   const roster=(state.personas||[]).filter(p=>!uid||p.universeId===uid);
   const nameById=id=>id==="__user__"?state.user:((roster.find(p=>p.id===id)||{}).name||null);
   const today=chat.gameDay||1;
+  // v144.1 — a plan whose holder or target has been removed (dead) is over; a hidden (latent) one waits.
+  chat.intents.forEach(i=>{ if(!i||i.status==="spent")return;
+    const h=roster.find(p=>p.id===i.holderId), t=(i.targetId&&i.targetId!=="__user__")?roster.find(p=>p.id===i.targetId):null;
+    if(!h||h.removed)_spendIntent(i,today,"holder gone");
+    else if(i.targetId&&i.targetId!=="__user__"&&(!t||t.removed))_spendIntent(i,today,"target gone"); });
   // BOTH player-targeted and char-to-char armed plans are eligible (c2c surfaces by pulling the
   // player in about the target).
   const armed=chat.intents.filter(i=>i.status==="armed"&&i.plan);
@@ -40524,11 +40794,18 @@ function checkArmedPlans(chat){
   }).sort((a,b)=>intentWeight(b)-intentWeight(a));
   if(!fireable.length){ persistChats(); return false; }
   const it=fireable[0];
-  _spendIntent(it,today,"acted on");   // consumed by surfacing
+  /* (!) v144.1 — SPENT WHEN IT SURFACED, NOT BEFORE. It was spent first, so when startConfrontation /
+     startOverture declined (a latent target, an event already starting, a refused arrival) the
+     motive was simply lost. A plan that fails to surface stays armed and tries again on a later
+     turn — up to ARMED_SURFACE_TRIES times, so one that can never surface cannot fail every turn. */
   const fired=surfaceIntent(chat,it,roster,nameById);
+  if(fired)_spendIntent(it,today,"acted on");   // consumed by surfacing
+  else{ it.surfaceFails=(it.surfaceFails||0)+1;
+        if(it.surfaceFails>=ARMED_SURFACE_TRIES)_spendIntent(it,today,"the moment kept slipping away"); }
   persistChats();
   return !!fired;
 }
+const ARMED_SURFACE_TRIES=3;
 
 // Translate the armed plans waiting in the wings into STAGE DIRECTIONS for the Gamemaster — what
 // scene-condition each is waiting for, NOT its secret content. The GM is a stagehand: it learns "a
@@ -40571,7 +40848,30 @@ function armedStagingSummary(chat){
   if(!lines.length)return "";
   return `WAITING MOMENTS (offstage forces are poised to act the instant the scene allows — you may, if it fits naturally, nudge the scene toward ONE of these conditions; do NOT name or reveal what's waiting, just let the situation shift):\n${lines.join("\n")}`;
 }
-async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod){
+/* ===== DAY END, IN THE BACKGROUND ===== Everything a day end does AFTER the day has visibly advanced
+   (End Day, or a day that ended on the road — _quietDayEnd). Order matters: the arc is flushed and
+   the day's periods reconciled first, so diaries and the motive former see the day's complete memory
+   set; diaries and the long-axis relationship pass run side by side; the living-world passes follow.
+   (!) v144.1 — ONCE PER DAY, AND IT SURVIVES A RELOAD.
+     · chat._dayEndDoneFor records the day whose background has started; a second run for the same
+       day (a double tap, a day that ended on the road while End Day's narration was still loading)
+       is dropped here. Runs for different days queue behind each other (withChatLock).
+     · chat.pendingDayEnd {day,period,stage} is saved as each stage finishes. A reload used to lose
+       whatever had not run yet — diaries, gossip, the intent tick, the goals curator — for good;
+       resumePendingDayEnds() picks it up at the next stage once the app is ready.
+     · every pass is handed the ENDED day and period, and this chat — never curChat()/the open clock. */
+function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod,opts){
+  if(!chat)return Promise.resolve();
+  const resume=!!(opts&&opts.resume);
+  if(!resume){
+    if(chat._dayEndDoneFor===day)return Promise.resolve();
+    chat._dayEndDoneFor=day;
+    chat.pendingDayEnd={day,period:endPeriod||"",stage:0};
+    markChatDirty(chat); persistChats();
+  }
+  return withChatLock(chat,"dayEndBg",()=>_endDayBackgroundRun(chat,day,uni,daySnapshot,fallbackName,endPeriod,resume));
+}
+async function _endDayBackgroundRun(chat,day,uni,daySnapshot,fallbackName,endPeriod,resume){
   // v24.4 — endDay passes the universe ID here, but half the passes below expect the universe
   // OBJECT (`uni=uni||universeById(...)` keeps a truthy string as-is, then `uni.gameData` /
   // `uni.id` are undefined and the pass silently no-ops — the day-end quest reconciler and the
@@ -40579,6 +40879,16 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod)
   // each pass the one it expects.
   const uid=(typeof uni==="string"&&uni)||(uni&&uni.id)||(chat&&chat.universeId)||state.curUniverse||null;
   const uniObj=(uni&&typeof uni==="object")?uni:(universeById(uid)||null);
+  const endPer=endPeriod||"Night";
+  const pend=()=>(chat.pendingDayEnd&&chat.pendingDayEnd.day===day)?chat.pendingDayEnd:null;
+  const from=resume&&pend()?(+pend().stage||0):0;
+  let stageNo=0;
+  // One numbered stage: skipped when a resumed run is already past it, recorded when it finishes.
+  const stage=async fn=>{
+    const n=stageNo++; if(n<from)return;
+    try{ await fn(); }catch(e){}
+    const p=pend(); if(p){ p.stage=n+1; markChatDirty(chat); persistChats(); }
+  };
 
   // ---- MEMORY ARC FLUSH (must be FIRST) ---- commit any still-open memory arc for the day that
   // just ended BEFORE diaries and the intent former run, so both see the day's complete memory set.
@@ -40587,8 +40897,9 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod)
   /* v68.1 — stamped with the period that just ENDED as well as the day. chatPeriod(chat) is
      already "Morning" of the new day by the time this runs, so the closing memory of a day used to
      be filed under Day N, Morning — a stretch that belongs to Day N+1 — where the reconciler below
-     would never find it beside the memories it actually belongs with. */
-  if(state.mem && state.key){ try{ await flushMemoryArc(chat, day, endPeriod||undefined); }catch(e){} }
+     would never find it beside the memories it actually belongs with.
+     v144.1 — never on a resumed run: after a reload the open arc is the NEW day's. */
+  await stage(async()=>{ if(!resume&&state.mem&&state.key)await flushMemoryArc(chat, day, endPeriod||undefined); });
 
   /* ---- PERIOD RECONCILE (v68.1) ---- THE LAST STRETCH OF EVERY DAY WAS NEVER CONSOLIDATED.
      reconcilePeriodFor had exactly one caller, onPeriodChanged, and that hook returns early on a
@@ -40599,18 +40910,12 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod)
      that never became a memory of a stretch. Sweeps every owner and period of the just-ended day,
      so a day the player ran straight through without a single period change is caught too; a
      stretch already collapsed is skipped by the guard in reconcilePeriodFor. */
-  if(state.mem && state.key){
-    try{
-      const pairs=new Map();
-      (state.memory||[]).forEach(m=>{
-        if(m&&m.gameDay===day&&m.ownerId&&m.gamePeriod) pairs.set(m.ownerId+"|"+m.gamePeriod,[m.ownerId,m.gamePeriod]);
-      });
-      for(const [oid,per] of pairs.values()){
-        const who=(state.personas||[]).find(x=>x&&x.id===oid);
-        if(who){ try{ await reconcilePeriodFor(who,day,per); }catch(e){} }
-      }
-    }catch(e){}
-  }
+  await stage(async()=>{ if(!(state.mem&&state.key))return;
+    const pairs=new Map();
+    (state.memory||[]).forEach(m=>{ if(m&&m.gameDay===day&&m.ownerId&&m.gamePeriod&&_memOfChat(m,chat))pairs.set(m.ownerId+"|"+m.gamePeriod,[m.ownerId,m.gamePeriod]); });
+    for(const [oid,per] of pairs.values()){ const who=(state.personas||[]).find(x=>x&&x.id===oid);
+      if(who){ try{ await reconcilePeriodFor(who,day,per); }catch(e){} } }
+  });
 
   // ---- CALENDAR RECONCILE (v20.2) ---- with the day's memories now complete, mark any tracked
   // event that actually happened as done. Runs before intent/gossip so a fulfilled/unkept commitment
@@ -40618,83 +40923,124 @@ async function endDayBackground(chat,day,uni,daySnapshot,fallbackName,endPeriod)
   /* v63.1 — absence is an event. Runs BEFORE the reconciler and the daily evaluation so a
      character the player did go near has already had their stamp refreshed by the fast read, and
      only the genuinely untouched bonds drift. */
-  try{ runNeglectDrift(chat,day); }catch(e){}
-  try{ await reconcileCalendarDay(chat,day,uid); }catch(e){}
-  // v63.1 — AFTER the reconciler, so a meeting it just marked done is never logged as missed.
-  try{ plantUnkeptMeetingMemories(chat,day,endPeriod); }catch(e){}   // v144.1 — endPeriod: what was still ahead is not a no-show
+  await stage(async()=>{
+    try{ runNeglectDrift(chat,day); }catch(e){}
+    try{ await reconcileCalendarDay(chat,day,uid); }catch(e){}
+    // v63.1 — AFTER the reconciler, so a meeting it just marked done is never logged as missed.
+    try{ plantUnkeptMeetingMemories(chat,day,endPeriod); }catch(e){}   // v144.1 — endPeriod: what was still ahead is not a no-show
+  });
 
   // ---- QUEST RECONCILE (v20.7) ---- with the day's memories complete, mark accomplished quests
   // done (which unlocks the next in the arc). LLM-judged; a manual button in the Quests modal is the
   // fallback if it misses. Best-effort.
-  try{ await reconcileQuestsForDay(chat,day,uniObj); }catch(e){}
+  await stage(async()=>{ await reconcileQuestsForDay(chat,day,uniObj); });
 
   // ---- DIARIES ---- one private entry per participating character, from the day's MEMORIES.
   // Diaries and the relationship pass don't depend on each other, so we kick the relationship
   // pass off in parallel and let diaries run alongside it.
-  const relJob = (state.relOn && state.key)
-    ? runDailyRelationships(chat,day,daySnapshot).catch(()=>{})
-    : Promise.resolve();
-
-  if(state.mem && state.key){
-    await writeDayDiaries(chat,day,uid,daySnapshot,fallbackName);
-    // Keep the diary tier bounded: merge each character's oldest day-diaries into period summaries
-    // once enough have accumulated (newest ~7 stay verbatim). Best-effort, gated by the condense toggle.
-    if(state.condenseOn){ for(const c of curCast()){ try{ await condenseDiaries(c.id,c.name); }catch(e){} } }
-    // Diaries are written; refresh the tab now (rather than only at the end of the long living-world
-    // pipeline below) so it populates the moment you open it after End Day.
-    try{ const ds=document.getElementById('screen-diary'); if(ds&&ds.classList.contains('active'))renderDiary(); }catch(_){}
-  }
-  await relJob;
+  await stage(async()=>{
+    const relJob = (state.relOn && state.key)
+      ? runDailyRelationships(chat,day,daySnapshot).catch(()=>{})
+      : Promise.resolve();
+    if(state.mem && state.key){
+      try{ await writeDayDiaries(chat,day,uid,daySnapshot,fallbackName); }catch(e){}
+      // Keep the diary tier bounded: merge each character's oldest day-diaries into period summaries
+      // once enough have accumulated (newest ~7 stay verbatim). Best-effort, gated by the condense toggle.
+      if(state.condenseOn){ for(const c of curCast(chat)){ try{ await condenseDiaries(c.id,c.name); }catch(e){} } }
+      // Diaries are written; refresh the tab now (rather than only at the end of the long living-world
+      // pipeline below) so it populates the moment you open it after End Day.
+      try{ const ds=document.getElementById('screen-diary'); if(ds&&ds.classList.contains('active'))renderDiary(); }catch(_){}
+    }
+    await relJob;
+  });
 
   // ---- AUTO RELATIONSHIP RE-EVALUATION ---- regenerate the factual relationship sheet for
   // characters whose long axes shifted today (so kinship/role/address stays in sync with how
   // the bonds actually evolved). Gated to those who moved, to keep it cheap.
-  if(state.key){
-    try{ await reEvaluateRelationshipsForDay(chat,day,daySnapshot); }catch(e){}
-  }
+  await stage(async()=>{ if(state.key)await reEvaluateRelationshipsForDay(chat,day,daySnapshot); });
 
   // ---- LIVING UNIVERSE: GOSSIP ---- charged things bystanders glimpsed today travel to people
   // who'd care, planted as open-suspicion rumors. Runs after memories/relationships are settled.
-  try{ await runGossipPropagation(chat,day,uid); }catch(e){}
   // v28.9 — and yesterday's talk cools off. A rumor nobody acts on dies of boredom, like a real one.
-  try{ decayGossip(day); }catch(e){}
+  await stage(async()=>{
+    try{ await runGossipPropagation(chat,day,uid,endPer); }catch(e){}
+    try{ decayGossip(day,uid); }catch(e){}
+  });
 
   // ---- LIVING UNIVERSE: WORLD PULSE (v25.x) ---- at day end, only SETTLE what is still due
   // (user-less calendar plans are commitments). Spontaneous char↔char encounters now fire DURING
   // the day on the turn cadence — no more end-of-day event burst.
-  try{ await maybeWorldPulse(chat,{dayEnd:true}); }catch(e){}
+  await stage(async()=>{ await maybeWorldPulse(chat,{dayEnd:true}); });
 
   // ---- ONE CHARACTER AT A TIME (v129.1) ---- goal pursuit, character quests, offstage tasks and
   // intents run at every change of the time of day now (runPeriodEngines). Day end runs them for
   // the part of the day that closed it, and lets intents fester one more day.
-  try{ await runPeriodEngines(chat,day,endPeriod||"Night",uniObj,{dayEnd:true}); }catch(e){}
+  await stage(async()=>{ await runPeriodEngines(chat,day,endPer,uniObj,{dayEnd:true}); });
 
   // ---- TEXTS: a message the player left on read all day is felt (memory + a mood nudge), then a
   // charged character may fire off a text as the day closes.
-  try{ await maybeProactiveText(chat,{force:true}); }catch(e){}
+  await stage(async()=>{ await maybeProactiveText(chat,{force:true}); });
 
   // ---- LIVING UNIVERSE: CONFRONTATION (layer 3) ---- if a character now holds a strong, unresolved
   // open suspicion about the player, they may come to settle it. Fires at most one, only when no
   // event is already active, and only if the accuser is available. The Scene Writer then runs it as
   // a judged, winnable confrontation (conviction + floor-by-evidence).
-  try{ maybeSpawnConfrontation(chat,uid); }catch(e){}
+  await stage(async()=>{ maybeSpawnConfrontation(chat,uid); });
 
   // ---- GOALS & AMBITIONS (v30.3) ---- with quests settled and today's motives formed, each
   // character whose day actually moved gets their want-list REWRITTEN: what is finished comes out,
   // what shifted is reworded, the live pursuit and the private aim are folded in. Runs here because
   // the quest passes and the intent engine above are the two things most likely to have changed what
   // somebody wants — and before the chronicler, which only reads memories.
-  try{ await runGoalsCurator(chat,day,uniObj); }catch(e){ try{ console.warn("[goals] curator bailed:",e); }catch(_){} }
+  await stage(async()=>{ try{ await runGoalsCurator(chat,day,uniObj); }catch(e){ try{ console.warn("[goals] curator bailed:",e); }catch(_){} } });
 
   // ---- UNIVERSE CHRONICLE (v24.4) ---- runs LAST: every engine above has minted its memories and
   // quest notes for the day, so the universe's own record of the day is complete when written.
-  try{ await runUniverseChronicler(chat,day,uniObj); }catch(e){}
+  await stage(async()=>{ await runUniverseChronicler(chat,day,uniObj); });
+
+  if(pend()){ delete chat.pendingDayEnd; markChatDirty(chat); persistChats(); }
 
   // Refresh any open views that show this data.
-  if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory();
-  const diaryScreen=document.getElementById('screen-diary');
-  if(diaryScreen&&diaryScreen.classList.contains('active'))renderDiary();
+  try{
+    if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory();
+    const diaryScreen=document.getElementById('screen-diary');
+    if(diaryScreen&&diaryScreen.classList.contains('active'))renderDiary();
+  }catch(_){}
 }
+/* v144.1 — pick up a day end a reload interrupted. Called once the app is ready (init2) and the
+   collections are known safe to write. The ended day's transcript is rebuilt from its day marker,
+   exactly the window endDay snapshotted. A pending day end more than a day stale is dropped —
+   running yesterday's diaries three days later would write them into the wrong stretch of play. */
+function resumePendingDayEnds(){
+  try{
+    if(typeof collectionsSafe!=="undefined"&&!collectionsSafe)return 0;
+    if(!state.key)return 0;
+    let n=0;
+    Object.values(state.chats||{}).forEach(chat=>{
+      const p=chat&&chat.pendingDayEnd;
+      if(!p||typeof p.day!=="number")return;
+      if(chatBusy(chat,"dayEndBg"))return;
+      if((chat.gameDay||1)-p.day>2){ delete chat.pendingDayEnd; markChatDirty(chat); persistChats(); return; }
+      const msgs=chat.messages||[];
+      const mi=msgs.findIndex(m=>m&&m.dayMarker&&m.dayFrom===p.day);
+      let start=0;
+      for(let i=(mi<0?msgs.length:mi)-1;i>=0;i--){ if(msgs[i]&&msgs[i].dayMarker){ start=i+1; break; } }
+      const snap=msgs.slice(start,mi<0?msgs.length:mi);
+      const fb=(curCast(chat)[0]&&curCast(chat)[0].name)||"Narrator";
+      try{ console.log(`[day end] resuming day ${p.day} for chat ${chat.id} at stage ${p.stage||0}`); }catch(_){}
+      endDayBackground(chat,p.day,chat.universeId,snap,fb,p.period||"",{resume:true}).catch(()=>{});
+      n++;
+    });
+    return n;
+  }catch(e){ return 0; }
+}
+// v144.1 — leaving while a day end is still running would cut it off mid-stage; ask first. (What has
+// finished is saved and the rest resumes on the next load, but a stage in flight is paid for again.)
+window.addEventListener('beforeunload',e=>{
+  try{
+    if(Object.values(state.chats||{}).some(c=>c&&chatBusy(c,"dayEndBg"))){ e.preventDefault(); e.returnValue=""; return ""; }
+  }catch(_){}
+});
 
 // Parse a diary model reply into {content, ...}. The diary is the app's longest, most multi-line
 // JSON output (a header line + several prose entries), and models routinely emit RAW newlines inside
@@ -40729,7 +41075,7 @@ function _parseDiaryOut(out){
 async function writeDayDiaries(chat,day,uni,daySnapshot,fallbackName){
   // Who actually spoke today (from the snapshot).
   const speakerNames=new Set(daySnapshot.filter(m=>m.role==='assistant'&&m.speaker&&!m.sysError).map(m=>m.speaker));
-  const cast=curCast().filter(c=>speakerNames.has(c.name));
+  const cast=curCast(chat).filter(c=>speakerNames.has(c.name));
   if(!cast.length)return;
   let wrote=false;
   for(const c of cast){
@@ -41111,16 +41457,27 @@ function saveIntentEdit(){
   const tRaw=gv('ieTarget'); const tLow=tRaw.toLowerCase();
   let targetId=null, targetName=tRaw;
   if(!tRaw || tLow===String(state.user||"").toLowerCase() || tLow==="you" || tLow==="player"){ targetId="__user__"; targetName=state.user; }
-  else { const tp=(state.personas||[]).find(pp=>pp&&pp.universeId===chat.universeId&&pp.name&&pp.name.toLowerCase()===tLow); if(tp){ targetId=tp.id; targetName=tp.name; } }
+  else {
+    /* (!) v144.1 — a name that matched nobody was saved with targetId null, which every reader takes
+       as the player: a drive "toward Nill" (typo) surfaced as a confrontation with YOU. Resolve it
+       like every other model- or hand-written name; if it still names nobody in play, refuse. */
+    const tp=findByName((state.personas||[]).filter(pp=>pp&&pp.universeId===chat.universeId&&isActiveChar(pp)&&pp.id!==charId),tRaw);
+    if(!tp){ toast(`Nobody called "${tRaw}" is in play — pick someone from the list`); return; }
+    targetId=tp.id; targetName=tp.name;
+  }
   const today=chat.gameDay||1;
   const existing=intentId?chat.intents.find(i=>i&&i.id===intentId):null;
+  let it=existing; const oldTarget=existing?existing.targetId:null;
   if(existing){ Object.assign(existing,{kind,valence,targetId,targetName,aim,strength,status,priority,fedDay:today}); }
   else {
-    chat.intents.push({ id:"intent_"+Date.now()+Math.random().toString(36).slice(2,5),
+    it={ id:"intent_"+Date.now()+Math.random().toString(36).slice(2,5),
       holderId:charId, holderName:holder.name, targetId, targetName,
       kind, valence, trigger:"(hand-authored)", aim, strength, priority,
-      allies:[], status, born:today, lastTick:today, fedDay:today });
+      allies:[], status, born:today, lastTick:today, fedDay:today };
+    chat.intents.push(it);
   }
+  // v144.1 — armed by hand means ready to act: give it the plan firing needs (see _armIntent).
+  if(it.status==="armed"){ if(it.plan&&existing&&oldTarget!==targetId){ it.plan=null; it.armedDay=null; } _armIntent(it,today); }
   persistChats();
   const modal=document.getElementById('intentEditModal'); if(modal)modal.remove();
   _mapStateClose(); _mapCharState(charId);
@@ -43136,7 +43493,7 @@ async function runCharQuestSpawn(chat,day,uni,opts){
         goals:engineGoals(p,400)||"(nothing stated)", intents:myIntents, recent,
         ties:ties.join("\n")||"(no notable ties on record)",
         cast:rosterNames.filter(n=>n!==p.name).concat(state.user||"the player").join(", "),
-        locations:locNames, day:String(day), period:chatPeriod(chat),
+        locations:locNames, day:String(day), period:period||chatPeriod(chat),   // v144.1 — the stretch being closed (at day end the clock already reads the next Morning)
         user:state.user||"the player", world:String(curWorldSetting()||"").slice(0,700)
       });
       let j=null;
@@ -43246,7 +43603,7 @@ function _cqLapseAndPrune(chat,uni,day){
   if(n)persistUniverses();
   return n;
 }
-async function runCharQuestPursuit(chat,day,uni){
+async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period: the stretch being closed
   try{
     if(state.charQuestsOn===false||!chat||!state.key)return 0;
     uni=uni||universeById(chat.universeId); if(!uni)return 0;
@@ -43286,7 +43643,7 @@ async function runCharQuestPursuit(chat,day,uni){
         done_when:q.doneWhen||"(no condition was set — judge whether the pursuit is genuinely finished)",
         tie:target?(_pulseTie(chat,holder,target)||"(nothing on record)"):"(not applicable)",
         progress, recent,
-        place:place||"wherever they usually are", day:String(day), period:chatPeriod(chat),
+        place:place||"wherever they usually are", day:String(day), period:period||chatPeriod(chat),
         user:state.user||"the player", world:String(curWorldSetting()||"").slice(0,700)
       });
       // stamped before the call: an attempt is an attempt, and a second run cannot step it again today
@@ -44762,11 +45119,15 @@ try{
   window.addEventListener('pagehide',flushPersistMemory);
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden')flushPersistMemory(); });
 }catch(_){}
-function rememberMemory(m){
+/* v144.1 — `opts.chat` / `opts.period`: background writers (day end, world pulse) pass the chat and
+   the part of the day they are filing under; without them the OPEN chat's clock was read, which
+   is another chat's, or already the next part of the day. Default behaviour unchanged. */
+function rememberMemory(m,opts){
   if(!m) return m;
-  if(typeof m.gameDay!=="number") m.gameDay=curGameDay();
+  const _c=(opts&&opts.chat)||null;
+  if(typeof m.gameDay!=="number") m.gameDay=_c?(_c.gameDay||1):curGameDay();
   if(!m.gamePeriod && !memSpansTime(m)){
-    try{ m.gamePeriod=_memPeriod(curChat())||""; }catch(e){ m.gamePeriod=""; }
+    try{ m.gamePeriod=(opts&&opts.period)||_memPeriod(_c||curChat())||""; }catch(e){ m.gamePeriod=""; }
   }
   state.memory.push(m);
   return m;
@@ -45049,8 +45410,12 @@ function _liveDecisionsFor(p,day,period){
 }
 function memsOfPeriod(ownerId,day,period){
   if(!period)return [];
+  /* (!) v144.1 — and never a rumour. A planted GOSSIP memory is an open question with a ledger entry
+     (gossipId) and an openSuspicion flag the confrontation path reads; merged into a reconciled
+     memory it lost both, and the ledger pointed at a memory that no longer existed. */
   return (state.memory||[]).filter(m=>m&&m.ownerId===ownerId&&m.gameDay===day&&m.gamePeriod===period
-    && m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED" && !m.observerOnly);
+    && m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED" && !m.observerOnly
+    && m.type!=="GOSSIP" && !m.gossipId && !m.openSuspicion);
 }
 let _reconcileBusy={};
 async function reconcilePeriodFor(p,day,period){
@@ -45146,8 +45511,12 @@ async function reconcilePeriodFor(p,day,period){
 /* v129.1 — a day that ended on the road: mark it in the transcript and run the day end behind it. */
 function _quietDayEnd(chat,prevDay,prevPeriod){
   try{
+    /* (!) v144.1 — a day whose day end has already run is not ended again here: no second marker,
+       no second tracker tick, no second background run. (If End Day is still waiting on its
+       narration, THIS is the day end — End Day sees the day has moved and stands down.) */
+    if(!chat||chat._dayEndDoneFor===prevDay)return;
     const snap=messagesForCurrentDay(chat).slice();
-    try{ tickTrackersForDay(chat); }catch(e){}
+    try{ _tickTrackersOnce(chat); }catch(e){}
     chat.dayLog=null;
     const to=chat.gameDay||prevDay+1;
     chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",dayMarker:true,
@@ -45155,7 +45524,7 @@ function _quietDayEnd(chat,prevDay,prevPeriod){
       content:dayMarkerLine(prevDay,to),
       img:null,imgState:"idle",vidState:"idle",video:null});
     markChatDirty(chat); persistChats();
-    const fallbackName=(curCast()[0]&&curCast()[0].name)||"Narrator";
+    const fallbackName=(curCast(chat)[0]&&curCast(chat)[0].name)||"Narrator";
     endDayBackground(chat,prevDay,chat.universeId,snap,fallbackName,prevPeriod).catch(()=>{});
   }catch(e){}
 }
@@ -45166,8 +45535,15 @@ function _quietDayEnd(chat,prevDay,prevPeriod){
    a day), and the ones that look for something NEW — a quest, a motive — only consider characters
    who lived through something in the part of the day that just ended. Day end calls this for the
    last part of the day and lets intents fester (dayEnd). */
-async function runPeriodEngines(chat,day,period,uni,opts){
-  if(!chat)return;
+/* (!) v144.1 — ONE RUN AT A TIME PER CHAT. Two quick changes of the time of day (or one and a day
+   end) ran these side by side: the same character asked twice, two plans filed, the former reading
+   a half-written intent list. Serialised, not skipped — each run is for a different stretch and
+   none may be lost. */
+function runPeriodEngines(chat,day,period,uni,opts){
+  if(!chat)return Promise.resolve();
+  return withChatLock(chat,"periodEngines",()=>_runPeriodEnginesNow(chat,day,period,uni,opts));
+}
+async function _runPeriodEnginesNow(chat,day,period,uni,opts){
   const uniObj=(uni&&typeof uni==="object")?uni:(universeById((typeof uni==="string"&&uni)||chat.universeId)||null);
   const dayEnd=!!(opts&&opts.dayEnd);
   /* v131.1 — the record of the future is checked against the stretch first, so every engine below
@@ -45175,10 +45551,10 @@ async function runPeriodEngines(chat,day,period,uni,opts){
   try{ await runFutureReconcile(chat,day,period); }catch(e){}
   // Settle delivered asks first, then step pursuits, then new ones may be born, then an ask may go out.
   try{ await reconcileCharQuestsForDay(chat,day,uniObj,period); }catch(e){}
-  try{ await runCharQuestPursuit(chat,day,uniObj); }catch(e){}
+  try{ await runCharQuestPursuit(chat,day,uniObj,period); }catch(e){}
   try{ await runCharQuestSpawn(chat,day,uniObj,{period}); }catch(e){}
   try{ await maybeCharQuestText(chat); }catch(e){}
-  try{ await runGoalPursuit(chat,day,uniObj); }catch(e){}
+  try{ await runGoalPursuit(chat,day,uniObj,period); }catch(e){}
   try{ bindPendingTasks(chat); }catch(e){}
   try{ await runBackgroundTasks(chat,day,uniObj); }catch(e){}
   try{ await runIntentEngine(chat,day,uniObj?uniObj.id:chat.universeId,{period,tick:dayEnd}); }catch(e){ try{ console.warn("[runIntentEngine] engine bailed:",e); }catch(_){} }
@@ -49532,6 +49908,7 @@ function init2(){
   // images were loaded by loadState, persistImages() below writes them into IDB once,
   // then they live there going forward.
   hydrateMedia().then(()=>{ if(state.images.length) persistImages(); });
+  setTimeout(()=>{ try{ resumePendingDayEnds(); }catch(e){} },3000);   // v144.1 — a day end a reload cut off
   if(!state.curChat||!state.chats[state.curChat]){startSceneFor(state.curUniverse,true);}
   renderChat();updateChatHeader();
   // illustrate opening greeting if not yet done

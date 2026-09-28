@@ -181,7 +181,7 @@ const {chromium}=require('playwright');
   ok("sharing a scene clears the clock", await pg.evaluate(()=>
       /o\.lastSeenDay=chat\.gameDay\|\|1; o\.neglectDays=0;/.test(String(runShortTermRel))));
   ok("and the pass runs at day end, before the evaluation that reads the memories",
-     await pg.evaluate(()=>/runNeglectDrift\(chat,day\)/.test(String(endDayBackground))));
+     await pg.evaluate(()=>/runNeglectDrift\(chat,day\)/.test(String(endDayBackground)+String(window._endDayBackgroundRun||""))));   // v144.1 — the body is _endDayBackgroundRun
 
   console.log("\n[the six blocks are named by timescale, and ordered by authority]");
   /* They used to collide: three said "feeling", three said "now"/"this turn", two shouted with a

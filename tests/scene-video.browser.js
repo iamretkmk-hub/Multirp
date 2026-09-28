@@ -110,7 +110,7 @@ const {chromium}=require('playwright');
     const msgs=window.__writer[0]||[];
     const m=findMsg("a2");
     return {sys:(msgs.find(x=>x.role==="system")||{}).content||"",usr:msgs.filter(x=>x.role==="user").map(x=>x.content).join("\n"),
-      body:window.__bodies[0]||null,video:m.video,state:m.vidState,sv:m.sceneVid,toasts,cont:curChat().vidSceneBy.p_a||null};
+      body:window.__bodies[0]||null,video:m.video||null,clip:m.sceneClip||null,busy:m.clipState||null,toasts,cont:curChat().vidSceneBy.p_a||null};
   });
   ok("the system prompt is the registry prompt, filled with the clip's length and beats",
      /director of one short video clip/.test(R.sys)&&/5-second clip/.test(R.sys)&&/as 3 time blocks/.test(R.sys)&&!/\{\{/.test(R.sys), R.sys.slice(0,400));
@@ -130,7 +130,9 @@ const {chromium}=require('playwright');
   ok("a token past the last picture is dropped", !/@image7/.test(P)&&/@image1/.test(P)&&/@image2/.test(P), P);
   ok("the sound prompt rides after the picture prompt, held to ambient sound in code",
      /\n\nSound: Cafe murmur, cups clinking/.test(P)&&/No music/.test(P)&&/no dialogue/.test(P)&&R.body.generate_audio===true, P);
-  ok("the clip lands on the reply, POV as the writer chose", R.state==="done"&&R.video==="https://cdn/clip1.mp4"&&R.sv&&R.sv.shot==="pov"&&R.sv.lines===5, JSON.stringify({s:R.state,v:R.video,sv:R.sv}));
+  ok("the clip is kept on the reply as its scene clip, POV as the writer chose",
+     !!R.clip&&R.clip.src==="https://cdn/clip1.mp4"&&R.clip.shot==="pov"&&R.clip.lines===5&&R.clip.fromMid==="a1"&&!R.busy, JSON.stringify(R.clip));
+  ok("apart from the reply's own animated still (msg.video is untouched)", R.video===null, R.video);
   ok("and becomes this character's continuity here", R.cont&&R.cont.mid==="a2"&&/Ayla leans on the table/.test(R.cont.endState)&&R.cont.lastFrame==="https://cdn/last1.png", JSON.stringify(R.cont));
 
   console.log("\n[the next clip continues the last one — same character, same place]");
@@ -193,15 +195,15 @@ const {chromium}=require('playwright');
 
   console.log("\n[failures]");
   const KF=await pg.evaluate(async()=>{
-    const m=findMsg("a2"), before=m.video;
+    const m=findMsg("a2"), before=m.sceneClip&&m.sceneClip.src;
     const rg=window.atlasGenerate; window.atlasGenerate=async()=>{ throw{friendly:"AtlasCloud said no"}; };
     const toasts=[]; const rt=window.toast; window.toast=t=>toasts.push(t);
     await sceneVideo("a2");
     window.atlasGenerate=rg; window.toast=rt;
-    return {before,after:m.video,state:m.vidState,toasts};
+    return {before,after:m.sceneClip&&m.sceneClip.src,busy:m.clipState||null,toasts};
   });
   ok("a failed remake keeps the clip the reply already had, and says why",
-     !!KF.before&&KF.after===KF.before&&KF.state==="done"&&KF.toasts.includes("AtlasCloud said no"), JSON.stringify(KF));
+     !!KF.before&&KF.after===KF.before&&!KF.busy&&KF.toasts.includes("AtlasCloud said no"), JSON.stringify(KF));
   const NP=await pg.evaluate(async()=>{
     const rp=window.personRefs, rq=window.playerRefs;
     window.personRefs=()=>[]; window.playerRefs=()=>[];
@@ -210,10 +212,11 @@ const {chromium}=require('playwright');
     const toasts=[]; const rt=window.toast; window.toast=t=>toasts.push(t);
     await sceneVideo("s1");
     window.personRefs=rp; window.playerRefs=rq; window.toast=rt;
-    return {calls:window.__bodies.length,state:findMsg("s1").vidState,toasts};
+    const m=findMsg("s1");
+    return {calls:window.__bodies.length,clip:!!m.sceneClip,busy:m.clipState||null,toasts};
   });
   ok("with no picture of anyone, nothing is sent and the reason is shown",
-     NP.calls===0&&NP.state==="error"&&NP.toasts.some(t=>/reference pictures/.test(t)), JSON.stringify(NP));
+     NP.calls===0&&!NP.clip&&!NP.busy&&NP.toasts.some(t=>/reference pictures/.test(t)), JSON.stringify(NP));
 
   console.log("\n[the prompts are editable]");
   ok("the writer and the audio rule are registry prompts on their own card", await pg.evaluate(()=>

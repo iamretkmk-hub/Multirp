@@ -131,7 +131,8 @@ const {chromium}=require('playwright');
         "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other",
         "bio_wardrobe_other","quest_intro","last_line_footer","drive_ego","heat_breaks_voiced",
         "heat_breaks_silent","resistance_body","rails_header",
-        "mem_plan_self","mem_plan_with","mem_plan_asked"]);   // memory text — the memory bank is first person
+        "mem_plan_self","mem_plan_with","mem_plan_asked",     // memory text — the memory bank is first person
+        "mem_noshow_stood_up","mem_noshow_user","mem_noshow_declined"]);   // v144.1 — likewise
       const FP=/(?<![A-Za-z])(I|I'm|I've|my|My|MY|me|Me|mine|myself)(?![A-Za-z])/;
       const bad=Object.keys(BLOCK_TPL_DEFAULTS).filter(k=>!EXEMPT.has(k)
         && typeof BLOCK_TPL_DEFAULTS[k]==="string" && FP.test(BLOCK_TPL_DEFAULTS[k]));

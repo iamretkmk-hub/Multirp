@@ -214,7 +214,7 @@ const {chromium}=require('playwright');
     return {capped,echo,big,sheet,desc:o.desc,fast:o.st.desire}; });
   ok("a daily delta of +50 / −45 is capped at ±25", rel.capped.trust===25&&rel.capped.affection===-25, JSON.stringify(rel.capped));
   ok("an answer that echoes the current levels moves them by the difference, not by the level", rel.echo.trust===42&&rel.echo.affection===30&&rel.echo.familiarity===50, JSON.stringify(rel.echo));
-  ok("a number past ±60 is read as a level: 40 → 80 moves by +25 at most", rel.big===65, String(rel.big));
+  ok("an answer echoing the other levels is read as levels: 40 → 80 moves by +25 at most", rel.big===65, String(rel.big));
   ok("the fast read is capped at ±40", rel.fast>0&&rel.fast<=40, String(rel.fast));
   ok("the day's read stays on the chat, the authored foundation is untouched", rel.sheet==="AUTHORED FOUNDATION"&&/warier|same|x/.test(rel.desc), JSON.stringify({sheet:rel.sheet,desc:rel.desc}));
   ok("the prompts state the caps and the change-not-level rule", await pg.evaluate(()=>

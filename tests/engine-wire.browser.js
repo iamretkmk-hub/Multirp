@@ -254,7 +254,8 @@ const {chromium}=require('playwright');
   ok("and the call site resolves it from world positions", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       // v144.1 — a solitary pursuit (no target) sends the holder's own place instead
-      return /target_place:target\?\(\(locById\(pos\[target\.id\]\)\|\|\{\}\)\.name/.test(src)
+      // v146.1 — through the chat's own places (chatLocById), the pass runs in the background
+      return /target_place:target\?\(\((?:locById\(|chatLocById\(chat,)pos\[target\.id\]\)\|\|\{\}\)\.name/.test(src)
         ? true : "only the holder's place is sent"; })());
   ok("every placeholder both quest prompts use is one their call site fills", await pg.evaluate(()=>{
       const genFilled=["open_quests","char","personality","goals","intents","recent","ties","cast",

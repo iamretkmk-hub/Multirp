@@ -84,7 +84,13 @@ Every memory a character wrote in the part of the day that just ended (`memsOfPe
 goes to `memReconcile`, which rewrites them as the one thing a person would actually keep; the
 replacements are built first and swapped in only once they exist, so a failure anywhere cannot lose
 a memory. Capped at three. `onPeriodChanged` runs it after `flushMemoryArc`, never on a day roll —
-the diary owns that.
+the diary owns that. The replacements keep the union of the fragments' `srcMids` (v146.1), so the
+"still in the transcript" rule below keeps working after the period changes.
+
+**Still on screen (v146.1).** A memory with `srcMids` counts as "now" (withheld from retrieval and
+from Latest) only while at least 75% of those lines are in the character's actual history —
+`memTranscriptMids` reads the ids `castHistory` kept (scene cut, 2-day window, privacy drops,
+`histTurns` cap). An arc whose first half has scrolled out is recalled.
 
 **Reading the answer (v56.1).** The reader used to accept exactly one shape, `{"memories":[…]}`, and
 return early on anything else — silently, keeping the originals. Since this prompt is user-editable,
@@ -138,16 +144,19 @@ paper backgrounds (`genDiaryPaper`), fonts, and read-aloud (`dubDiary`).
 
 ## Long-term condensation (`maybeCondenseMemories`)
 
-Per character, when the **raw** bank (everything but DIARY/LONGTERM/CONSOLIDATED) reaches
-`memMaxBeforeCondense` (default 50): the newest `memCondenseStart` (30) by **story time** (day,
-then part of the day) stay verbatim; older ones are **clustered by similarity** — embedding
+Per character, when the **mergeable** raw bank (`_memMergeKind`: not DIARY/LONGTERM/CONSOLIDATED,
+and — v146.1 — not a glimpse, rumour, hand-written or superseded memory, which used to fill the count
+and the protected slots) reaches `memMaxBeforeCondense` (default 50): the newest `memCondenseStart`
+(30) of those by **story time** (day, then part of the day) stay verbatim; older ones are **clustered by similarity** — embedding
 cosine ≥ 0.82 when semantic memory is on, else word-set Jaccard ≥ 0.5 — and each cluster of ≥2
 is merged by the `condensePrompt` model into ONE `LONGTERM` memory (originals deleted; the merge
 keeps the earliest day, `daySpan`/`periodSpan`, the people and the source message ids, and a
 `condensedFrom` count). Never merged (v144.1): the current day+period, superseded decisions,
 rumour-linked memories (`gossipId`/`openSuspicion`), bystander glimpses (`observerOnly`) and
 memories the player wrote. Soft caps: past 60 LONGTERM entries the oldest (beyond 40) are offered
-for a second merge; past 120 diaries a Debug note is written (diaries are not trimmed). Bounded to
+for a second merge; past 120 diaries a Debug note is written (diaries are not trimmed); past 60
+bystander glimpses (`observerOnly`, v146.1 `_memTrimGlimpses`) the oldest are let go down to 40 —
+never today's, never one tied to a rumour. Bounded to
 4 clusters per pass; runs after the arc commit, outside the memory lock; fully best-effort.
 Manual trigger: Memory screen → Condense (`condenseAllNow`).
 

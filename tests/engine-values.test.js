@@ -74,9 +74,9 @@ function topLevelParts(body){
   }
   ok("every engine separator name resolves at every call site", misses.length===0?true:misses.join("\n        "));
 
-  // the two this test was written for
+  // the two this test was written for (v146.1 — the target defaults to _u, the chat's own player)
   ok('psychePrompt supplies "self" beside "target"',
-     /epSend\("psychePrompt",sys,bits,\{target:targetName\|\|state\.user,self:p\.name\}\)/.test(src)
+     /epSend\("psychePrompt",sys,bits,\{target:targetName\|\|(?:state\.user|_u),self:p\.name\}\)/.test(src)
        ? true : "the drives writer still sends target alone");
   ok('both memBuild call sites supply "who"',
      [...src.matchAll(/epSend\("memBuild"/g)].length===2

@@ -68,7 +68,7 @@ bound to them (media, diaries, memories, relationships, quests).
 - **Travel** (`travelTo` → `openTravel` UI): costs periods (`travelTime`), optional
   companions (`chooseCompanions` → `companionLock`), narrated (`travelPrompt`), pushes a
   `travelBeat` (the scene boundary for history & memory), triggers arrival hooks: latent-NPC
-  seeding (`maybeSeedLocationNpcs`, ≤2 minted inhabitants on first visit), location gossip
+  seeding (`maybeSeedLocationNpcs`, ≤2 minted inhabitants on the first visit to the destination, met on arrival), location gossip
   leak on exit, bound task/meeting arrivals (`maybeTriggerTaskArrival`).
 - **Daily placement**: `resolveWorldPositions` rolls each character's location for the day
   from home + `visitLocs` + schedules (`placementWeights`/`rollPlacement`), stored in

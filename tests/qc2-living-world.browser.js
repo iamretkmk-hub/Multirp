@@ -290,8 +290,9 @@ const {chromium}=require('playwright');
     const e=state.memory.filter(m=>m.ownerId==="p_e"&&m.source==="world_pulse");
     return {n:e.length, where:e.filter(m=>m.whereabouts).map(m=>m.content), other:e.filter(m=>!m.whereabouts).map(m=>m.content)};
   });
-  ok("ordinary entries at the same place fold into one record for the day", WB.where.length===1 && (WB.where[0].match(/spent time at home/g)||[]).length===1 && /kitchen tap/.test(WB.where[0]), JSON.stringify(WB));
-  ok("an entry where something happened is still its own memory", WB.n===2 && WB.other.length===1 && /real fight/.test(WB.other[0]), JSON.stringify(WB));
+  // v147.2 — only a similar line with the same company folds; a different thing done there ("fixed the tap") is its own memory.
+  ok("repeated ordinary entries at the same place fold into one record; a different one stays its own", WB.where.length===2 && (WB.where.join(" ").match(/spent time at home/g)||[]).length===1 && WB.where.some(w=>/^I fixed the kitchen tap\.$/.test(w)), JSON.stringify(WB));
+  ok("an entry where something happened is still its own memory", WB.n===3 && WB.other.length===1 && /real fight/.test(WB.other[0]), JSON.stringify(WB));
 
   console.log("\n[intents: prep_done timing, latent plans]");
   await setup();

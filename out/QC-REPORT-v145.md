@@ -370,4 +370,4 @@ Everything in this report was addressed in the v146.1 batch, released as **v147.
 | Memory | Fixed (1 partial) | Per-character retry of a partly failed arc. The condenser counts only condensable memories, and glimpses have a cap. Reconcile keeps `srcMids`. Location gossip is built from public text. The history window matches `castHistory`. People facet fixed. *Partial:* a lone bare "4" still reads as 0.4. |
 | Infrastructure | Fixed | The tab lock always ends with one writer. The breaker trips only on 401/402, and 29 player-started calls are marked foreground. Per-key write counters. A forced snapshot before imports. Escaped message ids and selectors. `sw.js` never caches query URLs. Every fetch is bounded. Playwright pinned in CI. Docs are current. |
 
-**Tests:** six new suites (`qc2-*`, 276 checks) plus `universe-reset` (23 checks). Full-suite result: see the release commit.
+**Tests:** six new suites (`qc2-*`, 276 checks) plus `universe-reset` (23 checks). Full suite on the merged build: **115/115 pass**.

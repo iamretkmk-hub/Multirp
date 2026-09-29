@@ -27,7 +27,7 @@ Prompts edited in Settings → Payloads save **instantly** through their own han
 
 | Set | Functions | Contents |
 |---|---|---|
-| **Everything** | `exportAll` / `importAllFile` → `buildBackup`/`applyBackupBundle` | localStorage (v144.1: export **asks** whether to include the API keys and TTS relay URL — `SECRET_LS_KEYS`; "without" is the first choice), the IDB collections (chats, memory, gossip, universes, personas, scenes), gallery media, static image bytes. Import (v144.1) **validates first** (`validateBackupBundle`: shapes, `backupVersion` ≤ `BACKUP_VERSION`) and touches nothing on a bad file; takes a safety snapshot; turns persistence off; writes settings with a rollback copy (API keys the file lacks are kept); commits collections + media in **one** IndexedDB transaction (`mediaDB.restoreAtomic`); on failure rolls settings back and reports "nothing was changed"; then reloads. Media fields with script schemes are blanked on import (`sanitizeImportedMedia`). |
+| **Everything** | `exportAll` / `importAllFile` → `buildBackup`/`applyBackupBundle` | localStorage (v144.1: export **asks** whether to include the API keys and TTS relay URL — `SECRET_LS_KEYS`; "without" is the first choice), the IDB collections (chats, memory, gossip, universes, personas, scenes), gallery media, static image bytes. Import (v144.1) **validates first** (`validateBackupBundle`: shapes, `backupVersion` ≤ `BACKUP_VERSION`) and touches nothing on a bad file; takes a safety snapshot (v146.1: always a real one, `doAutoBackup({force:true})` — the roleplay/universes/prompts imports take one too); turns persistence off; writes settings with a rollback copy (API keys the file lacks are kept); commits collections + media in **one** IndexedDB transaction (`mediaDB.restoreAtomic`); on failure rolls settings back and reports "nothing was changed"; then reloads. Media fields with script schemes are blanked on import (`sanitizeImportedMedia`), which (v146.1) also turns numeric fields (`day`, `min`/`max`, `mapPos`, tracker values…) back into numbers and replaces message ids that are not plain tokens. |
 | **Automatic snapshots** | `scheduleAutoBackup`/`doAutoBackup`/`renderAutoBackups`/`restoreAutoBackup` | A **text-only** bundle (no gallery media, v110.1), kept **inside IndexedDB** — the last `AUTO_KEEP` = **6**, ~once/min after changes and when the app goes to the background. v144.1: skipped when nothing changed since the last one (`_dataRev`/`_lsRev`), never started on `pagehide`. Restore goes through `applyBackupBundle`, which snapshots the current state first. |
 | **Roleplay** | `exportRoleplay`/`importRoleplayFile` | Current universe's chats + its memories + the universe & cast (self-contained; static images inlined). |
 | **Universes** | `exportUniverses`/`importUniversesFile` | Worlds + characters, no chats. |
@@ -43,18 +43,26 @@ chronicle but **keeps** the world, cast cards, locations and transcripts.
 The Debug screen has its own export (`exportDebug`) with `scrubSecrets` — that one is safe to
 share; a full backup is only safe to share when exported "without API keys".
 
-## Storage safety (v109.1 → v144.1)
+## Storage safety (v109.1 → v146.1)
 
 - **Read-only sessions.** `collectionsSafe` is false until the boot read is known good, while a
   second tab is open (`acquireWriterLock`, Web Locks / BroadcastChannel; `#tabRoBar` explains),
-  after a boot failure, and during a restore. Every `persist*` asks `canPersistCollections()`.
+  after a boot failure, and during a restore. The collection `persist*` functions ask
+  `canPersistCollections()`; the media ones ask `_canPersistMedia()` (which asks it too). Not
+  every write is a `persist*`: settings go straight through `store.*`, and some paths call the
+  `mediaDB` helpers directly (gallery bytes, snapshots, static art). In a read-only **tab**
+  (v146.1) `_storageRO` makes those refuse as well, and Save Settings says it did not save. When
+  the writer tab closes, the read-only tab that is granted the lock reloads itself and becomes the
+  writer (a flagged reload waits briefly for the lock), so exactly one tab ends up writing.
 - **Checked writes.** Collection writes go through `_kvPersist`: the `kvSet` result is checked,
   a failure toasts once, a run of failures warns once more, and the write is retried with backoff
-  (`_retryWriteLater`, reading the current value). The chat save signature (`_lastPersistSig`)
-  is recorded only after a successful write.
+  (`_retryWriteLater`, reading the current value). v146.1: the counters are **per key**, so a
+  write that succeeds on another key no longer hides a key that keeps failing. The chat save
+  signature (`_lastPersistSig`) is recorded only after a successful write.
 - **Media after hydration.** `persistImages`/`persistVideos` (`putAll` clears the store) and
   `persistScenes` wait for `hydrateMedia()` to have read the stores (`_mediaSafe`); a write asked
-  for earlier is made once hydration succeeds, and never if it failed.
+  for earlier is made once hydration succeeds, and never if it failed. v146.1: the delayed
+  re-write after a byte capture (`_gmPersistSoon`) goes through the same gate.
 
 ## Storage meter & PWA
 

@@ -191,7 +191,7 @@ const {chromium}=require('playwright');
   ok("turns that land while a pass is out are read by ONE more pass, not dropped or stacked", I===2, "passes: "+I);
   ok("postTurn, texts and calls all go through the tracker", (()=>{
     const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-    const pt=src.slice(src.indexOf("async function postTurn(chat"),src.indexOf("async function postTurn(chat")+4000);   // v146.1 — postTurn(chat,ptOpts)
+    const pt=src.slice(src.indexOf("async function postTurn(chat){"),src.indexOf("async function postTurn(chat){")+4000);
     const direct=(src.match(/runCalendarEngine\(chat\)|runPromiseEngine\(chat\)/g)||[]).length;
     return (/runFutureTracker\(chat\)/.test(pt) && !/runPromiseEngine\(|runCalendarEngine\(/.test(pt) && direct===0)
       ? true : "direct detector calls left: "+direct; })());

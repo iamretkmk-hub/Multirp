@@ -233,3 +233,85 @@ Severity is H / M / L. **R** = regression in v147; **P** = pre-existing.
 - **v147.0:** 115/115.
 - **v147.1 branch** (UI + hot-fixes): the new `scene-image-close` (12), `names-retry-safety` (10) and `universe-reset` (25) pass, together with the affected area suites.
 - **Harnesses** are in `/tmp/claude-0/qc3-*` (not committed). The E2E harness is `/tmp/claude-0/qc3-e2e/harness.js`, with reproductions Q1–Q10 in `repro.js`.
+
+---
+
+## 7. Fix status (v148.0)
+
+Every finding in §1 and §3 was worked in the v147.2 batch, which shipped as **v148.0**. Each area has a new test file: `qc3-roleplay`, `qc3-living-world`, `qc3-calendar`, `qc3-quests`, `qc3-memory` and `qc3-infra`.
+
+### High (§1)
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Whisper replies leak to the room | **Fixed.** The character's whisper back is private to the player, and `memHeardText` returns nothing for everyone else. |
+| 2 | Future reconcile judges the wrong lines | **Fixed.** `ftBounds` records each period's stretch, bounded by mids on both ends. The reconcile reads exactly its own stretch, and a hand-off is read up to the end of that stretch (`upto`). A stretch with no bounds is skipped, never guessed. |
+| 3 | Post-turn engines read the open story after a universe switch | **Fixed.** The director, Gamemaster, Scene Writer, trackers, rumours, heat, wearing, the judges' prompts, text payloads, meeting prompts and memory retrieval are built with `inChatWorld` or read the chat's own data. The Q3 repro across 15 engines now leaks nothing. |
+
+### By area (§3)
+
+- **3.1 Roleplay core — fixed.**
+  - Retry holds the turn lock, waits for the discarded reply's analysis to finish, and is refused after a Gamemaster beat, a Scene Writer beat, travel or a day marker. It also works with heat in group scenes (`heatOpen`).
+  - Narrator beats are stamped by earshot.
+  - An arriving character's own line is in their history.
+  - Fewer false refusals: assist, comply and depict count only with content or policy wording.
+  - `dropThoughtSpans` leaves markup and handles alone.
+  - A reply dropped by the place check leaves a notice you can retry.
+  - The texter's memory search uses only lines they witnessed.
+  - The heat headers are reworded, with an upgrade for stored copies of the prompts.
+- **3.2 Living world and intents — fixed.**
+  - The executor sorts its errors: only transport failures are retried for free, and those are capped too. A failing plan no longer blocks the ones behind it.
+  - Waiting period runs are saved (`pendingPeriodRuns`) and resumed after the pending day ends.
+  - Staging skips hidden characters, and a hidden character's expired plan is spent.
+  - "Where I was" lines fold only with the same company and similar content.
+  - Other chats' memories are kept out of goal pursuit, the pulse, offstage scoring and the chronicler.
+  - The stale limit is now 7 days, with a warning.
+  - Each finished stage is saved.
+  - The boot resume retries when the key arrives late.
+- **3.3 Calendar, promises and texts — fixed.**
+  - Dedupe goes by people and time of day.
+  - `_prSame` handles negations, numbers, possessives and the recipient.
+  - Arrangements and changes are exempt from lapse.
+  - Meetings are settled before the event gate.
+  - Day-end roll fixes; an "on my way" text resets a roll only when it moves the meeting.
+  - The tracker stamps each entry with the line that settled it.
+  - The player's name comes from the chat everywhere.
+  - Tracker deletes remove the entry in place.
+- **3.4 Quests, Gamemaster, hidden characters — fixed.**
+  - The intimacy detector has four tiers (hard, strong, weak, context veto). Scores on the held-out set:
+    - blind first run: 79.6% recall, 1.4% false positives;
+    - after one review pass: 100% / 0%.
+    - The fixtures are in `tests/fixtures/`.
+  - An ignored ask lapses 4 days after its last nudge and is worded "let go".
+  - "End this arc" wins over a quest being written.
+  - Undiscovered characters have no Text button, no staging line and no Story State entry.
+  - Heat state is kept per chat.
+  - Deletes happen in place.
+  - Names followed by an appositive ("Mira the smith") are recognised.
+  - Duplicate character quests are prevented and merged.
+- **3.5 Memory and relationships — fixed.**
+  - Silent listeners get a real memory of what they overheard.
+  - The echo rule is tightened, with 13 fixture rows.
+  - Retrieval, the day-end relationship sheet, call memory and heat aftermath all use the chat's own world.
+  - Importance scale detection is fixed.
+  - Names are stripped from memory queries.
+  - `relPeek` is used at 15 read-only sites.
+  - Location gossip goes by sub-area.
+  - `doneTo` stores mids.
+- **3.6 Infrastructure, security, reset — fixed.**
+  - Importing and reloading keeps the universe and the chat consistent, and boot repairs a mismatch.
+  - A reset puts found hidden characters back into hiding as written, keeps characters the player touched, and removes orphaned image and video data.
+  - A fresh story starts at home on Day 1 with residents present.
+  - Import snapshots are taken after you confirm.
+  - A writer tab reloads only when the lock is really free.
+  - Player-started calls are marked foreground.
+  - Stream idle ceilings added for live calls and TTS.
+  - Read-only tabs don't write settings.
+
+### Left open (minor)
+
+- An authored hidden character that carries `questIds` is still removed by a reset, because the older `madeInPlay` rule treats it as play-made.
+- Two ambiguous refusal lines ("I can't continue this.", "I'd prefer not to continue…") are not flagged.
+- `runCharQuestSpawn`'s recent and charged counts still mix chats.
+- `curGameDay()` inside `runTrackerEngine` reads the open chat.
+- A single new line from a character already committed in a partly failed memory arc is skipped, because the builder needs at least 2 lines.

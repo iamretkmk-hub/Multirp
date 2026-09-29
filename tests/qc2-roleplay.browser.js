@@ -340,7 +340,7 @@ const {chromium}=require('playwright');
     const before=_ftSnapshot(c);
     addCalendarEntry(c,{title:"Dinner at the harbour",day:3,period:"Evening",who:"Ayla Demir",source:"auto"});
     c.promises.push({id:"pr_x",holderId:"p_a",holderName:"Ayla Demir",promise:"I will call you",kind:"promise",status:"open",day:2});
-    _ftStampChanges(c,before,old.mid);
+    _ftStampChanges(c,before,null,old.mid);   // (chat, before, at, srcMid) since the calendar and roleplay fixes merged
     const stamped={cal:c.calendar.filter(e=>e.ftMid===old.mid&&e.ftNew).length, pr:c.promises.filter(e=>e.ftMid===old.mid&&e.ftNew).length};
     const o=relObj(c,"p_a","__user__"); o.st.desire=5;
     c._stUndo={mid:old.mid,rows:{"p_a>__user__":{st:Object.assign({},o.st),stNote:"",stNoteDay:0,stNoteAt:0,ep:0,op:0}}};

@@ -177,8 +177,8 @@ const path=require('path'), fs=require('fs');
     return (paused&&s1===1&&fg==="gen"&&cleared&&bg==="gen"&&sent===3)?true:JSON.stringify({paused,s1,fg,cleared,bg,sent});
   }));
   ok("player-started calls are marked foreground (generators, Story mode, Drop me into a scene, bio/universe)",
-    ['Universe generator','Character bio generator','Drop me into a scene · ',"Story mode · the player's move",'Batch character generator ×','Location generator (','Tracker generator','Outfit generator']
-      .every(l=>src.includes('foreground:true,dbg:"'+l))?true:"a call site lost its foreground mark");
+    (['Universe generator','Character bio generator',"Story mode · the player's move",'Batch character generator ×','Location generator (','Tracker generator','Outfit generator']
+      .every(l=>src.includes('foreground:true,dbg:"'+l))&&/foreground:true,timeoutMs:75000,retries:1,dbg:"Drop me into a scene/.test(src))?true:"a call site lost its foreground mark");
 
   console.log("\n[escaping details]");
   ok("a signed thumbnail URL with & is escaped once", await pg.evaluate(()=>{

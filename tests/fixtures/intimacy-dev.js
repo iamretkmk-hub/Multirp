@@ -60,6 +60,10 @@ explicit:[
  "I pull your jeans off and toss them aside.","His erection strained against his boxers.","Her nightie slid to the floor.",
  "He spread her thighs and knelt between them.","She moaned as his fingers moved inside her.","Beni sev, beni becer.",
  "Gece yarısı onunla yattı ve sabah kaçtı.","Kıyafetlerini çıkarıp yatağa girdi, onu bekliyordu.","Onun içine girdiğinde inledi.",
+ // added after the held-out review (paraphrases of the forms it found missing — the held-out lines themselves stay out)
+ "She lowered herself onto him with a sigh.","He was inside her before she could breathe.","I want to taste you.","Her hand found his hardness through the fabric.",
+ "He kissed her soft breasts.","She pulled him on top of her on the sofa.","Get your shirt off.","He lay there stark naked.",
+ "Göğüs uçları sertleşti, onları öptü.","Onu içimde hissetmek istiyorum.","Kasığına öpücükler bıraktı.","Kalçalarının üzerine oturup eğildi.","Eteğini sıyırdı.",
 ],
 romantic:[
  "She kissed him softly on the lips and smiled.",
@@ -157,6 +161,7 @@ idioms:[
  "The shelf was made out of oak.","I can barely make out the shape in the fog.","Fuck it, let's go.","He's going to fuck it up again.",
  "Screw you, Mert!","Fuck me, it's cold out here.","Odanın içine girdi ve ışığı yaktı.","Bunu becerdin mi sonunda?",
  "They slept together in the barn to keep warm.","Sıcak bir öğleden sonra, montunu çıkardı.","Same-sex couples may marry here.",
+ "She kicked the blanket off and got up.","He kneed him in the stomach and ran.","Hindi göğüslerini fırına verdi.","Ayağı çıplak koştu.",
 ],
 windows:{
  intimate:[
@@ -165,6 +170,7 @@ windows:{
   ["\"Stay,\" she said.","He sat on the edge of the bed.","She knelt in front of him and undid his belt.","He groaned her name."],
   ["After the fight they were both shaking.","She grabbed his collar and kissed him hard.","He lifted her onto the counter.","Her dress rode up to her hips and she pulled him closer."],
   ["Işığı söndürdü.","Elbisesi ayaklarının dibine düştü.","Onu çırılçıplak kucakladı.","Sabaha kadar konuşmadılar."],
+  ["They barely made it to the bedroom.","Their clothes were scattered across the floor.","The bed creaked.","She dug her nails into his back."],
  ],
  notIntimate:[
   ["Annesinin cenazesinden sonra ona sıkıca sarıldı.","Omuzları titriyordu, hıçkırıklarla ağladı.","Nefesi kesildi bir an.","Yatak odasına geçip biraz uzandı."],

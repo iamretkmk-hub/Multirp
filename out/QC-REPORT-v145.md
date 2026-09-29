@@ -330,3 +330,44 @@ Severity: **H** high, **M** medium, **L** low. **R** marks a regression from v14
   - universe switch mid-chain;
   - resume landing mid-stage.
 - **Harness and probes:** in `/tmp/claude-0/qc2-*` (not committed).
+
+---
+
+## 8. Fix status (v147.0)
+
+Everything in this report was addressed in the v146.1 batch, released as **v147.0**. The work was a groundwork commit, a universe-reset fix, and six area branches merged into `ccr-ee7705a9-15lcea`.
+
+**Groundwork and user-reported issues:**
+- **The hidden "Emre and Özlem Özüçak" character.**
+  - *Cause:* the calendar binder passed a meeting's free-text `who` field (you plus Özlem) to `_createBoundEntity` as one name. It minted a latent stub, which the character list hid and every picker showed.
+  - *Fix:* `splitNames` / `isPlayerName`. Meetings bind only to existing people, and a group or the player never becomes one person.
+  - *Migration:* a load-time clean-up removes such stubs and re-points their plans at the real characters.
+  - *Visibility:* undiscovered characters are now out of every picker, and appear in the character list as a greyed "Undiscovered" group that can be revealed or deleted.
+- **"Reset universe" did not zero promises and other living-world state.**
+  - *Cause:* the reset cleared a hand-kept list of fields and kept the transcript, so everything added since survived it.
+  - *Fix:* the reset now deletes the universe's chats, taking every per-chat field with it, and clears its memories, rumours, play-made characters, generated relationships, quests and chronicle. It keeps authored content and offers "Save a copy first".
+  - "Restart scene" now explains what carries over and offers the full reset.
+  - Covered by `tests/universe-reset.browser.js`.
+- **Shared helpers:**
+  - `chatUni` / `chatLocations` / `chatLocById` / `chatUserName` / `chatWorldSetting` let background code read its own chat's world.
+  - `findByName` needs a 4+ letter prefix covering 70% of the name, so "Can" no longer resolves to "Canan".
+
+| Area | Status | Main changes |
+|---|---|---|
+| High #1 relationship deltas | Fixed | Only an "echo" answer is treated as levels. A big number is a big change, clamped, and 0 means unchanged. Betrayal gives trust −25; −65 against −80 gives −25. |
+| High #2 media gate | Fixed | `_gmPersistSoon` goes through `persistImages`/`persistVideos`. A read-only tab refuses every storage write. |
+| High #3 numeric XSS | Fixed | `numOr` at every numeric sink. Imports coerce numbers. Also fixed the diary reader's raw inline handler. |
+| High #4 End Day meetings | Fixed | One rule (`_calRollsAtDayEnd`): a meeting in the current part of the day moves to tomorrow. The summary is honest and leaves out the player. |
+| High #5 quest asks | Fixed | `startOverture({questAsk})` bypasses the confrontation toggle, and the staging summary is truthful. |
+| High #6 heat locks scenes | Fixed | Heat is live only while a clip plays or the heat lines actually read as intimate. The busy flag is per chat. |
+| High #7 universe switch | Fixed | The player is frozen when the turn starts. `inChatWorld` builds payloads in the chat's own world. Places and the setting are chat-scoped throughout the turn and day-end paths. |
+| High #8 cross-universe participant | Fixed | The Scene Writer resolves only within the chat's cast. |
+| High #9 whisper in psyche prompt | Fixed | `_writePsyche`, the memory query and text replies use per-listener text. Unclosed `_thoughts_` are parsed per line. `present` is stamped by earshot. |
+| Roleplay: Stop, Retry, travel, watch turns | Fixed | Stop ends the chain and no longer leaks into the next turn. Retry targets only replies to the player, rolls back memories, plans, promises and the fast relationship read, and re-analyses the new reply. A reply is dropped if the place changed while it was written. The watch turn takes the lock. |
+| Living world | Fixed (2 partial) | Idempotent resume. A per-day pending record, and the next day's arc is never filed under the old day. Ordered and coalesced period engines, with the tick never touching future motives. Day-end code is chat-scoped. Memories scoped per chat. The seeder targets the destination. One whereabouts memory per day and place. `prep_done` timing. Latent plans don't block. *Partial:* the day-end engine pass stays at stage 8, because motives need that day's gossip; `runFutureReconcile`'s late window is not bounded. |
+| Calendar, promises, texts | Fixed | Dedupe on the model's own period. `_calFreshSlot`, and lapses are announced. UNKEPT held during the day-end window. Secrets never lapse, and old saves are seeded. `_prSame` rewritten (cast names, word order, pronouns, Turkish negation). "Go home now / Later / Skip". Parser fixes (128 phrasings). Group `who` split. |
+| Quests, Gamemaster | Fixed | Intimacy detector: 71/72 explicit caught, 0/61 ordinary flagged. Lapse only while an ask is awaiting the player, with no blame. Spawns throttled. Arc retry limit and an "End this arc" button. No same-day judging. |
+| Memory | Fixed (1 partial) | Per-character retry of a partly failed arc. The condenser counts only condensable memories, and glimpses have a cap. Reconcile keeps `srcMids`. Location gossip is built from public text. The history window matches `castHistory`. People facet fixed. *Partial:* a lone bare "4" still reads as 0.4. |
+| Infrastructure | Fixed | The tab lock always ends with one writer. The breaker trips only on 401/402, and 29 player-started calls are marked foreground. Per-key write counters. A forced snapshot before imports. Escaped message ids and selectors. `sw.js` never caches query URLs. Every fetch is bounded. Playwright pinned in CI. Docs are current. |
+
+**Tests:** six new suites (`qc2-*`, 276 checks) plus `universe-reset` (23 checks). Full-suite result: see the release commit.

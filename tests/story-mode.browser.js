@@ -216,7 +216,8 @@ const {chromium}=require('playwright');
     return {k, user:dec?dec.messages[1].content:"", sys:dec?dec.messages[0].content:""};
   });
   ok("where they were earlier today", /EARLIER TODAY:\n- Morning: Harbour Bar — with Ayla/.test(kn.user), kn.k.today);
-  ok("their tie to the person in front of them", /THE PEOPLE HERE:\n[\s\S]*Ayla: Emre's older sister/.test(kn.user), kn.k.people);
+  // v148.1 — the card's tie WORD only: the card's text is the character's own (private) view of the player
+  ok("their tie to the person in front of them", /THE PEOPLE HERE:\n[\s\S]*Ayla \(Emre's older sister\)/.test(kn.user)&&!/protective of him/.test(kn.user), kn.k.people);
   ok("what happened in scenes they were in", /lost the boat money/.test(kn.user), kn.k.memories);
   ok("their plans", /Dinner with Berk/.test(kn.user), kn.k.plans);
   ok("the words they have given", /pay back the boat money/.test(kn.user), kn.k.promises);

@@ -33,7 +33,8 @@ const {chromium}=require('playwright');
       if(dbg==="Story mode · the player's move") return window.__decide;
       if(dbg==="Auto-RP player narrator"){
         const u=messages.filter(m=>m.role==="user").map(m=>m.content).join("\n");
-        const said=(u.match(/rewrite this as their turn\):\n([\s\S]*)$/)||[])[1]||"?";
+        // v148.4 — a Story move reaches the narrator labelled as an intention, not as typed words
+        const said=(u.match(/(?:rewrite this as their turn|not words they typed)\):\n([\s\S]*)$/)||[])[1]||"?";
         return '*I lean in.* "'+said.trim()+'"';
       }
       return "{}";

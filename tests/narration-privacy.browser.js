@@ -41,11 +41,18 @@ const {chromium}=require('playwright');
   ok("Bora's own line is kept whole, narration and all", spokenB.indexOf("Pencereye")>-1);
 
   console.log("\n[the default is what a fresh install gets]");
-  ok("no stored value reads as 'spoken'", await pg.evaluate(()=>{
+  /* v148.4 — INTENTIONALLY CHANGED: the default is "seen" now. The payload review found every other
+     character's *action* stripped from each transcript (a raised glass, a look at Emre), which is the
+     "separate rooms" symptom this setting's own note names as the reason for "seen". Thoughts still
+     never cross (asserted below for "seen"). An explicit "spoken" still reads as "spoken". */
+  ok("no stored value reads as 'seen'", await pg.evaluate(()=>{
       const was=state.narrPrivacy; delete state.narrPrivacy;
-      const m=narrPrivacyMode(); state.narrPrivacy=was; return m==="spoken"; }));
-  ok("an old stored true also reads as 'spoken'", await pg.evaluate(()=>{
+      const m=narrPrivacyMode(); state.narrPrivacy=was; return m==="seen"; }));
+  ok("an old stored true also reads as 'seen'", await pg.evaluate(()=>{
       const was=state.narrPrivacy; state.narrPrivacy=true;
+      const m=narrPrivacyMode(); state.narrPrivacy=was; return m==="seen"; }));
+  ok("an explicit 'spoken' still reads as 'spoken'", await pg.evaluate(()=>{
+      const was=state.narrPrivacy; state.narrPrivacy="spoken";
       const m=narrPrivacyMode(); state.narrPrivacy=was; return m==="spoken"; }));
   ok("an old stored false still reads as 'off'", await pg.evaluate(()=>{
       const was=state.narrPrivacy; state.narrPrivacy=false;

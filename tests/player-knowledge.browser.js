@@ -152,8 +152,10 @@ const {chromium}=require('playwright');
     return {dbg:c&&c.dbg,t:c?c.text:"",authored:u.userSocialGraph,day:(u.userTies.p_be||{}).day};
   });
   ok("day end: the people in the player's memories of THAT day are updated", W.dbg==="Your ties · Berker Özüçak"&&W.day===3, JSON.stringify({dbg:W.dbg,day:W.day}));
-  ok("the writer gets the player's own notes, the card as public facts only, and the player's memories of them",
-     /YOUR OWN NOTES/.test(W.t)&&/Sami is my oldest friend/.test(W.t)&&/public facts only/.test(W.t)&&/argued about the budget/.test(W.t)&&!/Burcu said hello/.test(W.t), W.t.slice(0,1500));
+  // v148.4 — the card's prose (backstory, personality, social graph) is no longer sent at all, not even labelled
+  // "public facts only": only facts read off the structured fields (see player-payload-quality.browser.js).
+  ok("the writer gets the player's own notes, public facts (never the card's prose), and the player's memories of them",
+     /YOUR OWN NOTES/.test(W.t)&&/Sami is my oldest friend/.test(W.t)&&/Public facts/.test(W.t)&&!/accounting department/.test(W.t)&&/argued about the budget/.test(W.t)&&!/Burcu said hello/.test(W.t), W.t.slice(0,1500));
   ok("the player's own words are never overwritten", W.authored==="Sami is my oldest friend.", W.authored);
   const ST=await pg.evaluate(()=>DAYEND_STAGES.slice(-2).join());
   ok("the day end has a playerSheet stage, last (a saved record's stage index stays valid)", ST==="chronicle,playerSheet", ST);

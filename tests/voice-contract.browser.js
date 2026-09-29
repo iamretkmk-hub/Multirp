@@ -185,18 +185,25 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     const oz=state.personas.find(p=>p.id==="v_oz"), bu=state.personas.find(p=>p.id==="v_bu");
     const B=buildCharPromptBlocks(oz,[bu],{recent:[],diary:[],longterm:[]},null,
       {chat,targetName:"Burcu",targetId:"v_bu"});
-    return {target:String(B.response_target||""),engine:charBioBlock(bu,{self:false})};
+    /* v148.4 — a CHARACTER target's card is no longer lent to whoever answers them (it is written to
+       them and carries what they hide); target_bg now frames only the PLAYER's bio. The frame checks
+       below moved to a player target; the character target is checked for the card NOT being there. */
+    const wasBio=state.userBio; state.userBio="I came to Iskenderun and stayed for Burak.";
+    const P=buildCharPromptBlocks(oz,[bu],{recent:[],diary:[],longterm:[]},null,
+      {chat,targetName:"Emre",targetId:"__user__"});
+    state.userBio=wasBio;
+    return {target:String(B.response_target||""),player:String(P.response_target||""),engine:charBioBlock(bu,{self:false})};
   });
   {
     const r=await other();
     // The card is FIRST person and stays that way — nothing converts it. What changes is the label.
-    ok("the card itself is untouched, whichever voice it is in",
-       /I came to Iskenderun/.test(r.target) && /when nothing pulls at me/.test(r.engine));
+    ok("the card itself is untouched, whichever voice it is in (and a character target's is not lent out)",
+       !/I came to Iskenderun/.test(r.target) && /I came to Iskenderun/.test(r.player) && /when nothing pulls at me/.test(r.engine));
     ok("the response target's sheet names the owner of its pronouns",
-       /This is Burcu's own identity sheet, written TO Burcu/.test(r.target)?true:r.target);
+       /This is Emre's own identity sheet, written TO Emre/.test(r.player)?true:r.player);
     // v48.1 — CARD_VOICE_RULE makes cards SECOND person, so the frame must not bet on "I".
     ok("and covers a second-person card, not just a first-person one",
-       /says "you" — or "I" — it means Burcu/.test(r.target)?true:r.target);
+       /says "you" — or "I" — it means Emre/.test(r.player)?true:r.player);
     ok("and no longer calls it 'their' with no owner named",
        !/<their_backstory>I /.test(r.target)?true:r.target);
     ok("the bystander behaviour label names the person, not 'they'",

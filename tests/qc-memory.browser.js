@@ -56,7 +56,8 @@ const {chromium}=require('playwright');
   ok("Ayla's memBuild input has no thought of Burcu's", ayla.length>0&&ayla.indexOf("THOUGHTBURCU")<0, ayla.slice(0,400));
   ok("Burcu, the target, does get the whisper, marked as one", /SECRETWHISPER/.test(burcu)&&/whispered to Burcu alone/.test(burcu), burcu.slice(0,400));
   ok("and her own thought", /THOUGHTBURCU/.test(burcu));
-  ok("Cem (silent, in earshot) gets a listener memory build", cem.length>0&&/within earshot, heard every line/.test(cem), "no listener memBuild call");
+  // v148.4 — the listener line no longer claims "heard every line" (an aside is shown as one; see _memAsideCue)
+  ok("Cem (silent, in earshot) gets a listener memory build", cem.length>0&&/within earshot, heard the lines written out above/.test(cem), "no listener memBuild call");
   ok("the listener build sees neither the whisper nor the thought", cem.length>0&&!/SECRETWHISPER|THOUGHTBURCU/.test(cem), cem.slice(0,400));
   ok("a line said aloud still reaches Ayla", /figs/.test(ayla)&&/market/.test(ayla));
 
@@ -212,7 +213,9 @@ const {chromium}=require('playwright');
     window.__reply=()=>JSON.stringify({desire:90,comfort:0,fear:0,agitation:0,note:"Heat."});
     await runShortTermRel(chat);
     return {capped,echo,big,sheet,desc:o.desc,fast:o.st.desire}; });
-  ok("a daily delta of +50 / −45 is capped at ±25", rel.capped.trust===25&&rel.capped.affection===-25, JSON.stringify(rel.capped));
+  // v148.4 — an "old friend" now starts from the tie's baseline (trust 30, affection 0; see REL_TIE_SEEDS),
+  // so the capped +25 / −25 lands at 55 / −25 instead of 25 / −25.
+  ok("a daily delta of +50 / −45 is capped at ±25", rel.capped.trust===55&&rel.capped.affection===-25, JSON.stringify(rel.capped));
   ok("an answer that echoes the current levels moves them by the difference, not by the level", rel.echo.trust===42&&rel.echo.affection===30&&rel.echo.familiarity===50, JSON.stringify(rel.echo));
   ok("an answer echoing the other levels is read as levels: 40 → 80 moves by +25 at most", rel.big===65, String(rel.big));
   ok("the fast read is capped at ±40", rel.fast>0&&rel.fast<=40, String(rel.fast));

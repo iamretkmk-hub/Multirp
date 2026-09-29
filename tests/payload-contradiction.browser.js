@@ -282,7 +282,8 @@ const {chromium}=require('playwright');
       return /if\(!_answering\) return true;/.test(src)
           && /\[\?\uff1f\]/.test(src)
           && /exchangeIsStalled\(chat,selfP\)/.test(src)
-          && /charQuestSheetLines/.test(src)
+          // v148.4 — the pursuit case reads the delivered-ask flag now (any pursuit at all kept the gate open)
+          && /_railFlags&&_railFlags\.pending_ask/.test(src)
           && /catch\(e\)\{ return true; \}/.test(src); }));
   ok("the self-gating paragraph is gone from the text, now that code decides",
      await pg.evaluate(()=>!/THIS ONLY APPLIES IF SOMETHING WAS ACTUALLY ASKED/.test(blkTpl("resistance_body"))));

@@ -135,6 +135,45 @@ const {chromium}=require('playwright');
   ok("the cast prompt is a registry prompt on the image writer's card", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.x_img_cast && !!K.x_img_cast && ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey==="x_img_cast")&&(d.blocks||[]).some(x=>x.promptKey==="imgFrameGuide"))));
 
+  /* v148.3 — asked: "their faces are different but the clothing is the same — what they wear should be
+     given specifically; dialogue is not needed for image generation; when more than one character has
+     spoken before the player, each one's narration should be sent stating whose it is." */
+  console.log("\n[person by person: what each is doing and wearing, and no dialogue]");
+  const PP=await shot("window.__rule={label:'Group',cast:'group',pov:false,promptStyle:''};"
+    +"const c=curChat(); c.wearing={p_a:{text:'an emerald silk dress',key:_wearKey(c)}};"
+    +"state.personas.find(p=>p.id==='p_s').wardrobe='a grey wool coat over a red jumpsuit';"
+    +"state.universes[0].userWardrobe='a navy suit, white shirt'; c.universeId=state.universes[0].id;");
+  const W=PP.usr;
+  ok("each person's clothes are listed under their own label", /WHAT EACH PERSON IS WEARING/.test(W)
+     &&/- the woman in IMAGE 1 = Ayla — already decided, draw exactly this: an emerald silk dress/.test(W)
+     &&/- the woman in IMAGE 3 = Selin — choose ONE outfit from what they own[^\n]*grey wool coat over a red jumpsuit/.test(W)
+     &&/- the man in IMAGE 2 = Emre \(the player\) — choose ONE outfit[^\n]*navy suit/.test(W)
+     &&/- the man in IMAGE 4 = Deniz — nothing given: choose clothes/.test(W), W.slice(0,2400));
+  ok("and the writer is told never to dress two people alike", /never dress two people alike or swap a garment between them/.test(W), "");
+  ok("the old unlabelled 'what they are wearing' block is not sent beside it", !/WHAT THEY ARE WEARING right now/.test(W), W.slice(0,1600));
+  ok("what each person is doing: those who acted this round point to their labelled line, the rest are placed apart",
+     /WHAT EACH PERSON IN THE FRAME IS DOING/.test(W)&&/- the woman in IMAGE 1 = Ayla, whose line this picture is for: their own line in the LATEST EXCHANGE below/.test(W)
+     &&/- the woman in IMAGE 3 = Selin: their own line in the LATEST EXCHANGE below/.test(W)
+     &&/- the man in IMAGE 4 = Deniz: \(no action of their own — place them naturally, NOT in anyone else's pose\)/.test(W), W.slice(0,2400));
+  const LX=W.slice(W.indexOf("LATEST EXCHANGE (what just happened"));
+  ok("the latest exchange has every line of the round, each under its speaker's label (the reported case)",
+     /Selin \(the woman in IMAGE 3\): \(speaks\)/.test(LX)&&/Ayla \(the woman in IMAGE 1\): She leans toward Emre\./.test(LX), LX);
+  ok("dialogue is taken out everywhere", !/governor at the gate/.test(W)&&!/tell him what you saw/.test(W), W.slice(-600));
+  const P3=await pg.evaluate(()=>[
+    _imgVisualOnly('*She sets the cup down.* "I told you so." *Then she laughs.*'),
+    _imgVisualOnly('"Only words here."'),
+    _imgVisualOnly('_I hate this._ He turns to the window, “fine,” he says.'),
+    _imgVisualOnly('/whisper Ayla Demir *slides a note across* "read it"')]);
+  ok("a line as the camera sees it: narration kept; speech, thoughts and the whisper command gone",
+     JSON.stringify(P3)==='["She sets the cup down. Then she laughs.","","He turns to the window, he says.","slides a note across"]', JSON.stringify(P3));
+  const EAR=await shot("window.__rule={label:'Group',cast:'group',pov:false,promptStyle:''};"
+    +"const c=curChat(); c.messages.unshift({mid:'m0',role:'assistant',speaker:'Deniz',speakerId:'p_d',content:'*Deniz leans on the doorframe, arms crossed.* \"Well?\"',present:c.presentIds.slice()},{mid:'u0',role:'user',content:'*I sit down.*',present:c.presentIds.slice()});");
+  ok("someone who acted earlier in the scene (before the player's last line) keeps their own action, marked as earlier",
+     /- the man in IMAGE 4 = Deniz: \(earlier in the scene\) Deniz leans on the doorframe, arms crossed\./.test(EAR.usr)
+     &&/Emre \(the man in IMAGE 2\): I sit down\./.test(EAR.usr.slice(EAR.usr.indexOf("LATEST EXCHANGE (what"))), EAR.usr.slice(0,2400));
+  const ONE=await shot("window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''}; curChat().presentIds=['p_a']; curChat().messages.forEach(m=>m.present=['p_a']);");
+  ok("a one-person frame gets no per-person blocks", !/WHAT EACH PERSON/.test(ONE.usr), ONE.usr.slice(0,400));
+
   console.log("\n[a generate-image icon under every reply]");
   const IB=await pg.evaluate(async()=>{
     const c=curChat(); let called=null; const real=window.reIllustrate; window.reIllustrate=mid=>{ called=mid; };

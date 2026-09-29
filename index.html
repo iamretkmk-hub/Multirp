@@ -8933,17 +8933,26 @@ function loadState(){
   // ---- v144.1 refresh: INFRASTRUCTURE ----
   // (end INFRASTRUCTURE)
   /* v146.1 — CLEAN-UP: hidden figures the calendar binder minted from a group "who" field ("Emre and Özlem
-     Özüçak"). They carry only the binder's stub text, were never shown as a character card, but showed up
-     in pickers, residents and plans. A stub whose name is several people or the player is removed, with its
-     residency and any plan that pointed at it. A stub the player has filled in (a bio, a look) is kept. */
-  try{
+     Özüçak"). They carry only the binder's stub text, were never shown as a character card, but showed up in
+     pickers, residents and plans.
+     (!) v147.1 — THE FIRST VERSION WAS TOO EAGER. It ran on every load, split names on joining words inside
+     Turkish names ("Ümit" → "Ü"), treated anyone sharing the player's first name as the player, and ignored
+     a look or picture the player had given the figure. Now it runs ONCE, only on an untouched stub (binder
+     text, no bio, goals, look, picture or quest), and only when EVERY name in it is the player or a real
+     person of that story — "Salt and Pepper" or "Tom & Jerry" are left alone. */
+  try{ if(!store.get("sm_binderclean_v2",false)){
     const junk=new Set();
+    const lookEmpty=l=>!l||(typeof l==="string"?!l.trim():!Object.values(l).some(v=>String(v||"").trim()));
     (state.personas||[]).forEach(p=>{
       if(!p||!p.latent||!/^A figure connected to:/.test(String(p.personality||"")))return;
       if(String(p.backstory||"").trim()||String(p.goals||"").trim()||(p.questIds&&p.questIds.length))return;
-      const u=universeById(p.universeId); const uname=(u&&u.userName)||state.user||"";
-      const nm=splitNames(p.name);
-      if(nm.length>1||(uname&&nm.some(x=>sameName(uname,x,true))))junk.add(p.id);
+      if(!lookEmpty(p.look)||p.image||String(p.traits||"").trim()||String(p.style||"").trim())return;   // the player filled it in
+      const nm=splitNames(p.name); if(!nm.length)return;
+      const ctx={universeId:p.universeId};
+      const real=(state.personas||[]).filter(x=>x&&x.id!==p.id&&x.universeId===p.universeId&&!x.removed&&splitNames(x.name).length===1);
+      const every=nm.every(x=>isPlayerName(ctx,x)||!!findByName(real,x));
+      const hasPlayer=nm.some(x=>isPlayerName(ctx,x));
+      if(every&&(nm.length>1||hasPlayer))junk.add(p.id);
     });
     if(junk.size){
       state.personas=state.personas.filter(p=>!junk.has(p.id));
@@ -8953,17 +8962,16 @@ function loadState(){
         if(junk.has(e.charId))e.charId=null; if(junk.has(e.charId2))e.charId2=null;
         if(Array.isArray(e.charIds))e.charIds=e.charIds.filter(id=>!junk.has(id));
         if(hit){   // point the plan at the real people its "who" names (the player dropped)
-          const uni=universeById(c.universeId); const uname=(uni&&uni.userName)||state.user||"";
-          const roster=(state.personas||[]).filter(p=>p&&p.universeId===c.universeId&&!p.removed);
-          const real=splitNames(e.who||e.charName||"").filter(n=>!(uname&&sameName(uname,n,true))).map(n=>findByName(roster,n)).filter(Boolean);
+          const roster=(state.personas||[]).filter(p=>p&&p.universeId===c.universeId&&!p.removed&&splitNames(p.name).length===1);
+          const real=splitNames(e.who||e.charName||"").filter(n=>!isPlayerName(c,n)).map(n=>findByName(roster,n)).filter(Boolean);
           if(real.length){ e.charId=e.charId||real[0].id; if(real[1]&&!e.charId2)e.charId2=real[1].id;
             e.charIds=Array.from(new Set([...(e.charIds||[]),...real.map(x=>x.id)])); }
         } }); }
-      try{ console.info("[StoryMind] v146.1 removed "+junk.size+" group-name figure(s) the calendar binder had minted"); }catch(_){}
-      store.set("sm_v1461_binderclean",[...junk]);
+      try{ console.info("[StoryMind] removed "+junk.size+" group-name figure(s) the calendar binder had minted"); }catch(_){}
       setTimeout(()=>{ try{ persistPersonas(); persistUniverses(); persistChats(); }catch(_){} },0);
     }
-  }catch(e){ try{ console.warn("[v146.1 binder clean-up]",e); }catch(_){} }
+    store.set("sm_binderclean_v2",true);
+  } }catch(e){ try{ console.warn("[binder clean-up]",e); }catch(_){} }
   /* v146.1 — second-audit prompt fixes. One slot per area. */
   // ---- v146.1 refresh: ROLEPLAY CORE ----
   /* v146.1 — HEAT NEVER NARRATES THE PLAYER. Four heat fragments told the character to write "what is
@@ -10135,7 +10143,7 @@ const _badMediaVal=(k,v)=>_MEDIA_KEY_RE.test(k)&&!_NOT_MEDIA_KEY_RE.test(k)&&_BA
    other stored value used as markup (id="vid_…", [data-mid="…"] selectors): one that is not a plain
    token is replaced. */
 const _IMPORT_NUM_KEYS=new Set(["day","gameDay","completedDay","statusDay","doneDay","dueDay","born","seq","min","max","start",
-  "perDay","publicAt","at","probability","importance","strength","lastSeenDay","neglectDays"]);
+  "perDay","publicAt","at","probability","importance","strength","lastSeenDay","neglectDays","travelPeriods"]);   // v147.1 — travelPeriods (location editor sink)
 const _MID_OK=/^[\w.:-]{1,80}$/;
 function _importNum(v){ if(typeof v!=="string")return v; const t=v.trim(); return (t!==""&&Number.isFinite(+t))?+t:undefined; }
 function sanitizeImportedMedia(x,depth,pk){
@@ -21054,7 +21062,7 @@ function renderLocEditor(){
     row.innerHTML=`${thumb}
       <div class="kvline" style="padding:0">
       <div style="min-width:0"><b>${l.type==='home'?icon("home"):icon("pin")} ${esc(l.name||"(unnamed)")}</b>
-        <div class="desc">${esc((l.description||'').slice(0,70))}${resNames?` · ${icon("users")} ${esc(resNames)}`:''} · ${icon("timer")}${l.travelPeriods!=null?l.travelPeriods:state.travelTime}</div></div>
+        <div class="desc">${esc((l.description||'').slice(0,70))}${resNames?` · ${icon("users")} ${esc(resNames)}`:''} · ${icon("timer")}${numOr(l.travelPeriods,numOr(state.travelTime,1))}</div></div>
       <div style="display:flex;gap:4px;flex-shrink:0">
         <button class="btn sec small" type="button" data-img>${l.image?icon("refresh"):icon("sparkle")}</button>
         <button class="btn sec small" type="button" data-edit>Edit</button>
@@ -30274,14 +30282,31 @@ function findByName(pool,name,nameOf){
    duplicates dropped); it never splits inside a name ("Aslan Berk Atan" stays whole). */
 function splitNames(text){
   const t=String(text==null?"":text).replace(/\s+/g," ").trim(); if(!t)return [];
-  const parts=t.split(/\s*(?:,|;|&|\+|\/|\band\b|\bve\b|\bile\b|\bund\b|\bwith\b|\bmit\b)\s*/iu).map(x=>x.replace(/^[\s'"“”.-]+|[\s'"“”.-]+$/g,"")).filter(Boolean);
+  /* (!) v147.1 — the joining words must stand ALONE: JS \b does not count ü/ç/ı/ş as letters, so "Ümit"
+     split at "mit", "Çile" at "ile" and "Güve" at "ve" — a meeting with Ümit was never filed and the
+     binder minted a figure called "Ü". Unicode lookarounds, like every other Turkish-aware match here. */
+  // a joining word only joins BETWEEN two names ("Mit Patel", "Ile de France" are names, not groups)
+  const _J="(?<![\\p{L}\\p{N}])(?:and|ve|ile|und|with|mit)(?![\\p{L}\\p{N}])";
+  const edge=new RegExp("^"+_J+"|"+_J+"$","iu").test(t);
+  const parts=t.split(edge?/\s*[,;&+\/]\s*/u:new RegExp("\\s*(?:[,;&+\\/]|"+_J+")\\s*","iu")).map(x=>x.replace(/^[\s'"“”.-]+|[\s'"“”.-]+$/g,"")).filter(Boolean);
   const out=[]; parts.forEach(x=>{ if(!out.some(y=>_nmFold(y)===_nmFold(x)))out.push(x); }); return out;
 }
 /* Is `name` the player of this chat's universe (or the generic "you"/"the player")? */
+/* (!) v147.1 — first-name matching made a character "Emre Yıldız" the player when the player is Emre, so
+   meetings with him were dropped. Now: the player's exact name; or a BARE first name (the model wrote
+   "Emre") that is the player's first name and no character in this story shares; or the player's bare
+   name followed by a surname no character has. */
 function isPlayerName(chat,name){
   const n=_nmFold(name); if(!n)return false;
   if(["you","the player","player","sen","siz","ben","me","du"].includes(n))return true;
-  const u=chatUserName(chat); return !!u && sameName(u,name,true);
+  const u=chatUserName(chat); const U=_nmFold(u); if(!U)return false;
+  if(n===U)return true;
+  const uid=chat&&chat.universeId;
+  const cast=(state.personas||[]).filter(p=>p&&!p.removed&&(!uid||p.universeId===uid)).map(p=>_nmFold(p.name));
+  const first=x=>x.split(" ")[0];
+  if(!n.includes(" ")&&first(U)===n) return !cast.some(c=>first(c)===n);          // "Emre" for "Emre Tokmak"
+  if(!U.includes(" ")&&first(n)===U) return !cast.some(c=>c===n||first(c)===U);    // "Emre Tokmak" for "Emre"
+  return false;
 }
 /* ===== CHAT-SCOPED WORLD (v146.1) =====
    The universe, places, setting and player name OF A GIVEN CHAT. The cur*() readers answer for the chat
@@ -31511,6 +31536,8 @@ function _retryTarget(chat){
   if(msgs.slice(u+1).some(m=>m&&m.watchCue))return null;   // the replies answer a video cue, not the player's line
   for(let i=msgs.length-1;i>u;i--){
     const m=msgs[i];
+    // v147.1 — the scene moved on after the reply (travel, End Day): its memory is settled; no Retry
+    if(m&&(m.travelBeat||m.dayMarker))return null;
     if(!m||m.role!=='assistant'||m.textMsg||m.presenceNote||m.narratorEvent||m.dayMarker||m.uiNote)continue;
     if(m.sysError) return m.retryable?{u,i,m,player:msgs[u]}:null;
     if(m.speakerId&&m.toId==="__user__"&&!m.heatBeat&&!m.apBeat&&!m.reaction&&!m.entrance) return {u,i,m,player:msgs[u]};
@@ -31548,7 +31575,16 @@ async function _retryRollback(chat,mid,at){
   if(!chat||!mid)return 0;
   let n=0;
   await withChatLock(chat,"memBuild",async()=>{
-    const gone=(state.memory||[]).filter(x=>x&&Array.isArray(x.srcMids)&&x.srcMids.includes(mid)&&!memSpansTime(x));
+    /* (!) v147.1 — A MERGED MEMORY IS NOT THE DISCARDED REPLY'S. Since v146.1 a reconciled memory carries every
+       source line of its stretch, so a Retry deleted the whole afternoon's memory for everyone who heard the
+       line, and the re-cut after a travel began at the travel beat — t0…t29 were never remembered again.
+       Reconciled (and condensed) memories only lose the retried line from their sources; only an arc cut
+       that still stands as it was written is taken back and re-cut. */
+    const cites=(state.memory||[]).filter(x=>x&&Array.isArray(x.srcMids)&&x.srcMids.includes(mid)&&!memSpansTime(x));
+    const merged=cites.filter(x=>x.source==="reconciled"||x.reconciledFrom||x.source==="condensed"||x.type==="CONSOLIDATED");
+    merged.forEach(x=>{ x.srcMids=x.srcMids.filter(s=>s!==mid); });
+    const gone=cites.filter(x=>!merged.includes(x));
+    if(merged.length&&!gone.length){ try{ persistMemory(); }catch(e){} }
     if(gone.length){
       const ids=new Set(gone.map(x=>x.id));
       let first=Infinity;
@@ -44804,8 +44840,8 @@ function _createBoundEntity(uni,spec){
   if((spec.entityType||"npc")==="mob")return {made:null,charId:null};
   if(!spec.charName)return {made:null,charId:null};
   // v146.1 — a group ("A and B") or the player is never one new person (see bindPendingTasks).
-  { const _nm=splitNames(spec.charName); const _u=(uni&&uni.userName)||state.user||"";
-    if(_nm.length!==1||(_u&&sameName(_u,_nm[0],true)))return {made:null,charId:null}; }
+  { const _nm=splitNames(spec.charName);
+    if(_nm.length!==1||isPlayerName({universeId:uni&&uni.id},_nm[0]))return {made:null,charId:null}; }
   const existing=_questFindPersona(uni.id,spec.charName);
   if(existing&&existing.removed)return {made:null,charId:null,gone:existing};   // never resurrect the dead
   if(existing){ if(spec.questId)existing.questIds=Array.from(new Set([...(existing.questIds||[]),spec.questId])); return {made:"bound",charId:existing.id}; }
@@ -51721,20 +51757,28 @@ function _downloadJSON(obj,name){
 // ROLEPLAY: the current universe's chats + the memories tied to it, plus the universe and its
 // cast so the bundle is self-contained and importable into a fresh install.
 // v25.3 — async: static images are inlined from their stored bytes so the file is self-contained.
-async function exportRoleplay(){
+/* v147.1 — exportRoleplay(uid, {forReset}) exports THAT universe (no swapping the global open universe
+   around an await), includes its rumour ledger, and says whether a file was produced: the reset's
+   "Save a copy first" relied on a failure it could never see (every error was swallowed into a toast). */
+async function exportRoleplay(uidArg,opts){
+  const o=opts||{};
   try{
     flushPersistChats();
-    const uni=state.curUniverse||null;
+    const uni=uidArg||state.curUniverse||null;
     const universe=(state.universes||[]).find(u=>u.id===uni)||null;
     const chats={}; for(const id in state.chats){ if(state.chats[id].universeId===uni) chats[id]=state.chats[id]; }
     const personas=(state.personas||[]).filter(p=>p.universeId===uni);
+    const pIds=new Set(personas.map(p=>p.id));
     const memory=(state.memory||[]).filter(m=>!m.universeId||m.universeId===uni);
-    if(!Object.keys(chats).length && !memory.length){ toast("No roleplay in this universe to export"); return; }
+    const gossip=(state.gossip||[]).filter(g=>g&&(g.universeId===uni||(!g.universeId&&(pIds.has(g.stakeholderId)||(g.carriers||[]).some(c=>c&&pIds.has(c.charId))))));
+    if(!o.forReset && !Object.keys(chats).length && !memory.length){ toast("No roleplay in this universe to export"); return false; }
     const inl=await inlineStaticImages(universe?[universe]:[],personas);
+    const curC=(state.curChat&&chats[state.curChat])?state.curChat:(Object.keys(chats)[0]||null);
     _downloadJSON({app:"StoryMind",kind:"roleplay",version:BACKUP_VERSION,date:Date.now(),
-      universe:inl.universes[0]||null, personas:inl.personas, chats, memory, curChat:state.curChat}, "storymind_roleplay");
+      universe:inl.universes[0]||null, personas:inl.personas, chats, memory, gossip, curChat:curC}, "storymind_roleplay");
     toast("Roleplay exported");
-  }catch(e){ console.warn("exportRoleplay failed",e); toast("Export failed"); }
+    return true;
+  }catch(e){ console.warn("exportRoleplay failed",e); toast("Export failed"); return false; }
 }
 async function importRoleplayFile(b){
   if(!b||b.kind!=="roleplay") throw new Error("Not a roleplay export");
@@ -51744,6 +51788,7 @@ async function importRoleplayFile(b){
   if(b.universe){ const i=state.universes.findIndex(u=>u.id===b.universe.id); if(i>=0)state.universes[i]=b.universe; else state.universes.push(b.universe); persistUniverses(); }
   if(Array.isArray(b.personas)){ b.personas.forEach(p=>{ const i=state.personas.findIndex(x=>x.id===p.id); if(i>=0)state.personas[i]=p; else state.personas.push(p); }); persistPersonas(); }
   if(b.chats){ for(const id in b.chats){ state.chats[id]=b.chats[id]; } }
+  if(Array.isArray(b.gossip)){ const g=gossipAll(); b.gossip.forEach(x=>{ if(!x||!x.id)return; const i=g.findIndex(y=>y&&y.id===x.id); if(i>=0)g[i]=x; else g.push(x); }); try{ persistGossip(); }catch(e){} }   // v147.1
   /* (!) Restoring a backup is NOT writing a memory: these already happened, at whatever time they
      happened. Sending them through rememberMemory would stamp every unstamped one with the period
      the restore is running in, which would then read as "this is the scene you are in" and be
@@ -52040,18 +52085,24 @@ function wipeUniverseState(uniId){
   return {mems:before-state.memory.length,chats:chatIds.size,npcs:dropIds.size,rumours:gBefore-state.gossip.length};
 }
 // v146.1 — says what a reset really does, and offers a restorable copy first (Import roleplay brings it back).
+// v146.1 — says what a reset really does, and offers a restorable copy first (Import roleplay brings it back).
 async function _confirmUniverseReset(uName,uid){
+  /* (!) v147.1 — not while the story is still being written: a reply or a day end finishing after the
+     wipe wrote the old conversation back into the fresh universe (memories of a chat that no longer exists). */
+  const busy=Object.values(state.chats||{}).some(c=>c&&c.universeId===uid&&(chatBusy(c,"turn")||chatBusy(c,"endDay")||chatBusy(c,"dayEndBg")||chatBusy(c,"periodEngines")||chatBusy(c,"memBuild")));
+  if(busy){ toast("The story is still being written (a reply or the day's end) — reset once it finishes"); return false; }
+  if(_tabReadOnly){ toast("This tab is read-only (StoryMind is open in another tab) — nothing can be reset here"); return false; }
   const how=await uiChoose(`WIPES: the chat and its transcript, all memories & diaries, promises, meetings, rumours, live schemes, generated relationships & feelings, tracker values, quests & story arcs, character quests, characters created during play, and the universe chronicle. The story starts again on Day 1.\n\nKEEPS: the world, its places and schedules, the cast's authored cards (incl. their written social graph), prompts, the state-zero briefing, images and scenes. Characters removed from play stay removed.`,[
       {label:"Save a copy first, then reset",value:"save"},
       {label:"Reset without saving",value:"reset"}],
     {title:`Reset "${uName}" to its initial state?`,icon:"refresh"});
   if(how===null||how===undefined)return false;
   if(how==="save"){
-    const prev=state.curUniverse;
-    try{ if(uid&&uid!==prev)state.curUniverse=uid; await exportRoleplay(); }
-    catch(e){ toast("Couldn't save a copy — nothing was reset"); return false; }
-    finally{ state.curUniverse=prev; }
+    let saved=false; try{ saved=await exportRoleplay(uid,{forReset:true}); }catch(e){ saved=false; }   // (!) v147.1 — the answer is real now
+    if(!saved){ toast("Couldn't save a copy — nothing was reset"); return false; }
   }
+  // v147.1 — a snapshot either way (Settings → Backup can undo a reset made without a saved copy)
+  try{ await doAutoBackup({force:true}); }catch(e){}
   return true;
 }
 // Reset the universe currently OPEN in the editor (not necessarily the active one).
@@ -52061,6 +52112,8 @@ async function wipeEditingUniverseMemory(){
   const uName=(state.universes.find(u=>u.id===uni)||{}).name||"this universe";
   if(!(await _confirmUniverseReset(uName,uni)))return;
   const r=wipeUniverseState(uni);
+  // (!) v147.1 — the editor's drafts (places, residents) were copied before the wipe: Save would put them back
+  try{ closeModal('universeModal'); editingUniverse=null; }catch(e){}
   if(r)toast(`"${uName}" reset — ${r.mems} memories, ${r.rumours} rumours and ${r.npcs} play-made characters cleared; Day 1 begins`);
 }
 // Reset the CURRENT universe (Settings → data row). Same full reset as the editor button.

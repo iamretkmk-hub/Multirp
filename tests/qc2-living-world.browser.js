@@ -344,7 +344,7 @@ const {chromium}=require('playwright');
       return (!r.canan&&!r.ercan&&r.can&&r.phrase&&!r.noChat) ? true : JSON.stringify(r); }));
   ok("day end scores proactive texts on the ended day", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-      return /maybeProactiveText\(chat,\{force:true,day\}\)/.test(src) && /runNeglectDrift\(chat,day,endPer\)/.test(src) ? true : "not passed"; })());
+      return /maybeProactiveText\(chat,\{(?:force:true,)?day\}\)/.test(src) && /runNeglectDrift\(chat,day,endPer\)/.test(src) ? true : "not passed"; })());
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

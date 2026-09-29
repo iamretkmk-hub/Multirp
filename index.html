@@ -17874,8 +17874,10 @@ function _ftEntry(chat,kind,id){
                       persistUniverses(); _afterQuestDone(chat,uni,d,day).catch(()=>{}); } }
       },
       drop:()=>{
-        if(cq){ gd.charQuests=_charQuests(uni).filter(x=>x!==q); }
-        else { gd.quests=(gd.quests||[]).filter(x=>x!==q); }
+        /* (!) v147.2 — IN PLACE, on the live list: this runs after the reconcile call, and assigning a
+           filtered copy orphaned a pursuit or quest pushed into the array during that await. */
+        const g=uni.gameData||gd, live=cq?g.charQuests:g.quests;
+        if(Array.isArray(live)){ for(let i=live.length-1;i>=0;i--){ if(live[i]===q)live.splice(i,1); } }
       }};
   }
   return null;
@@ -18309,8 +18311,11 @@ function addCalManual(editId){
   // v28 — the cast, as REAL options rather than a free-text datalist. A plan is tied to a character
   // by id now, so "Emre comes to me" survives a rename and can be matched exactly by every engine
   // that has to act on it, instead of being substring-matched against a typed string.
-  const cast=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p));
-  const charOpts=cast.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+  /* (!) v147.2 — an entry tied to an undiscovered (or removed) figure had no option for them, so Save
+     re-pointed it at the first cast member. Their own figures stay in the list, marked, as in the other pickers. */
+  const _keep=new Set([ex0&&ex0.charId,ex0&&ex0.charId2].concat((ex0&&Array.isArray(ex0.charIds))?ex0.charIds:[]).filter(Boolean));
+  const cast=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&(isActiveChar(p)||_keep.has(p.id)));
+  const charOpts=cast.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${isActiveChar(p)?"":(p.removed?" (gone)":" (not met yet)")}</option>`).join("");
   const ex=document.getElementById('calAddModal'); if(ex)ex.remove();
   const inpCss="width:100%";   // v124.0 — the app's standard field, not a smaller one-off
   const periods=["Morning","Midday","Afternoon","Evening","Night"];
@@ -20551,6 +20556,8 @@ function openStoryState(){
       // which owner keys to show: story/user → itself; character-owned → every key with a value
       const keys = (owner==="__story__"||owner==="__user__") ? [owner] : trackerOwnerKeys(chat,t);
       for(const key of keys){
+        // v147.2 — a tracker held by an UNDISCOVERED character would name someone the player has not met
+        { const kp=(state.personas||[]).find(x=>x&&x.id===key); if(kp&&kp.latent&&!kp.removed)continue; }
         const v=trackerVal(chat,t,key);
         const st=activeStage(t,v);
         const ownerTag = owner==="__story__" ? "" :
@@ -21716,7 +21723,11 @@ function revealPersonaUI(id){
 }
 async function deletePersonaById(id){
   const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p)return;
-  editingPersona=p; await deletePersona();
+  /* (!) v147.2 — editingPersona outlived the card delete (and a cancelled confirm left it pointing at a
+     card the editor never opened), so a later Save wrote into a deleted or wrong character. */
+  const prev=editingPersona; editingPersona=p;
+  try{ await deletePersona(); }
+  finally{ editingPersona=(prev&&prev!==p&&(state.personas||[]).includes(prev))?prev:null; }
 }
 function _personaCard(p){
     const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":(p.latent?" latent":""));
@@ -21840,7 +21851,7 @@ function openCharacterPage(id){
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
         <button class="btn sec small" onclick="_charPageClose();editPersona('${escJs(p.id)}')">${icon("edit")} Edit character</button>
-        <button class="btn sec small" onclick="_charPageClose();openTextWith('${escJs(p.id)}')">${icon("message")} Text</button>
+        ${isActiveChar(p)?`<button class="btn sec small" onclick="_charPageClose();openTextWith('${escJs(p.id)}')">${icon("message")} Text</button>`:""}
         ${diaryDays.length?`<button class="btn sec small" onclick="_charPageClose();openDiaryReader('${escJs(p.id)}')">${icon("book")} Read diary</button>`:""}
       </div>
       ${field("Personality",p.personality)}
@@ -24358,6 +24369,7 @@ async function deletePersona(){
   if(state.curPersona===delId)state.curPersona=(state.personas[0]&&state.personas[0].id)||null;
   persistPersonas();persistChats();persistMemory();
   try{ deleteStaticImagesFor(["char:"+delId,"diary:"+delId]); }catch(e){}
+  editingPersona=null;   // v147.2 — the editor closes with the card it was editing
   renderPersonas();closeModal('personaModal');toast("Deleted");
 }
 
@@ -29977,7 +29989,13 @@ function curChat(){
      video in the chat. Tapping the pin toggles it (and re-enables auto-gen on unpin).
    - Portrait keeps inline images; the rail is hidden by CSS but the pin still freezes
      auto-gen and shows a small sticky pinned banner above the list. */
-let _heatSeq=0,_heatNoImg=false;   // v19.5 heat-of-the-moment state (v146.1 — the burst-running flag is per chat: chat._heatBusy)
+let _heatSeq=0;   // v19.5 heat-of-the-moment state (v146.1 — the burst-running flag is per chat: chat._heatBusy)
+/* (!) v147.2 — PER CHAT. _heatSeq and _heatNoImg were global: a player turn in story B cancelled a heat run
+   in story A, and A's mid-burst "no picture" flag silenced B's illustrations. A player turn now bumps its
+   own chat (chat._heatSeq, transient); the global _heatSeq stays for the switches that end EVERY run (the
+   heat toggle, a clip). The no-picture flag is chat._heatNoImg, read for the open chat. */
+function heatSeqOf(chat){ return _heatSeq+((chat&&chat._heatSeq)||0); }
+function _heatNoImgNow(){ try{ const c=curChat(); return !!(c&&c._heatNoImg); }catch(e){ return false; } }
 /* v26.5 — DIRECTOR CANCELLATION. Gamemaster reactions run fire-and-forget while the player is free
    to keep typing, so a character could be generating their reaction to a GM beat at the very moment
    sendMessage started their reply to the player's line: two turns for one character, both answering
@@ -29991,10 +30009,10 @@ let _dirSeq=0;
    away a reply chat A was still generating. Each player turn stamps its own chat (chat._turnSeq, a
    transient field); a reply started at `seq` is superseded only by a turn IN ITS OWN CHAT. */
 function turnSuperseded(chat,seq){ return !!chat && (chat._turnSeq||0)>seq; }
-function markPlayerTurn(chat){ _heatSeq++; _dirSeq++; if(chat)chat._turnSeq=_dirSeq; try{ _rpStopClear(); }catch(_){} }   // v146.1 — a new turn is not covered by an old Stop
+function markPlayerTurn(chat){ if(chat)chat._heatSeq=(chat._heatSeq||0)+1; else _heatSeq++; _dirSeq++; if(chat)chat._turnSeq=_dirSeq; try{ _rpStopClear(); }catch(_){} }   // v146.1 — a new turn is not covered by an old Stop
 // (v24.3 — the v19.97 per-beat repeat detector is gone with the beat loop: heat is one
-// extended generation now, so there is no next beat to loop into. _heatNoImg stays declared
-// for autoImgActive but is never raised — the single heat response gets its auto image.)
+// extended generation now, so there is no next beat to loop into. The no-picture flag (chat._heatNoImg)
+// is read by autoImgActive and raised only between a burst's beats; the final beat gets its auto image.)
 /* v36.9 — every refusal names itself in the debug log. "Images stopped" is the hardest class of
    report to act on, because six independent switches produce the identical symptom (nothing
    appears) and five of them are somewhere the player is not looking. autoImgActive() answers
@@ -30010,7 +30028,7 @@ function _imgGate(){
   if(imgMode()==="off") return "Settings → pictures are set to “No pictures”";
   if(!state.autoImg) return "Settings → auto-illustration is off";
   if(state.imgPauseOn) return "the 'Pause images' row in the playback menu is on";
-  if(_heatNoImg) return "mid heat burst — only the final beat is illustrated";
+  if(_heatNoImgNow()) return "mid heat burst — only the final beat is illustrated";
   const c=state.chats&&state.curChat?state.chats[state.curChat]:null;
   if(c&&c.sceneDockId&&typeof sceneById==="function"&&sceneById(c.sceneDockId))
     return "a scene video is playing over the story — beats route scenes, not images";
@@ -30028,7 +30046,7 @@ function autoImgActive(){
   // ONLY by their own switches: the "Pause images" mode row above and Settings→auto-illustration
   // (state.autoImg). Generation is fire-and-forget, so the mic never waits on it anyway; narration
   // mode still skips the typewriter reveal (see revealText) — that was the part that had to be instant.
-  if(_heatNoImg) return false;       // v19.5: no auto image on non-final heat beats (no waiting mid-burst)
+  if(_heatNoImgNow()) return false;       // v19.5: no auto image on non-final heat beats (no waiting mid-burst)
   const c=state.chats&&state.curChat?state.chats[state.curChat]:null;
   // v29 — SCENE MODE: while a scene video is docked over the story, image generation stops;
   // the player's own scene carries the visuals until they close it (see autoVisualize).
@@ -32498,7 +32516,9 @@ function _stampText(chat,msg){
   return msg;
 }
 function unreadTextCount(chat,pid){
-  return (chat&&chat.messages||[]).filter(m=>m.textMsg && m.role==="assistant" && m.unread && (!pid||m.speakerId===pid)).length;
+  // v147.2 — a thread whose character is undiscovered or removed has no row in the inbox, so it cannot count on the badge
+  const hidden=new Set((state.personas||[]).filter(p=>p&&!isActiveChar(p)).map(p=>p.id));
+  return (chat&&chat.messages||[]).filter(m=>m.textMsg && m.role==="assistant" && m.unread && (!pid||m.speakerId===pid) && !hidden.has(m.speakerId)).length;
 }
 function _markTextRead(chat,pid){
   let changed=false;
@@ -32713,6 +32733,9 @@ function _cleanTextReply(reply,name){
    already read (it was in that reply's history) is not generated a second time. */
 const _textSeenMid=new Map();   // chatId|charId → the newest player text the last reply was written after
 async function sendTextMessage(chat,p,body){
+  /* (!) v147.2 — no guard: a latent (undiscovered) or removed character could be texted from their page,
+     and the reply introduced a person the player has never met. */
+  if(!p||!isActiveChar(p)){ try{ toast(p&&p.removed?`${p.name} is no longer around`:"You haven't met them yet"); }catch(e){} return null; }
   const out=_stampText(chat,{mid:newMid(),role:"user",content:body,textMsg:true,textWith:p.id,textWithName:p.name,present:[]});
   chat.messages.push(out); markChatDirty(chat); persistChats();
   renderTextThread(p.id);
@@ -32995,6 +33018,7 @@ async function _textArrive(chat,p){
 function openTextWith(pid){
   const chat=curChat(); const p=(state.personas||[]).find(x=>x.id===pid)||resolveChar(pid,chat);
   if(!chat||!p){ toast("Character not found"); return; }
+  if(!isActiveChar(p)){ toast(p.removed?`${p.name} is no longer around`:"You haven't met them yet"); return; }   // v147.2 — no thread with the undiscovered or removed
   _openTextPid=pid; _markTextRead(chat,pid); updateTextBadges();
   let pop=document.getElementById('textPop');
   if(!pop){ pop=document.createElement('div'); pop.id='textPop'; pop.className='mapCharPop'; document.body.appendChild(pop); }
@@ -35243,20 +35267,20 @@ async function runHeatBursts(chat){
      was switched on mid-turn no reply was marked and the run owns every beat, starting at 1. */
   const first=chat._heatOpened?1:0;
   delete chat._heatOpened;
-  const mySeq=_heatSeq;
+  const mySeq=heatSeqOf(chat);
   chat._heatBusy=true;
   try{
     for(let i=first;i<total;i++){
       // Re-checked before EVERY beat, not just once at the top: the player can type and the toggle
       // can go off at any point during a run that takes several generations.
-      if(mySeq!==_heatSeq||!state.heatOn)break;
+      if(mySeq!==heatSeqOf(chat)||!state.heatOn)break;
       const cast=presentCast(chat); if(!cast.length)break;
       // Voice for this beat: the present character who has spoken longest ago. Recomputed each beat,
       // so a scene with two or more people alternates instead of one person monologuing.
       const lastIdx={};
       chat.messages.slice(-30).forEach((m,k)=>{ if(m.role==='assistant'&&m.speaker){ const c=cast.find(x=>x.name===m.speaker); if(c)lastIdx[c.id]=k; } });
       const next=cast.slice().sort((a,b)=>((a.id in lastIdx)?lastIdx[a.id]:-1)-((b.id in lastIdx)?lastIdx[b.id]:-1))[0]||cast[0];
-      _heatNoImg=(i<total-1);      // only the last beat is illustrated
+      chat._heatNoImg=(i<total-1);      // only the last beat is illustrated
       /* v39.5 — WHICH NARRATION THIS BEAT GETS IS DECIDED HERE, NOT BY THE MODEL. The two modes
          (the conscience watching her, and the plain mechanics of what the bodies are doing) have to
          alternate, and a model generating one beat at a time cannot remember which one it used
@@ -35270,7 +35294,7 @@ async function runHeatBursts(chat){
       finally{ delete chat._heatBeat; }
       if(!ok)break;                // refused, empty, or cancelled — don't keep hammering
     }
-  }finally{ chat._heatBusy=false; _heatNoImg=false; delete chat._heatBeat; }
+  }finally{ chat._heatBusy=false; chat._heatNoImg=false; delete chat._heatBeat; }
 }
 /* One character produces one message, shown with its own name/avatar.
    `opts.answerTo` PINS who this turn is answering, overriding the "freshest line in the room"
@@ -35359,7 +35383,7 @@ function _pushRetryNotice(chat,text,extra){
 async function playCharacterTurn(chat,p,addressed,opts){
   opts=opts||{};
   const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see turnSuperseded)
-  const _hseq=_heatSeq, _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
+  const _hseq=heatSeqOf(chat), _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
   /* v146.1 — frozen before the first await: the player this line is said to (the chat's own, never the
      story the player may open meanwhile) and where the scene stands (see _placeSig / the drop below). */
   const _who=turnUser(chat), _at=_placeSig(chat), _wasHere=inSceneIds(chat).includes(p.id);
@@ -35459,7 +35483,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
     // v27.4 — the heat toggle went off (or the player cut in) while this continuation was
     // generating. Nobody asked for it any more, so drop it instead of pushing a bubble the user
     // just switched off. This is the "heat keeps talking after I turn it off" fix.
-    if(_wasHeat && (!state.heatOn || _hseq!==_heatSeq)) return false;
+    if(_wasHeat && (!state.heatOn || _hseq!==heatSeqOf(chat))) return false;
     /* (!) v146.1 — THE SCENE MOVED WHILE THIS WAS BEING WRITTEN. The player travelled (or the speaker
        left earshot) during generation, and the line landed in the new place as if its speaker stood
        there. It answers a moment that is gone, so it is dropped (and logged). */
@@ -43947,6 +43971,12 @@ async function generateNextQuest(chat,uni,arc){
       authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Quest next — "+arc});
   }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
+  /* (!) v147.2 — THE WORLD MOVED DURING THE CALL. "End this arc" pressed while this generation was in
+     flight lost: the new quest was pushed into the ended arc. Re-read after the await — an arc concluded
+     (by the player or another path) or already given a live quest takes nothing from this reply. */
+  { const g2=uni.gameData||gd;
+    if(g2.arcMeta&&g2.arcMeta[arc]&&g2.arcMeta[arc].complete){ _qlog("next.drop",`arc "${arc}" — concluded while the quest was being written`); return null; }
+    if((Array.isArray(g2.quests)?g2.quests:[]).some(q=>q&&(q.arc||"Quests")===arc&&!q.done&&q.startActive!==false)){ _qlog("next.drop",`arc "${arc}" — a quest went live while this one was being written`); return null; } }
   if(j.arcComplete===true){
     gd.arcMeta=(gd.arcMeta&&typeof gd.arcMeta==="object")?gd.arcMeta:{};
     gd.arcMeta[arc]=Object.assign({},gd.arcMeta[arc],{complete:true});
@@ -44195,9 +44225,9 @@ function questEndArc(uni,arc,day){
   gd.arcMeta=(gd.arcMeta&&typeof gd.arcMeta==="object")?gd.arcMeta:{};
   gd.arcMeta[arc]=Object.assign({},gd.arcMeta[arc],{complete:true,endedByPlayer:true});
   (Array.isArray(gd.quests)?gd.quests:[]).forEach(q=>{
-    if(!q||q.arc!==arc||q.done)return;
+    if(!q||(q.arc||"Quests")!==arc||q.done)return;    // v147.2 — arc-less quests are listed (and ended) as "Quests"
     q.done=true; q.failed=true; q.abandoned=true; q.completedDay=day||null;
-    q.result=q.result||`${state.user||"The player"} ended this story line.`;
+    q.result=q.result||`${chatUserName({universeId:uni.id})||"The player"} ended this story line.`;
   });
   persistUniverses();
   _qlog("arc.ended",`arc "${arc}" ended by the player`);
@@ -44429,7 +44459,8 @@ async function questDeleteUI(qid){
   const q=qs.find(x=>x&&x.id===qid); if(!q)return;
   if(!(await uiConfirm("Its progress log goes with it.",{title:`Delete quest "${q.title||""}"?`,ok:"Delete",danger:true})))return;
   const wasLive=!q.done&&q.startActive!==false;
-  gd.quests=(Array.isArray(gd.quests)?gd.quests:qs).filter(x=>x!==q);
+  { const live=(u.gameData&&Array.isArray(u.gameData.quests))?u.gameData.quests:qs;   // v147.2 — in place (see charQuestDeleteUI)
+    for(let i=live.length-1;i>=0;i--){ if(live[i]===q)live.splice(i,1); } }
   persistUniverses(); toast("Quest deleted"); _refreshQuestViews();
   /* (!) v144.1 — deleting the LIVE quest left its arc with nothing live and nothing to follow. The
      chain runs on — unless that was the arc's last quest (then the arc itself is gone), or a task.
@@ -45107,7 +45138,13 @@ function _nameCapInText(text,name){
        you", "Will we", "May I") is the common word asking something, not the person. */
     const before=t.slice(0,m.index).replace(/\s+$/,"");
     const initial=!before||/[.!?…:;"“”(\n]$/.test(before);
-    if(initial&&/^\s+(?:you|u|i|we|they|he|she|it|someone|anyone|somebody|anybody|the|a|an|this|that|these|those|there|not|please|me|us|my|your)(?![\p{L}\p{N}])/iu.test(t.slice(m.index+m[0].length)))continue;
+    const after=t.slice(m.index+m[0].length);
+    if(initial&&/^\s+(?:you|u|i|we|they|he|she|it|someone|anyone|somebody|anybody|not|please|me|us|my|your)(?![\p{L}\p{N}])/iu.test(after))continue;
+    /* (!) v147.2 — an article only marks the common word when the name IS one that asks or orders
+       ("Can the guard…", "Will the…", "Mark the spot"); "Mira the smith owes…", "Rose the baker…" and
+       "Sam this time…" are the person, in apposition. */
+    if(initial&&/^\s+(?:the|a|an|this|that|these|those|there)(?![\p{L}\p{N}])/iu.test(after)
+       &&/^(?:can|will|may|might|must|shall|should|could|would|did|do|does|is|are|was|were|has|have|had|mark|rob|chase|pat|sue|bill|drew|lance|jack|dash|hope|find|ask|tell|take)$/i.test(m[0]))continue;
     return true;
   }
   return false;
@@ -45273,10 +45310,11 @@ function _cqGateOpen(chat,q){
       return presentCast(chat).every(p=>p.id===q.holderId);
     case "with_char":{
       if(!g.charId&&g.charName){
-        const p=findByName((state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&!x.removed),g.charName);   // v144.1 — folded
+        const p=findByName((state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x)),g.charName);   // v144.1 — folded; v147.2 — never an undiscovered one
         if(p)g.charId=p.id;
       }
       if(!g.charId)return false;
+      { const gp=(state.personas||[]).find(x=>x&&x.id===g.charId); if(!gp||!isActiveChar(gp))return false; }   // v147.2 — a gate on someone not in play stays closed
       if(!isPresent(chat,g.charId))return false;
       // "alone with X": nobody else in the room besides X (and possibly the holder).
       return presentCast(chat).every(p=>p.id===g.charId||p.id===q.holderId);
@@ -45325,17 +45363,17 @@ function checkCharQuestApproach(chat){
       // Gate open — or a long-waited quest settles for a quiet moment instead of never firing.
       const open=_cqGateOpen(chat,q)||(waited>=4&&presentCast(chat).every(p=>p.id===q.holderId));
       if(!open)continue;
-      const ask=String(q.ask||q.desc||q.title||"").slice(0,300);
-      const intent=`${holder.name} comes to ${state.user} about their OWN pursuit "${q.title}": ${briefDesc(String(q.desc||""),240)} What they want from ${state.user}: ${ask}. This is ${holder.name}'s own initiative — they explain what they need and why it matters to them, in their own manner. ${state.user} is free to agree, bargain, or refuse.`;
+      const ask=String(q.ask||q.desc||q.title||"").slice(0,300), U=chatUserName(chat);   // v147.2 — this chat's player
+      const intent=`${holder.name} comes to ${U} about their OWN pursuit "${q.title}": ${briefDesc(String(q.desc||""),240)} What they want from ${U}: ${ask}. This is ${holder.name}'s own initiative — they explain what they need and why it matters to them, in their own manner. ${U} is free to agree, bargain, or refuse.`;
       const fired=startOverture(chat,{accuser:holder,intent,questAsk:true,
-        summary:`${holder.name} seeks out ${state.user} — about "${q.title}"`,
+        summary:`${holder.name} seeks out ${U} — about "${q.title}"`,
         evidence:0.7,
         accuserNature:holder.personality?String(holder.personality).slice(0,200):""});
       if(!fired)return false;
       chat._cqApproachDay=today; markChatDirty(chat);
       q.delivered=true; q.deliveredDay=q.deliveredDay||today; q.awaitingUser=true;
       q.lastNudgeDay=today; q.nudges=(q.nudges||0)+1;
-      charQuestNote(uni,q,today,`${holder.name} went to ${state.user} in person and made the ask.`);
+      charQuestNote(uni,q,today,`${holder.name} went to ${U} in person and made the ask.`);
       persistUniverses();
       _qlog("cq.approach",`"${q.title}" — ${holder.name} approached in person (gate ${(q.gate&&q.gate.type)||"any"}${waited>=4&&!_cqGateOpen(chat,q)?", fallback after waiting":""})`);
       return true;
@@ -45352,7 +45390,7 @@ function charQuestStagingSummary(chat){
     const uni=universeById(chat.universeId); if(!uni)return "";
     const today=chat.gameDay||1;
     if(chat._cqApproachDay===today)return "";   // v146.1 — today's one approach is spent
-    const lines=[];
+    const lines=[], U=chatUserName(chat);   // v147.2 — this chat's player, not the open story's
     for(const q of _cqActive(uni)){
       if(q.targetId!=="__user__"||q.awaitingUser)continue;
       if(!(q.approach==="in_person"||q.approach==="either"))continue;
@@ -45364,14 +45402,21 @@ function charQuestStagingSummary(chat){
       if(!holder||!isActiveChar(holder)||charBarredHere(chat,holder))continue;
       const g=q.gate||{};
       let need="";
-      if(g.type==="user_alone")need=`${q.holderName} is waiting for a moment when ${state.user} is alone`;
-      else if(g.type==="with_char")need=`${q.holderName} is waiting to catch ${state.user} together with ${g.charName||"a certain person"}`;
-      else if(g.type==="at_location")need=`${q.holderName} is waiting for ${state.user} to be at ${g.locationName||"a certain place"}`;
+      if(g.type==="user_alone")need=`${q.holderName} is waiting for a moment when ${U} is alone`;
+      else if(g.type==="with_char"){
+        /* (!) v147.2 — the staging line named an UNDISCOVERED gate character to the GM, which then walked a
+           person the player has never met into the scene. Only a gate person in play is named. */
+        const gp=g.charId?(state.personas||[]).find(x=>x&&x.id===g.charId)
+          :(g.charName?findByName((state.personas||[]).filter(x=>x&&x.universeId===chat.universeId),g.charName):null);
+        if(!gp||!isActiveChar(gp))continue;
+        need=`${q.holderName} is waiting to catch ${U} together with ${gp.name}`;
+      }
+      else if(g.type==="at_location")need=`${q.holderName} is waiting for ${U} to be at ${g.locationName||"a certain place"}`;
       else continue;
-      lines.push(`- ${need} — they have private business with ${state.user}; do NOT reveal or hint at what it is`);
+      lines.push(`- ${need} — they have private business with ${U}; do NOT reveal or hint at what it is`);
       if(lines.length>=2)break;
     }
-    return lines.length?`WAITING APPROACHES (characters with their own business for ${state.user} are poised to come the instant the scene allows — you may, if natural, nudge the scene toward ONE of these conditions; never name the business):\n${lines.join("\n")}`:"";
+    return lines.length?`WAITING APPROACHES (characters with their own business for ${U} are poised to come the instant the scene allows — you may, if natural, nudge the scene toward ONE of these conditions; never name the business):\n${lines.join("\n")}`:"";
   }catch(e){ return ""; }
 }
 // SPAWN (v129.1: at every change of the time of day, no cap): a character who lived through
@@ -45508,6 +45553,14 @@ async function runCharQuestSpawn(chat,day,uni,opts){
         if(tp&&tp.id!==p.id){ targetId=tp.id; targetName=tp.name; }
       }
       if(!targetId&&!solitary){ _qlog("cq.spawn.skip",`${p.name} — target "${tRaw}" didn't resolve`); _cqSpawnNote(uni,day,`${p.name}'s pursuit named "${tRaw}", who is not in this world`); continue; }
+      /* (!) v147.2 — NO TWIN PURSUITS. Two spawns for one holder with the same answer (a retried stretch, a
+         second pass while the first was in its call) gave two identical live pursuits, each stepping and
+         planting its own identical memory. Re-read the live list after the call: the same holder already
+         chasing a similar title with the same person (or alone) — or already carrying two — takes nothing. */
+      { const liveNow=_cqActive(uni).filter(x=>x.holderId===p.id);
+        const twin=liveNow.find(x=>(solitary?!!x.solitary:x.targetId===targetId)&&_titleSimilar(x.title,qq.title));
+        if(twin){ _qlog("cq.spawn.skip",`${p.name} — "${qq.title}" is already being pursued ("${twin.title}")`); _cqSpawnNote(uni,day,`${p.name} is already pursuing "${twin.title}"`); continue; }
+        if(liveNow.length>=2){ _qlog("cq.spawn.skip",`${p.name} — already carrying two pursuits`); continue; } }
       const g=(qq.gate&&typeof qq.gate==="object")?qq.gate:{};
       const gateType=["user_alone","with_char","at_location","any"].includes(g.type)?g.type:"any";
       const approach=["text","in_person","either"].includes(qq.approach)?qq.approach:"either";
@@ -45527,7 +45580,7 @@ async function runCharQuestSpawn(chat,day,uni,opts){
         status:"active", createdDay:day, createdPeriod:period||chatPeriod(chat), completedDay:null, result:"",
         progress:[], delivered:false, deliveredDay:null, awaitingUser:false, lastNudgeDay:null, nudges:0
       };
-      all.push(q);
+      _charQuests(uni).push(q);   // v147.2 — the live list, re-read after the await
       uni.cqLastSpawn={day,reason:`${p.name} began "${q.title}"`,at:Date.now()};
       persistUniverses();
       charQuestNote(uni,q,day,`The pursuit began${q.motive?": "+q.motive:"."}`);
@@ -45580,8 +45633,33 @@ function _cqLastActivity(q){
   (q.progress||[]).forEach(p=>{ if(p&&+p.day>d)d=+p.day; });
   return d;
 }
+/* v147.2 — twins already saved (born before the spawn dedupe): the same holder, the same person on the
+   other end (or both alone) and the SAME title, both live. The older one keeps going and takes the newer
+   one's notes and ask state; the newer one is removed in place. Exact titles only — a similar title may
+   be a real second pursuit, and that is the spawn's call, not a clean-up's. */
+function _cqMergeTwins(uni){
+  const all=_charQuests(uni); let n=0;
+  const key=q=>[q.holderId,q.solitary?"~solo":(q.targetId||""),String(q.title||"").trim().toLocaleLowerCase("tr").replace(/\s+/g," ")].join("|");
+  const first=new Map();
+  for(const q of all.slice().sort((a,b)=>(a.createdDay||0)-(b.createdDay||0))){
+    if(!q||q.status!=="active"||!String(q.title||"").trim())continue;
+    const k=key(q), keep=first.get(k);
+    if(!keep){ first.set(k,q); continue; }
+    const seen=new Set((keep.progress||[]).map(p=>p&&p.text));
+    keep.progress=(keep.progress||[]).concat((q.progress||[]).filter(p=>p&&!seen.has(p.text))).sort((a,b)=>(+a.day||0)-(+b.day||0)).slice(-24);
+    if(q.delivered){ keep.delivered=true; keep.deliveredDay=keep.deliveredDay||q.deliveredDay; keep.awaitingUser=keep.awaitingUser||q.awaitingUser; }
+    keep.nudges=Math.max(keep.nudges||0,q.nudges||0);
+    if(q.lastNudgeDay!=null)keep.lastNudgeDay=Math.max(keep.lastNudgeDay||0,q.lastNudgeDay);
+    if(q.lastStepDay!=null)keep.lastStepDay=Math.max(keep.lastStepDay||0,q.lastStepDay);
+    if(q.lastMoveDay!=null)keep.lastMoveDay=Math.max(keep.lastMoveDay||0,q.lastMoveDay);
+    const i=all.indexOf(q); if(i>=0)all.splice(i,1);
+    n++; try{ _qlog("cq.merge",`"${q.title}" (${q.holderName}) — a duplicate merged into the older pursuit`); }catch(e){}
+  }
+  return n;
+}
 function _cqLapseAndPrune(chat,uni,day){
   const all=_charQuests(uni); let n=0;
+  try{ n+=_cqMergeTwins(uni); }catch(e){}
   for(const q of all.slice()){
     if(!q||q.status!=="active")continue;
     const steppable=q.solitary||(q.targetId&&q.targetId!=="__user__");
@@ -45944,7 +46022,10 @@ async function charQuestDeleteUI(id){
   const gd=u.gameData||{}; const qs=Array.isArray(gd.charQuests)?gd.charQuests:[];
   const q=qs.find(x=>x&&x.id===id); if(!q)return;
   if(!(await uiConfirm("Its progress log goes with it.",{title:`Delete ${q.holderName}'s quest "${q.title||""}"?`,ok:"Delete",danger:true})))return;
-  gd.charQuests=qs.filter(x=>x!==q);
+  /* (!) v147.2 — IN PLACE, on the array as it is AFTER the confirm. Assigning a filtered copy of the list
+     read before the await orphaned the array a spawn (or the lapse pass) had pushed into meanwhile. */
+  { const live=(u.gameData&&Array.isArray(u.gameData.charQuests))?u.gameData.charQuests:[];
+    for(let i=live.length-1;i>=0;i--){ if(live[i]&&live[i].id===id)live.splice(i,1); } }
   persistUniverses(); toast("Character quest deleted"); _refreshQuestViews();
 }
 

@@ -288,7 +288,7 @@ const {chromium}=require('playwright');
   ok("a texter does not read the player's scene: no travel beat, no presence note they did not witness", TX.t&&!/Worker Canteen|money in cash|Duygu Akbaba left|Cash, on Friday/.test(TX.t), TX.t.slice(0,1500));
   ok("…their own thread is still there", /Seen the news\?/.test(TX.t)&&/selam/.test(TX.t), TX.t.slice(0,600));
   ok("…nobody at the player's table is '[here now]' with them, and no 'Just LEFT the scene'", !/\[here now\]/.test(TX.t)&&!/Just LEFT the scene/.test(TX.t), (TX.t.match(/.{80}\[here now\].{20}/)||[""])[0]);
-  ok("the event-resolution note is stamped with who was there", /presenceNote:true,sysError:true,\s*content:"— "\+\(how\|\|"the event passes"\)\+" —",present:inSceneIds\(chat\)\.slice\(\)/.test(TX.src), "not stamped");
+  ok("the event-resolution note is stamped with who was there", /presenceNote:true,sysError:true,(?:uiNote:true,)?\s*content:"— "\+\(how\|\|"the event passes"\)\+" —",present:inSceneIds\(chat\)\.slice\(\)/.test(TX.src)   /* v148.4 merge — the reply batch also made it a player-only notice */, "not stamped");
 
   const PT=await pg.evaluate(async()=>{
     const chat=curChat(); chat.gameDay=2; chat.period="Evening"; chat.timeOfDay="Evening";

@@ -248,7 +248,9 @@ const {chromium}=require('playwright');
         L("Sami Özüçak","*Zarfı cebine atıyor.* Sağ ol abi.",{whisperTo:"__user__",whisperToName:"Emre"})];
       return {gm:recentExchangeText(c,12),ft:_ftConvoText(c,6),msgs:JSON.stringify(recentExchangeMsgsWithTexts(c,6))};
     });
-    ok("the director reads the player's whisper as one, with who heard it", /Emre: \(whispered to Sami Özüçak alone — nobody else heard\) Ona bir zarf/.test(r.gm)&&/\(aloud\) "Cuma'yı bekleme/.test(r.gm), r.gm);
+    // v148.4 merge — whisperSplit now keeps quoted speech touching the *aside* with it (the player's documented
+    // `/whisper <name> *narration* "speech"` form is private as a whole), so nothing of this whisper is aloud
+    ok("the director reads the player's whisper as one, with who heard it", /Emre: \(whispered to Sami Özüçak alone — nobody else heard\) \*?Ona bir zarf[^\n]*"Cuma'yı bekleme, şimdi al\."/.test(r.gm)&&!/\(aloud\) "Cuma'yı bekleme/.test(r.gm), r.gm);
     ok("and the character's whisper back", /Sami Özüçak: \(whispered back to Emre alone — nobody else heard\)/.test(r.gm), r.gm);
     ok("the future tracker / promise reader transcripts carry the same marks", /whispered to Sami Özüçak alone/.test(r.ft)&&/whispered to Sami/.test(r.msgs), r.ft);
   }

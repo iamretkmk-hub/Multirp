@@ -95,8 +95,8 @@ const {chromium}=require('playwright');
       return /A beat with nobody behind it is noise/.test(t)
           && /tells the people in the room nothing/.test(t) ? true : "no diagnosis of the shrug"; }));
   ok("with a beat that works shown against one that does not", await pg.evaluate(()=>{
-      const t=up("gmAuthor")||"";
-      return /ekranda Berker'in adı vardı/.test(t) && /Bir telefon çaldı\." is not/.test(t)
+      const t=up("gmAuthor")||"";   // v148.4 — the worked contrast uses invented names now (no real cast in shipped prompts)
+      return /ekranda Hugo'nun adı vardı/.test(t) && /Bir telefon çaldı\." is not/.test(t)
         ? true : "no worked contrast"; }));
   ok("no nameable cause means no move 2 at all", await pg.evaluate(()=>{
       const t=up("gmAuthor")||"";

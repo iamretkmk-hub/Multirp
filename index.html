@@ -15572,6 +15572,12 @@ function calClose(chat,e,outcome,res){
   if(!e.completedPeriod)e.completedPeriod=(chat?chatPeriod(chat):"")||e.period||"";
   if(res!=null&&String(res).trim())e.result=briefDesc(String(res),240);
 }
+/* v146.1 — a meeting whose day or time was set on purpose (the tracker, the calendar editor, an "on my
+   way" text) starts over: not yet asked, not put off, not rolled, not logged as unkept. */
+function _calFreshSlot(e){
+  if(!e)return;
+  e.prompted=false; delete e.snoozedAt; delete e.snoozes; delete e._rolledFrom; delete e._unkeptLogged;
+}
 // v19.993 — announce a newly created quest/task on screen (player-only; present:[] so it never
 // enters any character's witnessed history — quests are calendar-only per v19.96).
 function _announceTaskLine(chat,label,title){
@@ -15593,7 +15599,15 @@ function addCalendarEntry(chat,entry,opts){
   // v144.1 — one rule for every writer (_calIsDup): place and time of day count, not just title words.
   try{
     if(entry&&entry.title&&entry.source!=="manual"){   // a deliberate manual save is authoritative
-      if(_calIsDup(cal,entry,opts))return null;
+      /* (!) v146.1 — THE WORLD ENGINES' PLANS ARE CHECKED LIKE THE TRACKER'S. A round plan, a goal-pursuit
+         plan or an executor follow-up was filed with no period (and a day nobody bounded here), so it
+         sat undated-in-the-day and matched nothing. Dedupe first, on the period the writer gave (a
+         filled-in default is not evidence of a different time), then fill and bound it (_calSaneSlot). */
+      const _d0=(entry.day!=null&&Number.isFinite(Number(entry.day)))?Math.round(Number(entry.day)):null;
+      const _p0=PERIODS.indexOf(entry.period)>=0?entry.period:null;
+      const _sl=(_d0!=null&&(entry.kind||"meeting")==="meeting")?_calSaneSlot(chat,_d0,_p0):null;
+      if(_calIsDup(cal,Object.assign({},entry,{day:_sl?_sl.day:entry.day,period:_p0}),Object.assign({chat},opts||{})))return null;
+      if(_sl)entry=Object.assign({},entry,{day:_sl.day,period:_sl.period});
     }
   }catch(_){}
   const _annTitle=entry&&entry.title, _annSrc=entry&&entry.source;
@@ -15629,6 +15643,13 @@ function periodForHour(h){
    "saat beşte". A bare hour of twelve or less is ambiguous, so the words around it disambiguate:
    an afternoon/evening/night word pushes it past noon, which is what makes "akşamüstü saat beş"
    seventeen hundred rather than five in the morning. */
+/* v146.1 — ONE word list per part of the day, shared by the hour reader and the period inference so
+   the two cannot drift: English, then Turkish with the suffixed forms people actually write. */
+const _TR_MORNING_W="morning|breakfast|sabah|sabaha|sabahki|sabahleyin|sabahları|kahvaltı|kahvaltıda|kahvaltıya|kahvaltıdan";
+const _TR_NOON_W="midday|noon|lunch|öğlen|öğle|öğlene|öğleye|öğlenki|öğleyin|öğle yemeği|öğle yemeğinde";
+const _TR_AFTERNOON_W="afternoon|öğleden sonra|ikindi|ikindiye";
+const _TR_EVENING_W="evening|dinner|supper|akşam|akşama|akşamki|akşamleyin|akşamları|akşamüstü|akşamüstüne|akşam yemeği|akşam yemeğinde";
+const _TR_NIGHT_W="night|tonight|midnight|gece|geceye|geceki|geceleyin|gece yarısı";
 const _TR_HOUR={"bir":1,"iki":2,"üç":3,"dört":4,"beş":5,"altı":6,"yedi":7,"sekiz":8,"dokuz":9,"on":10,"onbir":11,"on bir":11,"oniki":12,"on iki":12};
 function statedHour(text){
   const t=" "+String(text||"").toLocaleLowerCase("tr")+" ";
@@ -15642,7 +15663,13 @@ function statedHour(text){
     if(m){ h=parseInt(m[1],10); lead0=/^0\d/.test(m[1]); }
   }
   if(h==null){
-    m=t.match(/(?<![\p{L}\p{N}])(?:saat|at|around|about)\s+([01]?\d|2[0-3])(?![\p{L}\p{N}])/u)
+    /* (!) v146.1 — "around"/"about" are also how a COUNT is said: "about 20 guards" was filed as
+       Evening and "around 5 minutes later" as 17:00. After those two a number is a clock time only
+       when a word that could follow a time (or nothing) follows it — never a noun. */
+    const _CLK="(?!\\s+(?!o['’]clock|in\\b|at\\b|on\\b|or\\b|and\\b|then\\b|sharp|tonight|tomorrow|today|this|that|later|yarın|bu\\b|gibi|civarı)\\p{L})";
+    m=t.match(/(?<![\p{L}\p{N}])(?:saat|at)\s+([01]?\d|2[0-3])(?![\p{L}\p{N}])/u)
+     || t.match(new RegExp("(?<![\\p{L}\\p{N}])(?:around|about)\\s+([01]?\\d|2[0-3])(?![\\p{L}\\p{N}])"+_CLK,"u"))
+     || t.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])\s*o['’]clock/u)                                  // "8 o'clock"
      || t.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])['’](?:de|da|te|ta)(?![\p{L}\p{N}])/u);    // "7'de"
     if(m) h=parseInt(m[1],10);
   }
@@ -15657,10 +15684,12 @@ function statedHour(text){
      (Night), "dinner at 7" as Morning, "at 1 tonight" as 13:00 (Midday). The words around it decide;
      with no words, 1–6 is afternoon or evening (nobody arranges four in the morning without saying
      so) and 7–11 stays morning. Night words keep 1–4 in the small hours. */
-  const night=W("tonight|night|midnight|gece|gece yarısı").test(t);
-  const morning=W("morning|early|breakfast|dawn|sabah|kahvaltı|sabahleyin").test(t);
-  const noonW=W("noon|midday|lunch|öğle|öğlen|öğle yemeği").test(t);
-  const pmW=W("afternoon|evening|dinner|supper|pm|öğleden sonra|akşam|akşamüstü|akşam yemeği|ikindi").test(t);
+  /* v146.1 — the Turkish suffixed forms too ("akşama", "sabaha", "kahvaltıda", "akşamki"): a whole-word
+     test never matched them, so the hour beside them was read without its half of the day. */
+  const night=W(_TR_NIGHT_W).test(t);
+  const morning=W("early|dawn|"+_TR_MORNING_W).test(t);
+  const noonW=W(_TR_NOON_W).test(t);
+  const pmW=W("pm|"+_TR_AFTERNOON_W+"|"+_TR_EVENING_W).test(t);
   if(h===12) return (night&&!noonW)?0:12;               // "gece 12" is midnight, a bare 12 is noon
   if(night&&h<=4) return h;                             // "at 1 tonight", "gece saat ikide"
   if(morning&&!pmW) return h;                           // "sabah 5", "5 in the morning"
@@ -15685,9 +15714,10 @@ function _calInferDayPeriod(text,today){
   if(_B("day after tomorrow|öbür gün|yarından sonra").test(t)) day=today+2;
   // (!) v144.1 — before "now": "3 days from now" was filed for today because "now" matched first.
   else if(nd){ const n=words[nd[1]]||parseInt(nd[1],10); if(n>=1&&n<=60)day=today+n; }
-  else if(_B("tomorrow|yarın").test(t)) day=today+1;
-  else if(_B("next week|haftaya|gelecek hafta|önümüzdeki hafta").test(t)) day=today+7;
-  else if(_B("tonight|bu gece|this evening|bu akşam|today|bugün|this afternoon|this morning|şimdi|now").test(t)) day=today;
+  else if(_B("tomorrow|yarın|yarınki|yarına").test(t)) day=today+1;
+  // v146.1 — "in a week" / "bir hafta sonra" are next week too.
+  else if(_B("next week|in a week|in one week|a week from now|a week later|haftaya|gelecek hafta|önümüzdeki hafta|bir hafta sonra|1 hafta sonra").test(t)) day=today+7;
+  else if(_B("tonight|bu gece|bu geceki|this evening|bu akşam|bu akşamki|today|bugün|bugünkü|this afternoon|this morning|bu sabah|bu sabahki|şimdi|now").test(t)) day=today;
   /* v144.1 — the story's clock has day numbers and no weekdays, so "on Friday" names no day that
      can be found. It stays unknown (and blocks the "this …" → today guess below) instead of
      landing on today. */
@@ -15698,11 +15728,11 @@ function _calInferDayPeriod(text,today){
      "öğleden sonra" never matched. */
   const _h=statedHour(text);
   if(_h!=null) period=periodForHour(_h);
-  else if(_B("morning|breakfast|sabah|kahvaltı").test(t)) period="Morning";
-  else if(_B("afternoon|öğleden sonra|ikindi").test(t)) period="Afternoon";
-  else if(_B("midday|noon|lunch|öğlen|öğle|öğle yemeği").test(t)) period="Midday";
-  else if(_B("evening|dinner|supper|akşam|akşamüstü|akşam yemeği").test(t)) period="Evening";
-  else if(_B("night|tonight|midnight|gece").test(t)) period="Night";
+  else if(_B(_TR_MORNING_W).test(t)) period="Morning";
+  else if(_B(_TR_AFTERNOON_W).test(t)) period="Afternoon";
+  else if(_B(_TR_NOON_W).test(t)) period="Midday";
+  else if(_B(_TR_EVENING_W).test(t)) period="Evening";
+  else if(_B(_TR_NIGHT_W).test(t)) period="Night";
   if(day==null && period && !weekday && _B("this|bu").test(t)) day=today;
   return {day,period};
 }
@@ -15766,10 +15796,18 @@ function _whoOverlap(a,b){
    could not both be filed. A different resolved place is never the same meeting; on the same day a
    clearly different time of day is not either (Evening vs Night stays one: "tonight" is filed both
    ways). `opts.sameDay` narrows the ±1 day tolerance (kept for a re-emission a day off) to the day. */
+/* (!) v146.1 — three holes that let real duplicates through: the same title on the same day was kept
+   when the periods differed (a re-sent meeting whose missing period had been filled with a default
+   landed two parts away — callers now pass the writer's own period); the names branch demanded the
+   SAME period where the title branch allowed a neighbour ("Dinner with Aria" Evening vs "Have dinner
+   together" Night); and the player, named on every meeting of theirs, counted as the shared person,
+   so any two of their meetings in one part of the day were "the same". `opts.chat` names the player. */
 function _calIsDup(cal,cand,opts){
   if(!cand||cand.day==null)return false;
   const sameDayOnly=!!(opts&&opts.sameDay);
-  const names=n=>String(n||"").split(/\s*(?:,|&|\band\b|\bve\b)\s*/i).map(x=>x.trim()).filter(Boolean);
+  const _chat=opts&&opts.chat;
+  const _isP=n=>{ try{ return _chat?isPlayerName(_chat,n):sameName(String(state.user||""),n,true); }catch(_){ return false; } };
+  const names=n=>splitNames(n).filter(x=>!_isP(x)&&!/^\{\{\s*user\s*\}\}$/i.test(x));
   const exName=e=>(e&&e.executor&&e.executor!=="user"&&!meetIsBoth(e))?[String(e.executor).trim()]:[];
   const cNames=names(cand.who).concat(exName(cand));
   const placeTxt=e=>_nmFold(e.where||e.whereRaw||"");
@@ -15781,9 +15819,11 @@ function _calIsDup(cal,cand,opts){
     if(e.locationId&&cand.locationId&&e.locationId!==cand.locationId)return false;
     const pa=placeTxt(e), pb=placeTxt(cand);
     if(!(e.locationId&&cand.locationId)&&pa&&pb&&!pa.includes(pb)&&!pb.includes(pa))return false;
-    const sameTitle=String(e.title||"").toLowerCase()===String(cand.title||"").toLowerCase()||_titleSimilar(e.title,cand.title);
+    const exactTitle=_nmFold(e.title||"")===_nmFold(cand.title||"");
+    if(exactTitle&&dd===0)return true;
+    const sameTitle=exactTitle||_titleSimilar(e.title,cand.title);
     if(sameTitle&&!(dd===0&&pDiff(e,cand)>=2))return true;
-    if(dd===0&&cNames.length&&(!e.period||!cand.period||e.period===cand.period)){
+    if(dd===0&&cNames.length&&pDiff(e,cand)<2){
       const oN=names(e.who).concat(exName(e));
       if(oN.some(n=>cNames.some(x=>sameName(n,x,true))))return true;
     }
@@ -15850,7 +15890,8 @@ async function runCalendarEngine(chat,opts){
     // small model's context window.
     const _openAll=chatCalendar(chat).filter(e=>!e.done);
     const openItems=_openAll
-      .map(e=>`- ${e.title}${e.who?` (with ${e.who})`:""}${e.day!=null?` day ${e.day}`:""}`)
+      // v146.1 — with its part of the day: a model that cannot see "Evening" re-emits the dinner as new.
+      .map(e=>`- ${e.title}${e.who?` (with ${e.who})`:""}${e.day!=null?` day ${e.day}${e.period?" "+e.period:""}`:""}`)
       .slice(-40).join("\n");
     // (!) v30.5 — fillTpl, not a bare up(). DEFAULT_CAL names {{user}} ELEVEN times — it is the
     // token the whole prompt turns on ("a plan for two people to be in the same place… EITHER
@@ -15884,9 +15925,11 @@ async function runCalendarEngine(chat,opts){
         const title=_su(String(t.title).trim()); if(title.length<3)continue;
         const cast=(state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x));
         const findC=n=>findByName(cast,n);   // v144.1 — Turkish-folded, ambiguity → nobody
-        const assignee=findC(t.assignee)||findC(String(t.who||"").split(/\s*,\s*/)[0]);
+        // v146.1 — a group "who" is several people and never the player (splitNames / isPlayerName).
+        const _tw=splitNames(t.who).filter(n=>!isPlayerName(chat,n));
+        const assignee=findC(t.assignee)||findC(_tw[0]);
         if(!assignee)continue;                       // no real character was asked → not a task
-        const others=String(t.who||"").split(/\s*,\s*/).map(x=>findC(x)).filter(Boolean);
+        const others=_tw.map(x=>findC(x)).filter(Boolean);
         const group=[assignee].concat(others.filter(c=>c.id!==assignee.id));
         let day=(t.dayOffset!=null&&t.dayOffset!==""&&Number.isFinite(Number(t.dayOffset)))?today+_calClampOffset(t.dayOffset):today;
         let period=(t.period&&PERIODS.indexOf(t.period)>=0)?t.period:null;
@@ -15911,11 +15954,12 @@ async function runCalendarEngine(chat,opts){
     }catch(_){}
     if(!Array.isArray(arr)||!arr.length)return;
     const cal=chatCalendar(chat);
-    const subUser=s=>String(s||"").replace(/\{\{\s*user\s*\}\}/gi, state.user);
+    const _un=chatUserName(chat);   // v146.1 — this chat's player (the tracker is not awaited; the open story may be another)
+    const subUser=s=>String(s||"").replace(/\{\{\s*user\s*\}\}/gi, _un);
     const stripNarrator=s=>String(s||"")
       .split(/\s*(?:,|&|\bve\b|\band\b)\s*/i).map(x=>x.trim())
       .filter(x=>x && !/^(the\s+)?(narrator|anlat[ıi]c[ıi])$/i.test(x)).join(", ");
-    const isUserName=s=>{ const k=String(s||"").trim().toLowerCase(); return !k||k==="{{user}}"||k==="user"||k==="player"||k===String(state.user||"").toLowerCase(); };
+    const isUserName=s=>{ const k=String(s||"").trim().toLowerCase(); return !k||k==="{{user}}"||k==="user"||k==="player"||isPlayerName(chat,k); };
     let added=0; const newLikely=[];
     for(const p of arr){
       if(!p||!p.title)continue;
@@ -15937,6 +15981,7 @@ async function runCalendarEngine(chat,opts){
       // moment it was filed. A part of today that is already over moves to tomorrow (_calSaneSlot).
       if(period && PERIODS.indexOf(period)<0) period=null;
       if(!period){ const inf2=_calInferDayPeriod(title,today); period=inf2.period||null; }
+      const _ownPeriod=period;   // v146.1 — what the model (or its wording) said, before any default: the dedupe reads this
       { const _sl=_calSaneSlot(chat,day,period); if(!_sl)continue; day=_sl.day; period=_sl.period; }
       let who=stripNarrator(subUser(p.who||""));
       /* EXECUTOR — "user", a character name, or (v54.1) "both": nobody hosts and each side travels
@@ -15948,7 +15993,12 @@ async function runCalendarEngine(chat,opts){
       // meeting resolves OFFSTAGE via the world-pulse calendar executor (a narrated "X and Y met"
       // beat), not the player-facing resolver. Trust the model's "parties", but never call it char↔char
       // if the user is actually named as executor or among the participants.
-      const _whoHasUser=String(who||"").split(/\s*,\s*/).some(n=>n&&isUserName(n));
+      /* (!) v146.1 — A GROUP IS SPLIT INTO PEOPLE, AND THE PLAYER IS NEVER ONE OF "THE CHARACTERS".
+         "Emre and Özlem Özüçak" was one name here, and the player's name was stored with the
+         counterpart's as the meeting's `character` — which the binder then minted into a hidden
+         person. splitNames + isPlayerName; `character`/`charName` carry the counterparts only. */
+      const _whoNames=splitNames(who);
+      const _whoHasUser=_whoNames.some(n=>n&&isUserName(n));
       const withUser = executor==="user" || executor==="both" || _whoHasUser || String(p.parties||"").toLowerCase()!=="chars";
       /* (!) v144.1 — ONLY PEOPLE WHO EXIST. Tasks checked the roster; meetings never did, so a
          meeting could be filed with somebody the model made up, a character still undiscovered, or
@@ -15957,7 +16007,7 @@ async function runCalendarEngine(chat,opts){
          with no real character in it is not filed. `who` is rewritten with the canonical names. */
       const _cast=(state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x));
       const _res=[];
-      String(who||"").split(/\s*,\s*/).map(s=>s.trim()).filter(Boolean).forEach(n=>{
+      _whoNames.forEach(n=>{
         if(isUserName(n))return;
         const pp=findByName(_cast,n); if(pp&&_res.indexOf(pp)<0)_res.push(pp);
       });
@@ -15966,7 +16016,8 @@ async function runCalendarEngine(chat,opts){
       if(!_res.length)continue;
       if(executor!=="user"&&executor!=="both"&&!_ex){ _ex=_res[0]; }
       if(_ex) executor=_ex.name;
-      who=_res.map(x=>x.name).concat(_whoHasUser?[state.user]:[]).join(", ");
+      who=_res.map(x=>x.name).concat(_whoHasUser?[_un]:[]).join(", ");
+      const _chars=_res.map(x=>x.name).join(", ");
       /* "both" is the no-host shape of a meeting WITH {{user}}; between two characters it means
          nothing, and leaving it there would hand the offstage executor a plan whose actor is a word.
          The first named participant carries it instead, which is what the prompt asks for there. */
@@ -15993,7 +16044,7 @@ async function runCalendarEngine(chat,opts){
       const _where=loc?loc.name:"";
       // v144.1 — dedup AFTER the place is known: same/similar title within ±1 day, or the same
       // people on the same day at the same time — never two different places or times (_calIsDup).
-      if(_calIsDup(cal,{title,who,executor,day,period,locationId:loc?loc.id:null,where:_where,whereRaw:(loc?"":_rawWhere)}))continue;
+      if(_calIsDup(cal,{title,who,executor,day,period:_ownPeriod,locationId:loc?loc.id:null,where:_where,whereRaw:(loc?"":_rawWhere)},{chat}))continue;
       // v28 — resolve the names the tracker returned to real personas and store their IDS, so a
       // detected plan is tied to its people exactly like a hand-made one (and every engine can match
       // the actor without substring-matching a name the model may have spelled differently).
@@ -16004,7 +16055,7 @@ async function runCalendarEngine(chat,opts){
         detail:String(p.why||"").trim().slice(0,200),   // v25.2 — WHY it was arranged (from the exchange)
         day, period,
         where:_where, locationId:loc?loc.id:null, whereRaw:(loc?"":_rawWhere),
-        subArea:String(p.subArea||"").trim(), character:who, charName:who,
+        subArea:String(p.subArea||"").trim(), character:_chars, charName:_chars,
         _needsBind:(!loc && !!_rawWhere),
         certainty, probability:null,
         done:false, prompted:false, source:"auto"};
@@ -16122,6 +16173,26 @@ async function _adjustAttendance(chat){
    reasoned from the same record everything else is.
    Once per entry (`_unkeptLogged`), for the character participants only: the player knows what they
    did, and a memory of their own no-show in their own head is not a thing. */
+/* (!) v146.1 — ONE ANSWER TO "DOES ENDING THE DAY NOW BLAME ANYONE FOR THIS MEETING?" The End Day
+   confirm said a dinner in the CURRENT part of the day "moves to tomorrow" (it tested >=) while the
+   roll-forward tested > — so the dinner was recorded as unkept and every participant got "they never
+   came". Both read this now. A meeting of the ending day `day` moves on (nobody to blame) when:
+     - its part of the day had not come yet, or IS the current one (`endPeriod`), or it has none;
+     - the player put it off with "Later" that day;
+     - the tracker filed it in the very last stretch (the future reconcile has not judged it yet);
+     - Do Not Disturb kept it from resolving.
+   `endPeriod` absent: the whole day passed. */
+function _calRollsAtDayEnd(chat,e,day,endPeriod){
+  if(!e||e.day==null)return false;
+  if(e.day>day)return true;
+  if(chat&&chat.dnd&&_planIncludesUser(e))return true;
+  if(e.ftAt&&e.ftAt.day===day&&(!endPeriod||e.ftAt.period===endPeriod))return true;
+  const endIdx=PERIODS.indexOf(endPeriod);
+  if(e.day<day||endIdx<0)return false;
+  const pi=PERIODS.indexOf(e.period);
+  if(pi<0||pi>=endIdx)return true;
+  return e.snoozedAt!=null&&Math.floor(e.snoozedAt/10)===day;
+}
 function plantUnkeptMeetingMemories(chat,day,endPeriod){
   try{
     if(!chat)return;
@@ -16130,29 +16201,27 @@ function plantUnkeptMeetingMemories(chat,day,endPeriod){
        day had already rolled, so a dinner still hours away when the player pressed End Day read as
        overdue: every participant was told they had been stood up, and the next morning the player
        was asked "It's time for 'Dinner'…" about yesterday. Now, for the day that ended:
-         - a meeting in a part of that day that had not come yet (or of a day skipped over), one the
-           tracker filed in the very last stretch (the future reconcile has not judged it yet), or
-           one Do Not Disturb kept from resolving → nobody is to blame. It moves to the same part
-           of the day on the current day, once, with a notice; a second time it lapses quietly.
+         - a meeting _calRollsAtDayEnd says moves on (its part of the day not over yet, put off,
+           filed in the last stretch, held by Do Not Disturb) → nobody is to blame. It moves to the
+           same part of the day on the current day, once, with a notice; a second time it lapses,
+           with a notice too (v146.1).
          - only a meeting whose hour had genuinely passed is remembered as unkept.
        `endPeriod` is the part of the day that was current when it ended (absent: all of it passed). */
-    const endIdx=PERIODS.indexOf(endPeriod);
     const now=c.gameDay||today+1;
-    const lastStretch=e=>!!(e.ftAt&&e.ftAt.day===today&&(!endPeriod||e.ftAt.period===endPeriod));
-    const stillAhead=e=>e.day>today || (e.day===today && endIdx>=0 && (!e.period || PERIODS.indexOf(e.period)>endIdx));
     let touched=false;
-    const rolled=[];
+    const rolled=[], lapsed=[];
     chatCalendar(c).forEach(e=>{
       if(!e||e.done||e._unkeptLogged)return;
       if(!_calOverdue(c,e))return;
       if(e.outcome==="cancelled")return;
-      if(stillAhead(e)||lastStretch(e)||(c.dnd&&_planIncludesUser(e))){
+      // v146.1 — one predicate with the End Day confirm (_calRollsAtDayEnd): the part of the day that was current counts as still ahead.
+      if(_calRollsAtDayEnd(c,e,today,endPeriod)){
         if(e._rolledFrom==null){
-          e._rolledFrom=e.day; e.prompted=false; delete e.snoozedAt;
+          e._rolledFrom=e.day; e.prompted=false; delete e.snoozedAt; delete e.snoozes;
           const sl=_calSaneSlot(c,now,e.period);
           e.day=sl?sl.day:now; if(sl)e.period=sl.period;
           rolled.push(e);
-        }else calClose(c,e,"lapsed");
+        }else{ calClose(c,e,"lapsed"); lapsed.push(e); }
         touched=true; return;
       }
       if(!state.mem)return;
@@ -16182,24 +16251,50 @@ function plantUnkeptMeetingMemories(chat,day,endPeriod){
         ? `"${rolled[0].title}" moved to ${relWhen(rolled[0].day,now,true)||"today"}${rolled[0].period?" ("+rolled[0].period+")":""} — the day ended before it`
         : `${rolled.length} plans moved to today — the day ended before them`); }catch(_){}
     }
+    /* (!) v146.1 — A LAPSE IS NEVER SILENT. Only the first roll posted a notice, so a meeting put off a
+       second time (or held back by Do Not Disturb two days running) simply vanished from the list. */
+    if(lapsed.length){
+      try{ _calNotice(c,lapsed.length===1
+        ? `"${lapsed[0].title}" did not happen — it was already put off once, and the day ended before it again`
+        : `${lapsed.length} plans did not happen — already put off once, the day ended before them again`); }catch(_){}
+    }
+    /* (!) v146.1 — AN UNKEPT MEETING IS CLOSED ONCE ITS STING HAS PASSED. It stayed open for good: the
+       badge counted it and the tracker's ALREADY TRACKED list carried it forever. Past the window in
+       which calendarContextLine still shows it as UNKEPT (3 days) it is closed as missed. */
+    chatCalendar(c).forEach(e=>{
+      if(e&&!e.done&&_calOverdue(c,e)&&e.day<now-3&&(e._unkeptLogged||!state.mem)){ calClose(c,e,"missed"); touched=true; }
+    });
     if(touched){ try{ persistMemory(); }catch(_){} markChatDirty(c); persistChats(); try{ updateCalendarBadge(); }catch(_){} }
   }catch(e){/* best-effort, exactly like the reconciler it runs beside */}
 }
 /* v144.1 — "You still have 'Dinner with Aria' this evening." for the End Day confirm: the player is
    told what is still ahead today before they end it, not after. "" when nothing is. */
+/* (!) v146.1 — what it says is what End Day then does: the same predicate as the roll-forward
+   (_calRollsAtDayEnd), so tonight's dinner is "moves to tomorrow" and stays that way. A meeting that
+   was due earlier today and is still open (put off, or never asked) is named too, with what ending
+   the day means for it. The player is never listed as their own company ("with Aria, Emre"). */
 function calPendingTodaySummary(chat){
   try{
     if(!chat||!state.calOn)return "";
-    const today=chat.gameDay||1, cur=chatPeriodIndex(chat);
-    const left=chatCalendar(chat).filter(e=>e&&!e.done&&(e.kind||"meeting")==="meeting"&&e.day===today
-      &&_planIncludesUser(e)&&(!e.period||PERIODS.indexOf(e.period)>=cur));
-    if(!left.length)return "";
-    const one=e=>{ const o=planOtherNames(e,""); const t=String(e.title||"a plan");
+    const today=chat.gameDay||1, endP=chatPeriod(chat);
+    const mine=chatCalendar(chat).filter(e=>e&&!e.done&&(e.kind||"meeting")==="meeting"&&e.day===today
+      &&e.outcome!=="cancelled"&&_planIncludesUser(e));
+    if(!mine.length)return "";
+    const moves=mine.filter(e=>_calRollsAtDayEnd(chat,e,today,endP)), missed=mine.filter(e=>moves.indexOf(e)<0);
+    const one=e=>{ const o=planOtherNames(e,"").filter(n=>!isPlayerName(chat,n)); const t=String(e.title||"a plan");
       return `"${t}${o.length&&!o.some(n=>nameInText(t,n))?" with "+o.join(", "):""}"${e.period?" ("+e.period+")":""}`; };
-    return `You still have ${left.slice(0,3).map(one).join(", ")}${left.length>3?` and ${left.length-3} more`:""} today. `
-      +(left.every(e=>e._rolledFrom==null)
-        ? `If you end the day now, ${left.length===1?"it moves":"they move"} to tomorrow. `
-        : `If you end the day now, ${left.length===1?"it has":"some have"} already been put off once and will not happen. `);
+    const list=a=>`${a.slice(0,3).map(one).join(", ")}${a.length>3?` and ${a.length-3} more`:""}`;
+    let out="";
+    if(moves.length){
+      const fresh=moves.filter(e=>e._rolledFrom==null), again=moves.filter(e=>e._rolledFrom!=null);
+      out+=`You still have ${list(moves)} today. `
+        +(!again.length ? `If you end the day now, ${moves.length===1?"it moves":"they move"} to tomorrow. `
+          :!fresh.length ? `If you end the day now, ${again.length===1?"it has":"they have"} already been put off once and will not happen. `
+          : `If you end the day now, ${list(fresh)} ${fresh.length===1?"moves":"move"} to tomorrow; ${list(again)} ${again.length===1?"was":"were"} already put off once and will not happen. `);
+    }
+    if(missed.length)
+      out+=`${list(missed)} ${missed.length===1?"was":"were"} due earlier today and ${missed.length===1?"has":"have"} not happened — ending the day now counts ${missed.length===1?"it":"them"} as missed. `;
+    return out;
   }catch(_){ return ""; }
 }
 async function reconcileCalendarDay(chat,day,uni){
@@ -16528,10 +16623,21 @@ async function _resolveDueMeeting(chat,e,opts){
     }
     // Certain: the character comes no matter what.
     if(atMeetingLoc){ settle("met"); return await arriveCounterpart(); }
-    if(confirmed&&locId&&locObj){                                   // "Attend now": go there and meet them
-      settle("met"); await travelTo(locId,[],{meeting:e,counterpart:p});
-      if(p) await arriveCounterpart();
-      return true;
+    /* (!) v146.1 — THE PLAYER IS ASKED HERE TOO. A certain visit to a place the player was not at (home,
+       by default) was recorded as "stood up" the instant it came due, with no Go / Later / Skip like
+       every other branch — common, because home is where most visits land. Go: travel there and they
+       arrive; Later: asked again next part of the day; Skip (or no place to go to): they came and
+       nobody was there. */
+    if(locId&&locObj){
+      const _home=playerHomeLoc(chat);
+      const a=confirmed?"go":await _meetAsk(chat,e,`${p?p.name:"They"} ${p?"is":"are"} coming to ${locName||"the place you agreed"}, and you are not there. ${_home&&_home.id===locId?"Go home now?":"Go there now?"}`,
+        _home&&_home.id===locId?"Go home now":`Go to ${locName}`);
+      if(a==="later")return later();
+      if(a==="go"){
+        settle("met"); await travelTo(locId,[],{meeting:e,counterpart:p});
+        if(p) await arriveCounterpart();
+        return true;
+      }
     }
     settle("stood_up");
     try{ _calNotice(chat,`${p?p.name:"They"} went to ${locName||"the meeting place"} for "${e.title}", but ${state.user} wasn't there`); }catch(_){}
@@ -16703,7 +16809,13 @@ function calendarContextLine(chat,selfName,selfId,opts){
             : ` — ⚠️ You are AT the place and the hour is now: this is you keeping it, already underway. Do not wait for it, plan it, or talk about arranging it.`)
         : actorOf(e));
   };
-  const overdue=cal.filter(e=>_calOverdue(c,e) && e.day>=today-3);   // missed within the last few days
+  /* (!) v146.1 — NOT BEFORE THE DAY END HAS SETTLED IT. The day rolls in the foreground and the
+     roll-forward (plantUnkeptMeetingMemories) runs stages later in the background; in between, a dinner
+     that is about to move to today read here as "UNKEPT … it stung". A meeting of a day whose day end
+     is still pending, and not yet logged as unkept, is left out until that stage has run. */
+  const _pde=c.pendingDayEnd&&c.pendingDayEnd.day;
+  const overdue=cal.filter(e=>_calOverdue(c,e) && e.day>=today-3
+    && !(_pde!=null&&e.day>=_pde&&!e._unkeptLogged));   // missed within the last few days
   const active=cal.filter(e=>!_calOverdue(c,e));
   /* v60.1 — planDueNow stays true for the whole rest of the day once an entry's period arrives, so
      an Afternoon plan was still announcing itself as HAPPENING NOW at Evening. Its hour passing is
@@ -16856,23 +16968,83 @@ const _PR_STOP=new Set(["the","and","for","you","your","yours","will","would","s
   "who","what","when","are","was","were","been","have","has","had","into","onto","out","off","all","one","more","than","then","just",
   "promise","promised","promises","swear","swore","sworn","word","going","gonna","ile","için","bir","bu","şu","olarak",
   "sen","senin","seni","sana","ben","beni","bana","benim","onu","ona","onun","hiç","asla","artık","daha","her","zaman","değil","yok",
-  "söz","sözü","verdin","veriyorsun","verdi","olacak","edeceksin","yapmayacaksın","yapacaksın"]);
-function _prNames(t){
+  "söz","sözü","verdin","veriyorsun","verdi","olacak","edeceksin","yapmayacaksın","yapacaksın","sakın"]);
+/* (!) v146.1 — THE PEOPLE IN A PROMISE ARE THE CAST, NOT ITS CAPITALS. Any capitalised word counted as a
+   person, so "the Ring" vs "the ring", "by Friday" vs nothing, or a sentence-initial word split one
+   promise into two. A name is now a capitalised word that is the first name of someone in this chat's
+   world (or its player) — "Can" the person, never "can" the verb. */
+function _prNames(t,chat){
   const out=new Set();
-  const raw=String(t||"");
-  const W=raw.match(/\p{L}[\p{L}\p{M}]*/gu)||[];
-  // a capital inside the sentence is a name; the opening word only when it is a character's name
-  W.forEach((w,i)=>{ if(i>0&&w.length>1&&/^\p{Lu}/u.test(w)&&w!=="I")out.add(_nmFold(w)); });
-  try{ if(W[0]&&/^\p{Lu}/u.test(W[0])&&(state.personas||[]).some(p=>sameName(String((p&&p.name)||"").split(/\s+/)[0],W[0])))out.add(_nmFold(W[0])); }catch(_){}
+  const W=String(t||"").match(/\p{L}[\p{L}\p{M}]*/gu)||[];
+  const caps=new Set(W.filter(w=>w.length>1&&/^\p{Lu}/u.test(w)).map(w=>_nmFold(w)));
+  if(!caps.size)return out;
+  try{
+    const c=chat||curChat(), uid=c&&c.universeId;
+    (state.personas||[]).forEach(p=>{
+      if(!p||!p.name||(uid&&p.universeId!==uid))return;
+      const f=_nmFold(String(p.name).trim().split(/\s+/)[0]); if(f&&caps.has(f))out.add(f);
+    });
+    const un=_nmFold(String((c?chatUserName(c):state.user)||"").trim().split(/\s+/)[0]);
+    if(un&&caps.has(un))out.add(un);
+  }catch(_){}
   return out;
 }
-function _prNeg(t){ return /(?<![\p{L}])(not|never|no|asla|hiç|değil)(?![\p{L}])|n['’]t\b/iu.test(String(t||"")); }
-function _prSame(a,b){
-  const words=t=>[...new Set(_prNorm(t).split(" ").filter(w=>w&&!_PR_STOP.has(w)).map(w=>_nmFold(w).slice(0,5)))];
-  const NA=_prNames(a), NB=_prNames(b);
+/* Polarity. English/Turkish negators, plus (v146.1) the Turkish NEGATIVE VERB SUFFIX — "söyleyeceksin"
+   (you will tell) and "söylemeyeceksin" (you will not) differ by one syllable and no separate word, so
+   they merged as one promise: -me/-ma before the future, aorist, present, past and reported endings,
+   the 3rd-person/plural imperatives, and the bare negative imperative of the common verbs. Read with
+   Turkish casing, on the words that are not somebody's name ("Fatma" is not a negation). */
+const _PR_NEG_TR=/(?:m[ae]y[ae]c[ae][kğ]|m[ıiuü]yor|m[ae]m[ıiuü]ş|m[ae]z(?:s[ıi]n(?:[ıi]z)?|l[ae]r|[ıi]m|s[ıi]k|d[ıi])?$|m[ae]d[ıiuü](?:m|n|k|n[ıi]z|l[ae]r)?$|m[ae]s[ıi]n$|m[ae]y[ıi]n(?:[ıi]z)?$)/u;
+const _PR_NEG_TR_IMP=new Set(["söyleme","yapma","gitme","gelme","anlatma","dokunma","bakma","içme","çıkma","girme","yaklaşma","karışma","bulaşma","konuşma","arama","açma"]);
+function _prNeg(t,names){
+  const s=String(t||"");
+  if(/(?<![\p{L}])(not|never|no|asla|hiç|değil|sakın)(?![\p{L}])|n['’]t(?![\p{L}])/iu.test(s))return true;
+  const W=s.match(/\p{L}[\p{L}\p{M}]*/gu)||[];
+  // a capitalised word past the first is a name ("Yılmaz"), never a verb
+  return W.some((w0,i)=>{ if(i>0&&/^\p{Lu}/u.test(w0))return false; const w=w0.toLocaleLowerCase("tr");
+    return !(names&&names.has(_nmFold(w)))&&(_PR_NEG_TR_IMP.has(w)||(w.length>=6&&_PR_NEG_TR.test(w))); });
+}
+/* The same thing said another way: "keep/stay away from X" and "don't go near X" are one prohibition,
+   "stop seeing X" is "not seeing X"; a few verbs that mean the same are one word; English -ing/-ed/-s are
+   taken off before the five-letter stem, so "pay back the money" and "pay the money back" (or "seeing"
+   and "see") meet. */
+const _PR_SYN={speak:"talk",chat:"talk",say:"tell",reveal:"tell",meet:"see",visit:"see",return:"back"};
+function _prCanon(t){
+  return String(t||"")
+    .replace(/(?<![\p{L}])(?:keep|stay)\s+away\s+from(?![\p{L}])/giu,"not near")
+    .replace(/(?<![\p{L}])(?:go|come|get)\s+(?:near|close\s+to)(?![\p{L}])/giu,"near")
+    .replace(/(?<![\p{L}])(?:stop|quit)\s+(?=\p{L}+ing(?![\p{L}]))/giu,"not ");
+}
+function _prStem(w){
+  let x=_nmFold(w);
+  if(/^[a-z]+$/.test(x)){
+    if(x.length>5&&/ing$/.test(x))x=x.slice(0,-3); else if(x.length>4&&/ed$/.test(x))x=x.slice(0,-2);
+    else if(x.length>4&&/[^s]s$/.test(x))x=x.slice(0,-1);
+    x=_PR_SYN[x]||x;
+  }
+  return x.slice(0,5);
+}
+// Words that name a part of the day or a day: two promises tied to different ones are different words.
+const _PR_WHEN=new Set(["morning","evening","night","afternoon","noon","midnight","tonight","tomorrow","today","weekend",
+  "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
+  "sabah","aksam","gece","ogle","oglen","bugun","yarin","pazartesi","sali","carsamba","persembe","cuma","cumartesi","pazar"]);
+const _PR_PRON=/(?<![\p{L}])(him|her|them|onu|ona|onunla|ondan|onun|onlara|onları)(?![\p{L}])/iu;
+function _prSame(a,b,chat){
+  a=_prCanon(a); b=_prCanon(b);
+  let NA=_prNames(a,chat), NB=_prNames(b,chat);
+  if(_prNeg(a,NA)!==_prNeg(b,NB))return false;                          // "will" vs "will not"
+  /* A restatement often swaps the name for a pronoun ("…to Berk again" / "…to him again"): one name on
+     one side, none but a pronoun on the other, is read as that person. */
+  if(NA.size===1&&!NB.size&&_PR_PRON.test(b))NB=new Set(NA);
+  else if(NB.size===1&&!NA.size&&_PR_PRON.test(a))NA=new Set(NB);
   if(NA.size!==NB.size||[...NA].some(n=>!NB.has(n)))return false;     // different people → different promise
-  if(_prNeg(a)!==_prNeg(b))return false;                                // "will" vs "will not"
-  const A=words(a).filter(w=>!NA.has(w)), B=words(b).filter(w=>!NB.has(w));
+  const whenOf=t=>new Set(_prNorm(t).split(" ").map(w=>_nmFold(w)).filter(w=>_PR_WHEN.has(w)));
+  const WA=whenOf(a), WB=whenOf(b);
+  if(WA.size&&WB.size&&![...WA].some(w=>WB.has(w)))return false;       // "every night" vs "every morning"
+  const nameStems=new Set([...NA].map(n=>n.slice(0,5)));
+  const words=t=>[...new Set(_prNorm(t).split(" ").filter(w=>w&&!_PR_STOP.has(w)&&!_PR_PRON.test(w)&&!_PR_WHEN.has(_nmFold(w))).map(_prStem)
+    .filter(w=>w&&!nameStems.has(w)))];
+  const A=words(a), B=words(b);
   if(!A.length||!B.length)return !A.length&&!B.length&&NA.size>0;       // only the name left on both sides
   const sb=new Set(B); let hit=0; A.forEach(w=>{ if(sb.has(w))hit++; });
   const r=hit/Math.min(A.length,B.length);
@@ -16887,7 +17059,7 @@ function recordPromise(chat,o,day){
   if(!holderId)return null;                       // a commitment with no owner cannot be held to
   const toId=toName?_prResolveId(chat,toName):"";
   const promise=briefDesc(String(o.promise).trim(),220);   // v62.1 — word-safe, like every other cap
-  const dup=list.find(x=>x&&x.status==="open"&&x.holderId===holderId&&_prSame(x.promise,promise));
+  const dup=list.find(x=>x&&x.status==="open"&&x.holderId===holderId&&_prSame(x.promise,promise,chat));
   if(dup){ dup.day=dup.day||day; dup.seenDay=day||dup.seenDay; return dup; }    // already given; restating it changes nothing (but it was raised)
   /* (!) v61.1 — AN UNRECOGNISED KIND IS A MIS-SCRAPE, NOT A PROMISE. This used to fall back to
      "promise" for anything, which meant a line the extractor could not even classify still entered
@@ -16911,7 +17083,7 @@ function recordPromise(chat,o,day){
     ask:briefDesc(String(o.ask||"").trim(),200),
     promise, showsAs,
     kind,
-    day:day||chat.gameDay||1, status:"open", statusDay:0, note:""
+    day:day||chat.gameDay||1, seenDay:day||chat.gameDay||1, status:"open", statusDay:0, note:""
   };
   list.push(e);
   _prPrune(chat,day);
@@ -16928,7 +17100,16 @@ const PR_LAPSE_DAYS=21;
 function _prPrune(chat,day){
   const list=chatPromises(chat); const d=day||chat.gameDay||1;
   let changed=false;
-  list.forEach(pr=>{ if(pr&&pr.status==="open"&&(d-(pr.seenDay||pr.day||d))>=PR_LAPSE_DAYS){ pr.status="lapsed"; pr.statusDay=d; pr.note="no longer mentioned"; changed=true; } });
+  /* (!) v146.1 — two lapses that were wrong. A secret or a prohibition is KEPT by silence — never
+     mentioning it is the keeping — so it lapsed while being honoured and the holder stopped seeing
+     "WHAT YOU SWORE"; those two kinds never lapse. And a save from before `seenDay` existed had every
+     open word lapse at once on the first check: a missing stamp is seeded with today instead. */
+  list.forEach(pr=>{
+    if(!pr||pr.status!=="open")return;
+    if(pr.seenDay==null){ pr.seenDay=d; changed=true; return; }
+    if(pr.kind==="secret"||pr.kind==="prohibition")return;
+    if((d-(pr.seenDay||pr.day||d))>=PR_LAPSE_DAYS){ pr.status="lapsed"; pr.statusDay=d; pr.note="no longer mentioned"; changed=true; }
+  });
   let keep=list.filter(pr=>pr&&(pr.status==="open"||((d-(pr.statusDay||pr.day||0))<=7)));
   if(keep.length>60){
     const open=keep.filter(pr=>pr.status==="open"), settled=keep.filter(pr=>pr.status!=="open");
@@ -17131,7 +17312,7 @@ async function runPromiseEngine(chat,opts){
     const openList=open.slice(-24)
       .map(pr=>`- [${pr.id}] ${pr.holderName}${pr.toName?` → ${pr.toName}`:""}: ${pr.promise}${pr.ask?` (asked: ${pr.ask})`:""}`)
       .join("\n");
-    const cast=[state.user||"You",...curCast().map(c=>c.name)].filter(Boolean).join(", ");
+    const cast=[chatUserName(chat)||"You",...curCast(chat).map(c=>c.name)].filter(Boolean).join(", ");   // v146.1 — this chat's cast, not the open one's
     const msgs=[{role:"system",content:fillTpl(up("promisePrompt"),{user:state.user,day:String(day)})+"\n\n"+engineLangDirective()}];
     recentExchangeMsgsWithTexts(chat,(opts&&opts.turns)||ENGINE_RECENT_TURNS).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${day}, ${(_at&&_at.period)||chatPeriod(chat)}.\nPeople who can be a holder: ${cast}\n\nCOMMITMENTS ALREADY ON THE LEDGER (never re-emit one — report a change to it in "updates" instead):\n${openList||"(none yet)"}\n\nFrom the exchange above ONLY, return the JSON.`});
@@ -17263,7 +17444,7 @@ async function runFutureTracker(chat){
         try{ await runFutureUpdate(chat,kind,String(it.id).replace(/^\[|\]$/g,""),turns); }catch(e){}
       }
     }
-    try{ _ftStampChanges(chat,_before); }catch(e){}
+    try{ _ftStampChanges(chat,_before,at); }catch(e){}
     markChatDirty(chat);
   }catch(e){ try{ console.warn("[future tracker] bailed:",e&&e.message||e); }catch(_){} }
   finally{
@@ -17355,18 +17536,22 @@ function _ftEntry(chat,kind,id){
         if(c.title)e.title=briefDesc(String(c.title),90);
         if(c.day!=null&&Number.isFinite(+c.day)&&+c.day>=day&&+c.day<=day+60)e.day=Math.round(+c.day);
         if(c.period&&PERIODS.indexOf(c.period)>=0)e.period=c.period;
-        if(c.day!=null||c.period){ const sl=_calSaneSlot(chat,e.day,e.period); if(sl){ e.day=sl.day; e.period=sl.period; } e.prompted=false; delete e.snoozedAt; }
+        /* (!) v146.1 — a meeting moved on purpose is a NEW appointment: it had kept `_rolledFrom` (and its
+           snoozes), so the next day end let it lapse silently as "already put off once". */
+        if(c.day!=null||c.period){ const sl=_calSaneSlot(chat,e.day,e.period); if(sl){ e.day=sl.day; e.period=sl.period; } _calFreshSlot(e); }
         /* (!) v144.1 — WHO CHANGED, SO THE IDS CHANGE. Only the label was rewritten, so every
            id-first reader (payload scoping, the counterpart, the executor) still acted on the old
            people. Names resolve against this world's active cast; unknown ones are dropped. */
         if(c.who){
           const pool=(state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x));
-          const un=String(state.user||"").toLowerCase();
-          const parts=String(c.who).split(/\s*(?:,|&|\band\b|\bve\b)\s*/i).map(x=>x.trim()).filter(Boolean);
+          // v146.1 — split like every group field (splitNames), the player dropped (isPlayerName), and
+          // `character`/`charName` hold the counterparts only — never "Aria, Emre" as one character.
+          const parts=splitNames(c.who);
           const res=[]; let hasUser=false;
-          parts.forEach(n=>{ if(un&&n.toLowerCase()===un){ hasUser=true; return; } const pp=findByName(pool,n); if(pp&&res.indexOf(pp)<0)res.push(pp); });
+          parts.forEach(n=>{ if(isPlayerName(chat,n)){ hasUser=true; return; } const pp=findByName(pool,n); if(pp&&res.indexOf(pp)<0)res.push(pp); });
           if(res.length){
-            e.who=res.map(x=>x.name).concat(hasUser?[state.user]:[]).join(", "); e.character=e.who; e.charName=e.who;
+            e.who=res.map(x=>x.name).concat(hasUser?[chatUserName(chat)]:[]).join(", ");
+            e.character=res.map(x=>x.name).join(", "); e.charName=e.character;
             e.charIds=res.map(x=>x.id); e.charId=res[0].id; e.charId2=res[1]?res[1].id:null;
             if(meetMode(e)==="char"&&e.executorId&&e.charIds.indexOf(e.executorId)<0){ e.executorId=res[0].id; e.executor=res[0].name; }
           }
@@ -17391,6 +17576,8 @@ function _ftEntry(chat,kind,id){
       apply:c=>{
         if(c.promise){ const np=briefDesc(String(c.promise),220); if(np)pr.promise=np; }
         if(c.shows_as){ const sa=briefDesc(String(c.shows_as),160); if(sa)pr.showsAs=sa; }
+        // v146.1 — a word corrected from the lines was raised in them: it is not "no longer mentioned".
+        if(c.promise||c.shows_as)pr.seenDay=day;
       },
       end:(how,res)=>{ pr.status=how==="done"?"kept":how==="failed"?"broken":"released"; pr.statusDay=day; pr.note=briefDesc(String(res||""),140); },
       drop:()=>{ chat.promises=chatPromises(chat).filter(x=>x!==pr); }};
@@ -17472,8 +17659,11 @@ function _ftSnapshot(chat){
   return m;
 }
 /* Mark whatever a tracker pass created or changed with the stretch it happened in. */
-function _ftStampChanges(chat,before){
-  const at={day:chat.gameDay||1,period:chatPeriod(chat)};
+/* (!) v146.1 — with the stretch the TURN was in (`at`, taken before the tracker's awaits): the live clock
+   has often moved on by now (End Day, travel), and a meeting stamped with the next stretch was neither
+   judged by the reconcile of the stretch it was agreed in nor treated as "filed last thing" at day end. */
+function _ftStampChanges(chat,before,at0){
+  const at=(at0&&at0.day!=null)?{day:at0.day,period:at0.period||chatPeriod(chat)}:{day:chat.gameDay||1,period:chatPeriod(chat)};
   _ftSnapshot(chat).forEach((v,id)=>{
     const b=before.get(id);
     if(!b||b.sig!==v.sig)v.obj.ftAt=at;
@@ -18061,7 +18251,9 @@ function saveCalManual(){
   }
   if(editId){
     const e=chatCalendar(chat).find(x=>x.id===editId);
-    if(e){ Object.assign(e,fields); persistChats(); }
+    if(e){ const _mv=e.day!==fields.day||(e.period||null)!==(fields.period||null);
+      Object.assign(e,fields); if(_mv)_calFreshSlot(e);   // v146.1 — moved by hand: a new appointment, not a rolled one
+      persistChats(); }
   }else{
     addCalendarEntry(chat,Object.assign({kind:"meeting",source:"manual"},fields));
   }
@@ -32185,6 +32377,7 @@ function _textComing(chat,p,period){
     // The plan they are acting on: it happens here, today, and they are the one travelling.
     Object.assign(ex,{day:today,period:per,executor:p.name,executorId:p.id,withUser:true,
       certainty:"certain",probability:null,locationId:here,where,prompted:false});
+    _calFreshSlot(ex);   // v146.1 — "on my way" sets its day and time anew
     persistChats(); try{ updateCalendarBadge(); }catch(_){}
     return ex;
   }
@@ -32378,7 +32571,7 @@ function deliverProactiveText(chat,p,message,why){
 async function maybeProactiveText(chat,opts){
   opts=opts||{};
   if(!state.textsOn||!chat||!state.key)return false;
-  // (!) v144.1 — Do Not Disturb holds for End Day's forced pass too; `force` used to walk straight through it.
+  // (!) v144.1 — Do Not Disturb holds for End Day's pass too (a `force` flag used to walk straight through it).
   if(chat.dnd)return false;
   const uid=chat.universeId, today=chat.gameDay||1;
   const present=new Set(presentIds(chat));
@@ -41861,9 +42054,9 @@ async function _endDayBackgroundRun(chat,day,uni,daySnapshot,fallbackName,endPer
   // the part of the day that closed it, and lets intents fester one more day.
   await stage(async()=>{ await runPeriodEngines(chat,day,endPer,uniObj,{dayEnd:true}); });
 
-  // ---- TEXTS: a message the player left on read all day is felt (memory + a mood nudge), then a
-  // charged character may fire off a text as the day closes.
-  await stage(async()=>{ await maybeProactiveText(chat,{force:true}); });
+  // ---- TEXTS: a charged character may fire off a text as the day closes. (v146.1 — the "left on
+  // read" pass this comment described was removed in v38.7; `force` was read by nobody.)
+  await stage(async()=>{ await maybeProactiveText(chat); });
 
   // ---- LIVING UNIVERSE: CONFRONTATION (layer 3) ---- if a character now holds a strong, unresolved
   // open suspicion about the player, they may come to settle it. Fires at most one, only when no
@@ -42998,7 +43191,8 @@ async function maybeGenerateNextQuest(chat,uni,arc){
 // into the quest memory, then hand the arc to the chain (activate the pre-authored next, or design one).
 async function _afterQuestDone(chat,uni,res,day){
   if(!res||!res.quest)return null;
-  { const rq=res.quest, how=rq.abandoned?`Quest abandoned by ${state.user||"the player"}`:rq.failed?"Quest failed":"Quest completed";
+  // v146.1 — a task called off (the tracker's "cancelled") is not a failure: its note says so.
+  { const rq=res.quest, how=rq.abandoned?`Quest abandoned by ${state.user||"the player"}`:(rq.cancelled||rq.outcome==="cancelled")?"Quest called off":rq.failed?"Quest failed":"Quest completed";
     try{ questProgressNote(uni,rq,day,`${how}${rq.result?": "+rq.result:"."}`); }catch(e){} }
   try{
     if(res.next){       // questMarkDone already activated the pre-authored next quest

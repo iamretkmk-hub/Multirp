@@ -27,7 +27,7 @@ AI providers with the user's own API keys.
 ## File layout
 
 ```
-index.html   — the entire app (v144: ~49,000 lines): ~1,000 lines CSS, ~1,700 lines HTML, ~46,000 lines JS
+index.html   — the entire app (v146: ~51,000 lines): ~1,000 lines CSS, ~1,700 lines HTML, ~48,000 lines JS
 sw.js        — optional service worker: caches the app shell, network-first; never caches API calls
 docs/        — this documentation
 ```
@@ -38,7 +38,7 @@ global** and discipline comes from banner comments + naming conventions, not mod
 
 ## index.html anatomy
 
-| Region | Lines (v29.1 — v144 is ~49k lines; same order, every region larger) | Content |
+| Region | Lines (v29.1 — v146 is ~51k lines; same order, every region larger) | Content |
 |---|---|---|
 | `<style>` | ~25–657 | All CSS. Theming via CSS variables on `body[data-theme]`. Landscape two-column layout, video gallery, playground styles at the end. |
 | SVG symbol defs | ~660–742 | The line-icon system: `<symbol id="i-*">` sprites referenced by `<use href="#i-…">`. |
@@ -76,7 +76,9 @@ window load
  └─ init()                          (async; a throw while loading → bootFatal(): a screen that
      │                               explains and offers "Download what's recoverable")
      ├─ acquireWriterLock()         v144.1 — first tab writes; a later tab runs read-only
-     │                              (collectionsSafe=false, #tabRoBar) so tabs can't overwrite
+     │                              (collectionsSafe=false, #tabRoBar) so tabs can't overwrite;
+     │                              v146.1 — a read-only tab writes nothing (_storageRO: settings,
+     │                              IndexedDB), and the one that inherits the lock reloads as writer
      ├─ preloadCollections()        hydrate chats/memory/universes/personas/gossip from IndexedDB kv
      │                              (strict reads; unreadable → read-only session; one-time
      │                              migration from legacy localStorage only for absent keys)
@@ -106,13 +108,14 @@ only), `navigator.storage.persist()`, and a custom "Install app" button.
 
 ## Versioning & release checklist
 
-- `#buildStamp` in the Settings header shows the app version (`v144.0` at time of writing). The codebase's
+- `#buildStamp` in the Settings header shows the app version (`v146.0` at time of writing). The codebase's
   banner comments reference feature versions constantly (`v19.4 — NARRATION MODE`), which is
   how history is tracked in a single file.
-- `sw.js` `CACHE_VERSION` (`storymind-v404` at time of writing) **must be bumped with every
+- `sw.js` `CACHE_VERSION` (read the current value in `sw.js`) **must be bumped with every
   upload**, otherwise installed clients keep the previous cached `index.html` (network-first
   mitigates this online, but offline clients pin to cache). The worker caches only `ok`
-  responses and keeps the previous cache when an install fails.
+  responses, never a URL with a query string (the update check's `index.html?_b=…`), and keeps
+  the previous cache when an install fails.
 - Tests: `tests/` holds ~100 plain Node + Playwright scripts; `node tests/run-all.js` runs them
   all (see `tests/README.md`), and `.github/workflows/tests.yml` runs them on every push and PR.
   The dev-time drift guards that `console.warn` at boot (`[blockTpls] drift`,

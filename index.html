@@ -2964,12 +2964,18 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
 const ML="https://modelslab.com/api/v6/";
 const ATLAS="https://api.atlascloud.ai/api/v1/";   // AtlasCloud image/video (async submit→poll)
 let _lsRev=0;   // v144.1 — bumped by every settings write; the snapshot skip reads it (doAutoBackup)
+/* (!) v146.1 — A READ-ONLY TAB WRITES NOTHING AT ALL. collectionsSafe=false stopped its collection
+   saves, but settings, prompts and API keys (store.*) and the raw IndexedDB helpers (gallery bytes,
+   pruning, static art) still wrote — a stale second tab's Save Settings put its old values over the
+   writer's. init() sets this when the writer lock is held elsewhere; every write below refuses. */
+let _storageRO=false;
+function _roRefuse(){ if(_storageRO&&typeof canPersistCollections==="function")try{ canPersistCollections(); }catch(_){} return _storageRO; }
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v);}catch(e){return d;}},
-  set(k,v){_lsRev++;try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){console.warn("storage set failed",k,e);return false;}},
+  set(k,v){if(_roRefuse())return false;_lsRev++;try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){console.warn("storage set failed",k,e);return false;}},
   // v144.1 — raw() had no try/catch: with storage blocked, the first read threw and the app was blank.
   raw(k,d){try{const v=localStorage.getItem(k);return v===null?d:v;}catch(e){return d;}},
-  setRaw(k,v){_lsRev++;try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}},
-  del(k){try{localStorage.removeItem(k);return true;}catch(e){console.warn("storage del failed",k,e);return false;}}};
+  setRaw(k,v){if(_roRefuse())return false;_lsRev++;try{localStorage.setItem(k,v);return true;}catch(e){console.warn("storage setRaw failed",k,e);return false;}},
+  del(k){if(_roRefuse())return false;try{localStorage.removeItem(k);return true;}catch(e){console.warn("storage del failed",k,e);return false;}}};
 
 /* ===== v144.1 — UNCAUGHT ERRORS ARE LOGGED =====
    An error nobody caught used to vanish (there is no console on a phone). Each one now lands in the
@@ -3057,6 +3063,7 @@ const mediaDB=(function(){
   return {
     // Replace the whole store with `records` (array of {id,...}). Used by persist*.
     async putAll(storeName,records){
+      if(_storageRO)return false;   // v146.1 — a read-only tab never writes (see _storageRO)
       try{ await tx(storeName,"readwrite",s=>{ s.clear(); records.forEach(r=>{ if(r&&r.id) s.put(r); }); }); return true; }
       catch(e){ console.warn("idb putAll failed",storeName,e); return false; }
     },
@@ -3073,10 +3080,11 @@ const mediaDB=(function(){
         r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error);
       }));
     },
-    async clear(storeName){ try{ await tx(storeName,"readwrite",s=>s.clear()); return true; }catch(e){ return false; } },
+    async clear(storeName){ if(_storageRO)return false; try{ await tx(storeName,"readwrite",s=>s.clear()); return true; }catch(e){ return false; } },
     /* v144.1 — a backup restore in ONE transaction: every kv entry, plus (optionally) the image and
        video stores replaced. Either all of it commits or none of it does. Throws on failure. */
     async restoreAtomic(kv,media){
+      if(_storageRO)throw new Error("StoryMind is open in another tab");
       const names=["kv"].concat(media?["images","videos"]:[]);
       const db=await open();
       await new Promise((res,rej)=>{
@@ -3095,6 +3103,7 @@ const mediaDB=(function(){
       })); }catch(e){ console.warn("idb kvGet failed",key,e); return null; }
     },
     async kvSet(key,value){
+      if(_storageRO)return false;
       try{ await tx("kv","readwrite",s=>s.put(value,key)); return true; }
       catch(e){ console.warn("idb kvSet failed",key,e); return false; }
     },
@@ -3121,7 +3130,7 @@ const mediaDB=(function(){
         r.onsuccess=()=>res(r.result||[]); r.onerror=()=>rej(r.error);
       })); }catch(e){ return []; }
     },
-    async kvDelete(key){ try{ await tx("kv","readwrite",s=>s.delete(key)); return true; }catch(e){ return false; } }
+    async kvDelete(key){ if(_storageRO)return false; try{ await tx("kv","readwrite",s=>s.delete(key)); return true; }catch(e){ return false; } }
   };
 })();
 // Holding object populated BEFORE loadState() from IndexedDB (see preloadCollections()).
@@ -3203,15 +3212,31 @@ function canPersistCollections(){
    second takes over — and the second is told when that happens. Web Locks where available, else a
    BroadcastChannel handshake; with neither, every tab writes, as before. */
 let _tabReadOnly=false;
+/* (!) v146.1 — THE TAB THAT INHERITS THE LOCK BECOMES THE WRITER. A read-only tab queued for the lock
+   and, when the writer closed, got it and kept it — while staying read-only. A third tab (or a reload
+   of the second) then found the lock taken and went read-only too: every tab read-only, for good.
+   Now the waiter that is granted the lock lets it go at once and reloads itself (its in-memory state
+   is the stale one it booted with, so it cannot simply start saving). The reload is flagged, and a
+   flagged boot WAITS a moment for the lock instead of giving up when it is busy — so if several
+   read-only tabs were queued, each hand-off drains in turn and exactly one of them ends as writer. */
+const _WL_HANDOFF="sm_writerHandoff", _WL_WAIT_MS=3000;
 function acquireWriterLock(){
   return new Promise(resolve=>{
     let settled=false; const done=v=>{ if(!settled){ settled=true; resolve(v); } };
     try{
       if(navigator.locks&&navigator.locks.request){
-        navigator.locks.request("storymind-writer",{ifAvailable:true},lock=>{
+        let handoff=false; try{ handoff=sessionStorage.getItem(_WL_HANDOFF)==="1"; sessionStorage.removeItem(_WL_HANDOFF); }catch(_){}
+        const hold=lock=>{
           if(!lock){ done(false); return; }
           done(true); return new Promise(()=>{});   // held for the life of the page
-        }).catch(()=>done(true));
+        };
+        if(handoff&&typeof AbortController!=="undefined"){
+          const ctl=new AbortController(); const t=setTimeout(()=>{ try{ ctl.abort(); }catch(_){} },_WL_WAIT_MS);
+          navigator.locks.request("storymind-writer",{signal:ctl.signal},lock=>{ clearTimeout(t); return hold(lock); })
+            .catch(e=>{ clearTimeout(t); done(!(e&&e.name==="AbortError")); });   // waited it out → read-only
+        }else{
+          navigator.locks.request("storymind-writer",{ifAvailable:true},hold).catch(()=>done(true));
+        }
         return;
       }
     }catch(e){}
@@ -3230,15 +3255,20 @@ function acquireWriterLock(){
     done(true);
   });
 }
+let _wlPromoting=false;
 function _showTabReadOnly(){
   const b=document.getElementById('tabRoBar'); if(b)b.classList.add('show');
-  // Wait for the writer's lock; when the other tab closes, say that a reload now takes over.
+  // Wait for the writer's lock; when it is ours, hand it straight back and reload to take over (above).
   try{
     if(navigator.locks&&navigator.locks.request)
       navigator.locks.request("storymind-writer",()=>{
+        if(_wlPromoting)return;
+        _wlPromoting=true;
         const t=b&&b.querySelector('.updTxt');
-        if(t)t.textContent="The other StoryMind tab has closed. Reload this tab to continue — it will save again.";
-        return new Promise(()=>{});
+        if(t)t.textContent="The other StoryMind tab has closed — reloading this one so it can save…";
+        try{ sessionStorage.setItem(_WL_HANDOFF,"1"); }catch(_){}
+        setTimeout(()=>{ try{ location.reload(); }catch(_){} },150);
+        // returning releases the lock now; the reloaded page asks for it again (and waits for it)
       }).catch(()=>{});
   }catch(e){}
 }
@@ -9029,7 +9059,7 @@ function loadState(){
     if(c.memEvent===undefined)c.memEvent=null;   // event-bounded memory arc tracker (null = none open)
     delete c._gmBusy;   // clear any in-flight flag left over from a previous session
     (c.messages||[]).forEach(m=>{
-      if(!m.mid)m.mid=newMid();
+      if(!m.mid||typeof m.mid!=="string"||!_MID_OK.test(m.mid))m.mid=newMid();   // v146.1 — a hostile stored id is replaced (see _MID_OK)
       // Heavy media isn't persisted; clear any half-states from a prior session.
       // A blob: video URL is dead after reload — but if we kept the durable remote URL
       // (videoSrc), restore playback from it so the generated video reappears instead of
@@ -9186,20 +9216,25 @@ function persistChatsNow(){ return perf("persistChatsNow",()=>{
    _noteWrite records one write's outcome: the first failure toasts, a run of failures raises one
    stronger warning, and any success resets both. _retryWriteLater re-runs a failed collection write
    with backoff (5s → 60s) — the retry reads the CURRENT value, so it can never write stale data. */
-let _writeFails=0, _writeWarnedOnce=false, _writeWarnedRepeat=false;
+/* (!) v146.1 — PER KEY. The counters were global, so the small gossip write that succeeded between two
+   failed chat writes reset them: the "retrying" toast came back on every save and the "export now"
+   warning never fired while the chats were not being saved at all. Each key keeps its own run now,
+   and a success on that key (only) ends its episode. */
+const _writeFail=new Map();    // key -> {n, warned, warnedRepeat}
 const _writeRetry=new Map();   // key -> {timer, n}
 function _noteWrite(what,ok){
   if(ok){
-    _writeFails=0; _writeWarnedOnce=false; _writeWarnedRepeat=false;
+    _writeFail.delete(what);
     const r=_writeRetry.get(what); if(r){ clearTimeout(r.timer); _writeRetry.delete(what); }
     return true;
   }
-  _writeFails++;
-  try{ console.error("[storage] write failed:",what,"(failure "+_writeFails+" in a row)"); }catch(_){}
-  try{ if(typeof dbg==="function"){ const e=dbg("Storage · save "+what,"IndexedDB","kv:"+what,{what}); dbgDone(e,"error","write failed ("+_writeFails+" in a row)"); } }catch(_){}
-  if(!_writeWarnedOnce){ _writeWarnedOnce=true; try{ toast("Couldn't save "+what+" — retrying"); }catch(_){} }
-  else if(_writeFails>=3&&!_writeWarnedRepeat){ _writeWarnedRepeat=true;
-    try{ toast("Saving keeps failing (storage full or blocked?) — export a backup from Settings → Backup now"); }catch(_){} }
+  const f=_writeFail.get(what)||{n:0,warned:false,warnedRepeat:false}; _writeFail.set(what,f);
+  f.n++;
+  try{ console.error("[storage] write failed:",what,"(failure "+f.n+" in a row)"); }catch(_){}
+  try{ if(typeof dbg==="function"){ const e=dbg("Storage · save "+what,"IndexedDB","kv:"+what,{what}); dbgDone(e,"error","write failed ("+f.n+" in a row)"); } }catch(_){}
+  if(!f.warned){ f.warned=true; try{ toast("Couldn't save "+what+" — retrying"); }catch(_){} }
+  else if(f.n>=3&&!f.warnedRepeat){ f.warnedRepeat=true;
+    try{ toast("Saving "+what+" keeps failing (storage full or blocked?) — export a backup from Settings → Backup now"); }catch(_){} }
   return false;
 }
 function _retryWriteLater(key,fn){
@@ -9288,9 +9323,10 @@ async function fetchMediaBlob(url){
   if(!/^https?:/.test(url)) return null;
   const attempt=async(u,opt)=>{
     try{
-      const r=await fetch(u,opt);
+      const g=await fetchWithTimeout(u,opt,{timeoutMs:120000,read:"blob"});   // v146.1 — bounded, body included
+      const r=g&&g.res;
       if(!r||!r.ok)return null;
-      const b=await r.blob();
+      const b=g.blob;
       if(!b||!b.size)return null;
       // An error page returned with 200 is not media. Real frames are never this small.
       if(b.type&&/^text\/|json/i.test(b.type)&&b.size<4096)return null;
@@ -9348,11 +9384,15 @@ async function captureGalleryMedia(rec){
 // Captures finish after the record was already written, so re-persist once the dust settles (the
 // record is slimmer and carries `stored` now). Coalesced — a burst of captures costs one write.
 let _gmPersistTimer=null;
+/* (!) v146.1 — THROUGH THE GATE, NOT AROUND IT. This timer called mediaDB.putAll itself, and putAll
+   CLEARS the store: one capture after a failed gallery read (or in a read-only second tab, whose list
+   is stale) replaced the whole stored gallery with what that session had in memory. It now goes
+   through persistImages/persistVideos, which ask _canPersistMedia (hydrated + allowed to write). */
 function _gmPersistSoon(){
   if(_gmPersistTimer)return;
   _gmPersistTimer=setTimeout(()=>{ _gmPersistTimer=null;
-    try{ mediaDB.putAll("images",(state.images||[]).filter(x=>x&&x.id).map(_slimMediaRec)); }catch(e){}
-    try{ mediaDB.putAll("videos",(state.videos||[]).filter(v=>v&&v.id).map(_slimMediaRec)); }catch(e){}
+    try{ persistImages(); }catch(e){}
+    try{ persistVideos(); }catch(e){}
   },1500);
 }
 // Persisted shape: never write a session-only blob: URL (dead after reload), and once the bytes are
@@ -9366,6 +9406,8 @@ function _slimMediaRec(r){
 // Background capture pass for anything not stored yet (new records, and legacy ones whose links
 // are still alive). Guarded by _gmCaptured, so repeat calls after the first are free.
 function _gmCaptureAll(list){
+  // v146.1 — a session that may not write (read-only tab, unreadable storage) captures nothing either.
+  if(!collectionsSafe)return;
   (list||[]).forEach(r=>{ if(r&&r.id&&!r.stored) captureGalleryMedia(r); });
 }
 // Hydrate a specific set of records from their stored bytes (used on demand by the gallery for
@@ -9432,7 +9474,7 @@ async function mediaBlob(url,recId,mid){
     const opt={mode:"cors",referrerPolicy:"no-referrer"};
     for(const u of [url,httpsMedia(url)]){
       if(!u)continue;
-      try{ const r=await fetch(u,opt); if(r&&r.ok){ const b=await r.blob(); if(b&&b.size) return b; } }catch(e){}
+      try{ const g=await fetchWithTimeout(u,opt,{timeoutMs:120000,read:"blob"}); const b=g&&g.blob; if(g&&g.res&&g.res.ok&&b&&b.size) return b; }catch(e){}   // v146.1 — bounded
       if(httpsMedia(url)===url)break;
     }
   }catch(e){}
@@ -9703,13 +9745,15 @@ function runningBuild(){
    query so neither the browser nor the service worker can answer from a stale copy. */
 async function serverBuild(){
   try{
-    const r=await fetch("index.html?_b="+Date.now(),{cache:"no-store"});
+    // v146.1 — bounded: 20 s for the answer, 60 s to find the stamp (a stalled server hung the check)
+    const dl=Date.now()+60000;
+    const r=await fetchWithTimeout("index.html?_b="+Date.now(),{cache:"no-store"},{timeoutMs:20000});
     if(!r.ok)return "";
-    if(!r.body||!r.body.getReader) return _stampOf(await r.text());   // no streams → read it whole
+    if(!r.body||!r.body.getReader) return _stampOf((await Promise.race([r.text(),new Promise(res=>setTimeout(()=>res(""),Math.max(0,dl-Date.now())))]))||"");   // no streams → read it whole
     const reader=r.body.getReader(), dec=new TextDecoder();
     let buf="",stamp="";
     for(;;){
-      const {done,value}=await reader.read();
+      const {done,value}=await _readUntil(reader,dl);
       if(value)buf+=dec.decode(value,{stream:true});
       stamp=_stampOf(buf);
       if(stamp||done)break;
@@ -10031,6 +10075,12 @@ function closeModal(id){document.getElementById(id).classList.remove('show');}
    &#39; back to ' BEFORE the JS runs, so HTML escaping alone cannot keep such a value inside it. */
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function escJs(s){return esc(String(s==null?"":s).replace(/[\\'"\n\r\u2028\u2029<>]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0")));}
+/* (!) v146.1 — a field that is "always a number" is only a number until a shared file says otherwise:
+   status.day, mapPos, tracker min/max went into HTML raw, and an imported roleplay ran script. numOr
+   gives a finite number (or the fallback) for markup that needs a number — SVG coordinates, value="". */
+function numOr(x,d){ const n=(typeof x==="number")?x:((typeof x==="string"&&x.trim()!=="")?+x:NaN); return Number.isFinite(n)?n:(d===undefined?0:d); }
+// …and for selectors built from stored ids (message ids): an attribute-selector-safe form.
+function cssq(s){ s=String(s==null?"":s); try{ if(window.CSS&&CSS.escape)return CSS.escape(s); }catch(_){} return s.replace(/["\\\]\[]/g,"\\$&"); }
 /* v144.1 — a stored or imported URL is only put in src= / href= / url() when it is media the app
    itself produces: an inline image/video/audio data: URI, a blob: object URL, or an http(s) link
    (the providers' CDNs). Anything else — javascript:, data:text/html, a relative path smuggled in
@@ -10049,18 +10099,39 @@ const _MEDIA_KEY_RE=/(image|img|url|src|cover|photo|picture|portrait|video|thumb
 const _NOT_MEDIA_KEY_RE=/(prompt|desc|caption|text|content|note|style|name|label|title)/i;
 const _BAD_SCHEME_RE=/^\s*(?:javascript|vbscript|data|file|filesystem|about|jar|intent|chrome[a-z-]*)\s*:/i;
 const _badMediaVal=(k,v)=>_MEDIA_KEY_RE.test(k)&&!_NOT_MEDIA_KEY_RE.test(k)&&_BAD_SCHEME_RE.test(v)&&!safeMediaUrl(v);
-function sanitizeImportedMedia(x,depth){
+/* v146.1 — fields the app only ever writes as numbers. An imported file can carry anything there, and
+   several of them reach HTML as they are (see numOr); a string that is not a plain number is dropped
+   (the reader falls back to its default), a numeric string becomes the number. Message ids are the
+   other stored value used as markup (id="vid_…", [data-mid="…"] selectors): one that is not a plain
+   token is replaced. */
+const _IMPORT_NUM_KEYS=new Set(["day","gameDay","completedDay","statusDay","doneDay","dueDay","born","seq","min","max","start",
+  "perDay","publicAt","at","probability","importance","strength","lastSeenDay","neglectDays"]);
+const _MID_OK=/^[\w.:-]{1,80}$/;
+function _importNum(v){ if(typeof v!=="string")return v; const t=v.trim(); return (t!==""&&Number.isFinite(+t))?+t:undefined; }
+function sanitizeImportedMedia(x,depth,pk){
   let n=0; depth=depth||0;
   if(!x||typeof x!=="object"||depth>8)return 0;
-  if(Array.isArray(x)){ for(const v of x) n+=sanitizeImportedMedia(v,depth+1); return n; }
+  if(Array.isArray(x)){
+    for(const v of x){
+      // v146.1 — a message whose id is not a plain token gets a fresh one (see _MID_OK)
+      if(pk==="messages"&&v&&typeof v==="object"&&v.mid!=null&&!(typeof v.mid==="string"&&_MID_OK.test(v.mid))){ v.mid=newMid(); n++; }
+      n+=sanitizeImportedMedia(v,depth+1);
+    }
+    return n;
+  }
   for(const k of Object.keys(x)){
     const v=x[k];
+    // v146.1 — numeric fields (and the map position / tracker values, which are bags of numbers)
+    if(typeof v==="string"&&(_IMPORT_NUM_KEYS.has(k)||((pk==="mapPos")&&(k==="x"||k==="y"))||pk==="trackerVal")){
+      const nv=_importNum(v); if(nv===undefined)delete x[k]; else x[k]=nv; n++; continue;
+    }
+    if(k==="trackerVals"&&v&&typeof v==="object"){ for(const tk of Object.keys(v)){ if(v[tk]&&typeof v[tk]==="object")sanitizeImportedMedia(v[tk],depth+2,"trackerVal"); else if(typeof v[tk]==="string"){ const nv=_importNum(v[tk]); if(nv===undefined)delete v[tk]; else v[tk]=nv; } } continue; }
     if(typeof v==="string"){
       if(_badMediaVal(k,v)){ x[k]=""; n++; }
     }else if(v&&typeof v==="object"){
       // an array of URL strings under a media key (reference images)
       if(Array.isArray(v)){ for(let i=0;i<v.length;i++){ if(typeof v[i]==="string"&&_badMediaVal(k,v[i])){ v[i]=""; n++; } } }
-      n+=sanitizeImportedMedia(v,depth+1);
+      n+=sanitizeImportedMedia(v,depth+1,k);
     }
   }
   return n;
@@ -10335,7 +10406,7 @@ function _dispText(t){
 }
 function typewriterReveal(mid,fullText,onDone){
   fullText=_dispText(fullText);   // single choke point: instant path, per-tick slices, final all inherit
-  const b=document.querySelector('.bubble[data-mid="'+mid+'"]');
+  const b=document.querySelector('.bubble[data-mid="'+cssq(mid)+'"]');
   const body=b&&b.querySelector('.body');
   // If reveal is off, the bubble is offscreen, or we can't find it: just show it whole.
   if(!body || state.streamReveal===false || state.narrMode){ if(body)body.innerHTML=msgBodyHTML(fullText,b); if(onDone)onDone(); return; }   // narrMode: instant text (v19.4)
@@ -10347,7 +10418,7 @@ function typewriterReveal(mid,fullText,onDone){
   let i=0;                                    // character index into fullText
   const baseTick=Math.round(1000/revealCps()); // ms per character
   const tick=()=>{
-    const liveBody=document.querySelector('.bubble[data-mid="'+mid+'"] .body');
+    const liveBody=document.querySelector('.bubble[data-mid="'+cssq(mid)+'"] .body');
     if(!liveBody){ cancelReveal(mid); if(onDone)onDone(); return; }
     i++;                                       // reveal one more character
     const shown=fullText.slice(0,i);
@@ -10561,7 +10632,7 @@ function appendOneBubble(m){
   if(!chatShowsMsg(m))return;                                 // texts belong to the text window
   if(_renderedChatId!==state.curChat){ renderChat(); if(typeof reflectModes==='function')reflectModes(); return; }
   {const _cc=curChat(); if(!_cc||(_cc.messages||[]).indexOf(m)<0)return;}   // (!) v144.1 — another chat's line
-  if(list.querySelector('[data-mid="'+m.mid+'"]')) return;   // already on screen
+  if(list.querySelector('[data-mid="'+cssq(m.mid)+'"]')) return;   // already on screen
   const _following=ChatScroll.isFollowing();
   const b=bubble(m); list.appendChild(b); if(b._needsScene) refreshBubble(m.mid);
   // Front-trim to the render window. The OLD approach summed getBoundingClientRect().height of the
@@ -10826,7 +10897,11 @@ async function chatCompletion(messages,model,opts={}){
   const entry=dbg(opts.dbg||"Chat / roleplay",_api.label,_url,body);
   // v144.1 — a background call waits out a paused provider instead of failing one by one (see _mcBreaker).
   const _bg=opts.rp!==true&&opts.foreground!==true;
-  if(_bg){ const br=_mcBreakerOpen(_api); if(br){ dbgDone(entry,"error","Skipped — background calls to "+_api.label+" are paused ("+br+")"); throw{friendly:httpMsg(br==="credit"?402:401,_api),paused:true}; } }
+  /* v146.1 — …but never one the player just asked for: generators, Story mode, "Drop me into a
+     scene", a re-illustrate and the other button-started calls pass foreground:true (as the
+     connection tests always did). One of those succeeding also lifts the pause (below). */
+  const _asked=!_bg;
+  if(!_asked){ const br=_mcBreakerOpen(_api); if(br){ dbgDone(entry,"error","Skipped — background calls to "+_api.label+" are paused ("+br+")"); throw{friendly:httpMsg(br==="credit"?402:401,_api),paused:true}; } }
   // v144.1 — Stop. A roleplay reply (or a caller passing opts.signal) can be aborted by the player.
   const _stopCtl=(opts.rp===true||opts.signal)?_rpCallStart(opts.signal):null;
   const _sig=_stopCtl?_stopCtl.signal:undefined;
@@ -10874,7 +10949,16 @@ async function chatCompletion(messages,model,opts={}){
     res=_got.res; lastStatus=res.status;
     if(res.ok)break;
     // v144.1 — a bad key or no credit pauses the BACKGROUND engines (one toast) instead of each failing.
-    if(res.status===401||res.status===402||res.status===403) _mcBreakerTrip(_api,res.status);
+    /* (!) v146.1 — NOT on a 403. OpenRouter answers 403 when its moderation flags THIS input: the key
+       is fine and the next call may pass. Tripping on it paused every engine for two minutes behind a
+       "your key is invalid" toast. A 403 is this call's own error, and it says what the provider said. */
+    if(res.status===401||res.status===402) _mcBreakerTrip(_api,res.status);
+    if(res.status===403){
+      const em=_errSnippet(_got).replace(/^ — /,"");
+      dbgDone(entry,"error","HTTP 403"+(em?" — "+em:""));
+      throw{friendly:/moderat|flagged/i.test(em)?(_api.label+" refused this request: its moderation flagged the input"+(em?" ("+em.slice(0,120)+")":"")+".")
+                    :(_api.label+" refused this request (403)"+(em?": "+em.slice(0,160):". Check the model and your key in Settings.")),status:403};
+    }
     // retry on rate-limit / server errors; fail fast on client errors (auth, bad model, etc.)
     if((res.status===429||res.status>=500) && attempt<maxTry){
       // v144.1 — honour Retry-After (seconds or a date), with jitter so parallel calls do not return in step.
@@ -10900,6 +10984,7 @@ async function chatCompletion(messages,model,opts={}){
     throw{friendly:_api.label+" returned an error: "+em.slice(0,160)};
   }
   _dbgUsage(entry,d);
+  if(_asked) _mcBreakerClear(_api);   // v146.1 — a call that went through proves the key works again
   let out=extractCompletionText(d);
   // EMPTY-RESPONSE RESCUE. Reasoning models (e.g. deepseek-v4-pro) spend hidden reasoning tokens
   // BEFORE the answer. If max_tokens is small (or the prompt is thin, like a bare arrival note),
@@ -10972,6 +11057,9 @@ async function fetchWithTimeout(url,init,o){
     const res=await race(fetch(url,Object.assign({},init,ctl?{signal:ctl.signal}:{})));
     if(!o.read) return res;
     if(o.read==="text") return {res,text:(typeof res.text==="function")?await race(res.text()):""};
+    // v146.1 — media bytes are read under the same timer (a CDN that stalls mid-download used to hang the capture)
+    if(o.read==="blob") return {res,blob:(res.ok&&typeof res.blob==="function")?await race(res.blob()):null};
+    if(o.read==="arrayBuffer") return {res,buf:(res.ok&&typeof res.arrayBuffer==="function")?await race(res.arrayBuffer()):null};
     // JSON: parse with res.json(); on failure keep a snippet of the raw body (from a clone) for the log.
     const cl=(typeof res.clone==="function")?(()=>{ try{ return res.clone(); }catch(_){ return null; } })():null;
     try{ return {res,data:await race(res.json()),text:"",jsonError:false}; }
@@ -10982,6 +11070,14 @@ async function fetchWithTimeout(url,init,o){
     }
   }catch(e){ throw fail(e); }
   finally{ if(timer)clearTimeout(timer); if(outer)try{ outer.removeEventListener("abort",onAbort); }catch(_){} }
+}
+/* v146.1 — one read of a streamed body under an absolute deadline; past it the stream is cancelled and a
+   timeout thrown. For the bodies fetchWithTimeout cannot read whole (NDJSON audio, the update check). */
+async function _readUntil(reader,deadline){
+  const tmo=()=>{ try{ reader.cancel(); }catch(_){} const e=new Error("timed out"); e.kind="timeout"; return e; };
+  const left=deadline-Date.now(); if(left<=0) throw tmo();
+  let t; const to=new Promise((_,rej)=>{ t=setTimeout(()=>rej(tmo()),left); });
+  try{ return await Promise.race([reader.read(),to]); }finally{ clearTimeout(t); }
 }
 function _sameOrigin(a,b){ try{ return new URL(a).origin===new URL(b).origin; }catch(e){ return false; } }
 // ModelsLab's own hosts (its fetch_result links have used the legacy stablediffusionapi.com domain).
@@ -11028,7 +11124,7 @@ function _mcRelease(pid){
   const s=_mcSem[pid]; if(!s)return;
   const next=s.q.shift(); if(next) next(); else s.n=Math.max(0,s.n-1);
 }
-/* Circuit breaker: after a 401/402/403, background calls to that provider are skipped for two
+/* Circuit breaker: after a 401/402 (v146.1 — not a 403, see chatCompletion), background calls to that provider are skipped for two
    minutes (one toast), instead of every engine in the turn failing on its own. It is tied to the
    key that failed, so fixing the key in Settings lifts it at once. */
 const MC_BREAKER_MS=120000;
@@ -11041,6 +11137,7 @@ function _mcBreakerTrip(api,status){
     try{ toast(httpMsg(status,api)+" Background engines are paused for 2 minutes."); }catch(_){}
   }
 }
+function _mcBreakerClear(api){ if(api&&_mcBreak[api.id])delete _mcBreak[api.id]; }
 function _mcBreakerOpen(api){
   const b=_mcBreak[api.id]; if(!b)return "";
   if(b.until<Date.now()||b.key!==api.key){ delete _mcBreak[api.id]; return ""; }
@@ -11904,10 +12001,15 @@ async function atlasUpload(dataUri){
   fd.append("file",blob,"upload."+ext);
   const entry=dbg("Upload source frame (AtlasCloud)","AtlasCloud",ATLAS+"model/uploadMedia",{file:"[image data omitted]"});
   let res;
-  try{res=await fetch(ATLAS+"model/uploadMedia",{method:"POST",headers:{"Authorization":"Bearer "+state.atlasKey},body:fd});}
-  catch(e){dbgDone(entry,"error","CORS / network");throw{friendly:"Couldn't upload the scene image to AtlasCloud (network/CORS)."};}
+  // v146.1 — a ceiling on the upload and its answer (a bare fetch here could hang the video button for ever)
+  let g;
+  try{g=await fetchWithTimeout(ATLAS+"model/uploadMedia",{method:"POST",headers:{"Authorization":"Bearer "+state.atlasKey},body:fd},{timeoutMs:90000,read:"json"});}
+  catch(e){ if(e&&e.kind==="timeout"){dbgDone(entry,"error","Timed out");throw{friendly:"The AtlasCloud upload timed out. Try again.",timeout:true};}
+    dbgDone(entry,"error","CORS / network");throw{friendly:"Couldn't upload the scene image to AtlasCloud (network/CORS)."};}
+  res=g.res;
   if(!res.ok){dbgDone(entry,"error","HTTP "+res.status);throw{friendly:atlasMsg(res.status)};}
-  let d;try{d=await res.json();}catch(e){dbgDone(entry,"error","Unreadable response");throw{friendly:"AtlasCloud upload returned an unreadable response."};}
+  if(g.jsonError){dbgDone(entry,"error","Unreadable response");throw{friendly:"AtlasCloud upload returned an unreadable response."};}
+  const d=g.data;
   const sub=(d&&d.data)?d.data:d;
   // AtlasCloud's uploadMedia returns the hosted URL under data.download_url (per API schema);
   // accept the other common field names too in case the response shape varies.
@@ -11937,9 +12039,10 @@ async function toPlayableVideo(url){
     url=httpsMedia(url);
     if(!url || typeof url!=="string") return url;
     if(url.startsWith("blob:")||url.startsWith("data:")) return url;   // already local
-    const r=await fetch(url,{mode:"cors",referrerPolicy:"no-referrer"});
+    const g=await fetchWithTimeout(url,{mode:"cors",referrerPolicy:"no-referrer"},{timeoutMs:120000,read:"blob"});   // v146.1 — the download too
+    const r=g.res;
     if(!r.ok) return url;
-    const blob=await r.blob();
+    const blob=g.blob; if(!blob) return url;
     // Guard against an HTML error page sneaking through as a "video".
     if(blob.type && !/^video\/|^application\/octet-stream/i.test(blob.type) && blob.size<1024) return url;
     return URL.createObjectURL(blob);
@@ -12404,7 +12507,7 @@ async function writeMoanScript(actor,sec){
   if(!state.key)throw{friendly:"No OpenRouter key set (Settings → API keys)."};
   const s=sec||videoSeconds();
   const out=await chatCompletion(epSend("x_voice_sample_script_writer",moanWriterSystem(s),{clip:`CLIP LENGTH: ${s} seconds — the track must last that long.`,actor:moanActorBrief(actor)}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.9),max:fnTok("rewriter",Math.min(900,160+moanBeats(s)*60)),
-                    dbg:"Voice sample script writer"});
+                    foreground:true,dbg:"Voice sample script writer"});
   const script=cleanMoanScript(out);
   if(!script)throw{friendly:"The writer returned an empty vocal script. Try again."};
   return script;
@@ -12605,15 +12708,20 @@ async function _inworldFetchPcm(text,voiceId){
   const body={ text, voiceId:voice, modelId:(state.callTtsModel||"inworld-tts-2"),
     audioConfig:{audioEncoding:'LINEAR16',sampleRateHertz:24000,speakingRate:Math.max(0.5,Math.min(1.5,+state.ttsSpeed||1))} };
   if(state.callTtsLang) body.language=state.callTtsLang;
-  const res=await fetch(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  // v146.1 — bounded: 30 s for the relay to answer, 90 s for the whole stream (a stalled relay wedged the dub queue)
+  let res;
+  try{ res=await fetchWithTimeout(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:30000}); }
+  catch(e){ throw{friendly:(e&&e.kind==="timeout")?"The Inworld relay did not answer in time.":"Can't reach the Inworld relay."}; }
   if(!res.ok) throw{friendly:"Inworld relay error (HTTP "+res.status+")."};
-  const chunks=[]; const reader=res.body.getReader(); const dec=new TextDecoder(); let buf='';
+  const chunks=[]; const reader=res.body.getReader(); const dec=new TextDecoder(); let buf=''; const _dl=Date.now()+90000;
   const take=line=>{ let j; try{j=JSON.parse(line);}catch(e){return;} const r=j.result||j;
     if(r&&r.audioContent){ const bin=atob(r.audioContent); let u=new Uint8Array(bin.length);
       for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
       if(u.length>44 && u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46) u=u.subarray(44);  // per-chunk WAV header strip
       if(u.length)chunks.push(u); } };
-  while(true){ const {done,value}=await reader.read(); if(done)break; buf+=dec.decode(value,{stream:true}); let nl; while((nl=buf.indexOf('\n'))>=0){ const ln=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(ln)take(ln); } }
+  try{
+    while(true){ const {done,value}=await _readUntil(reader,_dl); if(done)break; buf+=dec.decode(value,{stream:true}); let nl; while((nl=buf.indexOf('\n'))>=0){ const ln=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(ln)take(ln); } }
+  }catch(e){ if(e&&e.kind==="timeout"&&!chunks.length) throw{friendly:"The Inworld relay stalled mid-stream."}; }   // a partial clip still plays
   if(buf.trim())take(buf.trim());
   if(!chunks.length) throw{friendly:"Inworld returned no audio."};
   let total=chunks.reduce((n,c)=>n+c.length,0); const all=new Uint8Array(total); let off=0; chunks.forEach(c=>{all.set(c,off);off+=c.length;});
@@ -12661,9 +12769,10 @@ function _playPcmAwait(f32,fx){
 // Fetch + decode a clip into an AudioBuffer (CORS-tolerant attempt; throws when the host refuses).
 async function _fetchDecodeAudio(url){
   if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
-  const res=await fetch(httpsMedia(url),{mode:"cors",referrerPolicy:"no-referrer"});
+  const g=await fetchWithTimeout(httpsMedia(url),{mode:"cors",referrerPolicy:"no-referrer"},{timeoutMs:45000,read:"arrayBuffer"});   // v146.1 — bounded
+  const res=g.res;
   if(!res||!res.ok) throw new Error("HTTP "+(res&&res.status));
-  const raw=await res.arrayBuffer();
+  const raw=g.buf;
   return await _dubCtx.decodeAudioData(raw);
 }
 async function _playUrlAsPcmAwait(url,fx){
@@ -13047,7 +13156,7 @@ async function dubMessage(mid){
   const m=findMsg(mid); if(!m)return;
   // Replay if we already have audio for this line (xAI only — Inworld streams, no URL to cache).
   if(m.ttsUrl){ _playDubUrl(m.ttsUrl); toast("Playing"); return; }
-  const btn=document.querySelector(`[data-dub="${esc(mid)}"]`);
+  const btn=document.querySelector(`[data-dub="${cssq(mid)}"]`);
   const setBtn=t=>{ if(btn)btn.innerHTML=t; };
   setBtn("…");
   try{
@@ -13244,9 +13353,11 @@ async function _fetchCatalogue(id){
   /* Both serve OpenAI's shape — {data:[{id}]}. NanoGPT takes the key as optional (it only changes
      the pricing detail we do not ask for), so it is sent when present and skipped when not. */
   const key=String(state[P.keyState]||"").trim();
-  const r=await fetch(P.base+"/models",{headers:key?{"Authorization":"Bearer "+key}:{}});
+  const g=await fetchWithTimeout(P.base+"/models",{headers:key?{"Authorization":"Bearer "+key}:{}},{timeoutMs:30000,read:"json"});   // v146.1 — bounded
+  const r=g.res;
   if(!r.ok)throw new Error("HTTP "+r.status);
-  const d=await r.json();
+  if(g.jsonError)throw new Error("unreadable catalogue");
+  const d=g.data||{};
   const list=(d.data||[]).map(m=>m&&m.id).filter(Boolean).sort();
   if(!list.length)throw new Error("empty catalogue");
   return list;
@@ -17858,7 +17969,7 @@ function openCalendar(){
   const dirLabel=e=>meetIsBoth(e)?`you ⇢ ${e.who||"them"} ⇠ (each go)`
                   :(meetMode(e)==="char"?`${e.who||"they"} → you`:`you → ${e.who||"them"}`);
   const certLabel=e=>e.certainty==="likely"
-    ? `<span style="color:#E8A33D">~${e.probability!=null?e.probability+"% ":""}likely</span>`
+    ? `<span style="color:#E8A33D">~${e.probability!=null?numOr(e.probability,50)+"% ":""}likely</span>`
     : `<span style="color:var(--good)">agreed</span>`;
   const entryRow=e=>{
     const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
@@ -17883,7 +17994,7 @@ function openCalendar(){
     :`<div class="desc">No meetings yet. Concrete dated meetings you and characters agree to (in scene or over text) are tracked automatically; you can also add one.</div>`;
   const m=document.createElement('div'); m.id="calModal"; m.className="modal show";
   m.innerHTML=`<button class="x" onclick="_calClose()">×</button>
-   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Calendar — Day ${today}, ${esc(chatPeriod(chat))}</h3>
+   <div class="card editCard" style="max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch"><h3>Calendar — Day ${esc(today)}, ${esc(chatPeriod(chat))}</h3>
    ${rows}
    ${_calDoneSection(chat)}
    ${_calWorldSection(chat)}
@@ -17917,7 +18028,7 @@ function _calDoneSection(chat){
     // v144.1 — every not-lived outcome is shown as what it was, never with a ✓ (calLived).
     const missed=!calLived(e);
     const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
-    const meta=[d!=null?`Day ${d}`:"",e.period?esc(e.period):"",esc(e.who||""),
+    const meta=[d!=null?`Day ${esc(d)}`:"",e.period?esc(e.period):"",esc(e.who||""),
                 locName?icon("pin")+" "+esc(locName):"",
                 e.source==="directive"?"you asked for this":""].filter(Boolean).join(" · ");
     return `<div class="card" style="padding:8px;opacity:${missed?.65:1}">
@@ -17972,7 +18083,7 @@ function _calPromiseSection(chat){
   if(!open.length&&!ended.length)return "";
   const KIND={promise:"promised",prohibition:"swore not to",arrangement:"standing rule",change:"declared",secret:"keeping quiet"};
   const row=pr=>{
-    const meta=[`Day ${pr.day}`,KIND[pr.kind]||pr.kind,
+    const meta=[`Day ${esc(pr.day)}`,esc(KIND[pr.kind]||pr.kind),
                 pr.status!=="open"?`<span style="color:${pr.status==="broken"?"#E8A33D":"var(--good)"}">${esc(pr.status)}</span>`:""]
                .filter(Boolean).join(" · ");
     return `<div class="card" style="padding:8px">
@@ -18017,7 +18128,7 @@ function _calWorldSection(chat){
   const row=e=>{
     const locName=(e.locationId&&locById(e.locationId))?locById(e.locationId).name:(e.where||"");
     const solo=String(e.who||"").split(/[,&]| and | ve /i).map(s=>s.trim()).filter(Boolean).length<=1;
-    const meta=[e.day!=null?`Day ${e.day}`:"",e.period?esc(e.period):"",esc(e.who||""),solo?"solo":"together",locName?icon("pin")+" "+esc(locName):""].filter(Boolean).join(" · ");
+    const meta=[e.day!=null?`Day ${esc(e.day)}`:"",e.period?esc(e.period):"",esc(e.who||""),solo?"solo":"together",locName?icon("pin")+" "+esc(locName):""].filter(Boolean).join(" · ");
     return `<div class="card" style="padding:8px;${!e.done&&e.day===today?'border-color:var(--accent)':''}">
       <div class="qrow"><div class="qtxt"><b style="${e.done?'text-decoration:line-through;opacity:.5':''}">${esc(e.title)}</b>
         <div class="desc">${meta}</div>
@@ -18146,7 +18257,7 @@ function addCalManual(editId){
     <label style="margin-top:8px">Purpose — why this plan exists <span class="desc" data-help style="font-weight:400">(optional; the participants act from this when it plays out)</span></label>
     <input type="text" id="caWhy" style="${inpCss}" placeholder="e.g. to talk about the debt" value="${esc((ex0&&ex0.detail)||"")}">
     <label style="margin-top:8px">Day (a number, or +N from now)</label>
-    <input type="text" id="caDay" style="${inpCss}" value="${ex0&&ex0.day!=null?ex0.day:today}">
+    <input type="text" id="caDay" style="${inpCss}" value="${esc(ex0&&ex0.day!=null?ex0.day:today)}">
     <label style="margin-top:8px">Time of day</label>
     <select id="caPeriod" style="${inpCss}"><option value="">(any)</option>${periods.map(pr=>`<option${(ex0&&ex0.period)===pr?" selected":""}>${pr}</option>`).join("")}</select>
     <div id="caCharWrap">
@@ -18180,7 +18291,7 @@ function addCalManual(editId){
     <div id="caCertWrap">
       <label style="margin-top:8px">Certainty</label>
       <select id="caCert" style="${inpCss}"><option value="certain">Agreed (certain)</option><option value="likely">Not firmly agreed (likely)</option></select>
-      <div id="caProbWrap" style="display:none"><label style="margin-top:8px">Attendance chance % (0-100)</label><input type="text" id="caProb" style="${inpCss}" value="${ex0&&ex0.probability!=null?ex0.probability:50}"></div>
+      <div id="caProbWrap" style="display:none"><label style="margin-top:8px">Attendance chance % (0-100)</label><input type="text" id="caProb" style="${inpCss}" value="${numOr(ex0&&ex0.probability,50)}"></div>
     </div>
     <div class="desc" id="caTypeHint" data-help style="margin-top:8px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
@@ -18205,7 +18316,7 @@ function addCalManual(editId){
       const byNameIds=parts0.map(byName).filter(Boolean).map(c=>c.id);
       new Set(all.concat(byNameIds)).forEach(id=>{
         if(primary.has(id))return;
-        const cb=m.querySelector(`#caMore input[data-more="${esc(id)}"]`); if(cb)cb.checked=true;
+        const cb=m.querySelector(`#caMore input[data-more="${cssq(id)}"]`); if(cb)cb.checked=true;
       });
     }
   }
@@ -20359,7 +20470,7 @@ function openStoryState(){
         const ownerTag = owner==="__story__" ? "" :
           owner==="__user__" ? ` <span class="pill" style="font-size:9px">${esc(state.user)}${(t.userVisibility||"public")==="private"?" · private":""}</span>` :
           ` <span class="pill" style="font-size:9px">${esc(ownerLabel(key))}</span>`;
-        rows.push(`<div class="kvline"><span>${esc(t.name)}${ownerTag} <b>${v}${t.max!=null?"/"+t.max:""}</b>${st&&st.text?` <span class="desc">— ${esc(st.text)}</span>`:""}</span>
+        rows.push(`<div class="kvline"><span>${esc(t.name)}${ownerTag} <b>${esc(v)}${t.max!=null?"/"+esc(t.max):""}</b>${st&&st.text?` <span class="desc">— ${esc(st.text)}</span>`:""}</span>
           <span style="display:flex;gap:4px">
             <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',-1,'${escJs(key)}')">−1</button>
             <button class="btn sec small" onclick="nudgeTracker('${escJs(t.id)}',1,'${escJs(key)}')">+1</button>
@@ -20611,7 +20722,7 @@ function renderTrackerEditor(){
     const meth={llm:"AI",endday:"End Day",trigger_then_day:"event→daily"}[trackerMethod(t)]||"AI";
     row.innerHTML=`<div class="kvline" style="padding:0">
       <div style="min-width:0"><b>${esc(t.name||"(unnamed)")}</b>
-        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${t.min!=null?t.min:0}–${t.max!=null?t.max:100} · ${beh}${t.perDay?` · ${t.perDay>0?"+":""}${esc(t.perDay)}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${esc(t.publicAt)}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
+        <div class="desc">${esc(_trackerOwnerSummary(t))} · ${meth} · ${esc(t.min!=null?t.min:0)}–${esc(t.max!=null?t.max:100)} · ${esc(beh)}${t.perDay?` · ${t.perDay>0?"+":""}${esc(t.perDay)}/day`:""} · ${stages} point${stages===1?"":"s"}${t.publicAt!=null?` · <span class="pill" style="font-size:9px">public @${esc(t.publicAt)}${(t.publicScope==="universe")?" · world":""}</span>`:""}</div>
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0">
         <button class="btn sec small" type="button" data-edit>Edit</button>
@@ -20666,7 +20777,7 @@ async function genTrackerAI(){
   try{
     const sys=fillTpl(up("trackerGen"),{world:String(uni.setting||"").slice(0,900),brief:brief.slice(0,600),segments:String(segs),owner:ownerName});
     const out=await chatCompletion(epSend("trackerGen",sys,{}),
-      state.bioModel,{fn:"bio",temp:fnTemp("bio",0.8),max:fnTok("bio",1400),frequency_penalty:0,presence_penalty:0,dbg:"Tracker generator"});
+      state.bioModel,{fn:"bio",temp:fnTemp("bio",0.8),max:fnTok("bio",1400),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Tracker generator"});
     const j=parseJSON(out);
     if(!j||!j.name||!Array.isArray(j.stages)||!j.stages.length){ toast("Couldn't design it — try a more concrete description"); return; }
     const min=Number.isFinite(+j.min)?Math.round(+j.min):0;
@@ -20775,7 +20886,7 @@ function _teRenderStages(){
   _teStages.sort((a,b)=>(a.at||0)-(b.at||0));
   _teStages.forEach((s,i)=>{
     const row=document.createElement('div'); row.style.cssText="display:flex;gap:6px;align-items:flex-start";
-    row.innerHTML=`<input type="number" class="fld" style="max-width:80px" value="${s.at!=null?s.at:0}" data-at>
+    row.innerHTML=`<input type="number" class="fld" style="max-width:80px" value="${numOr(s.at,0)}" data-at>
       <input type="text" class="fld" style="flex:1" placeholder="text injected at/above this value" value="${esc(s.text||"")}" data-text>
       <button class="btn danger sec small" type="button" data-del><svg class="ic"><use href="#i-x"/></svg></button>`;
     row.querySelector('[data-at]').onchange=e=>{ s.at=+e.target.value||0; };
@@ -21416,7 +21527,7 @@ async function runWriteAi(){
     const usr=`PURPOSE OF THIS PROMPT (what the function does):\n${reg.label} — ${reg.hint||""}\n\nREFERENCE PROMPT (current/default version — match its output format and any JSON schema; improve or replace the rest per the request):\n"""\n${tpl}\n"""\n\nUSER'S REQUEST (what they want this prompt to do):\n${brief}\n\nWrite the new system prompt now.`;
     const out=await chatCompletion(epSend("x_write_prompt_with_ai",sys,{data:usr}),
       state.bioModel||state.model,
-      {temp:0.6,max:1500,dbg:"Write prompt with AI · "+reg.key}
+      {temp:0.6,max:1500,foreground:true,dbg:"Write prompt with AI · "+reg.key}
     );
     // Strip surrounding markdown fences if the model added them (multiline-safe).
     let cleaned=(out||"").trim();
@@ -22275,7 +22386,7 @@ async function generateBio(brief,context,opts){
   const user=parts.join("\n\n———\n\n");
   let out;
   try{
-    out=await chatCompletion(epSend("bioPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",800),dbg:"Character bio generator"});
+    out=await chatCompletion(epSend("bioPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",800),foreground:true,dbg:"Character bio generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -22327,7 +22438,7 @@ async function generateSchedule(persona,routineText,forUniverse){
   const sys=fillTpl(up("x_schedule_generator"),{home_note:(homeName?` Their home is "${homeName}".`:"")});
   let out;
   try{
-    out=await chatCompletion(epSend("x_schedule_generator",sys,{card:`Character: ${persona.name}\nPersonality: ${persona.personality||""}\nRoutine: ${routineText||persona.routine||"(infer from personality)"}`,locations:locList}),state.bioModel,{fn:"bio",temp:fnTemp("bio",0.4),max:fnTok("bio",500),dbg:"Schedule generator · "+persona.name});
+    out=await chatCompletion(epSend("x_schedule_generator",sys,{card:`Character: ${persona.name}\nPersonality: ${persona.personality||""}\nRoutine: ${routineText||persona.routine||"(infer from personality)"}`,locations:locList}),state.bioModel,{fn:"bio",temp:fnTemp("bio",0.4),max:fnTok("bio",500),foreground:true,dbg:"Schedule generator · "+persona.name});
   }catch(e){ return null; }
   const j=parseJSON(out); if(!j||typeof j!=="object")return null;
   // Map names → ids per period.
@@ -22409,7 +22520,7 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
 
   let out;
   try{
-    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.5),max:fnTok("unigen",1100),dbg:"Relationship generator · "+persona.name});
+    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.5),max:fnTok("unigen",1100),foreground:true,dbg:"Relationship generator · "+persona.name});
   }catch(e){ return null; }
   const text=(out||"").trim();
   if(!text)return null;
@@ -22802,7 +22913,7 @@ async function generateSocialGraphFor(persona,forUniverse){
   let out;
   try{
     out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),max:fnTok("unigen",420),dbg:"Social graph · "+persona.name});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),max:fnTok("unigen",420),foreground:true,dbg:"Social graph · "+persona.name});
   }catch(e){ return null; }
   const text=String(out||"").trim().replace(/^["'\s]+|["'\s]+$/g,"");
   if(!text)return null;
@@ -22979,7 +23090,7 @@ async function generateLocations(uni,liveLocs,userInstr){
   let out;
   try{
     out=await chatCompletion(epSend("x_location_generator",sys,{}),
-      state.bioModel,{fn:"bio",temp:fnTemp("bio",0.85),max:fnTok("bio",2600),frequency_penalty:0,presence_penalty:0,dbg:"Location generator ("+mode+")"});
+      state.bioModel,{fn:"bio",temp:fnTemp("bio",0.85),max:fnTok("bio",2600),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Location generator ("+mode+")"});
   }catch(e){ return null; }
   const arr=parseJSON(out); if(!Array.isArray(arr)||!arr.length)return null;
   const clean=s=>typeof s==="string"?s.trim():"";
@@ -23011,7 +23122,7 @@ async function generateUniverse(brief,count){
   const user=`USER BRIEF:\n${brief||"(none — invent a fitting world)"}\n\nNUMBER OF CHARACTERS TO CREATE: ${n}`;
   let out;
   try{
-    out=await chatCompletion(epSend("univPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,dbg:"Universe generator"});
+    out=await chatCompletion(epSend("univPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -23052,7 +23163,7 @@ async function generateDirectingNotes(universe,userInstr){
     cast
   });
   try{
-    const out=await chatCompletion(epSend("directorAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",500),dbg:"Director notes · "+universe.name});
+    const out=await chatCompletion(epSend("directorAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",500),foreground:true,dbg:"Director notes · "+universe.name});
     const notes=stripInlineReasoning(String(out||"")).trim();
     if(notes && notes.length>40){ universe.directingNotes=notes; return notes; }
   }catch(e){}
@@ -23176,7 +23287,7 @@ async function generateGenrePack(universe,userInstr){
   });
   try{
     const out=await chatCompletion(epSend("genrePackAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:(universe.name||"this world")}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",3800),
-      frequency_penalty:0,presence_penalty:0,dbg:"Genre pack · "+(universe.name||"")});
+      frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Genre pack · "+(universe.name||"")});
     const j=parseJSON(out); if(!j)return null;
     const pick=k=>typeof j[k]==="string"?j[k].trim():"";
     const pack={voice:pick("voice"),drama:pick("drama"),stakes:pick("stakes"),
@@ -23271,7 +23382,7 @@ async function compileWorldRule(text,locList,uniId){
   });
   try{
     const out=await chatCompletion(epSend("ruleCompiler",sys,{}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",300),
-      frequency_penalty:0,presence_penalty:0,dbg:"World-rule compiler"});
+      frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"World-rule compiler"});
     const j=parseJSON(out);
     if(!j){ toast("Compiler returned nothing usable"); return null; }
     if(j.error){ toast("Can't compile: "+String(j.error).slice(0,120)); return null; }
@@ -23437,7 +23548,7 @@ async function tuneUniversePrompts(universe){
       const out=await chatCompletion(epSend("promptTuner",sys,{},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),
         // long bases (e.g. the char-quest designer) need more output room than the old flat cap
         max:Math.max(fnTok("mem",1400),Math.min(3000,Math.ceil(base.length/2))),
-        dbg:"Prompt tuner · "+t.key});
+        foreground:true,dbg:"Prompt tuner · "+t.key});
       let cand=stripInlineReasoning(String(out||"")).trim()
         .replace(/^"""\s*/,"").replace(/\s*"""$/,"")
         .replace(/^```[a-z]*\n?/i,"").replace(/\n?```$/,"");
@@ -23560,7 +23671,7 @@ async function generateBatchBios(brief,count,opts){
     // it: a truncated batch is unparseable JSON and silently yields zero cards. We take the LARGER of
     // the configured cap and what the batch actually needs, then bound it so it can't run away.
     const batchTok=Math.min(8000,Math.max(fnTok("mem",0)||0, 1500+count*750));
-    out=await chatCompletion(epSend("batchBioPrompt",sys.replace(/\{\{count\}\}/g,String(count)),{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:batchTok,dbg:"Batch character generator ×"+count});
+    out=await chatCompletion(epSend("batchBioPrompt",sys.replace(/\{\{count\}\}/g,String(count)),{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:batchTok,foreground:true,dbg:"Batch character generator ×"+count});
   }catch(e){ return []; }
   const j=parseJSON(out);
   const arr=Array.isArray(j)?j:(j&&Array.isArray(j.characters)?j.characters:null);
@@ -23621,7 +23732,7 @@ async function repairCardVoice(){
     const out=await chatCompletion([
       {role:"system",content:up("x_card_voice")},
       {role:"user",content:`THE CHARACTER IS ${name}.\n\n${body}\n\nReturn the JSON.`}
-    ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",1800),dbg:"Card voice repair · "+name});
+    ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",1800),foreground:true,dbg:"Card voice repair · "+name});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Repair failed — the card is untouched"); return; }
     let n=0, stubborn=0;
@@ -23739,7 +23850,7 @@ async function generateAppearance(){
     const world=uni?`WORLD: ${uni.name||""}\n${(uni.setting||"").slice(0,800)}`:"";
     const sys=up("x_appearance_generator");
     const instrBlock=(instr&&instr.trim())?("USER'S REQUEST (follow this closely, still valid JSON):\n"+instr.trim()):"";
-    const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",650),dbg:"Appearance generator"});
+    const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",650),foreground:true,dbg:"Appearance generator"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Appearance generation failed — try again"); return; }
     const clean=s=>typeof s==="string"?s.trim():"";
@@ -23831,7 +23942,7 @@ async function generateOutfits(all,brief){
       _brief?("WHAT THE PLAYER ASKED FOR — THIS OVERRIDES THE CHARACTER'S OWN TASTE WHERE THEY DISAGREE.\nEvery outfit you write this time obeys it, in every slot, unless a slot physically cannot (you do not put a wool coat in the swimming pool). Follow it exactly — a named colour is that colour, a named fabric is that fabric — and do not widen it into something merely similar:\n"+_brief):""
     ].filter(Boolean).join("\n\n———\n\n");
     const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data:data}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),dbg:"Outfit generator"});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Outfit generation failed — try again"); return; }
     const clean=x=>typeof x==="string"?x.trim():"";
@@ -23942,7 +24053,7 @@ async function generateUserOutfits(all){
       (want&&want.length)?("ONLY THESE SLOTS ARE MISSING — write exactly these and leave every other key out:\n"+want.map(x=>"- "+x).join("\n")):""
     ].filter(Boolean).join("\n\n———\n\n");
     const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),dbg:"Outfit generator (player)"});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator (player)"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Outfit generation failed — try again"); return; }
     const clean=x=>typeof x==="string"?x.trim():"";
@@ -30412,7 +30523,7 @@ function _mergeIntoLastPresenceNote(chat,add){
     if(add.exitedIds&&add.exitedIds.length)last.exitedIds=(last.exitedIds||[]).concat(add.exitedIds);
     try{ last.present=presentIds(chat).slice(); }catch(e){}
     // Bump the already-rendered bubble: re-render it in place so the merged beat shows immediately.
-    try{ const node=document.querySelector('[data-mid="'+last.mid+'"]'); if(node&&node.parentNode)node.parentNode.replaceChild(bubble(last),node); }catch(e){}
+    try{ const node=document.querySelector('[data-mid="'+cssq(last.mid)+'"]'); if(node&&node.parentNode)node.parentNode.replaceChild(bubble(last),node); }catch(e){}
     return true;
   }catch(e){ return false; }
 }
@@ -31034,7 +31145,7 @@ function renderChat(){ return perf("renderChat",()=>{
     // that anchor (no captured mid, or the node fell out of the render window), land at the
     // BOTTOM rather than leaving scrollTop at 0 — an unresolved anchor used to silently park the
     // whole view at the very top (the "chat jumps high above" failure on a mid-scene rebuild).
-    const _an=_anchorMid?list.querySelector('[data-mid="'+_anchorMid+'"]'):null;
+    const _an=_anchorMid?list.querySelector('[data-mid="'+cssq(_anchorMid)+'"]'):null;
     if(_an){ setScrollTop(list, _an.offsetTop - _anchorOff); showNewMsgPill(); }
     else { ChatScroll.follow(); }
   }
@@ -31080,7 +31191,7 @@ function appendNewBubbles(){ return perf("appendNewBubbles",()=>{
        so a presence note can be pushed while a reply is still queued; skipping the queued reply drew
        the note ABOVE the line it follows. The queue draws the rest, in order, when it gets there. */
     if(_presentPendingMids.has(m.mid)) break;      // committed to state but not yet its turn to show
-    if(m._reveal && !list.querySelector('[data-mid="'+m.mid+'"]')){
+    if(m._reveal && !list.querySelector('[data-mid="'+cssq(m.mid)+'"]')){
       if(m.mid===_presentingMid) break;            // the queue is drawing this one right now
       delete m._reveal;                            // a leftover flag (its queue was cleared) — draw it whole
     }
@@ -31139,7 +31250,7 @@ function statusStripHTML(m){
   const loc=s?s.location:(chat&&chat.location)||"";
   const trackers=s&&Array.isArray(s.trackers)?s.trackers:[];
   const bits=[];
-  bits.push(`<span class="ss-day">Day ${day}</span>`);
+  bits.push(`<span class="ss-day">Day ${esc(day)}</span>`);   // v146.1 — an imported status.day is text
   if(period)bits.push(`<span>${esc(period)}</span>`);
   if(loc)bits.push(`<span>${icon("pin")} ${esc(loc)}</span>`);
   let trk="";
@@ -31299,7 +31410,7 @@ function saveEditMessage(){
   if(owner) markChatDirty(owner);
   closeModal('editMsgModal');
   // Re-render the single bubble in place (cheap) and persist.
-  const node=document.querySelector('.bubble[data-mid="'+_editMsgMid+'"]');
+  const node=document.querySelector('.bubble[data-mid="'+cssq(_editMsgMid)+'"]');
   if(node){ const body=node.querySelector('.body'); if(body) body.innerHTML=msgBodyHTML(val,node); }
   else renderChat();
   persistChats();
@@ -31313,7 +31424,7 @@ async function deleteMessage(mid){
   markChatDirty(owner);
   try{ mediaDB.kvDelete("mimg:"+mid); }catch(e){}   // drop this message's cached scene-image bytes
   try{ mediaDB.kvDelete("mvid:"+mid); }catch(e){}   // ...and its cached clip (v29)
-  const node=document.querySelector('[data-mid="'+mid+'"]');
+  const node=document.querySelector('[data-mid="'+cssq(mid)+'"]');
   if(node) node.remove(); else renderChat();
   persistChats();
   toast("Deleted");
@@ -31351,7 +31462,7 @@ function refreshRetryMark(){
     const list=document.getElementById('chatList'); if(!list)return;
     list.querySelectorAll('.bubble.canRetry').forEach(n=>n.classList.remove('canRetry'));
     const t=_retryTarget(curChat()); if(!t)return;
-    const node=list.querySelector('.bubble[data-mid="'+t.m.mid+'"]'); if(node)node.classList.add('canRetry');
+    const node=list.querySelector('.bubble[data-mid="'+cssq(t.m.mid)+'"]'); if(node)node.classList.add('canRetry');
   }catch(e){}
 }
 function _dropMsgForRetry(chat,mid){
@@ -31359,7 +31470,7 @@ function _dropMsgForRetry(chat,mid){
   chat.messages.splice(i,1); markChatDirty(chat);
   try{ mediaDB.kvDelete("mimg:"+mid); }catch(e){}
   try{ mediaDB.kvDelete("mvid:"+mid); }catch(e){}
-  const node=document.querySelector('[data-mid="'+mid+'"]'); if(node)node.remove();
+  const node=document.querySelector('[data-mid="'+cssq(mid)+'"]'); if(node)node.remove();
 }
 /* v146.1 — WHAT A DISCARDED REPLY LEFT BEHIND. Retry used to take the line out of the transcript and
    nothing else: the memories cut from it, the plans and promises the future tracker filed from it and
@@ -31756,9 +31867,9 @@ function sceneHTML(m){
   const pinBtn=`<button class="pinBtn ${_pinned?"on":""}" onclick="togglePin('${escJs(mid)}')" title="${_pinned?"Unpin (re-enables auto images)":"Pin this image to the side & pause auto images"}"><svg class="ic"><use href="#i-pin"/></svg> ${_pinned?"Pinned":"Pin"}</button>`;
   // ---- video states take over the scene area once started ----
   if(m.vidState==="loading")
-    return `<div class="scene loading"><div class="spin"></div><span id="vidstat_${mid}">Animating scene…</span></div>`;
+    return `<div class="scene loading"><div class="spin"></div><span id="vidstat_${esc(mid)}">Animating scene…</span></div>`;
   if(m.video)
-    return `<div class="scene"><video id="vid_${mid}" src="${escUrl(m.video)}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
+    return `<div class="scene"><video id="vid_${esc(mid)}" src="${escUrl(m.video)}" controls playsinline ${m.vidLoop===false?"":"loop"} style="width:100%;display:block;border-radius:12px"></video>
             <div class="sceneTools" style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               <button class="btn sec small ${m.vidLoop===false?"":"on"}" onclick="toggleVidLoop('${escJs(mid)}',this)" title="Loop playback"><svg class="ic"><use href="#i-loop"/></svg></button>
               <button class="btn sec small" onclick="showMediaPrompt('${escJs(mid)}')" title="Show the generation prompt"><svg class="ic"><use href="#i-info"/></svg></button>
@@ -31806,7 +31917,7 @@ function refreshBubble(mid){
   // to it), do nothing now: the image is in state and will render when the bubble is presented.
   // This prevents a premature renderChat()/scroll jump while the user reads earlier lines.
   if(_presentPendingMids.has(mid)) return;
-  const b=document.querySelector('.bubble[data-mid="'+mid+'"]');
+  const b=document.querySelector('.bubble[data-mid="'+cssq(mid)+'"]');
   if(!b){
     // Bubble not in the DOM. If the message belongs to the current chat AND is within
     // the rendered window, a rebuild will surface it; if it's older than the window
@@ -31952,7 +32063,7 @@ async function narratePlayerTurn(rawText,chat,opts){
     +"\n\n"+langDirective();
   const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
   try{
-    const out=await chatCompletion(epSend("playerNarratePrompt",sys,{recent:recent||"",typed:`${state.user} just typed (rewrite this as their turn):\n${rawText}`}),model,{fn:"narrate",temp:fnTemp("narrate",0.6),max:fnTok("narrate",200),dbg:"Auto-RP player narrator"});
+    const out=await chatCompletion(epSend("playerNarratePrompt",sys,{recent:recent||"",typed:`${state.user} just typed (rewrite this as their turn):\n${rawText}`}),model,{fn:"narrate",temp:fnTemp("narrate",0.6),max:fnTok("narrate",200),foreground:true,dbg:"Auto-RP player narrator"});
     const clean=unquoteWrap(out);
     return clean||rawText;   // fall back to raw text if the model returns nothing
   }catch(e){ return rawText; }   // never block the turn — fall back to what they typed
@@ -34593,7 +34704,7 @@ async function smPlayerMove(chat){
   const tailMid=(_apTail(chat)||{}).mid;
   const kn=_playerKnows(chat);
   const out=await chatCompletion(epSend("x_story_player",sys,Object.assign({player:_playerProfileBlock(),scene:_autoRpSceneLine(chat)},kn,{convo,rule:rules.join("\n")})),
-    model,{fn:"narrate",temp:fnTemp("narrate",0.7),max:Math.max(fnTok("narrate",300),300),dbg:"Story mode · the player's move"});
+    model,{fn:"narrate",temp:fnTemp("narrate",0.7),max:Math.max(fnTok("narrate",300),300),foreground:true,dbg:"Story mode · the player's move"});
   const j=parseJSON(out)||{};
   if(((_apTail(chat)||{}).mid)!==tailMid)return;   // the player or the world moved meanwhile
   const clean=x=>String(x==null?"":x).replace(/^["“'\s*_]+|["”'\s*_]+$/g,"").trim();
@@ -35901,7 +36012,7 @@ async function illustrate(mid,replyText,force){
       +(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any lighting in it, that is added automatically; the LOCATION is yours to write and the block above is the authority on it). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
       +_window
       +`LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
-    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Image prompt writer"});
+    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),foreground:!!force,dbg:"Image prompt writer"});
     // Style tail: the 30-style picker (state.style) OWNS the quality/aesthetic ending now. Append the
     // selected style's keywords unless the writer already produced them (idempotent — avoids a double
     // tail if a rule template still bakes the same words). This is the global style auto-injection,
@@ -36102,7 +36213,7 @@ async function animateScene(mid){
     const _vidRule=await pickRule(state.vidRules,_scenePrompt);       // which POSITION this is
     const _isExplicit=!!(_vidRule&&_vidRule.explicit);
     const _sys=videoWriterSystem(_vidRule);
-    const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Video motion prompt writer"});
+    const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Video motion prompt writer"});
     const vidPrompt=injectRuleKeywords(motion.trim().replace(/^["']|["']$/g,""),_vidRule);
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}
 
@@ -36320,7 +36431,7 @@ async function sceneVideo(mid){
     const raw=await chatCompletion(epSend("x_scene_video_writer",sys,{
         clip, people:cast.roster.join("\n"), scene:_svWhenWhere(chat,win.items),
         dress:_svDressBlock(chat,cast), continuity:cont.join("\n\n"), lines}),
-      state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",Math.min(2200,500+blocks*170)),dbg:"Scene video writer"});
+      state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",Math.min(2200,500+blocks*170)),foreground:true,dbg:"Scene video writer"});
     let j=null; try{ j=parseJSON(raw); }catch(e){ j=null; }
     let vp=String((j&&(j.video_prompt||j.prompt))||(j?"":raw)||"").trim().replace(/^["']|["']$/g,"");
     if(!vp) throw{friendly:"The scene video writer returned nothing usable."};
@@ -36567,7 +36678,7 @@ function svChipHTML(m){
     +`<button type="button" class="msgAct" title="Save the clip" aria-label="Save the clip" onclick="svSaveClip('${escJs(m.mid)}')">${icon("download")}</button></div>`;
 }
 function svRefreshChip(mid){
-  const m=findMsg(mid); const b=document.querySelector('.bubble[data-mid="'+mid+'"]'); if(!m||!b)return;
+  const m=findMsg(mid); const b=document.querySelector('.bubble[data-mid="'+cssq(mid)+'"]'); if(!m||!b)return;
   const old=b.querySelector('.svChip'); if(old)old.remove();
   const h=svChipHTML(m); if(!h)return;
   const body=b.querySelector('.body'); if(body)body.insertAdjacentHTML('afterend',h); else b.insertAdjacentHTML('beforeend',h);
@@ -37183,7 +37294,7 @@ async function bookEditScene(chat,scene,force){
   let j=null;
   try{
     const out=await chatCompletion(epSend("x_book_editor",sys,{scene:where,lines:linesTxt,panels:panelsTxt}),
-      state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",2400),2400),dbg:"Story Book editor · "+where});
+      state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:Math.max(fnTok("mem",2400),2400),foreground:true,dbg:"Story Book editor · "+where});
     j=parseJSON(out);
   }catch(e){ try{ _alog("book.edit.fail",String((e&&(e.friendly||e.message))||e).slice(0,160)); }catch(_){} return null; }
   if(!j||!Array.isArray(j.panels))return null;
@@ -37683,7 +37794,7 @@ async function _mcRun(seq){
   }
   if(_mc&&_mc.seq===seq&&_mc.i>=_mc.items.length){
     const stage=document.getElementById('mcStage');
-    if(stage)stage.innerHTML=`<div class="mcTitle"><h2>The end of Day ${_bookDay}</h2><p>Tap ✕ to go back to the book.</p></div>`;
+    if(stage)stage.innerHTML=`<div class="mcTitle"><h2>The end of Day ${esc(_bookDay)}</h2><p>Tap ✕ to go back to the book.</p></div>`;
     _mc.i=_mc.items.length-1; _mc.paused=true; _mcRefreshCtl();
   }
 }
@@ -37814,11 +37925,11 @@ function renderVideoBook(){
   }).join("");
   chap.items.forEach(it=>{
     if(it.kind==="clip"){
-      const v=el.querySelector('.vbClip[data-mid="'+it.mid+'"] video'); if(!v)return;
+      const v=el.querySelector('.vbClip[data-mid="'+cssq(it.mid)+'"] video'); if(!v)return;
       v.src=svClipSrcNow(it.clip);
       v.onerror=async()=>{ if(v._tried)return; v._tried=true; const s=await svClipSrc(it.clip); if(s&&s!==v.src)v.src=s; };
     }else if(it.kind==="gap"&&!vbNarrCached(chat,it)){
-      vbNarration(chat,it).then(t=>{ const p=el.querySelector('.vbNarr[data-gap="'+it.key+'"]'); if(p)p.textContent=t||""; if(p&&!t)p.hidden=true; });
+      vbNarration(chat,it).then(t=>{ const p=el.querySelector('.vbNarr[data-gap="'+cssq(it.key)+'"]'); if(p)p.textContent=t||""; if(p&&!t)p.hidden=true; });
     }
   });
 }
@@ -37900,7 +38011,7 @@ async function _vbRun(seq){
   }
   if(_mc&&_mc.seq===seq&&_mc.i>=_mc.items.length){
     const stage=document.getElementById('mcStage');
-    if(stage)stage.innerHTML=`<div class="mcTitle"><h2>The end of Day ${_bookDay}</h2><p>Tap ✕ to go back to the book.</p></div>`;
+    if(stage)stage.innerHTML=`<div class="mcTitle"><h2>The end of Day ${esc(_bookDay)}</h2><p>Tap ✕ to go back to the book.</p></div>`;
     _mc.i=_mc.items.length-1; _mc.paused=true; _mcRefreshCtl();
   }
 }
@@ -38248,7 +38359,7 @@ function _renderGalImages(el){
 // preload=metadata — no canvas/CORS needed for referer-gated CDNs. The "#t=0.001" media
 // fragment nudges engines that only paint a frame after a seek.
 function _vidThumbHTML(url,cls){
-  const u=esc(httpsMedia(url))+"#t=0.001";
+  const u=httpsMedia(url)+"#t=0.001";   // v146.1 — escaped ONCE, by escUrl (esc here broke signed links with &)
   return `<video ${cls?`class="${cls}" `:""}src="${escUrl(u)}" preload="metadata" muted playsinline referrerpolicy="no-referrer" disablepictureinpicture></video>`;
 }
 function _sceneOwner(s){ return (s&&s.characterName)||""; }
@@ -38865,7 +38976,7 @@ async function pgWritePrompt(){
       _dress=_wb?[_wb,_dc].filter(Boolean).join("\n\n")+"\n\n":"";
     }
     const usr=_dress+`(No previous image — describe the scene fresh.)\n\nLATEST EXCHANGE (what just happened — the authority on the current moment):\nNarrator: ${brief}`;
-    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),dbg:"Playground image prompt writer"});
+    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),foreground:true,dbg:"Playground image prompt writer"});
     _pg.prompt=rewritten.trim().replace(/^["']|["']$/g,"");
   }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
   _pg.busy=null; renderPlayground();
@@ -39345,7 +39456,7 @@ async function i2vWritePrompt(){
     const _isExplicit=!!(rule&&rule.explicit);
     const lastRec=_i2vLastRec();
     const _sys=videoWriterSystem(rule,{endPrompt:lastRec?(lastRec.prompt||""):""});
-    const out=await chatCompletion(epSend("x_playground_video_prompt_writ",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(rec.prompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),dbg:"Playground video prompt writer"});
+    const out=await chatCompletion(epSend("x_playground_video_prompt_writ",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(rec.prompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Playground video prompt writer"});
     _i2v.prompt=out.trim().replace(/^["']|["']$/g,"");
   }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
   _i2v.busy=null; renderImg2Video();
@@ -41250,7 +41361,7 @@ async function runSceneCut(chat){
     raw=await chatCompletion(
       epSend("sceneCut",tpl+"\n\n"+mixedLangDirective(["narration","line"]),{}),
       state.gmModel||state.memModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",500),
-      timeoutMs:75000,retries:1,dbg:"Drop me into a scene · "+p.name});
+      foreground:true,timeoutMs:75000,retries:1,dbg:"Drop me into a scene · "+p.name});
     j=parseJSON(raw);
   }catch(e){
     /* (!) v99.1 — this was `catch(e){}`, which threw the reason away and left one useless toast
@@ -42678,7 +42789,8 @@ function _mapRenderCanvas(){
   }
 
   // Location positions (0-100). Missing ones get a stable auto-layout.
-  const posOf=(l,i)=>(l.mapPos&&typeof l.mapPos.x==="number")?l.mapPos:_mapAutoPos(i,locs.length);
+  // v146.1 — both coordinates must be real numbers: they are written into SVG attributes as they are.
+  const posOf=(l,i)=>(l.mapPos&&Number.isFinite(l.mapPos.x)&&Number.isFinite(l.mapPos.y))?l.mapPos:_mapAutoPos(i,locs.length);
   // Who is at each location (living-engine placement). Used to blink a marker green when occupied.
   const occupancy={};
   try{
@@ -42749,7 +42861,7 @@ function _mapWire(){
     // translate the whole marker group to the pointer, relative to its authored position
     const l=(curLocations()||[]).find(z=>z.id===drag.locid); if(!l)return;
     const i=(curLocations()||[]).findIndex(z=>z.id===drag.locid);
-    const base=(l.mapPos&&typeof l.mapPos.x==="number")?l.mapPos:_mapAutoPos(i,(curLocations()||[]).length);
+    const base=(l.mapPos&&Number.isFinite(l.mapPos.x)&&Number.isFinite(l.mapPos.y))?l.mapPos:_mapAutoPos(i,(curLocations()||[]).length);
     drag.g.setAttribute('transform',`translate(${(c.x-base.x).toFixed(2)} ${(c.y-base.y).toFixed(2)})`);
     drag._last=c;
   };
@@ -43079,7 +43191,7 @@ async function generateOriginDoc(u,ovr){
   let out=null;
   try{
     out=await chatCompletion(epSend("originGen",sys+"\n\n"+engineLangDirective(),{request:(ovr.instr&&String(ovr.instr).trim())?String(ovr.instr).trim():""}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
   }catch(e){ _qlog("origin.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const doc=String(out||"").trim();
   if(!doc)return null;
@@ -48553,13 +48665,13 @@ function openDiaryReader(ownerId,day){
         <span class="diaryTitle">${esc(p.name)}'s Diary</span>
         <button class="diaryChip" onclick="_diaryClose()" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
-      <div class="pp-date">Day ${day}${loc?` · ${esc(loc)}`:""}</div>
+      <div class="pp-date">Day ${esc(day)}${loc?` · ${esc(loc)}`:""}</div>
       <div class="pp-body">${esc(bodyText)}</div>
       ${emo?`<div class="pp-meta">— feeling ${esc(emo)}</div>`:""}
       <div class="diaryChipBar">
-        <button class="diaryChip" ${prevDay==null?"disabled":""} onclick="${prevDay==null?"":`openDiaryReader('${ownerId}',${prevDay})`}" title="Previous day">‹</button>
-        <span class="diaryChip" style="cursor:default">Day ${day}${days.length>1?` · ${dayIdx+1}/${days.length}`:""}</span>
-        <button class="diaryChip" ${nextDay==null?"disabled":""} onclick="${nextDay==null?"":`openDiaryReader('${ownerId}',${nextDay})`}" title="Next day">›</button>
+        <button class="diaryChip" ${prevDay==null?"disabled":""} onclick="${prevDay==null?"":`openDiaryReader('${escJs(ownerId)}',${esc(JSON.stringify(prevDay))})`}" title="Previous day">‹</button>
+        <span class="diaryChip" style="cursor:default">Day ${esc(day)}${days.length>1?` · ${dayIdx+1}/${days.length}`:""}</span>
+        <button class="diaryChip" ${nextDay==null?"disabled":""} onclick="${nextDay==null?"":`openDiaryReader('${escJs(ownerId)}',${esc(JSON.stringify(nextDay))})`}" title="Next day">›</button>
         <button class="diaryChip" onclick="cycleDiaryFont()" title="Handwriting: ${esc(curFont.label||curFont.id)}" style="font-family:${curFont.css}">Aa</button>
         <button class="diaryChip" data-diaryread onclick="dubDiary('${escJs(ownerId)}')" title="Read aloud"><svg class="ic"><use href="#i-volume"/></svg></button>
         <button class="diaryChip" onclick="toggleDiaryPaperPop()" title="Paper look">${icon("palette")}</button>
@@ -50126,7 +50238,7 @@ async function _abSide(key,text,kind,n,label){
         msgs=[]; if(pl.head)msgs.push({role:"system",content:pl.head});
         msgs.push.apply(msgs,hist); if(pl.tail)msgs.push({role:"system",content:pl.tail}); }
       let r="";
-      try{ r=await chatCompletion(msgs,state.model,{fn:"reply",temp:fnTemp("reply",0.9),max:fnTok("reply",700),dbg:"A/B "+label+" "+(i+1)}); }
+      try{ r=await chatCompletion(msgs,state.model,{fn:"reply",temp:fnTemp("reply",0.9),max:fnTok("reply",700),foreground:true,dbg:"A/B "+label+" "+(i+1)}); }
       catch(e){ r="[failed: "+(e&&e.message||e)+"]"; }
       outs.push(String(r||"").trim()||"[empty]");
     }
@@ -50736,6 +50848,8 @@ function syncSettingsUI(){
   renderToggleSegs();renderOvrFields();updateStorage();
 }
 function saveSettings(notify){
+  // v146.1 — a read-only tab's store refuses every write (_storageRO); say so rather than "Saved".
+  if(_tabReadOnly){ try{ toast("Read-only tab — these settings apply here only and are NOT saved. Close the other StoryMind tab first."); }catch(_){} }
   // The "You" fields are GLOBAL defaults — persist them to their keys, then re-resolve the
   // active per-universe identity (a universe without its own override picks these up).
   const gUser=document.getElementById('setUser').value.trim()||"You";
@@ -51008,7 +51122,7 @@ function saveSettings(notify){
     else store.setRaw(K[r.key],state[r.key]);
   });
   applyTheme();updateChatHeader();
-  if(notify)toast("Settings saved");
+  if(notify&&!_tabReadOnly)toast("Settings saved");
 }
 /* v29 — say plainly how much media is actually on the device. The referer-gated capture failure
    was invisible: the gallery looked fine until a link expired weeks later, by which point the bytes
@@ -51174,12 +51288,15 @@ let _autoBkWarned=false;
    and store writes; a snapshot is skipped when it has not moved since the last one (boot counts as
    "already snapshotted"). Resolves true when the current state is covered by a snapshot. */
 let _dataRev=0, _snapRev=null;
-async function doAutoBackup(){
+/* (!) v146.1 — {force:true} before anything destructive. "Boot counts as snapshotted" is an assumption,
+   not a snapshot: with the pagehide snapshot gone, the last session's final turns may be in no snapshot
+   at all, and an import right after boot then took none — the undo it promised did not exist. */
+async function doAutoBackup(o){
   /* v109.1 — a snapshot is never written by a session that could not read your data: it would
      roll a good snapshot off the end and replace it with an empty one. */
   if(!collectionsSafe) return false;
   const rev=_dataRev+"/"+_lsRev;
-  if(_snapRev===rev) return true;
+  if(_snapRev===rev&&!(o&&o.force)) return true;
   try{
     const bundle=await buildBackup({noMedia:true});
     const slot="autobackup_"+Date.now();
@@ -51242,9 +51359,9 @@ function validateBackupBundle(b){
 async function applyBackupBundle(b){
   validateBackupBundle(b);
   if(_tabReadOnly) throw new Error("StoryMind is open in another tab — close it and reload this one first");
-  // 0) a safety snapshot of what is here now (a no-op when an identical one already exists)
+  // 0) a safety snapshot of what is here now — always a real one (v146.1, see doAutoBackup)
   if(collectionsSafe){
-    const snap=await doAutoBackup();
+    const snap=await doAutoBackup({force:true});
     if(!snap && !(await uiConfirm("A safety snapshot of your current data couldn't be taken, so this can't be undone.",{title:"Import anyway?",ok:"Import anyway",danger:true}))) return false;
   }
   const wasSafe=collectionsSafe;
@@ -51519,6 +51636,8 @@ async function importDispatch(file){
     const b=JSON.parse(await file.text());
     if(!b||b.app!=="StoryMind") throw new Error("Not a StoryMind file");
     let ok=false;
+    // v146.1 — these overwrite items with the same id (a universes REPLACE drops the rest): snapshot first.
+    if(!(await doAutoBackup({force:true}))&&!(await uiConfirm("A safety snapshot of your current data couldn't be taken, so this can't be undone.",{title:"Import anyway?",ok:"Import anyway",danger:true}))) return;
     if(_importMode==="roleplay")  ok=await importRoleplayFile(b);
     else if(_importMode==="universes") ok=await importUniversesFile(b);
     else if(_importMode==="prompts")   ok=await importPromptsFile(b);
@@ -51694,6 +51813,7 @@ function finishOnboard(){
 async function init(){
   try{
     _tabReadOnly=!(await acquireWriterLock());   // v144.1 — a second tab plays read-only
+    if(_tabReadOnly)_storageRO=true;              // v146.1 — before the preload, whose migration seed writes
     await preloadCollections();   // hydrate growing collections from IndexedDB (with one-time LS migration)
     if(_tabReadOnly){ collectionsSafe=false; collectionsError="StoryMind is open in another tab"; _showTabReadOnly(); }
     loadState();

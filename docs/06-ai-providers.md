@@ -53,9 +53,13 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   fails with a named message and a failed debug row — it no longer throws a raw `SyntaxError` or
   triggers the paid rescue.
 - **Background limits** (v144.1): calls without `opts.rp`/`opts.foreground` share a semaphore of
-  `MC_BG_MAX` = 4 in flight per provider. A 401/402/403 trips a 2-minute circuit breaker
+  `MC_BG_MAX` = 4 in flight per provider. A 401/402 trips a 2-minute circuit breaker
   (`_mcBreak`, one toast) during which background calls to that provider are skipped; it lifts
-  at once when the key changes. Roleplay replies are never queued or paused.
+  at once when the key changes, or (v146.1) when a player-started call succeeds. v146.1: a 403
+  does **not** trip it (OpenRouter's moderation answers 403 for one flagged input) — it is that
+  call's error and names what the provider said. Roleplay replies, calls passing
+  `opts.foreground` (generators, Story mode, "Drop me into a scene", a re-illustrate, …) are
+  never paused.
 - **Stop** (v144.1): roleplay calls register an `AbortController`; the stop button next to Send
   (`#stopBtn`, `stopReply()`) aborts them → `{friendly:"Stopped.", stopped:true}`, no retry, and
   later roleplay calls in the same turn are refused until the send button is re-enabled.

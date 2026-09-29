@@ -1,7 +1,7 @@
 # StoryMind (Multirp) — Architecture Documentation
 
 This folder is the developer map of the app. It was written at **v29.1** and has been kept
-current in places since; the app is now at **v144** and `index.html` is **~49,000 lines** (CSS →
+current in places since; the app is now at **v146** and `index.html` is **~51,000 lines** (CSS →
 HTML → one `<script>`), plus a tiny optional service worker (`sw.js`). Where a subsystem changed
 after v29.1 and its doc was not updated, the source's version-tagged comments are the authority.
 These documents explain how every subsystem works, how it shows up
@@ -76,8 +76,8 @@ breaks when you change something in the wrong place.
 4. **Every new network call gets `dbg()`/`dbgDone()`** and a ceiling (`fetchWithTimeout`). The
    Debug screen is the app's only diagnostic surface on a phone.
 5. **Bump both version stamps on release:** the `#buildStamp` text in Settings' header
-   (`v144.0` at time of writing) *and* `CACHE_VERSION` in `sw.js` (`storymind-v404`) — without
-   the sw bump, installed clients keep serving the old cached build.
+   (`v146.0` at time of writing) *and* `CACHE_VERSION` in `sw.js` (bump whatever value it holds) —
+   without the sw bump, installed clients keep serving the old cached build.
 6. **Check every write.** `kvSet`/`putAll` return `false` on failure; route collection writes
    through `_kvPersist` (checked, retried, reported) and never write media before
    `hydrateMedia()` has read the stores (`_mediaSafe`).

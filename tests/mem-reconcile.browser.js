@@ -169,7 +169,8 @@ const {chromium}=require('playwright');
         ? true : "onPeriodChanged no longer defers the day roll"; })());
   ok("End Day stamps the arc with the period that ENDED, not the new morning", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-      return /await flushMemoryArc\(chat, day, endPeriod\|\|undefined\)/.test(src)
+      // v146.1 — started by endDayBackground (bounded to the day marker), not awaited in place
+      return /flushMemoryArc\(chat,\s*day,\s*endPeriod\|\|undefined[,)]/.test(src)
           && /const endPeriod=\(typeof chatPeriod==="function"\)\?chatPeriod\(chat\):"";/.test(src)
         ? true : "the closing arc still takes the new day's period"; })());
   ok("an already-collapsed stretch is not collapsed again", await pg.evaluate(async()=>{

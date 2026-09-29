@@ -16,6 +16,13 @@ Motives fester (`intentTick`) at day end only. End Day calls `runPeriodEngines(�
 {dayEnd:true})` for the last stretch. A day that rolls by travelling on past Night gets
 `_quietDayEnd` — a day marker and the same `endDayBackground` — instead of nothing.
 
+**Order and coalescing (v146.1).** `runPeriodEngines` runs one pass at a time per chat. A pass still
+waiting in the queue is joined, not duplicated: a later part of the same day adds its period to it,
+and a day end absorbs whatever of its day is still waiting (so seven quick trips cost about three
+passes, not seven). The day end's pass is queued the moment `endDayBackground` starts, held by a gate
+until the pipeline reaches stage 8 — nothing of the next day runs first. The intent tick never touches
+a motive born after the day it ticks, and `lastTick` never moves backwards.
+
 ## postTurn order (per turn — mostly background)
 
 ```
@@ -379,7 +386,9 @@ blocks as a spoken turn, only the format rules differ (doc 05).
 
 ## End Day pipeline (`endDayBackground` — full order, after the day visibly advances)
 
-1. `flushMemoryArc` (day-stamped — **must be first**; everything below reads today's memories)
+1. `flushMemoryArc` (day-stamped — **must be first**; everything below reads today's memories).
+   v146.1: started by `endDayBackground` itself, at once and bounded to the day marker, so a day end
+   queued behind another never flushes the next day's arc under the older day.
 2. `reconcileCalendarDay` → 3. `reconcileQuestsForDay`
 4. `writeDayDiaries` (∥ `runDailyRelationships` — slow axes over the day snapshot)
 5. `reEvaluateRelationshipsForDay` (regenerate factual sheets for pairs whose axes moved)
@@ -394,6 +403,14 @@ The foreground `endDay()` (before all this): confirm dialog → snapshot the day
 (**before** pushing the new `dayMarker` — the marker would blank the "today" window) →
 transition narration → advance `gameDay`/period → `tickTrackersForDay` → reset player to
 home/entrance, clear `subPos`/`companionLock` → re-place the cast (`resolveWorldPositions`).
+
+**Resume (v144.1, v146.1).** Progress is saved per ended day in `chat.pendingDayEnds[day]`
+(`{day,period,stage}`, stage = index in `DAYEND_STAGES`); `resumePendingDayEnds` resumes every
+pending day, oldest first, after a reload (older saves' single `pendingDayEnd` slot is migrated). A
+stage a reload cut in half is safe to run again: a diary already written for the day is skipped, the
+daily relationship read is stamped per pair and day (`dayEvalFor`), neglect per day (`neglectDay`).
+Every pass reads the ending chat's world — its cast, places, setting and player (`curCast(chat)`,
+`chatLocations`, `chatWorldSetting`, `chatUserName`) — never the chat that happens to be open.
 
 ⚠️ `endDayBackground` resolves the universe as **both** id string and object (`uid`/`uniObj`)
 because half the passes expect each — passing the wrong shape silently no-ops a pass (this

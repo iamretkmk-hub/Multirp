@@ -54,7 +54,7 @@ const {chromium}=require('playwright');
     const c=curChat(); c.universeId=uni.id; c.gameDay=5; c.period="Morning"; c.timeOfDay="Morning";
     c.locationId="l_home"; c.location="Home"; c.presentIds=[]; c.messages=[]; c.intents=[]; c.calendar=[];
     c.activeEvent=null; c.dnd=false; c.worldLog=[]; c.pulseBusy=null; c._roundAt=null; c._roundTry=null;
-    c._dayEndDoneFor=null; c._trackersTickedFor=null; c.pendingDayEnd=null; c.goalActed={}; c.goalAsked={};
+    c._dayEndDoneFor=null; c._trackersTickedFor=null; delete c.pendingDayEnd; delete c.pendingDayEnds; c.goalActed={}; c.goalAsked={};
     c.dayPlacement=null; c.worldPositions=null; c._wpKey=null; c.companionLock={}; c.leftBehind=null; c.dayLog=null;
     return true;
   });
@@ -69,7 +69,7 @@ const {chromium}=require('playwright');
     window.__reply["Day transition narration"]=async()=>{ await new Promise(r=>setTimeout(r,150)); return "The day draws to a close."; };
     try{
       await Promise.all([endDay(),endDay()]);
-      const afterTwo={day:c.gameDay,bg,ticks,markers:c.messages.filter(m=>m.dayMarker).length,done:c._dayEndDoneFor,pend:c.pendingDayEnd&&c.pendingDayEnd.day};
+      const afterTwo={day:c.gameDay,bg,ticks,markers:c.messages.filter(m=>m.dayMarker).length,done:c._dayEndDoneFor,pend:c.pendingDayEnds&&c.pendingDayEnds[5]&&c.pendingDayEnds[5].day};   // v146.1 — keyed by day
       // Travelling on is not a second day end for the day that already ended.
       _quietDayEnd(c,5,"Night");
       afterTwo.bgAfterQuiet=bg; afterTwo.markersAfterQuiet=c.messages.filter(m=>m.dayMarker).length;
@@ -91,7 +91,7 @@ const {chromium}=require('playwright');
     c.messages=[{mid:"a",role:"user",content:"hi"},{mid:"b",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"hello"},
                 {mid:"m",role:"assistant",speaker:"Narrator",dayMarker:true,dayFrom:5,dayTo:6,content:"—"},
                 {mid:"c",role:"user",content:"new day"}];
-    c._dayEndDoneFor=5; c.pendingDayEnd={day:5,period:"Night",stage:7};   // gossip (stage 6) already ran
+    c._dayEndDoneFor=5; c.pendingDayEnd={day:5,period:"Night",stage:7};   // gossip (stage 6) already ran — the v144.1 single slot, as an older save holds it
     const seen=[]; const names=["runGossipPropagation","maybeWorldPulse","runPeriodEngines","maybeProactiveText","runGoalsCurator","runUniverseChronicler","flushMemoryArc"];
     const real={}; names.forEach(n=>{ real[n]=window[n]; window[n]=async()=>{ seen.push(n); }; });
     let snap=null; const realBg=window.endDayBackground;
@@ -99,7 +99,7 @@ const {chromium}=require('playwright');
     try{
       const n=resumePendingDayEnds();
       await new Promise(r=>setTimeout(r,300));
-      return {n,snap,seen,pend:c.pendingDayEnd||null};
+      return {n,snap,seen,pend:(c.pendingDayEnds&&c.pendingDayEnds[5])||c.pendingDayEnd||null};
     } finally { names.forEach(k=>window[k]=real[k]); window.endDayBackground=realBg; }
   });
   ok("a pending day end is resumed with the ended day's own transcript", R.n===1 && R.snap && R.snap.d===5 && R.snap.per==="Night" && R.snap.len===2 && R.snap.resume, JSON.stringify(R));
@@ -287,9 +287,13 @@ const {chromium}=require('playwright');
     window.__reply["World pulse (calendar executor)"]="not json at all";
     await runCalendarExecutor(c,null);
     const e1={done:c.calendar[0].done,tries:c.calendar[0].execTries};
+    // v146.1 — a transport failure is not a try (it used to close the plan here); a second unreadable answer is.
     window.__reply["World pulse (calendar executor)"]=new Error("offline");
     await runCalendarExecutor(c,null);
-    const e2={done:c.calendar[0].done,outcome:c.calendar[0].outcome,result:c.calendar[0].result||""};
+    const eT={done:c.calendar[0].done,tries:c.calendar[0].execTries};
+    window.__reply["World pulse (calendar executor)"]="still not json";
+    await runCalendarExecutor(c,null);
+    const e2={done:c.calendar[0].done,outcome:c.calendar[0].outcome,result:c.calendar[0].result||"",eT};
     c.calendar=[plan()]; c.pulseBusy=null;
     window.__reply["World pulse (calendar executor)"]={headline:"Coffee",event:"They had coffee.",memories:[],rel:[],
       followup:{title:"Talk to Emre together",day:40,period:"Evening",who:"Ayla, Emre, Berk"}};
@@ -299,7 +303,8 @@ const {chromium}=require('playwright');
             userPlan:c.calendar.some(e=>e.id!=="cx"&&_planIncludesUser(e))};
   });
   ok("a failed call keeps the plan pending for a retry", X.e1.done===false && X.e1.tries===1, JSON.stringify(X));
-  ok("after the second failure it closes as \"didn't happen\", not as lived", X.e2.done===true && X.e2.outcome==="missed" && X.e2.result==="", JSON.stringify(X));
+  ok("a transport failure does not count as a try", X.e2.eT.done===false && X.e2.eT.tries===1, JSON.stringify(X));
+  ok("after the second unreadable answer it closes as \"didn't happen\", not as lived", X.e2.done===true && X.e2.outcome==="missed" && X.e2.result==="", JSON.stringify(X));
   ok("a success closes it with its result", !!X.ok, JSON.stringify(X));
   ok("a follow-up naming the player is between the characters only, bounded to four days",
      X.f && X.f.withUser===false && !/Emre/.test(X.f.who) && X.f.day===9 && X.f.ex==="Ayla" && X.userPlan===false, JSON.stringify(X));

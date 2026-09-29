@@ -101,14 +101,14 @@ const {chromium}=require('playwright');
       o.desc="She has come to rely on him.";
       o.lastSeenDay=10-gap; o.neglectDays=0;
       const before={t:o.trust,j:o.jealousy,r:o.respect,a:o.affection,f:o.familiarity};
-      runNeglectDrift(chat,10);
+      chat.neglectDay=null; runNeglectDrift(chat,10);   // v146.1 — once a day: each case is a fresh day end
       return {before,after:{t:o.trust,j:o.jealousy,r:o.respect,a:o.affection,f:o.familiarity}};
     },gap);
   ok("nothing moves inside the grace period", await pg.evaluate(async()=>{
       const chat=curChat(); chat.gameDay=10;
       const o=relObj(chat,"p_n","__user__");
       o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=9; o.neglectDays=0;
-      runNeglectDrift(chat,10);
+      chat.neglectDay=null; runNeglectDrift(chat,10);   // v146.1 — once a day: each case is a fresh day end
       return o.trust===40; }));
   {
     const r=await drift(5);
@@ -140,7 +140,7 @@ const {chromium}=require('playwright');
       Object.keys(o).forEach(k=>r[k]=o[k]);
       r.desc="x"; r.lastSeenDay=1; r.neglectDays=0;
       const before={j:r.jealousy,t:r.trust};
-      runNeglectDrift(chat,10);
+      chat.neglectDay=null; runNeglectDrift(chat,10);   // v146.1 — once a day: each case is a fresh day end
       return {moved:(r.jealousy!==before.j||r.trust!==before.t), j:r.jealousy, t:r.trust};
     },o);
   ok("an empty bond does not drift",
@@ -161,7 +161,7 @@ const {chromium}=require('playwright');
       const chat=curChat(); chat.gameDay=10;
       const o=relObj(chat,"p_n","__user__");
       o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=0; o.neglectDays=0;
-      runNeglectDrift(chat,10);
+      chat.neglectDay=null; runNeglectDrift(chat,10);   // v146.1 — once a day: each case is a fresh day end
       return o.lastSeenDay===10 && o.trust===40 ? true : JSON.stringify({d:o.lastSeenDay,t:o.trust}); }));
   ok("the drift saturates — it cannot run away", await pg.evaluate(()=>{
       const chat=curChat();
@@ -176,12 +176,12 @@ const {chromium}=require('playwright');
       const chat=curChat();
       const o=relObj(chat,"p_n","__user__");
       o.trust=40; o.affection=60; o.familiarity=60; o.desc="x"; o.lastSeenDay=6; o.neglectDays=0;
-      chat.gameDay=10; runNeglectDrift(chat,10);          // gap of 4 — a marked crossing
+      chat.gameDay=10; chat.neglectDay=null; runNeglectDrift(chat,10);   // v146.1 — once a day: each case is a fresh day end          // gap of 4 — a marked crossing
       return (state.memory||[]).some(m=>m&&m.source==="neglect"&&m.ownerId==="p_n"); }));
   ok("sharing a scene clears the clock", await pg.evaluate(()=>
       /o\.lastSeenDay=chat\.gameDay\|\|1; o\.neglectDays=0;/.test(String(runShortTermRel))));
   ok("and the pass runs at day end, before the evaluation that reads the memories",
-     await pg.evaluate(()=>/runNeglectDrift\(chat,day\)/.test(String(endDayBackground)+String(window._endDayBackgroundRun||""))));   // v144.1 — the body is _endDayBackgroundRun
+     await pg.evaluate(()=>/runNeglectDrift\(chat,day(,endPer)?\)/.test(String(endDayBackground)+String(window._endDayBackgroundRun||""))));   // v144.1 — the body is _endDayBackgroundRun (v146.1 — with the ended period)
 
   console.log("\n[the six blocks are named by timescale, and ordered by authority]");
   /* They used to collide: three said "feeling", three said "now"/"this turn", two shouted with a
@@ -362,7 +362,7 @@ const {chromium}=require('playwright');
        /# What you have already sent them about this — do not say any of it again/.test(src)
          ? true : "prior asks never reach the prompt");
     ok("so does the recent thread, so silence is readable",
-       /# Your recent texts with \$\{state\.user\} \(theirs and yours — read whether they answered\)/.test(src)
+       /# Your recent texts with \$\{(state\.user|chatUserName\(chat\))\} \(theirs and yours — read whether they answered\)/.test(src)   // v146.1 — the chat's own player
          ? true : "the thread never reaches the prompt");
     ok("the thread lines carry a day/period stamp",
        /const when=\(m\.gday!=null\)\?`Day \$\{m\.gday\}\$\{m\.gperiod\?", "\+m\.gperiod:""\}`:"earlier"/.test(src)

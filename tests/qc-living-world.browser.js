@@ -288,7 +288,7 @@ const {chromium}=require('playwright');
     await runCalendarExecutor(c,null);
     const e1={done:c.calendar[0].done,tries:c.calendar[0].execTries};
     // v146.1 — a transport failure is not a try (it used to close the plan here); a second unreadable answer is.
-    window.__reply["World pulse (calendar executor)"]=new Error("offline");
+    window.__reply["World pulse (calendar executor)"]=Object.assign(new Error("offline"),{network:true});   // v147.2 — the shape chatCompletion throws for a network failure (a bare Error is our own bug, and counts)
     await runCalendarExecutor(c,null);
     const eT={done:c.calendar[0].done,tries:c.calendar[0].execTries};
     window.__reply["World pulse (calendar executor)"]="still not json";

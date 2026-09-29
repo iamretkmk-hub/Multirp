@@ -158,7 +158,12 @@ standing — the stakeholder's one raisable rumor vs. talk merely overheard (doc
   deltas (`_applyWorldRel`), and physical placement at the venue — you can walk in on the
   aftermath.
 - **Calendar executor** (`runCalendarExecutor`, `calExec`): due plans that don't include the
-  player execute offstage the same way, honoring the plan's recorded origin/purpose.
+  player execute offstage the same way, honoring the plan's recorded origin/purpose. Up to three
+  calls per check; a plan that has to wait (people claimed or in the player's scene) takes no slot.
+  v147.2: only a timeout, network error, 429/5xx, Stop or paused provider is free
+  (`_calExecTransient`); anything else (4xx incl. a 403 from moderation, a non-JSON 200, our own
+  exception) counts toward `CALEXEC_TRIES` (2). A plan still failing the free way
+  `CALEXEC_STALE_DAYS` (2) days after its day closes as missed.
 - **Goal pursuit** (time-of-day change, once a day per character, `runGoalPursuit`, `goalPursuit`): each offstage character decides
   a NEXT MOVE from personality/goals/motives/memories/standings → lands on the **calendar**
   as a plan (solo or with one other character, never the player) for the executor.
@@ -272,10 +277,17 @@ action: new|update|ended, stage: planning|agreed, id}`.
 - **The check at each time-of-day change (v131.1).** Every entry a tracker pass files or changes is
   stamped `ftAt:{day,period}` (`_ftSnapshot`/`_ftStampChanges`). `runFutureReconcile` runs FIRST in
   `runPeriodEngines`, so at every time change and at day end: one call (`x_future_reconcile`) reads
-  the whole stretch since the last check (`chat.ftStretch.start`, up to 60 lines) against the entries
+  exactly that stretch (up to its last 60 lines) against the entries
   stamped in it plus the rest of the record. It corrects details that ended up different, closes what
   was done or called off, drops what was never agreed, and hands anything agreed but on no record to
-  its writer. No stamped entries and fewer than 4 lines → no call. Entries are read and patched
+  its writer (which reads back from the stretch's end, `opts.upto`). No stamped entries and fewer than
+  4 lines → no call; an empty or never-bounded stretch → no call.
+  **Stretch bounds (v147.2).** A stretch is bounded the moment the clock leaves it — `advanceTime`
+  (time changes, travel, Story mode), the scene dialog, End Day (at the day marker), a day that ends
+  on the road — by `_ftCloseStretch`, into `chat.ftBounds["day|period"]={start,end,a,e}` (raw indexes
+  plus the edge mids, durable, pruned to 8 days); `chat.ftStretch` is the open one. The reconcile
+  slices exactly those bounds (`_ftStretchLines`), so a merged or late run never reads another
+  stretch's lines. Entries are read and patched
   through one adapter, `_ftEntry(chat,kind,id)`, shared with `runFutureUpdate`.
 
 ## Calendar & meetings
@@ -406,7 +418,11 @@ home/entrance, clear `subPos`/`companionLock` → re-place the cast (`resolveWor
 
 **Resume (v144.1, v146.1).** Progress is saved per ended day in `chat.pendingDayEnds[day]`
 (`{day,period,stage}`, stage = index in `DAYEND_STAGES`); `resumePendingDayEnds` resumes every
-pending day, oldest first, after a reload (older saves' single `pendingDayEnd` slot is migrated). A
+pending day, oldest first, after a reload (older saves' single `pendingDayEnd` slot is migrated),
+up to `DAYEND_STALE_DAYS` (7) behind the clock — older ones are dropped with a toast. Each stage is
+saved at once (`flushPersistChats`). The time-of-day runs still waiting behind a day end are kept in
+`chat.pendingPeriodRuns {day:[periods]}` (v147.2) and queued again after the day ends; the boot
+resume retries every 15 s while the key is missing. A
 stage a reload cut in half is safe to run again: a diary already written for the day is skipped, the
 daily relationship read is stamped per pair and day (`dayEvalFor`), neglect per day (`neglectDay`).
 Every pass reads the ending chat's world — its cast, places, setting and player (`curCast(chat)`,

@@ -175,6 +175,12 @@ const {chromium}=require('playwright');
   });
   ok("a resume at stage 0 commits the ended day's open arc up to its marker, under that day", RF.before.commits.length===1 && RF.before.commits[0].d===5 && RF.before.commits[0].p==="Night" && RF.before.commits[0].contents==="old hi|old hello", JSON.stringify(RF));
   ok("…and leaves an arc that began after the marker open for the new day", RF.after.commits.length===0 && RF.after.open===true, JSON.stringify(RF));
+  ok("dayEndPending answers per day, for the keyed record and an old single slot", await pg.evaluate(()=>{
+      const c=curChat(); c.pendingDayEnds={5:{day:5,stage:2},6:{day:6,stage:0}};
+      const a=[dayEndPending(c,5),dayEndPending(c,6),dayEndPending(c,7)];
+      delete c.pendingDayEnds; c.pendingDayEnd={day:6,stage:1}; const b=[dayEndPending(c,6),dayEndPending(c,5)];
+      delete c.pendingDayEnd; const z=dayEndPending(c,6);
+      return (a.join()==="true,true,false"&&b.join()==="true,false"&&z===false)?true:JSON.stringify({a,b,z}); }));
   ok("an old single-slot record is still picked up", await pg.evaluate(()=>{
       const c=curChat(); delete c.pendingDayEnds; c.pendingDayEnd={day:6,period:"Night",stage:3};
       const m=_pendDayEnds(c); return (m[6]&&m[6].stage===3&&c.pendingDayEnd===undefined)?true:JSON.stringify(m); }));
@@ -222,26 +228,18 @@ const {chromium}=require('playwright');
   await openOther();
   const U=await pg.evaluate(async()=>{
     const c=state.chats[window.__home]; state.relOn=true; state.pulseOn=true;
-    const snap=[{mid:"a",role:"user",content:"hi"},{mid:"b",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"hello"}];
-    state.memory=[{id:"x1",ownerId:"p_a",type:"EXPERIENCE",content:"Talked with Emre",gameDay:5,gamePeriod:"Night",universeId:c.universeId,chatId:c.id}];
-    window.__reply["Daily relationship"]={};
-    await runDailyRelationships(c,5,snap);
-    const relCalls=window.__calls.filter(d=>/^Daily relationship/.test(d));
-    runNeglectDrift(c,5,"Night");
-    const relKeys=Object.keys(c.rel||{});
     // the round: this chat's places, setting and player
     c.worldPositions={p_a:"l_gym",p_b:"l_cafe",p_e:"l_home",p_n:"l_home"}; c._wpKey="5|Morning";
     c.dayPlacement={day:5,period:"Morning",positions:Object.assign({},c.worldPositions)};
     window.__reply["The day around you"]={entries:[{who:["Ayla"],place:"Cafe",headline:"Ayla has coffee",event:"e",kind:"ordinary",memories:[{name:"Ayla",content:"I had coffee alone."}]}]};
     const ran=await runWorldRound(c,null);
     const sent=window.__sent["The day around you (whole-cast round)"]||"";
-    return {relCalls,relKeys,ran,aylaPos:c.worldPositions.p_a,
+    return {ran,aylaPos:c.worldPositions.p_a,
       prompt:{harbour:/harbour town/.test(sent),fortress:/frozen northern/.test(sent),gymName:/Ayla — at Gym/.test(sent),emre:/Emre/.test(sent),zed:/Zed/.test(sent)},
       home:personaHome(state.personas.find(p=>p.id==="p_a")), allowed:allowedLocs(state.personas.find(p=>p.id==="p_a")).join()};
   });
   await closeOther();
-  ok("the daily relationship pass reads the ending chat's cast (it made no calls before)", U.relCalls.length===1 && /Ayla → Emre/.test(U.relCalls[0]), JSON.stringify(U.relCalls));
-  ok("neglect keeps records only for the ending chat's cast", U.relKeys.length>0 && !U.relKeys.some(k=>/p_z/.test(k)), JSON.stringify(U.relKeys));
+  // (runDailyRelationships / runNeglectDrift reading curCast(chat) is agent F's fix — covered by F's tests.)
   ok("the round names this chat's places, setting and player — not the open story's", U.ran===1 && U.aylaPos==="l_cafe" && U.prompt.harbour && !U.prompt.fortress && U.prompt.gymName && U.prompt.emre && !U.prompt.zed, JSON.stringify(U));
   ok("a character's home and places come from their own universe", U.home==="l_home" && U.allowed==="l_home", JSON.stringify(U));
 

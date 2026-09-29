@@ -83,7 +83,8 @@ const {chromium}=require('playwright');
       chat.calendar=[{id:"d1",kind:"meeting",title:"Dinner with Aria",who:"Aria",charIds:["q_a"],charId:"q_a",withUser:true,executor:"user",certainty:"certain",day:5,period:"Evening",done:false,locationId:"l_cafe",where:"Cafe Nero"},
                      {id:"d2",kind:"meeting",title:"Lunch with Aria",who:"Aria",charIds:["q_a"],charId:"q_a",withUser:true,executor:"user",certainty:"certain",day:5,period:"Midday",done:false,locationId:"l_cafe",where:"Cafe Nero"}];
       const s=calPendingTodaySummary(chat);
-      return (/Dinner with Aria/.test(s)&&!/Lunch with Aria/.test(s)) ? true : s; }));
+      // v146.1 — the lunch whose hour passed unresolved is named too, as what ending the day makes of it (missed)
+      return (/You still have "Dinner with Aria"/.test(s)&&/moves to tomorrow/.test(s)&&/"Lunch with Aria" \(Midday\) was due earlier today.*counts it as missed/.test(s)) ? true : s; }));
   await pg.evaluate(()=>{ const chat=curChat(); chat.gameDay=6; chat.period="Morning"; chat.timeOfDay="Morning";
       plantUnkeptMeetingMemories(chat,5,"Afternoon"); });
   ok("no 'stood up' memory for the dinner whose hour had not come", await pg.evaluate(()=>{
@@ -260,7 +261,7 @@ const {chromium}=require('playwright');
       const open=chat.promises.filter(p=>p.status==="open").length;
       return (chat.promises.length===60&&open===55&&chat.promises.some(p=>p.id==="o0")) ? true : chat.promises.length+" / open "+open; }));
   ok("an open word nobody raised for three weeks lapses — quietly", await pg.evaluate(()=>{
-      const chat=curChat(); chat.promises=[{id:"L1",holderId:"q_a",holderName:"Aria",toId:"__user__",promise:"You will write every week",status:"open",day:2}];
+      const chat=curChat(); chat.promises=[{id:"L1",holderId:"q_a",holderName:"Aria",toId:"__user__",promise:"You will write every week",kind:"promise",status:"open",day:2,seenDay:2}];   // v146.1 — seenDay: an unstamped old entry is seeded, not lapsed
       _prPrune(chat,30);
       const pr=chat.promises[0];
       const ctx=promiseContextFor(chat,"q_a","Aria",{});

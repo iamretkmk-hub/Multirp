@@ -152,9 +152,13 @@ const {chromium}=require('playwright');
   console.log("\n[5. location gossip hears only what the room could]");
   const lg=await pg.evaluate(async()=>{
     const chat=curChat(); state.memory=[]; const A=["p_ay","p_bu"]; chat.presentIds=A.slice(); chat.gameDay=4;
+    /* v148.4 — INTENTIONALLY CHANGED: (a) "spoken" is no longer the default, so this section asks for it by
+       name; (b) quoted speech touching the whispered span is part of the whisper now (the documented
+       `/whisper Name *narration* "speech"` form), so the public part is set off with plain text first. */
+    state.narrPrivacy="spoken";
     chat.messages=[
       {mid:"v0",role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,content:"You arrive at the tea garden.",present:A.slice()},
-      {mid:"v1",role:"user",content:"*SECRETWHISPER the money is in the boat* \"Nice evening.\"",present:A.slice(),whisperTo:"p_bu",whisperToName:"Burcu"},
+      {mid:"v1",role:"user",content:"*SECRETWHISPER the money is in the boat* Then, to everyone: \"Nice evening.\"",present:A.slice(),whisperTo:"p_bu",whisperToName:"Burcu"},
       {mid:"v2",role:"assistant",speaker:"Burcu",speakerId:"p_bu",content:"_THOUGHTBURCU he is lying_ \"PUBLICWORDS it really is.\"",present:A.slice()},
       {mid:"v3",role:"assistant",speaker:"Ayla",speakerId:"p_ay",content:"*ACTIONAYLA she pours the tea* \"More tea?\"",present:A.slice()},
       {mid:"v4",role:"user",content:"\"Yes please.\" _THOUGHTEMRE I hope nobody saw_",present:A.slice()}];
@@ -162,6 +166,7 @@ const {chromium}=require('playwright');
     let prompt="";
     window.__reply=(d,msgs)=>{ if(/Location gossip/.test(d)){ prompt=JSON.stringify(msgs); return JSON.stringify({content:"People are saying Emre was at the tea garden.",importance_score:7,charge:0.8,gist:"Emre at the tea garden"}); } return "{}"; };
     await runLocationGossipLeak(chat,loc,null);
+    delete state.narrPrivacy;
     const m=state.memory.find(x=>x.ownerId==="p_ce"&&x.source==="location_rumor");
     return {prompt,imp:m&&m.importance,charge:m&&m.charge}; });
   ok("the gossip prompt ran", lg.prompt.length>0, "no Location gossip call");

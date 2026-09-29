@@ -1952,7 +1952,7 @@
               <option value="seen">What they said, and what they visibly did</option>
               <option value="off">Everything, thoughts included</option>
             </select></div>
-          <div class="desc"><b>Only what they said</b> — another character's <i>*narration*</i> and <i>_thoughts_</i> are both private; you react to what you HEARD. A turn that was purely narrated reaches nobody, which is the cost of it.<br><b>What they said and did</b> — their visible actions cross too, so two people in one kitchen can see each other move; thoughts still never cross.<br>In every setting a character's OWN lines and <b>{{user}}</b>'s always stay whole — the player's <i>*actions*</i> are how the story is driven.</div>
+          <div class="desc"><b>Only what they said</b> — another character's <i>*narration*</i> and <i>_thoughts_</i> are both private; you react to what you HEARD. A turn that was purely narrated reaches nobody, which is the cost of it.<br><b>What they said and did</b> (the default) — their visible actions cross too, so two people in one kitchen can see each other move; thoughts still never cross.<br>In every setting a character's OWN lines and <b>{{user}}</b>'s always stay whole — the player's <i>*actions*</i> are how the story is driven.</div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-globe"/></svg> Living Universe</h3>
@@ -9035,6 +9035,28 @@ function loadState(){
     }
     store.set("sm_binderclean_v2",true);
   } }catch(e){ try{ console.warn("[binder clean-up]",e); }catch(_){} }
+  // ---- v148.4 refresh: ROLEPLAY CORE ----
+  /* v148.4 — whisper_back_guidance learns that an aside's line can have an aloud part (whisperSplit now
+     keeps quoted speech with the whispered span, and whatever is left over is marked aloud). Block
+     template, so the v146.1 splice: a stored copy still carrying the old sentence gets the new one. */
+  {const WB=[
+     ["whisper_back_guidance","not one of them knows anything passed between you at all.\n","not one of them knows anything passed between you at all. Only a part marked as said aloud, if there was one, reached the others.\n"]];
+   const upW=bag=>{ if(!bag||typeof bag!=="object")return false; let ch=false;
+     WB.forEach(([k,o,n])=>{ const v=bag[k]; if(typeof v==="string"&&v.indexOf(o)>=0&&v.indexOf(n)<0){ bag[k]=v.split(o).join(n); ch=true; } });
+     return ch; };
+   try{ if(upW(state.blockTpls)) store.set(K.blockTpls,state.blockTpls); }catch(e){}
+   try{ let any=false; (state.universes||[]).forEach(u=>{ if(u&&u.blockTpls&&upW(u.blockTpls))any=true; });
+        if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
+  }
+  /* v148.4 — narration privacy defaults to "seen" (see narrPrivacyMode). Until now the Settings select
+     wrote whatever it displayed on every save, so a stored "spoken" is almost always the old default
+     rather than a choice; it is moved once. Choosing "Only what they said" again afterwards sticks. */
+  try{ if(!store.get("sm_narrpriv_v1484",false)){
+    if(state.narrPrivacy===true||state.narrPrivacy==="spoken"){ state.narrPrivacy="seen"; store.set(K.narrPrivacy,"seen"); }
+    store.set("sm_narrpriv_v1484",true); } }catch(e){}
+  // (end v148.4 ROLEPLAY CORE)
+  //
+  //
   /* v147.2 — third-audit prompt fixes. One slot per area. */
   // ---- v147.2 refresh: ROLEPLAY CORE ----
   /* v147.2 — the last two heat lines that argued with the POV rail and the heat format: heat_narr_physical's
@@ -19493,12 +19515,28 @@ function psycheSig(chat,p,targetId){
     const o=(targetId&&chat&&chat.rel)?chat.rel[relDirKey(p.id,targetId)]:null;
     const ax=REL_FAST.concat(REL_SLOW).map(k=>k[0]+((o&&o.st&&o.st[k]!=null)?_psycheBand(o.st[k])+((o.st[k]<0)?"-":"+"):"")).join("");
     const here=(presentIds(chat)||[]).slice().sort().join(",");
+    // (!) v148.4 — and who can HEAR them (earshot), which is what a brake like "Berker is sitting right there" is about
+    const ear=(()=>{ try{ return earshotSplit(chat,p.id).here.slice().sort().join(","); }catch(e){ return ""; } })();
     const vows=(()=>{ try{ return String(promiseDirectorBlock(chat)||"").length; }catch(e){ return 0; } })();
     const trk=(()=>{ try{ return String(trackerContext(chat)||"").replace(/\d+/g,"#").slice(0,300); }catch(e){ return ""; } })();
-    return [p.id,targetId||"__user__",chat.locationId||chat.location||"",curSubId(chat)||"",here,
+    return [p.id,targetId||"__user__",chat.locationId||chat.location||"",curSubId(chat)||"",here+"/"+ear,
             chat.gameDay||1,(typeof chatPeriod==="function"?chatPeriod(chat):""),
             chat._heatBeat?"heat":"", ax, vows, trk, _psycheBodySig(chat)].join("|");
   }catch(e){ return p&&p.id||""; }
+}
+/* (!) v148.4 — THE PASSAGES BELONG TO THE SCENE THEY WERE WRITTEN FOR. The refresh is fire-and-forget,
+   so the turn that walks into a new scene used to carry the old one's pull and brake: Sami alone with
+   Emre at the garden gate on Day 2 was held back by "Berker is sitting right there with the ledger",
+   written at the Day 1 canteen. The scene part of the signature (place, area, who is present and in
+   earshot, day, period) is compared; when it moved, the block waits for the next turn's fresh text
+   rather than ship the last room's. A record from before signatures (no sig) is left as it was. */
+function _psycheSceneKey(sig){ return String(sig||"").split("|").slice(2,7).join("|"); }
+function psycheSceneFresh(chat,p,targetId){
+  try{
+    const rec=chat&&chat._psyche&&p&&chat._psyche[p.id];
+    if(!rec||!rec.sig||String(rec.sig).indexOf("|")<0)return true;   // no real signature to compare
+    return _psycheSceneKey(rec.sig)===_psycheSceneKey(psycheSig(chat,p,targetId));
+  }catch(e){ return true; }
 }
 /* The two passages for this character, as last written. Never generates inline. */
 function psycheFor(chat,p){
@@ -23171,10 +23209,14 @@ function relSheetBlockFull(persona,opts){
   if(!sheetsOnly){const facts=socialFactLines(persona);
    if(facts.length)parts.push(fillTpl(blkTpl("rel_learned"),{lines:facts.map(t=>"- "+t).join("\n")}));
    else{ const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim(); if(sgAuto)parts.push(sgAuto); }}
-  const hereSet=new Set(presentCast().map(c=>c.id));
-  const mark=id=>hereSet.has(id)?" [here now]":" [not here right now]";
+  const hereSet=new Set(presentCast(opts&&opts.chat).map(c=>c.id));
+  /* (!) v148.4 — opts.earIds (earshotSplit) splits "here" in two: at this place AND able to hear you, or
+     at this place but in another area. The reply payload passes it, so this mark agrees with PRIVACY. */
+  const earSet=(opts&&Array.isArray(opts.earIds))?new Set(opts.earIds):null;
+  const mark=id=>hereSet.has(id)?((earSet&&!earSet.has(id))?" [nearby, out of earshot]":" [here now]"):" [not here right now]";
   const rels=persona.relationships;
   let sheet="";
+  const _fullFor=[];   // v148.4 — who got a full paragraph (see trimSummary)
   if(rels&&typeof rels==="object"&&Object.keys(rels).length){
     const lines=[];
     // The player, then whoever is actually in the room, then everyone else by name. The block keeps
@@ -23235,6 +23277,7 @@ function relSheetBlockFull(persona,opts){
       const _dupStance=(opts&&opts.stanceElsewhere&&id===opts.stanceElsewhere);
       lines.push(`• [${who}${tie?` — ${tie}`:""}]${id==="__user__"?"":mark(id)}`
         +(_dupStance?"":`\n  ${rel||tie}`));
+      if(!_dupStance)_fullFor.push(who);   // v148.4 — this person's paragraph is printed below
     }
     /* (!) v42.8 — the same person twice. This list is keyed by persona id, so two ids whose labels
        differ only by case or by a diacritic ("Hakan" / "Hâkan") both got a line, and the character
@@ -23251,6 +23294,31 @@ function relSheetBlockFull(persona,opts){
   }
   // Legacy prose blob: the character's whole relationship description — their own knowledge, as-is.
   if(!sheet)sheet=(persona.relationshipsGen||"").trim();
+  /* (!) v148.4 — TIES ONCE, NOT TWICE. The summary note says "Berker is your younger brother… you love him
+     fiercely and lean on his stability", and Berker's own paragraph a few lines down says it again, in
+     nearly the same words — for everyone present (v67.1 dropped the note from the drives writer for the
+     same reason). opts.trimSummary drops a summary SENTENCE whose only people are ones whose paragraph is
+     printed below. A sentence about anyone else — the absent wife, a daughter — stays: for them the note
+     is the only line there is. A sentence naming nobody stays too. */
+  if(opts&&opts.trimSummary&&sg&&_fullFor.length&&parts[0]===sg){
+    try{
+      const fold=x=>asciiFold(String(x||"")).toLocaleLowerCase("tr");
+      const firstOf=n=>fold(n).split(/\s+/)[0];
+      const full=new Set(_fullFor.map(firstOf).filter(w=>w&&w.length>=2));
+      // everyone this story knows by name, not only this card's ties: "Berker and Buket…" is about Buket too
+      const known=new Set(Object.keys(rels||{}).map(id=>firstOf(castLabel(id)))
+        .concat((state.personas||[]).filter(x=>x&&x.universeId===persona.universeId&&x.id!==persona.id).map(x=>firstOf(x.name)))
+        .filter(w=>w&&w.length>=2));
+      full.forEach(w=>known.add(w));
+      const kept=sg.split(/(?<=[.!?])\s+/).filter(snt=>{
+        const words=new Set(fold(snt).split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+        const named=[...known].filter(w=>words.has(w)||[...words].some(x=>x.startsWith(w)&&x.length<=w.length+4));
+        return !named.length || named.some(w=>!full.has(w));
+      });
+      const t=kept.join(" ").trim();
+      if(t)parts[0]=t; else parts.shift();
+    }catch(e){}
+  }
   if(sheet)parts.push(sheet);
   return parts.join("\n\n");
 }
@@ -24990,6 +25058,7 @@ function migrateGossipLedger(){
 async function noteRumorRaise(chat,p,reply){
   try{
     if(!p||!reply||!state.key||state.gossipOn===false)return;
+    const _at=((chat&&chat.messages)||[]).length;   // v148.4 — where this reply lands (read before the judge is awaited)
     const day=(chat&&chat.gameDay)||curGameDay();
     const uid=(chat&&chat.universeId)||state.curUniverse||null;
     const g=gossipStakeOf(p.id,uid).filter(x=>gossipCanRaise(x,day))
@@ -25004,6 +25073,8 @@ async function noteRumorRaise(chat,p,reply){
     g.status="raised";
     g.heat=Math.max(0,(g.heat||0)-0.25);   // putting it into words takes the pressure out of it
     g._awaitAnswer=true;
+    // v148.4 — where and what was asked, so the answer judge grades an answer TO it (see settleRumors)
+    g._raise={at:_at,by:p.id,text:String(reply).slice(0,600)};
     persistGossip();
   }catch(e){/* best-effort */}
 }
@@ -25016,10 +25087,26 @@ async function settleRumors(chat,playerText){
     const uid=(chat&&chat.universeId)||state.curUniverse||null;
     const pending=liveGossip(uid).filter(g=>g._awaitAnswer);
     const _u=turnUser(chat);   // v147.2 — this chat's player: the second rumor is judged after an await
+    /* (!) v148.4 — AN ANSWER IS SAID TO THE ONE WHO ASKED. Any pending rumour was graded against the
+       player's very next line, in any scene — a "Günaydın hanımlar!" at the market, with the asker a
+       mile away — and the pending answer was spent on it. Now the asker must be within earshot, and this
+       must be the player's first line since it was put to them (the previous player line came before
+       the raise); otherwise the moment has passed and the rumour waits, unanswered, for its next raise.
+       The judge also reads what was asked, not only the reply. */
+    const msgs=(chat&&chat.messages)||[];
+    let prevUser=-1;
+    { let seenCur=false;
+      for(let i=msgs.length-1;i>=0;i--){ const m=msgs[i]; if(!m||m.role!=='user'||m.textMsg||m.sysError)continue;
+        if(!seenCur){ seenCur=true; continue; } prevUser=i; break; } }
+    let ear=[]; try{ ear=inSceneIds(chat); }catch(_){}
     for(const g of pending){
       g._awaitAnswer=false;
+      const r=g._raise||null;
+      if(ear.indexOf(g.stakeholderId)<0 || (r&&typeof r.at==="number"&&r.at<=prevUser)){ persistGossip(); continue; }
+      const _asker=gossipName(g.stakeholderId)||"";
+      const _asked=(r&&r.text)?`${_asker} put it to ${_u}:\n${String(r.text).slice(0,600)}\n\n`:"";
       const out=await chatCompletion(inChatWorld(chat,()=>epSend("rumorJudge",fillTpl(up("rumorJudge"),{rumor:g.text,mode:"ANSWER",user:_u,
-          text:`${_u} answers:\n${String(playerText).slice(0,900)}`}),{data:"Return the JSON."})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0),max:fnTok("gm",80),dbg:"Rumor judge (answer)"});
+          text:`${_asked}${_u} answers:\n${String(playerText).slice(0,900)}`}),{data:"Return the JSON."})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0),max:fnTok("gm",80),dbg:"Rumor judge (answer)"});
       const j=parseJSON(out)||{};
       const v=String(j.verdict||"open");
       if(v==="settled"||v==="believed") resolveGossip(g.id,v,j.why||"");
@@ -25818,16 +25905,25 @@ function _memLead(m,today){
   }).replace(/\s{2,}/g," ").replace(/\s+([.,])/g,"$1").trim();
   return s?s+" ":"";
 }
+/* (!) v148.4 — how far back a line picker may walk for this character: not past the start of their
+   scene (sceneCutIndex) and not past a day marker. A text thread is not a scene, so a text reply keeps
+   the whole walk (its channel gate already confines it to the thread). */
+function _lineWalkFloor(chat,selfP,textMode){
+  if(!selfP||textMode)return 0;
+  try{ return sceneCutIndex(chat,selfP); }catch(e){ return 0; }
+}
 function lastDialogueLine(chat,selfP,textMode){
   try{
     const msgs=(chat&&chat.messages)||[];
-    for(let i=msgs.length-1;i>=0;i--){
+    const floor=_lineWalkFloor(chat,selfP,textMode);   // v148.4 — this scene, this day
+    for(let i=msgs.length-1;i>=floor;i--){
       const m=msgs[i];
+      if(m&&m.dayMarker&&selfP&&!textMode)break;       // v148.4 — yesterday's line is not in front of you
       if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
       if(!m.content||!String(m.content).trim())continue;
       if(!_lineReachable(m,selfP,textMode))continue;
       if(m.role==='user'){
-        return {name:state.user,text:String(m.content).trim()};
+        return {name:state.user,text:(m.whisperTo&&selfP)?whisperForTarget(m):String(m.content).trim()};   // v148.4 — an aside reads as one, with its aloud part marked
       }
       const sp=m.speaker||"";
       if(!sp||/^Narrator$/i.test(sp))continue;
@@ -25858,12 +25954,14 @@ function lastDialogueLine(chat,selfP,textMode){
 function lastPlayerLine(chat,selfP,textMode){
   try{
     const msgs=(chat&&chat.messages)||[];
-    for(let i=msgs.length-1;i>=0;i--){
+    const floor=_lineWalkFloor(chat,selfP,textMode);   // v148.4 — same bounds as lastDialogueLine
+    for(let i=msgs.length-1;i>=floor;i--){
       const m=msgs[i];
+      if(m&&m.dayMarker&&selfP&&!textMode)break;
       if(!m||m.role!=='user'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
       if(!m.content||!String(m.content).trim())continue;
       if(!_lineReachable(m,selfP,textMode))continue;
-      return {name:state.user,text:String(m.content).trim(),toId:null,toName:null};
+      return {name:state.user,text:(m.whisperTo&&selfP)?whisperForTarget(m):String(m.content).trim(),toId:null,toName:null};   // v148.4 — see lastDialogueLine
     }
   }catch(e){}
   return null;
@@ -25887,8 +25985,10 @@ function selfContinueLine(chat,selfP,textMode){
   try{
     if(!selfP)return null;
     const msgs=(chat&&chat.messages)||[];
-    for(let i=msgs.length-1;i>=0;i--){
+    const floor=_lineWalkFloor(chat,selfP,textMode);   // v148.4 — your last line in THIS scene, today
+    for(let i=msgs.length-1;i>=floor;i--){
       const m=msgs[i];
+      if(m&&m.dayMarker&&!textMode)break;
       if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
       if(!m.content||!String(m.content).trim())continue;
       // v37.1 — same channel gate: a line on the other channel is not "the last thing said here",
@@ -26009,7 +26109,7 @@ const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"]
   mem_noshow:["mem_noshow_stood_up","mem_noshow_user","mem_noshow_declined"],
   /* v50.1 — the aside wordings. castHistory writes them rather than a payload block assembling
      them, so they have no block to hang under either. */
-  whisper:["whisper_to_you","whisper_back_guidance"],
+  whisper:["whisper_to_you","whisper_aloud","whisper_back_guidance"],
   /* v136.1 — the meeting marker castHistory and the text engines set into a text thread. */
   text_meet:["text_met_in_person"]};
 const REPLY_BLOCKS={
@@ -26639,7 +26739,7 @@ const PT_INLINE_HEAD={
    line drops. Listing them here is what lets an unpicked name read as "known but empty" instead of
    as a typo in the editor's red warnings. */
 const RT_ORDER=["target_header","cont_target_header","heat_target_header",
-  "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_look","target_wearing"];
+  "target_player","target_char","cont_target_self","heat_target_self","target_bg","target_known","target_look","target_wearing"];
 const RG_ORDER=["heat_guidance","guidance_open","guidance_target","guidance_close",
   "guidance_continue","guidance_reply","guidance_absence","guidance_not_yours"];
 const DRIVE_FRAGS=["drive_toward","drive_against"];
@@ -27787,7 +27887,7 @@ function epSend(key,systemText,parts,vars){
     your_bio:["bio_header","bio_intro","goals_live_intro","pursuit_status_intro","bio_behave_self","bio_behave_other","bio_wardrobe_self","bio_wardrobe_other","bio_wearing_self","bio_wearing_other","intent_aim_warm","intent_aim_cool","intent_aim_self"],
     relationships:["rel_header","rel_learned","rel_elsewhere"],scenario:["scenario_header"],
     others_present:["others_header","others_footer"],
-    response_target:["target_header","target_player","target_char","target_bg","target_look","target_wearing","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
+    response_target:["target_header","target_player","target_char","target_bg","target_known","target_look","target_wearing","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
     player:["player_intro","player_bg","player_look","player_wearing"],
     situation:["situation_leaving","situation_arriving","narr_move_self","narr_move_with","narr_move_char"],
     last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
@@ -28578,6 +28678,9 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
      "you" is worse than an "I", because the payload's own instructions say "you" and mean the
      reader. So the frame names the owner and covers both pronouns rather than betting on one. */
   target_bg:`<their_backstory>This is {{target}}'s own identity sheet, written TO {{target}}. Wherever it says "you" — or "I" — it means {{target}}, never you:\n{{bio}}</their_backstory>`,
+  /* (!) v148.4 — for a CHARACTER target, what they are to the responder, from the responder's own sheet.
+     Their card (target_bg) is no longer lent out: it is written to them and carries what they hide. */
+  target_known:`<what_they_are_to_you>What {{target}} is to you, in your own words: {{tie}}. That, and what {{target}} shows and says in front of you, is what you have of {{target}} — what goes on inside {{target}} is not yours to know.</what_they_are_to_you>`,
   target_look:`<their_appearance>How {{target}} looks:\n{{look}}</their_appearance>`,
   /* v140.2 — what the player has on right now (their outfit table, or what the scene changed it to).
      The entries are written TO the player ("You wear…"), so the frame names whose "you" it is. */
@@ -28610,10 +28713,13 @@ Structure EVERY reply as exactly TWO blocks, in this order, never mixed:
      because being told "something passed between them" is itself a leak, and a small one is still
      one. */
   whisper_to_you:`({{user}} does this close, for you alone — nobody else in the room hears it, sees it, or is told it happened. Whatever is said and whatever is done here is between the two of you):`,
+  /* v148.4 — the part of an aside's line that was NOT whispered (text after the whispered group), as its
+     target reads it: said to be public, so they never believe the room missed what it heard. */
+  whisper_aloud:`(and then, aloud — everyone here hears and sees this part):`,
   /* The character answering one. They get ONE channel and it is private, so there is nowhere to
      blurt to — which is the point: a reply with nowhere private to go is a reply that leaks. */
   whisper_back_guidance:`# THIS IS BETWEEN THE TWO OF YOU
-{{user}} did that close, for you alone. Nobody else in this room heard it, saw it, or has been told it happened — not one of them knows anything passed between you at all.
+{{user}} did that close, for you alone. Nobody else in this room heard it, saw it, or has been told it happened — not one of them knows anything passed between you at all. Only a part marked as said aloud, if there was one, reached the others.
 
 Your whole reply goes back the same way: only {{user}} will read it. So answer it properly — say and do the thing you would only say and do like this. Speech and action together, as one moment; you do not have to keep them apart.
 
@@ -29466,7 +29572,9 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
    const _scope=(_wantScope==="present"&&!_hasSummary)?"brief":_wantScope;
    // v62.1 — whoever the turn is aimed at has their stance stated once, in `feelings`.
    const _stanceElsewhere=(_feelHasSettled&&targetId)?targetId:null;
-   const sheet=relSheetBlockFull(p,{scope:_scope,stanceElsewhere:_stanceElsewhere});
+   const sheet=relSheetBlockFull(p,{scope:_scope,stanceElsewhere:_stanceElsewhere,
+     chat:chat,earIds:(()=>{ try{ return earshotSplit(chat,p.id).here; }catch(e){ return null; } })(),   // v148.4 — [here now] = earshot
+     trimSummary:true});                                                                                // v148.4 — ties once, not twice
    if(sheet)B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`;}
 
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
@@ -29488,12 +29596,25 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
 
   // ===== WHO YOU ARE RESPONDING TO — the player OR another character, whoever it actually is. =====
   {
-    const isPlayer=(targetId==="__user__"||!targetId);
+    /* (!) v148.4 — NO TARGET IS NOT THE PLAYER. `!targetId` used to mean the player whatever the name
+       said, so a line from someone who had since left (targetId null, targetName "Berker") printed
+       "Berker is the human player" over the PLAYER's bio. Only an explicit "__user__", or no target
+       and no other name, is the player now; a named person who resolves to nobody gets no sheet. */
+    const isPlayer=(targetId==="__user__"||(!targetId&&(!targetName||targetName===state.user)));
     const tName=targetName||state.user;
-    let bio="",look="";
+    let bio="",look="",known="",tWear="";
     if(isPlayer){ bio=(state.userBio||"").trim(); look=(state.userLook||"").trim(); }
-    else { const t=resolveChar(targetId,chat)||(others||[]).find(o=>o.name===tName);
-           if(t){ bio=subUser(String(t.backstory||"")).trim(); look=subUser(lookProse(t.look)||"").trim(); } }
+    else { const t=(targetId?resolveChar(targetId,chat):null)||(others||[]).find(o=>o.name===tName);
+           /* (!) v148.4 — ANOTHER CHARACTER'S CARD IS THEIRS, NOT THE RESPONDER'S. This printed the target's
+              own backstory — written TO them, secrets and all ("you have begun to want something that
+              belongs to you and Buket alone") — into the payload of whoever answered them. That is the
+              card-lending v104.1 removed from OTHERS PRESENT, one block lower. The responder now gets
+              what they could know: how the target looks, what they have on, and the responder's OWN tie
+              to them (their relationship sheet, above, carries the rest in their own words). */
+           if(t){ look=subUser(lookProse(t.look)||"").trim();
+                  try{ const e=relSheetEntry(p,t.id); known=_relTieLabel(e&&e.tie,80)||""; }catch(_){}
+                  try{ if(!(opts&&opts.textMode)){ const f=currentOutfit(t,chat);
+                    tWear=f&&f.text?subUser(String(f.text)).replace(/\s+/g," ").trim().slice(0,400):""; } }catch(_){} } }
     // v27.4/v27.9 — this character spoke last and nothing new is aimed at them, so the header says
     // to carry on rather than naming a target whose line they have already answered. Heat gets its
     // own wording ({{user}} has gone quiet); any other second turn gets the neutral one.
@@ -29520,7 +29641,9 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
       _rtPut(_bk,fillTpl(blkTpl(_bk),{target:tName}));
     }
     if(bio) _rtPut("target_bg",fillTpl(blkTpl("target_bg"),{bio:bio,target:tName,user:state.user||""}));
+    if(known)_rtPut("target_known",fillTpl(blkTpl("target_known"),{tie:known,target:tName,user:state.user||""}));   // v148.4 — your tie, not their card
     if(look)_rtPut("target_look",fillTpl(blkTpl("target_look"),{look:look,target:tName,user:state.user||""}));
+    if(tWear)_rtPut("target_wearing",fillTpl(blkTpl("target_wearing"),{wearing:tWear,target:tName,user:state.user||""}));   // v148.4 — a character target's clothes too
     /* v140.2 — AND WHAT THE PLAYER HAS ON. The image writer has been told since v140.1; the person
        looking at them was not, so a reply could admire a jacket the picture did not draw. Never over
        a text: nobody sees what you are wearing through a phone. */
@@ -29568,6 +29691,18 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
     // first line isn't context-blind.
     const brief=sceneWriterBriefing(chat,p);
     if(brief){ B._si.situation_brief=brief; B.situation+=`\n\n${brief}`; }
+  }else{
+    /* v148.4 — an event opened by someone already in the room (_kickEventOpening): no entrance, but the
+       same WHY & HOW, on the turn that opens it — before they have said anything in the event. */
+    try{
+      const ev=chat&&chat.activeEvent;
+      if(ev&&!ev.resolved&&ev.accuserId===p.id&&ev.participant&&ev.participant.approaching===false){
+        const from=(typeof ev._startMsg==="number")?ev._startMsg:0;
+        const spoke=(chat.messages||[]).slice(from).some(m=>m&&m.role==='assistant'&&!m.sysError&&!m.narratorEvent&&m.speakerId===p.id);
+        const brief=spoke?"":sceneWriterBriefing(chat,p);
+        if(brief){ B.situation=brief; B._si={situation_brief:brief}; }
+      }
+    }catch(e){}
   }
 
   return B;
@@ -29835,7 +29970,9 @@ function buildTailBlocks(opts){
       // area with everyone else.
       const _vSub=(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat);
       const _pSubNow=curSubId(chat);
-      const _sameSub=id=>((chat.subPos&&chat.subPos[id])||_pSubNow)===_vSub;
+      // v148.4 — the one earshot reading (earshotSplit), shared with OTHERS PRESENT and the [here now] marks
+      const _ear=earshotSplit(chat,selfId), _earSet=new Set(_ear.here);
+      const _sameSub=id=>_earSet.has(id);
       // v19.72 — the presence list carries the VIEWER's OWN tie to each person ("Alev Alemdar —
       // your wife"), so the social stakes of who is standing here are visible at the point of
       // highest attention. Ties come from the viewer's own relationships map (their knowledge —
@@ -29859,7 +29996,7 @@ function buildTailBlocks(opts){
       const _subName=id=>{ try{ const _h=chat.locationId?locById(chat.locationId):null;
         const _s=_h&&subById(_h,(chat.subPos&&chat.subPos[id])||_pSubNow); return (_s&&_s.name)||""; }catch(e){ return ""; } };
       const _here=presentCast(chat).filter(c=>c.id!==selfId);
-      const _playerHere=(_vSub===_pSubNow);
+      const _playerHere=_ear.playerHere;
       // v26.7 — the player is tracked SEPARATELY from the other characters. Being in the room with
       // only {{user}} is being ALONE with them — the private, intimate state — not "not alone".
       // Folding the player into this list made every one-on-one scene read as if it had an audience.
@@ -30078,7 +30215,9 @@ function buildTailBlocks(opts){
      that is what {{target}} just said or did" — which is false (they already answered it) and which
      WINS, because it is the last instruction before generation. That is the payload arguing with
      itself, and the half that loses is the correct half. */
-  if(targetName){
+  /* (!) v148.4 — and it must not point at a line that is not there: with no line to answer (an arrival
+     whose scene starts at their own entrance) "react to the highlighted line above" named nothing. */
+  if(targetName && _answering){
     const _gk=selfContinueLine(chat,selfP,_tm)?"guidance_continue":"guidance_reply";
     _rg[_gk]=fillTpl(blkTpl(_gk),{target:targetName,self:selfName});
     g+=`\n${_rg[_gk]}`;
@@ -30178,7 +30317,8 @@ function buildTailBlocks(opts){
      neither side stays out of the payload entirely rather than shipping an empty heading. */
   try{
     psycheRefreshIfStale(chat,selfP,targetId,targetName);
-    const _ps=psycheFor(chat,selfP);
+    // v148.4 — last scene's pull and brake are not this scene's (psycheSceneFresh)
+    const _ps=psycheSceneFresh(chat,selfP,targetId)?psycheFor(chat,selfP):{toward:"",against:""};
     /* (!) v62.1 — BOTH PULLS, OR NO BLOCK. The heading is "THE TWO THINGS PULLING AT YOU" and the
        closing note says whichever side is empty is genuinely empty — but with one side rendered
        and the other absent, what actually reaches the model is a single unopposed push under a
@@ -30296,17 +30436,25 @@ function buildTailBlocks(opts){
          not: it scans BACKWARDS until it has collected six spans, with no message limit, so in any
          chat that has ever contained narration it returns something and the gate never shuts.
          Six messages is the same window the rest of the tail reasons over. */
+      /* (!) v148.4 — …and the six-message window had the same flaw one level down: every character reply
+         carries a *beat*, so any six lines contain one and the rail shipped on 77 of 77 turns, shift-plan
+         chat included. An ask made with a hand is made by the PLAYER to this character, so the window is
+         the player's own latest line (as long as it is recent — within those six messages), besides the
+         line being answered above. Another character's glance across the table is not an ask to you. */
       const win=((chat&&chat.messages)||[]).slice(-6);
-      return win.some(m=>m&&m.content&&!m.sysError&&!m.dayMarker&&!m.presenceNote&&!m.narratorEvent
-                         &&/\*[^*]{3,400}\*/.test(String(m.content)));
+      const pl=[...win].reverse().find(m=>m&&m.role==='user'&&m.content&&!m.sysError&&!m.textMsg);
+      if(!pl)return false;
+      if(pl.whisperTo&&selfP&&pl.whisperTo!==selfP.id)return false;   // a hand under the table for someone else
+      return /\*[^*]{3,400}\*/.test(String(pl.content));
     }catch(e){ return true; } })();
     const _asked=(()=>{ try{
       if(!_answering) return true;                       // nothing to read → fail open
       if(_physical) return true;
       if(/[?？]/.test(_lineTxt)) return true;              // a question put to them
       if(exchangeIsStalled(chat,selfP)) return true;      // the same move, several turns running
-      const _q=(typeof charQuestSheetLines==="function")?charQuestSheetLines(selfP,{brief:true}):"";
-      if(_q&&/\S/.test(_q)) return true;                  // a pursuit already put to somebody
+      // v148.4 — a pursuit already PUT to somebody (delivered), not any pursuit at all: the brief sheet
+      // renders "you have NOT asked yet" and "RECENTLY ACHIEVED" too, and those opened the gate every turn
+      if(_railFlags&&_railFlags.pending_ask) return true;
       return false;
     }catch(e){ return true; } })();
     if(_asked){
@@ -30870,6 +31018,27 @@ function inSceneIds(chat){
   const l=chatLocById(c,c.locationId); if(!l||!Array.isArray(l.sublocations)||l.sublocations.length<=1)return ids.slice();
   const here=curSubId(c);
   return ids.filter(id=>charSubId(c,id)===here);
+}
+/* (!) v148.4 — WHO THIS CHARACTER CAN HEAR, as one answer for the three blocks that state it. OTHERS
+   PRESENT (within earshot) and the relationship sheet's [here now] were built from presentCast — the
+   whole location — while PRIVACY, two blocks later, used the sub-area: Özlem was "within earshot" and
+   "[here now]" at the canteen table and, in the same payload, "not in this room… cannot hear what you say
+   here". Viewer-aware, by the rule PRIVACY has always used: the viewer's own area (or the player's when
+   the viewer has none on record), and a character with no area on record counts as in the player's.
+   Returns ids (never the viewer): `here` share the viewer's area, `apart` are at the place but elsewhere. */
+function earshotSplit(chat,selfId){
+  const c=chat||curChat(); const out={here:[],apart:[],playerHere:true};
+  try{
+    const ids=presentIds(c).filter(id=>id!==selfId);
+    const l=(c&&c.locationId)?chatLocById(c,c.locationId):null;
+    if(!l||!Array.isArray(l.sublocations)||l.sublocations.length<=1){ out.here=ids; return out; }
+    const pSub=curSubId(c);
+    const subOf=id=>(c.subPos&&c.subPos[id])||pSub;
+    const vSub=selfId?subOf(selfId):pSub;
+    ids.forEach(id=>{ (subOf(id)===vSub?out.here:out.apart).push(id); });
+    out.playerHere=(vSub===pSub);
+  }catch(e){ out.here=presentIds(c).filter(id=>id!==selfId); }
+  return out;
 }
 function inSceneCast(chat){
   const c=chat||curChat();
@@ -34078,7 +34247,28 @@ function cmdPaletteKey(e){
   return true;
 }
 
-function castConvoText(chat,limit,viewerId){
+/* v148.4 — the newest line in front of character p, as p took it in: inside their scene (sceneCutIndex),
+   one they could reach (_lineReachable: witness + whisper + channel), read through memHeardLine (a whisper
+   to them marked as one, another character's line as it crossed, never anyone's _thoughts_). Their own
+   lines are skipped — it is what they are answering. "" when nothing reached them. */
+function heardQueryLine(chat,p){
+  try{
+    if(!p)return "";
+    const msgs=(chat&&chat.messages)||[];
+    const floor=_lineWalkFloor(chat,p,false);
+    for(let i=msgs.length-1;i>=floor;i--){
+      const m=msgs[i];
+      if(m&&m.dayMarker)break;
+      if(!m||m.role==='system'||m.sysError||m.uiNote||m.narratorEvent||m.presenceNote||m.travelBeat||m.textMsg)continue;
+      if(!_lineReachable(m,p,false))continue;
+      if(m.role!=='user'&&((m.speakerId&&m.speakerId===p.id)||(!!m.speaker&&m.speaker===p.name)))continue;
+      const t=dropThoughtSpans(memHeardLine(m,p,"")||"").replace(/[ \t]{2,}/g," ").trim();
+      if(t)return t;
+    }
+  }catch(e){}
+  return "";
+}
+function castConvoText(chat,limit,viewerId,opts){
   const cast=curCast(chat);const fallback=(cast[0]&&cast[0].name)||"Narrator";   // v144.1 — this chat's cast
   const who=viewerId===undefined?"__user__":viewerId;
   return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.textMsg).slice(-(limit||14))
@@ -34086,6 +34276,16 @@ function castConvoText(chat,limit,viewerId){
       const nm=m.role==='user'?state.user:(m.speaker||fallback);
       let body=m.content;
       const wTo=m.whisperTo;
+      /* (!) v148.4 — opts.markAsides: the player's full view, with every aside SAID to be one, the way
+         recentExchangeFor marks them for the drives writer. The turn router read a knee touch under the
+         table as an ordinary line and could send the husband's brother to react to it. */
+      if(wTo && who==="__user__" && opts && opts.markAsides){
+        if(m.role==='user'){ const sp=whisperSplit(body);
+          return `${nm} (whispered to ${m.whisperToName||"someone"} alone — nobody else heard or saw it): ${sp.secret}`+(sp.open?`\n${nm} (aloud, to the room): ${sp.open}`:""); }
+        return `${nm} (whispered back to ${state.user} alone — nobody else heard or saw it): ${body}`;
+      }
+      // (!) v148.4 — a character's whisper BACK is private, all of it (v147.2, castHistory): not split
+      if(wTo && m.role==='assistant' && who!=="__user__" && m.speakerId!==who) return null;
       if(wTo && who!=="__user__" && wTo!==who){
         body=whisperOpenPart(m);                        // the public remainder, and nothing else
         if(!body) return null;                          // it was ALL aside — this turn is not theirs
@@ -34111,17 +34311,44 @@ function castConvoText(chat,limit,viewerId){
    the room simply gets the public remainder, and that remainder IS the cover story — they see him
    turn and smile, not what preceded it. A message that is nothing but an aside does not exist for
    them at all. */
+/* (!) v148.4 — THE WHISPERED WORDS ARE PART OF THE WHISPER. The documented form — the player's own persona
+   note says so — is `/whisper <name> *hidden narration* and/or "whispered speech in double quotes"`, and
+   both halves are private. Only the starred span counted, so `*Masanın altından dizine dokunuyorum.* "Bu
+   akşam Burak nöbette mi?"` told Burcu the whole moment was for her alone while Sami and Berker heard the
+   question in plain words. The rule now:
+     · the aside is the first *span* TOGETHER WITH quoted speech that touches it — a "…" right after it
+       (only spaces between), and a "…" that opens the body right before it;
+     · anything else outside that group is aloud, as before — `*…* "…" Sonra herkese dönüp gülümsüyorum.`
+       keeps its last sentence public, and a later *…* after the group is ordinary narration;
+     · no span at all is still wholly private.
+   A lone span still returns its inner text (no asterisks) as `secret`; a group keeps its asterisks, so
+   the reader can still tell the narrated half from the spoken one. Signature and shape are unchanged. */
 function whisperSplit(text){
   try{
     const t=String(text==null?"":text);
     const m=t.match(/\*([^*\n]+)\*/);                 // the FIRST pair, and only that one
     if(!m) return {secret:t.trim(), open:""};         // no span → the whole line is the aside
-    const open=(t.slice(0,m.index)+" "+t.slice(m.index+m[0].length)).replace(/[ \t]{2,}/g," ").trim();
-    return {secret:String(m[1]).trim(), open:open};
+    let a=m.index, b=m.index+m[0].length;
+    const Q=/^[ \t]*(?:"[^"\n]*"|“[^”\n]*”|«[^»\n]*»)/;
+    for(let q=Q.exec(t.slice(b)); q; q=Q.exec(t.slice(b))) b+=q[0].length;    // speech right after the span
+    if(a>0 && /^\s*(?:(?:"[^"\n]*"|“[^”\n]*”|«[^»\n]*»)\s*)+$/.test(t.slice(0,a))) a=0;   // speech opening the body
+    const joined=(a!==m.index||b!==m.index+m[0].length);
+    const open=(t.slice(0,a)+" "+t.slice(b)).replace(/[ \t]{2,}/g," ").trim();
+    return {secret:joined?t.slice(a,b).trim():String(m[1]).trim(), open:open};
   }catch(e){ return {secret:String(text||""), open:""}; }
 }
 /* What the room gets from an aside: the public remainder, or nothing at all. */
 function whisperOpenPart(m){ try{ return whisperSplit(m&&m.content).open; }catch(e){ return ""; } }
+/* v148.4 — the player's aside as its TARGET reads it, everywhere it is shown to them (their transcript and
+   the highlighted line): the private part under whisper_to_you, and a public remainder, if any, under
+   whisper_aloud — so they never believe the room missed a part it heard. */
+function whisperForTarget(m){
+  const tn=(m&&m.whisperToName)||"someone";
+  const sp=whisperSplit(m&&m.content);
+  const head=fillTpl(blkTpl("whisper_to_you"),{user:state.user,target:tn});
+  const aloud=sp.open?fillTpl(blkTpl("whisper_aloud"),{user:state.user,target:tn}):"";
+  return `${head} ${sp.secret}`+(sp.open?`\n${aloud?aloud+" ":""}${sp.open}`:"");
+}
 /* ===== v144.1 — *NARRATION* SPANS, READ LIKE A PERSON READS THEM ===============================
    stripNarration and spokenOnly paired the first asterisk with the next one (one regex),
    whatever lay between. One missing asterisk flipped the whole line:
@@ -34265,7 +34492,7 @@ function spokenOnly(text){
    So: you see what they did, you never hear what they thought. */
 /* v36.2 — WHAT CROSSES BETWEEN CHARACTERS, as one decision instead of a boolean.
    "spoken"  only quoted dialogue crosses. Another character's *narration* and _thoughts_ are
-             both theirs alone; you react to what you HEARD. This is the default.
+             both theirs alone; you react to what you HEARD. (The default until v148.4.)
    "seen"    dialogue plus visible *narration* — the v30.5 behaviour, kept because it answers a
              real complaint: with only speech crossing, a wordless turn (she sets the glass down
              and walks out) reaches nobody, and two characters in one kitchen can read as though
@@ -34275,11 +34502,17 @@ function spokenOnly(text){
    In every mode a character's OWN lines and the PLAYER's lines stay whole — the player's
    *actions* are how the story is driven, and a character always knows what their own hands did.
    The stored key is unchanged: an old `true` reads as the new default, `false` as "off". */
+/* (!) v148.4 — "seen" IS THE DEFAULT NOW. The payload review found exactly the symptom the note above
+   names as the reason for the switch: at the barbecue Berker's transcript read `Sami: "Eski günlere! Bir
+   de… Cuma'ya."` — the raised glass and the meaningful look at Emre, the one thing Berker would react to,
+   were gone, and every other character's line in the scene had lost its *action*. A person in earshot
+   sees what the others visibly do; only their _thoughts_ are private, and those still never cross
+   (perceivedOnly). "spoken" stays available as an explicit choice; an unset / old `true` reads as "seen". */
 function narrPrivacyMode(){
   const v=state.narrPrivacy;
   if(v===false||v==="off")return "off";
-  if(v==="seen")return "seen";
-  return "spoken";
+  if(v==="spoken")return "spoken";
+  return "seen";
 }
 function crossHeard(text){
   const m=narrPrivacyMode();
@@ -34384,6 +34617,28 @@ function noteMarksArrival(m,p){
   const arrivalClauses=clauses.filter(c=>/arriv/i.test(c));
   return arrivalClauses.some(c=>c.toLowerCase().includes(nm.toLowerCase()));
 }
+/* (!) v148.4 — WHERE THIS CHARACTER'S SCENE BEGINS, as one function. castHistory computed it inline, and
+   the two helpers that pick "the line you are responding to" / "your last line" (lastDialogueLine,
+   selfContinueLine) never applied it at all — so an arrival at the barbecue answered yesterday's line
+   from the canteen, and a man walking in on Day 2 was told to "continue straight on" from his Day 1 exit.
+   The most recent travel beat is the start of the physical scene; this character's own arrival note after
+   it starts THEIR part of it. An arrival an event had approaching (runSceneWriter stamps `heardFromMid`
+   on the note) starts where the event did instead: what was said to them at the door was said to them. */
+function sceneCutIndex(chat,forP){
+  const msgs=(chat&&chat.messages)||[];
+  let sceneStart=0;
+  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i]&&msgs[i].travelBeat){ sceneStart=i; break; } }
+  if(!forP) return sceneStart;
+  for(let i=msgs.length-1;i>sceneStart;i--){
+    const m=msgs[i];
+    if(m&&m.presenceNote&&noteMarksArrival(m,forP)){
+      const hf=m.heardFromMid&&m.heardFromMid[forP.id];
+      if(hf){ for(let j=i-1;j>sceneStart;j--){ if(msgs[j]&&msgs[j].mid===hf){ return j; } } }
+      return i;
+    }
+  }
+  return sceneStart;
+}
 // Per-character API history: character `forP` only receives messages they WITNESSED, scoped to the
 // CURRENT scene session (since the last location change). Two layers stop cross-scene leakage:
 //   1) Scene boundary — cut everything before the most recent travel beat (a location change). A
@@ -34419,13 +34674,7 @@ function castHistory(chat,forP,opts){
   // The character's own arrival cut still applies WITHIN the current physical scene: a char who walked
   // into an in-progress scene doesn't inherit what was said in the room before they entered THIS time.
   let arrivalCut=0;
-  if(forP){
-    // most recent travelBeat = current physical scene start; the per-char arrival is at/after it.
-    let sceneStart=0;
-    for(let i=msgs.length-1;i>=0;i--){ if(msgs[i]&&msgs[i].travelBeat){ sceneStart=i; break; } }
-    for(let i=msgs.length-1;i>sceneStart;i--){ const m=msgs[i]; if(m&&m.presenceNote&&noteMarksArrival(m,forP)){ sceneStart=i; break; } }
-    arrivalCut=sceneStart;
-  }
+  if(forP) arrivalCut=sceneCutIndex(chat,forP);   // v148.4 — one cut, shared with the line pickers
   // PRIOR-THREAD CONTINUITY: find the start of forP's MOST RECENT prior scene (the scene before the
   // current one) IF, within that scene, forP shared dialogue with a character who is present now. That
   // is the "beach this morning" the pub conversation should resume. We only reach back ONE prior scene
@@ -34577,14 +34826,13 @@ function castHistory(chat,forP,opts){
       /* v49.1 — the frame travels with the line, on EVERY later turn it renders, not only the turn
          it happened. A secret that is marked once and plain thereafter is a secret until the model
          scrolls back. */
-      const tn=m.whisperToName||"someone";
       const _sp=whisperSplit(m.content);
       if(!forP || forP.id===m.whisperTo){
         /* Framed for its target on EVERY turn it renders, not only the one it happened on, and the
-           public remainder kept with it so they read one continuous moment rather than two. */
-        const _head=fillTpl(blkTpl("whisper_to_you"),{user:state.user,target:tn});
-        return {role:"user",name:sanitizeName(state.user),
-          content:`${_head} ${_sp.secret}`+(_sp.open?`\n${_sp.open}`:"")};
+           public remainder kept with it so they read one continuous moment rather than two.
+           (!) v148.4 — and that remainder is SAID to be public (whisper_aloud): it was appended unmarked
+           under a frame promising "nobody else in the room hears it". See whisperForTarget. */
+        return {role:"user",name:sanitizeName(state.user),content:whisperForTarget(m)};
       }
       const _open=_sp.open;
       if(!_open) return null;                            // all aside — nothing of this reached them
@@ -34624,7 +34872,8 @@ function castHistory(chat,forP,opts){
       /* v36.2 — one decision, in narrPrivacyMode(). Default is "spoken": another character's
          narration and thoughts are both private and only their words cross. A turn that was
          purely narrated therefore reaches nobody — that is the cost of the setting, and "seen"
-         is there for anyone who wants the actions back. */
+         is there for anyone who wants the actions back.
+         (!) v148.4 — the default is "seen" now (see narrPrivacyMode): the room sees what they do. */
       if(forP){ heard=crossHeard(m.content); if(!heard) return null; }
       return {role:"user",name:sanitizeName(sp),content:`${sp}: ${heard}`};
     }
@@ -34779,15 +35028,18 @@ async function runMultiCharTurn(chat,playerText,stimulus){
       if(!ptOpts)maybeHeatBursts(chat);   // v19.5
       return;
     }
+    /* (!) v148.4 — the card is written TO its character ("You are the older brother…"), so the roster says
+       whose "you" it is; and the hooks go out whole enough to keep their point — at 140 characters every
+       "threaten exposure of…" was cut exactly where the thing to decide on began. */
     const roster=cast.map(c=>{
-      let line=`- ${c.name}: ${briefDesc(c.personality||lookProse(c.look)||"",90)}`;
-      if(c.interject&&c.interject.trim())line+=`\n    hooks: ${briefDesc(c.interject,140)}`;
+      let line=`- ${c.name} (${c.name}'s own card, written to ${c.name} — its "you" is ${c.name}): ${briefDesc(c.personality||lookProse(c.look)||"",90)}`;
+      if(c.interject&&c.interject.trim())line+=`\n    hooks: ${briefDesc(c.interject,300)}`;
       return line;
     }).join("\n");
     // ROUTER 1 — who did the player address, who responds
     let responders=[],addressed="group";
     try{
-      const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerPlayer",fillTpl(up("routerPlayer"),{user:_who}),{roster:roster,stimulus:(stimulus||`${_who} just said:\n"${playerText}"`),exchange:castConvoText(chat,8)})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
+      const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerPlayer",fillTpl(up("routerPlayer"),{user:_who}),{roster:roster,stimulus:(stimulus||`${_who} just said:\n"${playerText}"`),exchange:castConvoText(chat,8,undefined,{markAsides:true})})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
       const j=parseJSON(out);
       if(j){addressed=j.addressed||"group";
         responders=(Array.isArray(j.responders)?j.responders:[]).map(n=>findByName(cast,n)).filter(Boolean);   // v144.1 — "Ayla" resolves "Ayla Demir" (it fell back to cast[0])
@@ -34853,7 +35105,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
         const _lastRaw=((chat.messages.filter(m=>!m.sysError&&m.role==='assistant').slice(-1)[0]||{}).content||"");
         const _lastLine=(lastSpeaker?lastSpeaker.name+": ":"")+_routerLastLine(_lastRaw);
         const _presentNames=[_who,...cast.map(c=>c.name)].join(", ");
-        const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
+        const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,300)}`:"")).join("\n");
         const sys=fillTpl(up("routerChar",chat.universeId),{user:_who,speaker:lastSpeaker?lastSpeaker.name:cast[0].name,
           last_line:_lastLine||"(nothing yet)",present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
         /* v30.6 — the user message used to repeat the speaker, the hooks sheet and the last line,
@@ -36205,7 +36457,10 @@ async function playCharacterTurn(chat,p,addressed,opts){
      story the player may open meanwhile) and where the scene stands (see _placeSig / the drop below). */
   const _who=turnUser(chat), _at=_placeSig(chat), _wasHere=inSceneIds(chat).includes(p.id);
   const present=presentCast(chat);
-  const others=present.filter(c=>c.id!==p.id);   // only characters actually present
+  /* (!) v148.4 — "within earshot" means earshot: the same reading PRIVACY uses (earshotSplit), not
+     everyone at the place. Someone at the far end of the site is not in OTHERS PRESENT any more. */
+  const _earIds=new Set(earshotSplit(chat,p.id).here);
+  const others=present.filter(c=>c.id!==p.id&&_earIds.has(c.id));   // only characters who can hear this
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
   _typingAfterQueue(chat,typing);   // v146.1 — after the lines queued before it; never into another chat's window
@@ -36215,7 +36470,12 @@ async function playCharacterTurn(chat,p,addressed,opts){
     if(state.mem && state.memory.length){
       try{
         // v146.1 — the query is what THIS character heard: a whisper to someone else is not in it
-        const r=await retrieveMemories(castConvoText(chat,4,p.id),chat,p.id);
+        /* (!) v148.4 — and now it actually is. castConvoText(chat,4,p.id) was the last four lines of the
+           whole chat, witnessed or not, with a character's whisper-back and _thought_ run through the
+           player's aside splitter — Burcu's private reply and her racing heart became Berker's memory
+           query, and a market scene Sami never attended became his. It is the line in front of them now,
+           as they heard it (heardQueryLine); genQuery adds their own heard view of the recent lines. */
+        const r=await retrieveMemories(heardQueryLine(chat,p),chat,p.id);
         injected={
           recent:(r.recent||[]),
           diary:(r.diary||[]),
@@ -36248,7 +36508,9 @@ async function playCharacterTurn(chat,p,addressed,opts){
         const ls=ll&&ll.name;
         if(ls){
           if(ls===_who){ targetName=_who; targetId="__user__"; }
-          else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=ls; targetId=null; } }
+          /* (!) v148.4 — a speaker who is not here is nobody to answer. This kept their NAME with a null id,
+             and the builder read a null id as the player: "Berker is the human player", over Emre's bio. */
+          else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=null; targetId=null; } }
         }
         if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
       }
@@ -36328,6 +36590,8 @@ async function playCharacterTurn(chat,p,addressed,opts){
     if(opts.tag)msg[opts.tag]=true;
     if(addressed==="arriving"||addressed==="leaving")msg.entrance=addressed;
     stampStatus(chat,msg);chat.messages.push(msg);
+    // v148.4 — the ask / the confrontation this event brought them for is made now, with this line
+    try{ const _ev=chat.activeEvent; if(_ev&&!_ev.resolved&&_ev._pendingMove&&_ev._pendingMove.holderId===p.id)_spendEventMove(chat,_ev,{msg}); }catch(_){}
     const shown=enqueuePresent(msg.mid);   // queued at once, so the order on screen is the order pushed
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
     // next character can generate while this one is still queued/rolling on screen.
@@ -41759,11 +42023,13 @@ function maybeSpawnConfrontation(chat,uni){
     sus._confrontUsed=true;   // consume so it won't re-fire next day
     // v28.9 — coming to your door IS raising it. Spend the move and start the cooldown, so a
     // confrontation is followed by living with the answer rather than by asking again tomorrow.
-    if(sus.gossipId){ const g=gossipById(sus.gossipId);
-      if(g){ (g.raisedBy=g.raisedBy||{})[g.stakeholderId]=_day; g.status="raised";
-             g.heat=Math.max(0,(g.heat||0)-0.25); g._awaitAnswer=true; persistGossip(); } }
+    /* (!) v148.4 — …but only once they have actually put it to you. The spend used to happen here, before
+       Burak had said a word: his arrival payload carried "You already put this to Emre on day 2… do not
+       raise it again" beside "What you have come to do", the answer judge then graded the player's next
+       line in ANY scene (a greeting at the market) and closed the question, and the real exchange two
+       turns later was never judged. The event carries the spend; it lands with his first posted line. */
     persistMemory();
-    startConfrontation(chat,{
+    const _started=startConfrontation(chat,{
       accuser,
       intent:memText(sus),
       summary:`${accuser.name} comes to confront ${chatUserName(chat)}`,
@@ -41771,9 +42037,48 @@ function maybeSpawnConfrontation(chat,uni){
       conviction:Math.max(0.5,Math.min(0.85,(sus.suspicion||0.6))),
       accuserNature:accuser.personality?String(accuser.personality).slice(0,200):""
     });
+    // v148.4 — the spend rides with the event (set before its scene writer's first microtask runs)
+    if(_started&&sus.gossipId&&chat.activeEvent) chat.activeEvent._pendingMove={kind:"rumor",gid:sus.gossipId,holderId:accuser.id,day:_day};
     return true;   // one at a time
   }
   return false;
+}
+/* (!) v148.4 — A MOVE IS SPENT WHEN IT IS MADE. checkCharQuestApproach and maybeSpawnConfrontation leave
+   the stamp they used to write up front on the event (ev._pendingMove); this lands it. Called with the
+   holder's line just posted (playCharacterTurn: opts.msg), or at resolution — where it lands only if the
+   holder did speak in the event, and is dropped if they never did (nothing was asked, so nothing is
+   spent, and the rumour stays raisable). Idempotent: the pending record is cleared on first use. */
+function _spendEventMove(chat,ev,opts){
+  try{
+    const pm=ev&&ev._pendingMove; if(!pm)return false;
+    opts=opts||{};
+    const msgs=(chat&&chat.messages)||[];
+    let line=opts.msg||null;
+    if(!line){
+      const from=(typeof ev._startMsg==="number")?ev._startMsg:0;
+      for(let i=msgs.length-1;i>=from;i--){ const m=msgs[i];
+        if(m&&m.role==='assistant'&&!m.sysError&&!m.narratorEvent&&!m.presenceNote&&m.speakerId===pm.holderId){ line=m; break; } }
+      if(!line&&opts.resolving){ ev._pendingMove=null; return false; }   // never said: nothing spent
+      if(!line)return false;
+    }
+    ev._pendingMove=null;
+    const day=pm.day||(chat&&chat.gameDay)||1;
+    if(pm.kind==="quest"){
+      const uni=universeById(pm.uid); if(!uni)return false;
+      const q=_charQuests(uni).find(x=>x&&((pm.qid&&x.id===pm.qid)||(!pm.qid&&x.holderId===pm.holderId&&x.title===pm.title)));
+      if(!q)return false;
+      q.delivered=true; q.deliveredDay=q.deliveredDay||day; q.awaitingUser=true;
+      charQuestNote(uni,q,day,pm.note);
+      persistUniverses();
+    }else if(pm.kind==="rumor"){
+      const g=gossipById(pm.gid); if(!g)return false;
+      (g.raisedBy=g.raisedBy||{})[g.stakeholderId]=day; g.status="raised";
+      g.heat=Math.max(0,(g.heat||0)-0.25); g._awaitAnswer=true;
+      g._raise={at:Math.max(0,msgs.indexOf(line)),by:pm.holderId,text:String(line.content||"").slice(0,600)};   // what settleRumors checks the answer against
+      persistGossip();
+    }
+    return true;
+  }catch(e){ return false; }
 }
 
 // ===== LIVING UNIVERSE layer 4: the intent engine =====
@@ -46434,9 +46739,14 @@ function checkCharQuestApproach(chat){
         accuserNature:holder.personality?String(holder.personality).slice(0,200):""});
       if(!fired)return false;
       chat._cqApproachDay=today; markChatDirty(chat);
-      q.delivered=true; q.deliveredDay=q.deliveredDay||today; q.awaitingUser=true;
       q.lastNudgeDay=today; q.nudges=(q.nudges||0)+1;
-      charQuestNote(uni,q,today,`${holder.name} went to ${U} in person and made the ask.`);
+      /* (!) v148.4 — THE ASK IS MADE WHEN IT IS SAID. This marked the ask delivered and logged "went to
+         Emre in person and made the ask" before the overture had played a line — so the one payload
+         whose job was to make the ask read "you have ALREADY asked… do not nag" beside "What you have
+         come to do: ask for the cash". The event carries the stamp now and it lands with the holder's
+         first posted line in the event (_spendEventMove, from playCharacterTurn / resolveActiveEvent). */
+      if(chat.activeEvent) chat.activeEvent._pendingMove={kind:"quest",qid:q.id||null,title:q.title||"",holderId:holder.id,
+        uid:uni.id,day:today,note:`${holder.name} went to ${U} in person and made the ask.`};
       persistUniverses();
       _qlog("cq.approach",`"${q.title}" — ${holder.name} approached in person (gate ${(q.gate&&q.gate.type)||"any"}${waited>=4&&!_cqGateOpen(chat,q)?", fallback after waiting":""})`);
       return true;
@@ -47734,12 +48044,7 @@ function startConfrontation(chat,opts){
   chat.activeEvent=ev;
   persistChats();updateChatHeader();
   // Kick the Scene Writer so the accuser arrives and opens — director-driven, they DO speak.
-  Promise.resolve().then(async()=>{
-    try{
-      const broughtIn=await runSceneWriter(chat);
-      if(broughtIn) await playCharacterTurn(chat,broughtIn,"arriving");
-    }catch(e){}
-  });
+  _kickEventOpening(chat,ev,accuser);   // v148.4 — or, already beside the player, they simply say it
   return true;
 }
 /* (!) v144.1 — ONE READING OF WHERE IT LANDED. The outcome label and the memory text were decided
@@ -47851,13 +48156,27 @@ function startOverture(chat,opts){
   };
   chat.activeEvent=ev;
   persistChats();updateChatHeader();
+  _kickEventOpening(chat,ev,offerer);   // v148.4 — see startConfrontation
+  return true;
+}
+/* (!) v148.4 — SOMEONE ALREADY IN THE ROOM DOES NOT WALK IN. A quest ask or a confrontation from a
+   character who is already beside the player (Sami, three lines into the canteen conversation) was
+   staged as an arrival anyway: a "Sami Özüçak geldi" note in the transcript, "You have just walked in.
+   Give a brief entrance beat" in the head, and the ask, all in one turn that was also answering Berker.
+   Now: if they are already in the player's earshot, nobody is brought in — the event starts with them
+   in the room and they take one ordinary turn aimed at the player, with the WHY & HOW block (see
+   buildCharPromptBlocks) and no entrance. Anyone else still arrives through the Scene Writer. */
+function _kickEventOpening(chat,ev,who){
+  let here=false;
+  try{ here=!!(who&&inSceneIds(chat).indexOf(who.id)>=0); }catch(e){}
+  if(here&&ev&&ev.participant) ev.participant.approaching=false;
   Promise.resolve().then(async()=>{
     try{
+      if(here){ await playCharacterTurn(chat,who,chatUserName(chat),{answerTo:"__user__"}); return; }
       const broughtIn=await runSceneWriter(chat);
       if(broughtIn) await playCharacterTurn(chat,broughtIn,"arriving");
     }catch(e){}
   });
-  return true;
 }
 // Persist how an overture landed: a warm memory for the offerer (accepted / gently declined / coldly
 // rebuffed). Mirrors recordConfrontationAftermath so layer 4 can read the aftermath and escalate or
@@ -47899,6 +48218,35 @@ function spokeSincePlayer(chat,charId){
     if(m.role==="assistant" && !m.sysError && !m.narratorEvent && m.speakerId===charId) return true;
   }
   return false;
+}
+/* (!) v148.4 — THE GREETING AT THE DOOR. While an event has its character approaching, the room talks to
+   them — "Burak! Hayırdır, nöbetten önce mi geldin?" — but those lines were stamped with who was in the
+   player's area, which did not include the man at the door, and his transcript was cut at his own arrival
+   note, which came after them. So his entrance had nothing to answer, and the guidance still told him to
+   "react to the highlighted line above". At the moment they are brought in, the spoken lines since the
+   event began are stamped as heard by them (a whisper stays with its target — its own gate handles it),
+   and their arrival note records where their scene starts (heardFromMid, read by sceneCutIndex). */
+function _stampApproachHeard(chat,ev,id){
+  try{
+    const msgs=(chat&&chat.messages)||[];
+    const from=(ev&&typeof ev._startMsg==="number")?ev._startMsg:-1;
+    if(!id||from<0||from>=msgs.length)return;
+    let heard=[];
+    for(let i=from;i<msgs.length;i++){
+      const m=msgs[i];
+      if(!m)continue;
+      if(m.travelBeat||m.dayMarker){ heard=[]; continue; }   // the scene moved on: nothing before it counts
+      if(m.presenceNote||m.narratorEvent||m.textMsg||m.whisperTo||m.sysError)continue;   // beats: the briefing carries them
+      if(!Array.isArray(m.present)||!m.mid)continue;
+      heard.push(m);
+    }
+    heard.forEach(m=>{ if(m.present.indexOf(id)<0)m.present.push(id); });
+    const first=heard.length?heard[0].mid:null;
+    const note=msgs[msgs.length-1];
+    if(first&&note&&note.presenceNote&&noteMarksArrival(note,{id,name:(ev.participant&&ev.participant.name)||""})){
+      note.heardFromMid=Object.assign({},note.heardFromMid||{}); note.heardFromMid[id]=first;
+    }
+  }catch(e){}
 }
 async function runSceneWriter(chat){
   if(chat&&chat.dnd)return false;   // DND: never advance events
@@ -48085,6 +48433,7 @@ async function runSceneWriter(chat){
       // ensure the id is actually in presentIds (temp chars aren't in castIds)
       if(!presentIds(chat).includes(id))chat.presentIds.push(id);
       notePresence(chat,[ev.participant.name],[]);
+      _stampApproachHeard(chat,ev,id);   // v148.4 — what was said to them at the door reached them
       persistChats();appendNewBubbles();updateChatHeader();
       broughtIn=resolveChar(id,chat);
     }
@@ -48229,8 +48578,13 @@ async function runSceneWriter(chat){
 async function resolveActiveEvent(chat,how){
   const ev=chat.activeEvent;if(!ev)return;
   closeDirectorEvent(chat,how||"it passed");   // v26.4 — stamp the outcome on the GM's log entry
-  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,sysError:true,
+  /* (!) v148.4 — the outcome line is the ENGINE's verdict ("Emre agreed to bring the money in cash; Sami's
+     ask was granted"), in the engine's language, and castHistory keeps every presence note — so it sat
+     in every listener's transcript as narration, telling Berker the cash deal happened. It is the
+     player's notice (uiNote), which no character transcript carries. */
+  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,sysError:true,uiNote:true,
     content:"— "+(how||"the event passes")+" —",img:null,imgState:"idle",vidState:"idle",video:null});
+  _spendEventMove(chat,ev,{resolving:true});   // v148.4 — a move the holder did make counts; one never made does not
   // Send any temp participant back off and offer to save them.
   if(ev.participant&&ev.participant.temp){
     const tid=ev.participant.charId;
@@ -48285,10 +48639,10 @@ async function gamemasterReactions(chat){
       // 400-character cut beheaded the beat, and the hooks sheet rode in the user message a second time.
       const _lastLine=_routerLastLine((chat.messages.filter(m=>!m.sysError).slice(-1)[0]||{}).content||"")||"(a narrator event)";
       const _presentNames=[_who,...cast.map(c=>c.name)].join(", ");
-      const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
+      const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,300)}`:"")).join("\n");
       const sys=fillTpl(up("routerChar",chat.universeId),{user:_who,speaker:lastSpeaker?lastSpeaker.name:"the narrator",
         last_line:_lastLine,present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
-      const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerChar",sys,{data:`A narrator event just happened (it is the last line above). Should one of the characters present react to it, or does the turn return to ${_who}?\n\nRecent exchange:\n${castConvoText(chat,6)}\n\nReturn only the JSON.`})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
+      const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerChar",sys,{data:`A narrator event just happened (it is the last line above). Should one of the characters present react to it, or does the turn return to ${_who}?\n\nRecent exchange:\n${castConvoText(chat,6,undefined,{markAsides:true})}\n\nReturn only the JSON.`})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",100),dbg:"Turn router · gm reaction"});
       const j=parseJSON(out);
       if(j&&j.continue&&j.responder&&String(j.responder).toLowerCase()!=="null"){
         next=findByName(others,j.responder);   // v144.1 — a first name resolves too (see findByName)
@@ -52771,7 +53125,7 @@ function saveSettings(notify){
   state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||3));
   {const v=+document.getElementById('setCalDoneN').value; state.calDoneN=Math.max(0,Math.min(10,isNaN(v)?3:v));}
   {const v=document.getElementById('setRelScope').value; state.relScope=["present","brief","everyone"].indexOf(v)>=0?v:"present";}
-  {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'spoken';}
+  {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'seen';}   // v148.4 — the default is "seen"
   state.stripKeepFull=Math.max(2,+document.getElementById('setStripKeepFull').value||6);
   {const h=document.getElementById('setHistTurns'); if(h)state.histTurns=Math.max(2,Math.min(200,+h.value||20));}
   state.relOn=document.getElementById('setRelOn').checked;

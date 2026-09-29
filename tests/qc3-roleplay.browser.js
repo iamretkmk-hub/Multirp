@@ -103,7 +103,8 @@ const {chromium}=require('playwright');
     Object.assign(state,{mem:true,relOn:true,stInterval:1,calOn:true,promiseOn:true,charQuestsOn:true,gmOn:true,gmEvery:3,sceneOn:true,gossipOn:true});
     for(let i=0;i<4;i++){ c.messages.push({mid:"h"+i+"u",role:"user",content:"Line "+i,present:["p_a","p_b"]});
       c.messages.push({mid:"h"+i+"a",role:"assistant",speaker:"Berk Kaya",speakerId:"p_b",toId:"__user__",toName:"Emre",present:["p_a","p_b"],content:'"Sure '+i+'."'}); }
-    state.gossip=[{id:"g1",universeId:"u1",text:"Berk owes money",heat:0.8,status:"live",_awaitAnswer:true},{id:"g2",universeId:"u1",text:"Ayla lied",heat:0.8,status:"live",_awaitAnswer:true}];
+    // v148.4 — an answer is judged only with its asker in earshot (settleRumors), so each rumour names one here
+    state.gossip=[{id:"g1",universeId:"u1",text:"Berk owes money",heat:0.8,status:"live",_awaitAnswer:true,stakeholderId:"p_b"},{id:"g2",universeId:"u1",text:"Ayla lied",heat:0.8,status:"live",_awaitAnswer:true,stakeholderId:"p_a"}];
     Object.assign(__stub.bg,{
       "Turn router · player":{addressed:"group",responders:["Ayla","Berk"]},
       "Future tracker":{items:[{kind:"meeting",action:"new",stage:"agreed",about:"dinner at the Kafe"},{kind:"task",action:"new",stage:"agreed",about:"fix the boat",holder:"Berk"},{kind:"promise",action:"new",stage:"agreed",about:"keep the secret"}]},

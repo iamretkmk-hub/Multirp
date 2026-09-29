@@ -94,7 +94,13 @@ const HELD=require('./fixtures/intimacy-heldout.js');
     uni.gameData.charQuests=[{id:"cq1",holderId:"p_a",holderName:"Ayla",targetId:"__user__",targetName:"Emre",title:"Borrow the boat",desc:"d",ask:"lend me your boat",
       approach:"in_person",gate:{type:"any"},status:"active",createdDay:5,progress:[],delivered:false,awaitingUser:false,nudges:0,lastNudgeDay:null}];
     c.messages=[{mid:"x1",role:"user",content:"Merhaba."}];
-    const fired=checkCharQuestApproach(c); c.activeEvent=null;
+    const fired=checkCharQuestApproach(c);
+    /* v148.4 — INTENTIONALLY CHANGED: the ask is recorded when the holder SAYS it (the reply payload review
+       found the overture's own payload told the holder "you have ALREADY asked"). Firing only schedules
+       it; the holder's first posted line in the event lands it — played here by hand. */
+    if(c.activeEvent){ c.messages.push({mid:"x2",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"Tekneni odunc verir misin?"'});
+      _spendEventMove(c,c.activeEvent,{resolving:true}); }
+    c.activeEvent=null;
     const q=uni.gameData.charQuests[0]; const after={awaiting:q.awaitingUser,nudges:q.nudges};
     let lapsedOn=null;
     for(let d=6;d<=40;d++){ c.gameDay=d; c._cqApproachDay=null; checkCharQuestApproach(c); c.activeEvent=null; _cqLapseAndPrune(c,uni,d); if(q.status!=="active"){lapsedOn=d;break;} }

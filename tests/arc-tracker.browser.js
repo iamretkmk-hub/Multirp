@@ -199,7 +199,8 @@ Your DEFAULT is always "ongoing" + "same".`;
         const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         // v144.1 — temporary characters no longer get memories (retrieval never reads them), so the
         // filter is span presence alone.
-        return /const memCast=cast\.filter\(p=>p&&spanPresent\.has\(p\.id\)\)/.test(src)
+        // v148.4 — plus whoever has a one-line remainder carried from the previous arc (chat.memCarry).
+        return /const memCast=cast\.filter\(p=>p&&\(spanPresent\.has\(p\.id\)\|\|!!\(chat\.memCarry&&chat\.memCarry\[p\.id\]\)\)\)/.test(src)
           ? true : "commitMemoryArc still filters on presentIds alone"; })());
   }
 

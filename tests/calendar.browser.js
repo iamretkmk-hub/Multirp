@@ -122,7 +122,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[an errand you hand out comes back with a result]");
   ok("the detector is told what a task is", await pg.evaluate(()=>
-      /TASKS — SOMETHING/.test(DEFAULT_CAL) && /go and talk to Hakan/.test(DEFAULT_CAL)));
+      /TASKS — SOMETHING/.test(DEFAULT_CAL) && /go and talk to Tomas/.test(DEFAULT_CAL)));   // v148.4 — the example uses an invented name now (no real cast in shipped prompts)
   ok("it may be undated, unlike a meeting", await pg.evaluate(()=>
       /does NOT need a stated day/.test(DEFAULT_CAL)));
   ok("a refusal is not a task", await pg.evaluate(()=>

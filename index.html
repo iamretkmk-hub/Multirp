@@ -1397,7 +1397,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3744,6 +3744,15 @@ Return ONLY JSON, with every panel you were given, in order:
 Everyone listed is in the picture. Write where each of them is and what each of them is doing, their pose and their contact with each other, as the exchange shows it.
 Call each person ONLY by their label — "the woman in IMAGE 1", "the man in IMAGE 2" — every time you mention them. Never a name, and never just "a woman" or "the man": with more than one person, a bare "woman" does not say whose face goes on that body. Where the scene instructions above give someone a different IMAGE number, THIS list wins: it is the order the pictures are actually sent in, and there is no IMAGE number beyond the last one listed.
 Someone marked NO PICTURE is in the frame all the same: call them by their label and describe them briefly in words from the look given. Do not describe the face, hair, build or skin of anyone who HAS a picture; their pictures carry that. Clothing is yours to write unless it is decided below. Add nobody who is not listed.`},
+
+  /* v148.2 — the same for a model that draws from WORDS alone (no reference pictures): each person in
+     the frame has to be told apart in the prompt itself. */
+  x_img_cast_text:{label:"Image writer — who is in the frame (no reference pictures)",json:false,
+    hint:"Sent to the image prompt writer when the image model draws from words alone and the frame holds two or more people: each person with their look, so the writer can describe every one of them separately. Placeholder: {{cast}} (one line per person).",
+    def:`PEOPLE IN THIS FRAME — the picture is drawn from your words alone, so every person must be told apart in them:
+{{cast}}
+Everyone listed is in the picture. Write where each of them is and what each of them is doing, their pose and their contact with each other, as the exchange shows it.
+Describe each person SEPARATELY, in their own words, from the look given — man or woman, age, build, hair, face details, clothing — and keep each description attached to that person all the way through ("a tall man with a trimmed beard and glasses leans on the counter; beside him a shorter, heavier man in a grey work jacket laughs"). Never merge two people into one, never swap their features, never use names, and add nobody who is not listed. The person whose line this is stays the focus of the frame.`},
 
   /* v145.1 — SCENE VIDEO. The film button in a reply's action row turns the last stretch of the
      roleplay (one line per second of the configured clip length) into ONE reference-to-video clip.
@@ -27987,7 +27996,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"routerPrompt"},{kind:"prompt",promptKey:"rewritePrompt"},
     {kind:"prompt",promptKey:"sceneLangRetry"},
     {kind:"prompt",promptKey:"narrateVerbatim"},
-    {kind:"prompt",promptKey:"imgFoundation"},{kind:"prompt",promptKey:"imgFrameGuide"},{kind:"prompt",promptKey:"imgPovGuide"},{kind:"prompt",promptKey:"x_img_cast"},
+    {kind:"prompt",promptKey:"imgFoundation"},{kind:"prompt",promptKey:"imgFrameGuide"},{kind:"prompt",promptKey:"imgPovGuide"},{kind:"prompt",promptKey:"x_img_cast"},{kind:"prompt",promptKey:"x_img_cast_text"},
     {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video Prompt Writer",desc:"Turns a still into ONE motion prompt for the clip. Receives the configured clip length, the shared video ruleset (mid-scene pacing, the facial/hands/body detail, the anatomy rules) and the routed position's own template.",blocks:[
@@ -36670,6 +36679,8 @@ function _imgLocationClause(chat){
    were fine: the tail carried the face-map name, so the model drew THAT person instead of the
    reference. With a reference attached the identity clause is dropped completely — nothing about
    the face, hair or build — and the picture speaks for itself. */
+// v148.2 — the router's "also in the scene" line names the player too (they are in the room, not behind it).
+function rulesPlayerLine(chat){ try{ const u=chatUserName(chat)||state.user; return u?`, and ${u} (the player)`:""; }catch(e){ return ""; } }
 function _imgSpeakerAppearance(speaker,opts){
   try{
     if(!speaker)return "";
@@ -36899,6 +36910,11 @@ async function illustrate(mid,replyText,force){
     // clearly puts two people in contact; the writer names no one, and only the speaker's look is
     // injected, so the focal subject is always the character whose line this is. ----
     const speaker=cast.find(c=>c.name===who);
+    /* v148.2 — WHO ELSE IS IN THE ROOM. Everyone within the speaker's earshot is someone the frame can
+       hold. The router is told (so a one-person scene type is not picked for a moment shared by
+       several), and a one-person type still sends — and describes — them all (see _castRule below). */
+    let _nearby=[];
+    try{ _nearby=(inSceneCast(chat)||[]).filter(c=>c&&c.id&&isActiveChar(c)&&(!speaker||c.id!==speaker.id)); }catch(e){}
 
     // ---- Where the scene is happening, so the setting is drawn correctly. ----
     let locLine="";
@@ -36922,11 +36938,18 @@ async function illustrate(mid,replyText,force){
       ? `PREVIOUSLY SELECTED SCENE TYPE: ${_prevRuleName}\n(If the latest exchange does NOT clearly change the action, position, or framing, return that same type's index again. Switch ONLY when the roleplay shows a real change.)\n\n`
       : "";
     const _routeText=(locLine?locLine+"\n":"")
+      +(_nearby.length?`ALSO IN THE SCENE WITH ${who}, within reach of the camera: ${_nearby.map(c=>c.name).join(", ")}${rulesPlayerLine(chat)}. A picture of this moment shows them too unless the exchange puts ${who} somewhere apart.\n`:"")
       +_prevForRoute
       +`LATEST EXCHANGE (the authority — what the scene is NOW; route on what it has BECOME, not what it was):\n${latestExchange}`;
     const rule=await pickRule(state.imgRules,_routeText);
     if(chat&&rule&&rule.label){ if(!chat.lastImgRuleBy||typeof chat.lastImgRuleBy!=="object")chat.lastImgRuleBy={}; chat.lastImgRuleBy[_spkKey]=rule.label; }   // sticky memory for THIS character's next route
     if(rule&&rule.label){const e=document.getElementById('imgrule_'+mid);if(e)e.textContent=rule.label;}
+    /* (!) v148.2 — A ONE-PERSON SCENE TYPE WITH OTHERS IN THE ROOM. "Just the speaking character" sent
+       only the speaker's pictures, while the writer — reading an exchange that has two people in it —
+       drew both: the second one came out as a stranger's face. With anyone else in earshot the frame is
+       cast as a group for THIS picture (the stored rule is untouched): everyone's pictures go up and the
+       writer is told who each of them is. */
+    const _castRule=(rule&&ruleCast(rule)==="solo"&&_nearby.length)?Object.assign({},rule,{cast:"group"}):rule;
 
     // ---- Step 2: WRITE the image prompt. System prompt is layered:
     //   [universal rewritePrompt]  →  [selected class's promptStyle]  →  [draw-only guard]
@@ -36985,7 +37008,7 @@ async function illustrate(mid,replyText,force){
         _involved=(inSceneCast(chat)||[]).filter(c=>c&&c.name&&(!speaker||c.id!==speaker.id)
           &&_ex.indexOf(String(c.name).toLocaleLowerCase("tr"))>-1);
       }catch(e){}
-      _pack=await buildRefPack(rule,speaker,chat,editModelMaxRefs(effImgModel()),{involved:_involved});
+      _pack=await buildRefPack(_castRule,speaker,chat,editModelMaxRefs(effImgModel()),{involved:_involved});
       /* v132.2 — the writer is told the cast whenever the scene template's numbering could be wrong:
          two or more people, anyone in the frame without a picture, or a single picture that is not
          the speaker's. */
@@ -37008,14 +37031,38 @@ async function illustrate(mid,replyText,force){
         if(_others.length)_castBlock+=_others.join("\n\n")+"\n\n";
       }
     }
+    /* v148.2 — A MODEL THAT DRAWS FROM WORDS ALONE gets no pictures, so with two or more people in the
+       frame only the speaker's look was ever written (stamped on the tail), and everyone else was drawn
+       as whoever the model imagined. The writer now gets every person with their look and describes
+       each one separately; the speaker's look goes in with the others instead of on the tail, where
+       it could not say which of them it belonged to. */
+    let _textCast=false;
+    if(!usesRefImage()){
+      try{
+        const _cm=ruleCast(_castRule);
+        if(_cm!=="none"&&_cm!=="solo"){
+          const _look=o=>{ let l=""; try{ l=briefDesc(lookProse(o&&o.look)||"",260); }catch(e){} const sj=_refSubject(o); return [sj,l].filter(Boolean).join(" — "); };
+          const _lines=[];
+          if(speaker)_lines.push(`- ${speaker.name}, whose line this picture is for: ${_look(speaker)||"(no description given — keep them plain)"}`);
+          _nearby.forEach(c=>_lines.push(`- ${c.name}: ${_look(c)||"(no description given — keep them plain)"}`));
+          if(!rulePov(_castRule)){ const _ph=_playerRefHolder(); _lines.push(`- ${state.user||"the player"} (the player): ${_look(_ph)||"(no description given — keep them plain)"}`); }
+          if(_lines.length>=2){
+            _textCast=true;
+            _castBlock=fillTpl(up("x_img_cast_text"),{cast:_lines.join("\n")})+"\n\n";
+            const _others=_nearby.map(c=>{ const b=_imgOutfitDecided(c,chat)?_imgWardrobeBlock(c,chat):""; return b?`FOR ${String(c.name).toUpperCase()}:\n${b}`:""; }).filter(Boolean);
+            if(_others.length)_castBlock+=_others.join("\n\n")+"\n\n";
+          }
+        }
+      }catch(e){ _textCast=false; }
+    }
     /* v140.1 — WHAT THE PLAYER HAS ON, whenever the player is in this frame: every scene type that
        casts people other than "just the speaker", unless it is shot down the player's own eyes —
        the same test buildRefPack uses to send the player's pictures. Under the cast label when the
        writer was given one, so it knows which figure to dress; otherwise by name. */
     let _playerDress="";
     try{
-      const _cm=ruleCast(rule);
-      if(_cm!=="none"&&_cm!=="solo"&&!rulePov(rule)&&playerHasClothes(chat)){
+      const _cm=ruleCast(_castRule);
+      if(_cm!=="none"&&_cm!=="solo"&&!rulePov(_castRule)&&playerHasClothes(chat)){
         const _pb=_imgPlayerWardrobeBlock(chat);
         if(_pb){
           const _pp=_pack?(((_pack.people||[]).find(x=>x.player))||((_pack.unpictured||[]).find(x=>x.player))):null;
@@ -37047,7 +37094,7 @@ async function illustrate(mid,replyText,force){
     {
       // v29.7 — with a reference image the identity is the picture, not a sentence about it.
       const _refDriven=usesRefImage();
-      const _appC=_imgSpeakerAppearance(speaker,{refDriven:_refDriven});
+      const _appC=_textCast?"":_imgSpeakerAppearance(speaker,{refDriven:_refDriven});   // v148.2 — with a cast, their look is in it
       /* (!) v100.1 — THE LOCATION IS THE WRITER'S NOW, NOT THE TAIL'S. _imgLocationClause pasted
          the place's stored description onto the end of every prompt verbatim — the same sentence
          on every frame in that room, written for a reader rather than for a generator, and
@@ -38078,19 +38125,25 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
      IMAGE 1, and the writer — still following the scene template's "the woman in IMAGE 1" — wrote
      her as IMAGE 1 and him as an IMAGE 2 that was never sent. They are kept here, so the writer is
      told who has no picture and describes them in words. */
-  const _cnt={};
-  people.filter(function(p){return !p.srcs.length;}).forEach(function(p){
-    const subj=(p.subject||"person").toLowerCase(); _cnt[subj]=(_cnt[subj]||0)+1;
+  /* (!) v148.2 — AND SOMEONE WHOSE PICTURE DID NOT FIT IS STILL IN THE FRAME. With more people in the
+     scene than the model takes pictures, the ones past the cap got no slot and were dropped from the
+     pack AND from the list of people without one — so the writer, reading the exchange, drew them
+     anyway, as nobody in particular. They are listed as unpictured now (described in words). */
+  const _unpic=function(p){
     let look=""; try{ look=briefDesc(lookProse(p.look)||"",220); }catch(e){}
-    out.unpictured.push({name:p.name,subject:p.subject||"",speaker:!!p.speaker,player:!!p.player,id:p.id||null,look,subj});
-  });
-  const _seen={};
-  out.unpictured.forEach(function(u){
-    const n=(_seen[u.subj]=(_seen[u.subj]||0)+1);
-    u.label="the "+(_cnt[u.subj]>1?(["first","second","third","fourth"][n-1]||("#"+n))+" ":"")+u.subj+" with no picture";
-  });
+    out.unpictured.push({name:p.name,subject:p.subject||"",speaker:!!p.speaker,player:!!p.player,id:p.id||null,look,subj:(p.subject||"person").toLowerCase()});
+  };
+  const _labelUnpictured=function(){
+    const _cnt={}, _seen={};
+    out.unpictured.forEach(function(u){ _cnt[u.subj]=(_cnt[u.subj]||0)+1; });
+    out.unpictured.forEach(function(u){
+      const n=(_seen[u.subj]=(_seen[u.subj]||0)+1);
+      u.label="the "+(_cnt[u.subj]>1?(["first","second","third","fourth","fifth","sixth"][n-1]||("#"+n))+" ":"")+u.subj+" with no picture";
+    });
+  };
+  people.filter(function(p){return !p.srcs.length;}).forEach(_unpic);
   const live=people.filter(function(p){return p.srcs.length;});
-  if(!live.length)return out;
+  if(!live.length){ _labelUnpictured(); return out; }
   const take=live.map(function(){return 0;});
   let left=max;
   for(let i=0;i<live.length&&left>0;i++){ take[i]=1; left--; }
@@ -38108,7 +38161,9 @@ async function buildRefPack(rule,speaker,chat,cap,opts){
     }
     if(out.urls.length>=from)out.people.push({name:live[i].name,subject:live[i].subject||"",id:live[i].id||null,
       speaker:!!live[i].speaker,player:!!live[i].player,from,to:out.urls.length});
+    else _unpic(live[i]);   // v148.2 — no slot left (or the picture would not load): described in words
   }
+  _labelUnpictured();
   out.people.forEach(function(p,k){ p.slot=k+1; p.label="the "+(p.subject?p.subject.toLowerCase():"person")+" in IMAGE "+(k+1); });
   return out;
 }

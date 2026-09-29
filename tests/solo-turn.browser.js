@@ -96,7 +96,7 @@ const {chromium}=require('playwright');
          renderer, which is a different function entirely. */
       const i=src.indexOf('// ----- Nobody nearby: the user is speaking to themselves');
       const br=src.slice(i,i+1600);
-      return i>0 && /noteNobodyHere\(chat\)/.test(br) && /await postTurn\(chat\)/.test(br)
+      return i>0 && /noteNobodyHere\(chat\)/.test(br) && /await postTurn\(chat(?:,[^)]*)?\)/.test(br)   /* v147.2 — postTurn(chat,_ptOpts): a whole-turn Retry passes analysisOnly */
         ? true : "postTurn is not called when alone"; })());
   ok("postTurn checks due meetings and then the Gamemaster", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');

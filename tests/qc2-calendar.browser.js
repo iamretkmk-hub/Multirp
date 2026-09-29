@@ -175,9 +175,10 @@ const PRSAME_TABLE=[
     window.__cc=()=>JSON.stringify({new:[{title:"Have dinner together",who:"Aria",executor:"Aria",dayOffset:1,period:"Night"}]});
     await runCalendarEngine(chat,{});
     return chat.calendar.length===1 ? true : chat.calendar.map(e=>e.title+"|"+e.day+"|"+e.period).join("; "); }));
-  ok("an exact title on the same day is a duplicate whatever the period", await pg.evaluate(()=>{
-    const cal=[{id:"x",title:"Talk to Aria",who:"Aria",day:6,period:"Morning"}];
-    return _calIsDup(cal,{title:"talk to aria",who:"Aria",day:6,period:"Evening"},{chat:curChat()})===true ? true : "not a dup"; }));
+  // v147.2 — the exact title respects the time now (QC report #3 §3.3): Morning vs Evening are two, a neighbour or no time is one.
+  ok("an exact title on the same day is a duplicate at about the same time (or with no time of its own)", await pg.evaluate(()=>{
+    const cal=[{id:"x",title:"Talk to Aria",who:"Aria",day:6,period:"Morning"}], D=p=>_calIsDup(cal,{title:"talk to aria",who:"Aria",day:6,period:p},{chat:curChat()});
+    return (D("Midday")===true&&D(null)===true&&D("Evening")===false) ? true : JSON.stringify([D("Midday"),D(null),D("Evening")]); }));
   ok("the player is not the shared person: dinner with Aria and drinks with Mara, same evening, are both filed", await pg.evaluate(async()=>{
     const chat=curChat();
     chat.calendar=[{id:"e1",kind:"meeting",title:"Dinner with Aria",who:"Aria, Emre",charIds:["q_a"],withUser:true,executor:"user",day:6,period:"Evening",done:false,certainty:"certain",source:"auto"}];
@@ -223,8 +224,9 @@ const PRSAME_TABLE=[
   });
   ok("rescheduled by the tracker: _rolledFrom is cleared, so the next day end rolls it again instead of lapsing it",
      mv.rolled===5&&mv.after.day===9&&mv.after.rolled===undefined&&/moves to tomorrow/.test(mv.summary)&&mv.final.day===10&&!mv.final.done, JSON.stringify(mv));
-  ok("an 'on my way' text resets a rolled meeting", await pg.evaluate(()=>{
-    const chat=curChat(); const e=chat.calendar[0]; e._rolledFrom=9; e.snoozes=2; e.snoozedAt=101;
+  // v147.2 — only when it moves the meeting: the same slot restated keeps a "Later" and the roll (QC report #3 §3.3).
+  ok("an 'on my way' text that moves a rolled meeting resets it", await pg.evaluate(()=>{
+    const chat=curChat(); const e=chat.calendar[0]; e.period="Night"; e._rolledFrom=9; e.snoozes=2; e.snoozedAt=101;
     _textComing(chat,state.personas.find(p=>p.id==="q_a"),"Evening");
     return (e._rolledFrom===undefined&&e.snoozes===undefined&&e.snoozedAt===undefined) ? true : JSON.stringify(e); }));
   ok("moved by hand in the calendar editor: reset too", await pg.evaluate(()=>{

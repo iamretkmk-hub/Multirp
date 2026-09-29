@@ -58,7 +58,8 @@ const path=require('path');
 
   // ---- the clean-up on load removes the stub and re-points its plan
   await seed();
-  await pg.evaluate(async()=>{ await persistUniverses(); await persistPersonas(); await persistChatsNow(); await new Promise(r=>setTimeout(r,400)); });
+  await pg.evaluate(async()=>{ store.set("sm_binderclean_v2",false);   // the clean-up runs once per install — arm it again
+    await persistUniverses(); await persistPersonas(); await persistChatsNow(); await new Promise(r=>setTimeout(r,400)); });
   await pg.reload(); await pg.waitForTimeout(2800);
   const C=await pg.evaluate(()=>({stub:!!state.personas.find(p=>p.id==="pStub"), resident:universeById("uA").locations[1].residents.includes("pStub"),
     plan:(state.chats.cA.calendar.find(e=>e.id==="cal1")||{}).charId}));
@@ -96,7 +97,7 @@ const path=require('path');
   await seed();
   const S=await pg.evaluate(async()=>{
     const log=[]; const realExport=window.exportRoleplay;
-    window.exportRoleplay=async()=>{ log.push("export:"+Object.values(state.chats).filter(c=>c.universeId==="uA").map(c=>c.messages.length).join(",")); };
+    window.exportRoleplay=async()=>{ log.push("export:"+Object.values(state.chats).filter(c=>c.universeId==="uA").map(c=>c.messages.length).join(",")); return true; };
     window.uiChoose=async()=>"save"; await wipeEditingUniverseMemory();
     const savedThenReset=log[0]==="export:1"&&Object.values(state.chats).filter(c=>c.universeId==="uA")[0].messages.length===0;
     await (async()=>{})();
@@ -110,6 +111,21 @@ const path=require('path');
     return {msgs:state.chats.cA&&state.chats.cA.messages.length, mems:state.memory.length};
   });
   ok("a failed export resets nothing",F.msgs===1&&F.mems===2,JSON.stringify(F));
+  await seed();
+  const F2=await pg.evaluate(async()=>{
+    window.exportRoleplay=async()=>false;   // no file produced (e.g. the download was blocked)
+    window.uiChoose=async()=>"save"; await wipeEditingUniverseMemory();
+    return {msgs:state.chats.cA&&state.chats.cA.messages.length};
+  });
+  ok("an export that produced no file resets nothing",F2.msgs===1,JSON.stringify(F2));
+  await seed();
+  const F3=await pg.evaluate(async()=>{
+    const c=state.chats.cA; const release=holdChatLock(c,"turn");
+    window.uiChoose=async()=>"reset"; await wipeEditingUniverseMemory();
+    const kept=state.chats.cA&&state.chats.cA.messages.length; release();
+    return {kept};
+  });
+  ok("a reset is refused while a reply is still being written",F3.kept===1,JSON.stringify(F3));
 
   // ---- Restart scene: scene only vs full reset vs cancel
   await seed();

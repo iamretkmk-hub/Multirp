@@ -162,10 +162,10 @@ const {chromium}=require('playwright');
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const calls=(src.match(/\brelOf\s*\(/g)||[]).length;
       return calls===0?true:calls+" live call(s) to relOf remain"; })());
-  ok("relObj is what the engine reads, like every other consumer", (()=>{
+  ok("relObj (v147.2: through relPeek, a read creates no record) is what the engine reads", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-      return /const o=targetId\?relObj\(chat,p\.id,targetId\):null;/.test(src)
-        ? true : "the writer does not read relObj(chat,p.id,targetId)"; })());
+      return /const o=targetId\?rel(?:Obj|Peek)\(chat,p\.id,targetId\):null;/.test(src)
+        ? true : "the writer does not read relObj/relPeek(chat,p.id,targetId)"; })());
   ok("the signature moves when the feelings move", await pg.evaluate(()=>{
       const u=(state.universes||[])[0]; if(!u)return "no universe";
       const p={id:"c_sig",name:"S"};

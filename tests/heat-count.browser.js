@@ -43,10 +43,10 @@ const {chromium}=require('playwright');
     const beats=[];
     const real=window.playCharacterTurn;
     window.playCharacterTurn=async()=>{ beats.push(chat._heatBeat?chat._heatBeat.n:"?"); return true; };
-    const realCast=window.presentCast;
-    window.presentCast=()=>[{id:"h1",name:"Ayla"}];
+    const realCast=window.presentCast, realScene=window.inSceneCast;   // v147.2 — the run picks its voice from earshot (inSceneCast)
+    window.presentCast=()=>[{id:"h1",name:"Ayla"}]; window.inSceneCast=()=>[{id:"h1",name:"Ayla"}];
     await runHeatBursts(chat);
-    window.playCharacterTurn=real; window.presentCast=realCast;
+    window.playCharacterTurn=real; window.presentCast=realCast; window.inSceneCast=realScene;
     return {beats, openedAfter:chat._heatOpened};
   },[heatN,opened]);
 

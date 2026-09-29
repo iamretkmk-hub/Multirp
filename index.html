@@ -2183,7 +2183,7 @@
     <div id="uePromptList" style="display:flex;flex-direction:column;gap:6px;margin:6px 0"></div>
 
     <div class="row">
-      <button class="btn danger sec small" id="ueWipeMem" onclick="wipeEditingUniverseMemory()" title="Fresh start: wipes memories, diaries, relationships, feelings, schemes, meetings, tracker values, quests and the chronicle — keeps the world, cast cards, locations and chat transcripts">Reset universe (fresh start)</button>
+      <button class="btn danger sec small" id="ueWipeMem" onclick="wipeEditingUniverseMemory()" title="Fresh start: the story begins again on Day 1 — wipes the chat, memories, promises, rumours, relationships, schemes, meetings, quests, play-made characters and the chronicle; keeps the world, cast cards and locations (offers to save a copy first)">Reset universe (fresh start)</button>
       <button class="btn danger sec small" id="ueDelete" onclick="deleteUniverse()">Delete</button>
       <button class="btn" onclick="saveUniverse()">Save</button>
     </div>
@@ -15024,7 +15024,8 @@ async function maybeSeedLocationNpcs(chat){
         personality:`${c.role?String(c.role).slice(0,60)+". ":""}${String(c.personality||"").slice(0,400)}`,
         traits:"",goals:String(c.goals||"").slice(0,160),backstory:"",
         style:String(c.style||"").slice(0,200),look:String(c.look||"").slice(0,400),
-        instructions:"",interject:String(c.interject||"").slice(0,200),image:null});
+        instructions:"",interject:String(c.interject||"").slice(0,200),image:null,
+        origin:"seed"});   // v146.1 — made in play (first visit), so a universe reset can take it back out
       loc.residents=(loc.residents||[]).concat(pid);
       have.add(String(c.name).toLowerCase()); made++; newIds.push(pid);
     }
@@ -29797,9 +29798,10 @@ function chatLocations(chat){ const u=chatUni(chat); return (u&&Array.isArray(u.
 function chatLocById(chat,id){ return id?chatLocations(chat).find(l=>l&&l.id===id):undefined; }
 function chatUserName(chat){
   const u=chatUni(chat);
+  const n=u&&u.userName&&String(u.userName).trim();   // the universe's own player name wins
+  if(n)return n;
   if(!u||(chat&&chat.universeId===state.curUniverse))return state.user||"You";   // the open story: live value
-  const n=u.userName&&String(u.userName).trim();
-  return n||globalUserDefaults().user||"You";
+  return globalUserDefaults().user||"You";
 }
 function chatSubUser(chat,s){ const n=chatUserName(chat); return (s||"").replace(/\{\{user\}\}/g,n); }
 function chatWorldSetting(chat){ const u=chatUni(chat); return (u&&u.setting&&u.setting.trim())?chatSubUser(chat,u.setting.trim()):""; }
@@ -30158,9 +30160,24 @@ async function clearChatWindow(){
 }
 async function restartScene(){
   const u=curUniverseObj();
-  if(!(await uiConfirm("The current dialogue will be cleared.",{title:"Restart the story in "+((u&&u.name)||"this universe")+"?",ok:"Restart",danger:true})))return;
-  clearRevealQueue();   // drop any in-flight reveals from the old scene
+  /* v146.1 — "Restart scene" only ever cleared the chat: memories, relationships, rumours, quests and the
+     chronicle carried on into the "new" story, which is not what a restart reads as. Say so, and offer the
+     full universe reset as the other choice. */
   const uid=(state.curChat&&state.chats[state.curChat]&&state.chats[state.curChat].universeId)||state.curUniverse;
+  const how=await uiChoose("Restarting the scene clears this chat and its meetings, promises and schemes. What the world remembers — memories, relationships, rumours, quests and the chronicle — carries on. A fresh start resets all of it.",[
+      {label:"Restart the scene (the world remembers)",value:"scene"},
+      {label:"Fresh start — reset the whole universe…",value:"reset"}],
+    {title:"Restart the story in "+((u&&u.name)||"this universe")+"?",icon:"refresh"});
+  if(how===null||how===undefined)return;
+  if(how==="reset"){
+    const uName=(u&&u.name)||"this universe";
+    if(!(await _confirmUniverseReset(uName,uid)))return;
+    const r=wipeUniverseState(uid);
+    if(r)toast(`"${uName}" reset — Day 1 begins`);
+    _forceBottomOnce=true; renderChat(); updateChatHeader();
+    return;
+  }
+  clearRevealQueue();   // drop any in-flight reveals from the old scene
   // remove the existing chat for this universe so it starts fresh
   for(const id in state.chats){ if(state.chats[id].universeId===uid)delete state.chats[id]; }
   state.curChat=null;
@@ -43780,7 +43797,7 @@ function bindPendingTasks(chat){
       const who=e.character||e.charName||e.who;
       if(e.locationId && who){
         const names=splitNames(who).filter(n=>!isPlayerName(chat,n));
-        const roster=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&!p.removed);
+        const roster=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&!p.removed&&splitNames(p.name).length===1);   // never a group-named stub
         const found=names.map(n=>findByName(roster,n)).filter(Boolean);
         if(found.length){ e.charId=e.charId||found[0].id; if(found[1]&&!e.charId2)e.charId2=found[1].id;
           e.charIds=Array.from(new Set([...(e.charIds||[]),...found.map(p=>p.id)])); }
@@ -50668,84 +50685,129 @@ async function confirmClear(w){
      personality, goals, backstory, socialGraph, interject, routine, schedules — locations,
      per-universe prompts, the state-zero origin doc (that IS the initial state), and chat
      transcripts (delete chats separately for a truly blank page). */
+/* v146.1 — A RESET IS A FRESH START, AND IT FORGETS NOTHING. The old reset cleared a hand-kept list of
+   fields and kept the chat transcripts, so everything added since that list was written survived it:
+   promises, the rumour ledger, day-end and placement markers, drives, text/quest-ask gates, the active
+   event, first-visit NPCs, hidden figures the calendar binder minted — and the characters kept reading
+   the old conversation in their history. Now the universe's CHATS go (every per-chat engine field goes
+   with them, including any added later), and everything the universe accumulated in play is cleared:
+   memories and diaries, rumours, generated relationships and facts, characters created in play (never
+   met / first-visit / quest figures), quests, character quests and the chronicle. What was AUTHORED
+   stays: the world, its places and schedules, the cast cards (and their written social graph), prompts,
+   the state-zero briefing, images and scenes. The caller offers an export first (_confirmUniverseReset). */
 function wipeUniverseState(uniId){
   const u=universeById(uniId); if(!u)return null;
   const charIds=new Set(personasInUniverse(uniId).map(p=>p.id));
+  const chatIds=new Set(Object.keys(state.chats||{}).filter(id=>state.chats[id]&&state.chats[id].universeId===uniId));
   const before=state.memory.length;
-  // 1) memories & diaries — conservative attribution: drop what's owned by this universe's
-  //    characters or tagged to it; keep anything clearly belonging to another universe.
+  // 1) memories & diaries — anything owned by this universe's characters, tagged to it, or written in its
+  //    chats; anything clearly belonging to another universe is kept.
   state.memory=state.memory.filter(m=>{
-    if(m && m.universeId && m.universeId!==uniId) return true;
-    if(m && charIds.has(m.ownerId)) return false;
-    if(m && m.universeId===uniId) return false;
+    if(!m)return false;
+    if(m.universeId && m.universeId!==uniId) return true;
+    if(charIds.has(m.ownerId)||m.universeId===uniId||(m.chatId&&chatIds.has(m.chatId))) return false;
     return true;
   });
   persistMemory();
-  // 2) never-revealed latent NPCs minted BY quests: their quests are about to vanish and the
-  //    player has never met them — remove the card and scrub it from location residents.
-  //    Revealed characters stay, even quest-born ones (they're part of the world now).
-  const dropIds=new Set(personasInUniverse(uniId)
-    .filter(p=>p&&p.latent&&Array.isArray(p.questIds)&&p.questIds.length).map(p=>p.id));
+  // 2) the rumour ledger for this universe
+  const gBefore=(state.gossip||[]).length;
+  state.gossip=(state.gossip||[]).filter(g=>{
+    if(!g)return false;
+    if(g.universeId) return g.universeId!==uniId;
+    const touches=charIds.has(g.stakeholderId)||charIds.has(g.aboutId)||(g.carriers||[]).some(c=>c&&charIds.has(c.charId));
+    return !touches;
+  });
+  try{ persistGossip(); }catch(e){}
+  // 3) characters created IN PLAY: never-met quest figures, the calendar binder's stubs, first-visit NPCs
+  //    (tagged since v146.1; older ones recognised by the seeder's exact untouched shape). A character the
+  //    player revealed and wrote into (a backstory) is part of the world now and stays.
+  const seededLocs=new Set((u.locations||[]).filter(l=>l&&l.npcSeeded).map(l=>l.id));
+  const residentOf=id=>(u.locations||[]).find(l=>l&&Array.isArray(l.residents)&&l.residents.includes(id));
+  const madeInPlay=p=>{
+    if(!p)return false;
+    if(p.latent&&Array.isArray(p.questIds)&&p.questIds.length)return true;
+    if(p.latent&&/^A figure connected to:/.test(String(p.personality||""))&&!String(p.backstory||"").trim())return true;
+    if(p.origin==="seed")return !String(p.backstory||"").trim();
+    const r=residentOf(p.id);   // pre-v146.1 first-visit NPC: the seeder's shape, never edited
+    return !!(r&&seededLocs.has(r.id)&&p.avatar==="🧍"&&!String(p.instructions||"").trim()&&!String(p.backstory||"").trim()&&!p.image);
+  };
+  const dropIds=new Set(personasInUniverse(uniId).filter(madeInPlay).map(p=>p.id));
   if(dropIds.size){
     state.personas=state.personas.filter(p=>!(p&&dropIds.has(p.id)));
-    (u.locations||[]).forEach(l=>{ if(l&&Array.isArray(l.residents))l.residents=l.residents.filter(id=>!dropIds.has(id)); });
+    if(dropIds.has(state.curPersona))state.curPersona=null;
   }
-  // 3) evolved character state: the GENERATED relationship data in ALL its forms — the structured
-  //    map (p.relationships), the generated sheet text + stamp (p.relationshipsGen/At, rewritten
-  //    by the End-Day re-eval), and the append-only "Discovered in play" social-graph lines
-  //    (p.socialGraphAuto), its replacement (p.socialFacts — one current fact per person), and the
-  //    maintained goals & ambitions list (p.goalsLive). The authored card fields (the socialGraph
-  //    text and the goals field included) ARE the initial state — they stay.
+  (u.locations||[]).forEach(l=>{ if(!l)return;
+    if(Array.isArray(l.residents))l.residents=l.residents.filter(id=>!dropIds.has(id));
+    delete l.npcSeeded; });   // first visits will seed afresh
+  // 4) what the remaining characters accumulated in play. The authored card fields — socialGraph, goals,
+  //    backstory, personality, schedule — ARE the initial state and stay.
+  const PERSONA_PLAY_KEYS=["relationships","relationshipsGen","relationshipsGenAt","socialGraphAuto","socialFacts",
+    "goalsLive","afterHeat","afterHeatBy","bigMoveDay","questIds","_psyche","pendingBio"];
   personasInUniverse(uniId).forEach(p=>{
     if(!p)return;
-    p.relationships={}; p.relationshipsGen=""; p.relationshipsGenAt=null; p.socialGraphAuto="";
-    p.socialFacts={}; delete p.goalsLive;
+    PERSONA_PLAY_KEYS.forEach(k=>{ delete p[k]; });
+    p.relationships={}; p.relationshipsGen=""; p.relationshipsGenAt=null; p.socialGraphAuto=""; p.socialFacts={}; p.questIds=[];
+    if(p.latent&&p.boundLocId&&!dropIds.has(p.id)){ /* an authored hidden NPC stays hidden where it was placed */ }
   });
   persistPersonas();
-  // 4) per-chat engine state in this universe (transcripts stay).
-  let chats=0;
-  for(const id in state.chats){
-    const c=state.chats[id]; if(!c||c.universeId!==uniId)continue;
-    c.rel={}; c.intents=[]; c.memCounts={}; c.calendar=[]; c.trackerVals={};
-    markChatDirty(c); chats++;
-  }
-  persistChats();
-  // 5) universe-level play state: quests + arcs + character quests + the chronicle.
-  //    u.originDoc (state zero) is the definition of the initial state — kept.
+  // 5) the universe's chats — the transcript AND every per-chat engine field (promises, meetings, intents,
+  //    relationships, trackers, day logs, placements, markers…). The open one is replaced by a fresh Day 1.
+  const wasOpen=chatIds.has(state.curChat);
+  chatIds.forEach(id=>{ delete state.chats[id]; });
+  if(wasOpen){ state.curChat=null; try{ clearRevealQueue(); }catch(e){} }
+  // 6) universe-level play state: quests, arcs, character quests, the chronicle, the pursuit bookkeeping.
+  //    u.originDoc (state zero) defines the initial state — kept.
   if(u.gameData&&typeof u.gameData==="object"){
     u.gameData.quests=[]; u.gameData.charQuests=[]; u.gameData.arcMeta={};
     if(Array.isArray(u.gameData.tasks))u.gameData.tasks=[];
   }
   u.chronicle=[]; u.chronicleEras=[];
+  delete u.cqLastSpawn; delete u.cqAsked;
   persistUniverses();
+  if(wasOpen||state.curUniverse===uniId){ try{ startSceneFor(uniId,true); }catch(e){} }
+  persistChats();
+  try{ flushPersistChats(); }catch(e){}
   // Refresh whatever is showing this data.
+  try{ if(state.curUniverse===uniId){ renderChat(); updateChatHeader(); } }catch(e){}
   try{ if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory(); }catch(e){}
   try{ const d=document.getElementById('screen-diary'); if(d&&d.classList.contains('active'))renderDiary(); }catch(e){}
   try{ _refreshQuestViews&&_refreshQuestViews(); }catch(e){}
   try{ if(editingUniverse&&editingUniverse.id===uniId)renderUeChronicle(u); }catch(e){}
   try{ updateStorage&&updateStorage(); }catch(e){}
-  return {mems:before-state.memory.length,chats,npcs:dropIds.size};
+  return {mems:before-state.memory.length,chats:chatIds.size,npcs:dropIds.size,rumours:gBefore-state.gossip.length};
 }
-function _confirmUniverseReset(uName){
-  return uiConfirm(`WIPES: all memories & diaries, generated relationships & feelings, live schemes, calendar meetings, tracker values, quests & story arcs, character quests, and the universe chronicle.\n\nKEEPS: the world, the cast's authored cards (incl. their written social graph), locations, schedules, prompts, the state-zero briefing, and chat transcripts.`,{title:`Reset "${uName}" to its initial state?`,ok:"Reset",danger:true});
+// v146.1 — says what a reset really does, and offers a restorable copy first (Import roleplay brings it back).
+async function _confirmUniverseReset(uName,uid){
+  const how=await uiChoose(`WIPES: the chat and its transcript, all memories & diaries, promises, meetings, rumours, live schemes, generated relationships & feelings, tracker values, quests & story arcs, character quests, characters created during play, and the universe chronicle. The story starts again on Day 1.\n\nKEEPS: the world, its places and schedules, the cast's authored cards (incl. their written social graph), prompts, the state-zero briefing, images and scenes. Characters removed from play stay removed.`,[
+      {label:"Save a copy first, then reset",value:"save"},
+      {label:"Reset without saving",value:"reset"}],
+    {title:`Reset "${uName}" to its initial state?`,icon:"refresh"});
+  if(how===null||how===undefined)return false;
+  if(how==="save"){
+    const prev=state.curUniverse;
+    try{ if(uid&&uid!==prev)state.curUniverse=uid; await exportRoleplay(); }
+    catch(e){ toast("Couldn't save a copy — nothing was reset"); return false; }
+    finally{ state.curUniverse=prev; }
+  }
+  return true;
 }
 // Reset the universe currently OPEN in the editor (not necessarily the active one).
 async function wipeEditingUniverseMemory(){
   const uni=editingUniverse?editingUniverse.id:(state.curUniverse||null);
   if(!uni){ toast("No universe open"); return; }
   const uName=(state.universes.find(u=>u.id===uni)||{}).name||"this universe";
-  if(!(await _confirmUniverseReset(uName)))return;
+  if(!(await _confirmUniverseReset(uName,uni)))return;
   const r=wipeUniverseState(uni);
-  if(r)toast(`"${uName}" reset — ${r.mems} memories wiped, ${r.chats} chat${r.chats===1?"":"s"} cleared`);
+  if(r)toast(`"${uName}" reset — ${r.mems} memories, ${r.rumours} rumours and ${r.npcs} play-made characters cleared; Day 1 begins`);
 }
 // Reset the CURRENT universe (Settings → data row). Same full reset as the editor button.
 async function wipeUniverseMemory(){
   const uni=state.curUniverse||null;
   if(!uni){ toast("No universe selected"); return; }
   const uName=(state.universes.find(u=>u.id===uni)||{}).name||"this universe";
-  if(!(await _confirmUniverseReset(uName)))return;
+  if(!(await _confirmUniverseReset(uName,uni)))return;
   const r=wipeUniverseState(uni);
-  if(r)toast(`"${uName}" reset — ${r.mems} memories wiped, ${r.chats} chat${r.chats===1?"":"s"} cleared`);
+  if(r)toast(`"${uName}" reset — ${r.mems} memories, ${r.rumours} rumours and ${r.npcs} play-made characters cleared; Day 1 begins`);
 }
 
 /* ---- onboarding (single landing page; keys + roster moved into the app) ---- */

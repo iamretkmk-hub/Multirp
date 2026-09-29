@@ -29,23 +29,27 @@ const {chromium}=require('playwright');
   ok("it is cast as the character and you", def.cast==="player", def.cast);
   ok("its when-clause routes daily beats to it and contact away from it",
      /NO physical contact/.test(def.when)&&/DON'T CHOOSE the moment they make contact/.test(def.when), def.when.slice(0,160));
+  /* v148.4 — the POV contract (never a body, no IMAGE slot, the gaze into the lens) is stated ONCE, in
+     the POV note (imgPovGuide) that rides with every POV rule; the template, which repeated it twice,
+     keeps only what is its own — the shot — and is written for "the focus", man or woman. These three
+     read the contract where it lives now. */
+  const povNote=await pg.evaluate(()=>up("imgPovGuide"));
   ok("its template is written from his eyes and keeps him out of the frame",
      /point-of-view shot from the player's own eyes/.test(def.style)
-     &&/NEVER a body in this frame/.test(def.style)
-     &&/THE VIEWER TAKES NO IMAGE SLOT/.test(def.style), "");
-  ok("and it tells the writer she looks into the lens",
-     /HERE IT COMES TO THE LENS/.test(def.style)&&/SHE MAY LOOK INTO THE LENS/.test(def.style), "");
-  ok("the POV template is POV all the way down — it never hands him a slot, only forbids one",
-     (def.style.match(/the man in IMAGE 2/g)||[]).length
-       ===(def.style.match(/Never write "the man in IMAGE 2"/g)||[]).length
+     &&/The player takes no label and no place in the frame/.test(def.style)
+     &&/He is not a body in this picture/.test(povNote)&&/He takes no IMAGE slot/.test(povNote), "");
+  ok("and it tells the writer the person speaking to him looks into the lens",
+     /eyes come to the lens whenever they are speaking to him/.test(def.style)&&/MAY LOOK STRAIGHT INTO THE LENS/.test(povNote), "");
+  ok("the POV template is POV all the way down — it never hands him a slot",
+     !/(player|viewer)[^,.;]{0,30}IMAGE \d/i.test(def.style)
      &&/never a shot from anywhere his head is not/i.test(def.style)
-     &&/EXAMPLE POV FRAMES/.test(def.style), "slots: "+(def.style.match(/the man in IMAGE 2/g)||[]).join(" / "));
-  ok("it carries the full structure, not a sketch — shot, pose, face, hands, clothing, closer",
+     &&/EXAMPLE POV FRAMES/.test(def.style), (def.style.match(/[^,.;]{0,40}IMAGE \d/g)||[]).join(" / "));
+  ok("it carries the full structure, not a sketch — shot, pose, face, hands, clothing, setting, closer",
      /## 1\. THE SHOT IS CHOSEN BY THE EMOTION/.test(def.style)
-     &&/## 3\. WHERE SHE IS, AND THE POSE/.test(def.style)
-     &&/## 5\. HER HANDS/.test(def.style)&&/## 6\. THE VIEWER'S OWN HANDS/.test(def.style)
-     &&/## 7\. CLOTHING STATE/.test(def.style)&&/## 8\. ONE CLOSING COMPOSITION CLAUSE/.test(def.style)
-     &&def.style.length>8000, "length "+def.style.length);
+     &&/## 3\. WHERE THE FOCUS IS, AND THE POSES/.test(def.style)
+     &&/## 5\. THE HANDS/.test(def.style)&&/## 6\. THE VIEWER'S OWN HANDS/.test(def.style)
+     &&/## 7\. CLOTHING STATE/.test(def.style)&&/## 8\. THE SETTING, THEN ONE CLOSING COMPOSITION CLAUSE/.test(def.style)
+     &&def.style.length>7000, "length "+def.style.length);
 
   // ---- the second path
   const inti=await pg.evaluate(()=>{
@@ -63,8 +67,9 @@ const {chromium}=require('playwright');
   ok("its template bans the POV camera outright",
      /NEVER a first-person point of view on this path/.test(inti.style)
      &&/cannot show two bodies in contact/.test(inti.style), "");
+  // v148.4 — the cast list, when there is one, owns the numbering; without it the player is IMAGE 2
   ok("and puts the player back in the frame as a body with a slot",
-     /The player is IMAGE 2 and on this path he is a BODY IN THE FRAME/.test(inti.style)
+     /the player IMAGE 2/.test(inti.style)&&/On this path the player is a BODY IN THE FRAME/.test(inti.style)
      &&/Never write the player as a faceless viewer here/.test(inti.style), "");
   ok("the contact itself is made the subject, with the join named once",
      /THE CONTACT IS THE SUBJECT/.test(inti.style)&&/THEN NAME THE JOIN ITSELF/.test(inti.style)
@@ -208,7 +213,7 @@ const {chromium}=require('playwright');
                  backstory:"x",style:"x",goals:"x",look:{subject:"Woman"}};
     state.personas=[she,other];
     const chat=curChat(); chat.presentIds=[she.id,other.id]; chat.messages=[];
-    chat.imgPromptBy={}; chat.imgWindowBy={}; chat.lastImgRuleBy={};
+    chat.imgPromptBy={}; chat.imgWindowBy={}; chat.lastImgRuleBy={}; chat.imgContBy={};   // v148.4 — the continuity map too
     state.user="Emre";
     state.imgProvider="modelslab";                    // no reference pack on this path
     state.imgRules=[{id:"r_t",label:"T",when:"w",cast:"player",pov:!!a.pov,
@@ -248,8 +253,9 @@ const {chromium}=require('playwright');
            {r:'user',c:"Bir şey içer misin?"},
            {r:'assistant',s:"Burcu",c:"Çay içiyorum zaten."}];
   const w=await shot({msgs:M,pov:false});
+  // v148.4 — with no previous picture it is not called "since that picture" (there was none)
   ok("the window reaches the writer, labelled as analysis rather than script",
-     /WHAT HAS HAPPENED SINCE THAT PICTURE — FOR ANALYSIS, NOT FOR DRAWING/.test(w.usr), w.usr.slice(0,200));
+     /WHAT HAS HAPPENED IN THIS SCENE SO FAR — FOR ANALYSIS, NOT FOR DRAWING/.test(w.usr)&&!/SINCE THAT PICTURE/.test(w.usr), w.usr.slice(0,200));
   ok("it carries the turns the writer never used to see",
      /ceketimi çıkarıyorum/.test(w.usr)&&/Sandalyeyi yakınlaştırıyorum/.test(w.usr), "");
   ok("it names the player by name on his own lines",
@@ -257,7 +263,7 @@ const {chromium}=require('playwright');
   // v148.3 — another character in the frame is listed under their OWN label (what each person is doing);
   // what must never happen is their line landing in THIS character's window as if it were theirs
   ok("another character's line is NOT in this character's window",
-     !/Esma kendi masasından/.test(w.usr.slice(w.usr.indexOf("WHAT HAS HAPPENED SINCE THAT PICTURE"),w.usr.indexOf("LATEST EXCHANGE"))), "Esma leaked into Burcu's window");
+     !/Esma kendi masasından/.test(w.usr.slice(w.usr.indexOf("WHAT HAS HAPPENED IN THIS SCENE SO FAR"),w.usr.indexOf("LATEST EXCHANGE"))), "Esma leaked into Burcu's window");
   ok("the trigger line is not duplicated — it lives in the LATEST EXCHANGE",
      (w.usr.match(/Bir şey içer misin/g)||[]).length===1, "count "+(w.usr.match(/Bir şey içer misin/g)||[]).length);
   ok("the latest exchange is still the authority block at the end",
@@ -344,8 +350,13 @@ const {chromium}=require('playwright');
   }
 
   console.log("\n[and each layer says only what is its own to say]");
-  ok("the frame note defers to the scene-type block", await pg.evaluate(()=>
-      /the block wins/.test(up("imgFrameGuide"))));
+  /* v148.4 — it used to say "the block wins" outright, written before the cast, the per-person blocks and
+     the place moved into the request: a writer that obeyed it left the setting out and drew only whom the
+     exchange named. The block keeps the SHOT; the request's blocks win on who, what they wear and where. */
+  ok("the frame note gives the scene-type block the shot, and the request the facts of this frame", await pg.evaluate(()=>{
+      const t=up("imgFrameGuide");
+      return /governs the SHOT/.test(t)&&/the message below wins over it/.test(t)&&/PEOPLE IN THIS FRAME/.test(t)&&/WHERE THIS FRAME HAPPENS/.test(t)&&!/the block wins/.test(t)
+        ? true : t.slice(0,400); }));
   ok("it explains the continuity reference and the decided outfit", await pg.evaluate(()=>{
       const t=up("imgFrameGuide");
       return /CONTINUITY REFERENCE/.test(t) && /already decided/.test(t)

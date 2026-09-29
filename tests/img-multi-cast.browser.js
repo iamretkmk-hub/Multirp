@@ -145,7 +145,8 @@ const {chromium}=require('playwright');
     +"state.universes[0].userWardrobe='a navy suit, white shirt'; c.universeId=state.universes[0].id;");
   const W=PP.usr;
   ok("each person's clothes are listed under their own label", /WHAT EACH PERSON IS WEARING/.test(W)
-     &&/- the woman in IMAGE 1 = Ayla — already decided, draw exactly this: an emerald silk dress/.test(W)
+     // v148.4 — "draw exactly this" became "draw these garments": props in an outfit text are only suggestions
+     &&/- the woman in IMAGE 1 = Ayla — already decided, draw these garments: an emerald silk dress/.test(W)
      &&/- the woman in IMAGE 3 = Selin — choose ONE outfit from what they own[^\n]*grey wool coat over a red jumpsuit/.test(W)
      &&/- the man in IMAGE 2 = Emre \(the player\) — choose ONE outfit[^\n]*navy suit/.test(W)
      &&/- the man in IMAGE 4 = Deniz — nothing given: choose clothes/.test(W), W.slice(0,2400));

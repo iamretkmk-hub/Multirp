@@ -52,13 +52,15 @@ const {chromium}=require('playwright');
       const c=curChat(); c.period="Afternoon"; c.locationId="L_user";
       const f=currentOutfit(playerOutfitHolder(c),c); u.userWardrobe="";
       return (f.why==="wardrobe"&&/leather jacket/.test(f.text)) ? true : JSON.stringify(f); }));
-  ok("the scene's say wins until the place or hour changes", await pg.evaluate(()=>{
+  // v148.4 — the hour turning no longer undoes it (the change is held); arriving somewhere else does
+  ok("the scene's say wins until the place changes, and outlasts the hour", await pg.evaluate(()=>{
       const c=curChat(); c.locationId="L_cafe"; c.period="Afternoon";
       setWearingOverride(c,"__user__","Your jacket is off; the white tee is soaked.");
       const a=currentOutfit(playerOutfitHolder(c),c).text;
       c.period="Evening"; const b=currentOutfit(playerOutfitHolder(c),c).text;
-      c.period="Afternoon"; setWearingOverride(c,"__user__","");
-      return (/soaked/.test(a)&&/bomber/.test(b)) ? true : JSON.stringify({a,b}); }));
+      c.locationId="L_sahil"; c.subPos.__user__="s3"; const d=currentOutfit(playerOutfitHolder(c),c).text;
+      c.locationId="L_cafe"; c.subPos.__user__="s4"; c.period="Afternoon"; setWearingOverride(c,"__user__","");
+      return (/soaked/.test(a)&&/soaked/.test(b)&&!/soaked/.test(d)) ? true : JSON.stringify({a,b,d}); }));
   ok("a character's own table is untouched by this", await pg.evaluate(()=>{
       const p={id:"x",name:"X",outfits:{userHome:{Afternoon:"You wear the emerald dress."}}};
       const c=curChat(); c.locationId="L_user"; c.period="Afternoon";

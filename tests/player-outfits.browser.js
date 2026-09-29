@@ -92,9 +92,10 @@ const {chromium}=require('playwright');
     return data;
   },[rule,!!refs]);
   const two=await draw({cast:"player",pov:false});
-  ok("a two-shot with the player carries their outfit", !!two&&/EMRE \(THE PLAYER\) IS IN THIS FRAME/.test(two)&&/navy bomber/.test(two), (two||"(writer never called)").slice(0,900));
+  // v148.3 — with two or more people in the frame, the player's clothes are one line of WHAT EACH PERSON IS WEARING
+  ok("a two-shot with the player carries their outfit", !!two&&/WHAT EACH PERSON IS WEARING/.test(two)&&/\n- Emre \(the player\) — [^\n]*navy bomber/.test(two), (two||"(writer never called)").slice(0,1400));
   const lab=await draw({cast:"player",pov:false},true);
-  ok("with reference pictures it goes under the player's cast label", !!lab&&/= Emre \(the player\)/.test(lab)&&/FOR [A-Z ]*\d* — Emre, the player:/.test(lab)&&/navy bomber/.test(lab),
+  ok("with reference pictures it goes under the player's cast label", !!lab&&/= Emre \(the player\)/.test(lab)&&/\n- the [^=\n]+ = Emre \(the player\) — [^\n]*navy bomber/.test(lab),
      (lab||"(writer never called)").slice(0,1200));
   const pov=await draw({cast:"player",pov:true});
   ok("a shot from the player's own eyes does not", !!pov&&!/navy bomber/.test(pov), (pov||"(writer never called)").slice(0,600));

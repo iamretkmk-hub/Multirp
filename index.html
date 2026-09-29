@@ -1397,7 +1397,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -36707,6 +36707,12 @@ function _imgSpeakerAppearance(speaker,opts){
    sent with it. A character with no table keeps the old menu exactly as it was. */
 function _imgWardrobeBlock(character,chat){
   try{
+    /* (!) v148.3 — what the scene itself changed (the wearing tracker: a jacket off, a borrowed coat) was
+       read only for a character WITH an outfit table; one dressed from a free-text wardrobe went back
+       to the menu, and the change was lost from the picture. */
+    const _ov=character&&!hasOutfits(character)?wearingOverride(chat,character.id):"";
+    if(_ov) return `WHAT THEY ARE WEARING right now — already decided, not a list to choose from:\n${subUser(String(_ov)).replace(/\s+/g," ").trim().slice(0,600)}\n`+
+        `Draw these garments with these colours. Do not substitute another outfit. The latest exchange still overrides this if it strips, opens, soaks, borrows or swaps something.`;
     if(character&&typeof hasOutfits==="function"&&hasOutfits(character)){
       const fit=currentOutfit(character,chat);
       const t=fit&&fit.text?subUser(String(fit.text)).replace(/\s+/g," ").trim():"";
@@ -36745,7 +36751,8 @@ function _imgOutfitDecided(character,chat){
      curChat() while the block it gates was resolved against the chat actually being drawn. Same
      character, two chats, two answers: the outfit could be decided for the block and undecided for
      the test, which sends the dressing context along with an outfit that was never up for choice. */
-  try{ return !!(character&&typeof hasOutfits==="function"&&hasOutfits(character)&&currentOutfit(character,chat).text); }catch(e){ return false; }
+  try{ if(character&&wearingOverride(chat,character.id))return true;   // v148.3 — the scene decided it
+    return !!(character&&typeof hasOutfits==="function"&&hasOutfits(character)&&currentOutfit(character,chat).text); }catch(e){ return false; }
 }
 /* What the character has on today, as far as the calendar knows — the "occasion" half of the
    dressing decision (a dinner, a visit, a job) so an evening plan can pull an evening outfit.
@@ -36809,6 +36816,37 @@ function _imgDressingPlace(loc,sub){
    lines of dialogue. Whichever runs out first trims from the OLD end. */
 const IMG_WINDOW_MAX_LINES=20, IMG_WINDOW_MAX_CHARS=3000;
 
+/* ===== v148.3 — WHAT THE IMAGE WRITER IS GIVEN, PERSON BY PERSON ==============================
+   Reported with two or three people in a frame: the faces were right (each person's own pictures)
+   but everyone wore the same clothes, several characters who had spoken were drawn in one borrowed
+   pose, and the writer was handed pages of dialogue it cannot draw. So:
+     _imgVisualOnly   — a line as the camera sees it: speech and inner thoughts removed, the narration
+                        kept. A line that was only talk becomes "(speaks)".
+     _imgClothesFor   — what ONE person wears: the scene's own say (a garment taken off, borrowed…),
+                        else their decided outfit, else their wardrobe to choose from, else nothing.
+   and illustrate() sends, whenever the frame holds two or more people, one block of what EACH person
+   is doing (from their own latest line) and one of what EACH is wearing, under their cast label. */
+function _imgVisualOnly(text){
+  let s=String(text==null?"":text);
+  try{ s=dropThoughtSpans(s); }catch(e){}
+  s=s.replace(/^\s*\/whisper\s+\S+(?:\s+\S+)?\s*/i,"");
+  // quoted speech in the forms roleplay uses; a lone apostrophe is left alone (it is not a quote)
+  s=s.replace(/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»|„[^“”\n]*[“”]/g," ");
+  s=s.replace(/\*+/g," ").replace(/[ \t]+([,.;:!?…])/g,"$1").replace(/\s*\n\s*/g," ").replace(/[ \t]{2,}/g," ").trim();
+  s=s.replace(/^[\s,.;:—–\-…]+/,"").replace(/[\s,;:—–\-]+$/,"").trim();
+  return /[\p{L}\p{N}]/u.test(s)?s:"";
+}
+function _imgClothesFor(p,chat,isPlayer){
+  try{
+    const h=isPlayer?playerOutfitHolder(chat):p; if(!h)return {kind:"none",text:""};
+    const ov=wearingOverride(chat,isPlayer?"__user__":h.id);
+    if(ov)return {kind:"decided",text:subUser(String(ov)).replace(/\s+/g," ").trim().slice(0,500)};
+    if(hasOutfits(h)){ const fit=currentOutfit(h,chat); if(fit&&fit.text&&fit.why!=="wardrobe")return {kind:"decided",text:subUser(String(fit.text)).replace(/\s+/g," ").trim().slice(0,500)}; }
+    const w=String(h.wardrobe||"").replace(/\s+/g," ").trim();
+    if(w)return {kind:"menu",text:subUser(w).slice(0,500)};
+  }catch(e){}
+  return {kind:"none",text:""};
+}
 async function illustrate(mid,replyText,force){
   const msg=findMsg(mid);if(!msg)return;
   // Idempotency guard: multiple reply paths (solo / multi-char / gamemaster / opening greeting /
@@ -36856,6 +36894,23 @@ async function illustrate(mid,replyText,force){
       }
     }
     const latestExchange=(triggerLine?`${triggerWho}: ${triggerLine}\n`:``)+`${who}: ${replyText}`;
+    /* v148.3 — THE WHOLE ROUND, AS THE CAMERA SEES IT. The writer got two lines — the one before and this
+       reply — so when two characters spoke after the player, the first one's action never reached it,
+       and it drew both people in the one pose it had. The writer now gets every line since the player's
+       last one (the player's included), each under its speaker, with the dialogue taken out. The router
+       still reads the plain exchange (talk vs contact is often in the words). */
+    const _round=[];
+    let _sceneStart0=0;
+    if(chat&&_msgIdx>=0){
+      for(let i=_msgIdx-1;i>=0;i--){ if(chat.messages[i]&&chat.messages[i].travelBeat){ _sceneStart0=i; break; } }
+      let st=_msgIdx;
+      for(let i=_msgIdx-1;i>=_sceneStart0;i--){ const m=chat.messages[i]; if(!m)continue; if(m.dayMarker)break; st=i; if(m.role==='user'&&!m.sysError)break; }
+      for(let i=st;i<_msgIdx;i++){ const m=chat.messages[i];
+        if(!m||!m.content||m.sysError||m.dayMarker||m.textMsg||m.uiNote||m.questNote||m.calNote||m.worldEvent)continue;
+        _round.push({who:m.role==='user'?state.user:(m.presenceNote?"Narrator":(m.speaker||"Narrator")),id:m.role==='user'?"__user__":(m.speakerId||null),text:m.content}); }
+    }
+    _round.push({who,id:(msg.speakerId||null),text:replyText,self:true});
+    const _roundShown=_round.slice(-8);
 
     /* ---- v52.2 — WHAT HAPPENED BETWEEN THE LAST PICTURE AND THIS ONE -----------------------
        The writer used to see two lines: the beat being drawn and the one before it. That was the
@@ -36891,7 +36946,8 @@ async function illustrate(mid,replyText,force){
         const isPlayer=(m.role==='user');
         const isThem=!!(m.speaker&&String(m.speaker).toLowerCase()===_whoLc);
         if(!isPlayer&&!isThem)continue;                    // another character's line is not theirs to draw
-        lines.push(`${isPlayer?state.user:(m.speaker||"?")}: ${String(m.content).slice(0,600)}`);
+        const _vt=_imgVisualOnly(m.content);   // v148.3 — what can be seen; pure talk carries nothing to draw
+        if(_vt)lines.push(`${isPlayer?state.user:(m.speaker||"?")}: ${_vt.slice(0,600)}`);
       }
       // Newest first out of the budget: an old line is the one that can be dropped.
       let kept=lines.slice(-IMG_WINDOW_MAX_LINES), budget=IMG_WINDOW_MAX_CHARS;
@@ -36969,7 +37025,7 @@ async function illustrate(mid,replyText,force){
     // and the writer has to CHOOSE, so it goes in with the facts that decide the choice. Blocks are
     // ordered by rising authority — wardrobe, then continuity, then the exchange — matching the
     // order the frame guide states.
-    let _dress="";
+    let _dress="", _dressCtx="";
     {
       const _wb=_imgWardrobeBlock(speaker,chat);
       let _loc=null,_sub=null;
@@ -36983,6 +37039,7 @@ async function illustrate(mid,replyText,force){
       // The dressing context is only worth sending when there is a wardrobe to choose FROM.
       // v48.2 — with an outfit table there is nothing left to choose, so it is dropped.
       _dress=_wb?(_imgOutfitDecided(speaker,chat)?_wb+"\n\n":[_wb,_dc].filter(Boolean).join("\n\n")+"\n\n"):"";
+      _dressCtx=_dc;
     }
     const _window=sceneSoFar
       ?`WHAT HAS HAPPENED SINCE THAT PICTURE — FOR ANALYSIS, NOT FOR DRAWING. These are the lines between the previous frame and this one. Not all of it is drawn and most of it is not visual at all: read it for what CHANGED and carries into this instant — a garment taken off, opened or put back on, a body that stood, sat, turned or moved closer, a position or a hold that was taken up or let go, an object now in someone's hand. A change here stands until something undoes it; a garment removed several lines ago is still removed. Draw ONLY the instant in the LATEST EXCHANGE below — this block tells you the state that instant is in, never what the frame shows:\n${sceneSoFar}\n\n`
@@ -37024,11 +37081,6 @@ async function illustrate(mid,replyText,force){
           return `- ${u.label} = ${who}${u.speaker?", whose line this picture is for":""} — NO PICTURE: describe them in words${u.look?` (${u.look})`:""}`;
         })).join("\n");
         _castBlock=fillTpl(up("x_img_cast"),{cast:_lines})+"\n\n";
-        const _others=_pack.people.filter(p=>!p.speaker&&!p.player&&p.id)
-          .map(p=>{ const c=(state.personas||[]).find(x=>x&&x.id===p.id);
-            const b=c&&_imgOutfitDecided(c,chat)?_imgWardrobeBlock(c,chat):"";
-            return b?`FOR ${p.label.toUpperCase()}:\n${b}`:""; }).filter(Boolean);
-        if(_others.length)_castBlock+=_others.join("\n\n")+"\n\n";
       }
     }
     /* v148.2 — A MODEL THAT DRAWS FROM WORDS ALONE gets no pictures, so with two or more people in the
@@ -37049,8 +37101,6 @@ async function illustrate(mid,replyText,force){
           if(_lines.length>=2){
             _textCast=true;
             _castBlock=fillTpl(up("x_img_cast_text"),{cast:_lines.join("\n")})+"\n\n";
-            const _others=_nearby.map(c=>{ const b=_imgOutfitDecided(c,chat)?_imgWardrobeBlock(c,chat):""; return b?`FOR ${String(c.name).toUpperCase()}:\n${b}`:""; }).filter(Boolean);
-            if(_others.length)_castBlock+=_others.join("\n\n")+"\n\n";
           }
         }
       }catch(e){ _textCast=false; }
@@ -37073,11 +37123,56 @@ async function illustrate(mid,replyText,force){
         }
       }
     }catch(e){ _playerDress=""; }
-    const usr=_castBlock+_playerDress+_dress+_placeBlock
+    /* v148.3 — PERSON BY PERSON. Whenever the frame holds two or more people (a cast was sent), each of
+       them is listed with what THEY are doing (their own latest line, dialogue removed) and what THEY
+       wear (_imgClothesFor) — so nobody borrows another's pose or clothes. These replace the speaker's
+       and the player's separate clothing blocks, which did not say whose they were. */
+    const _inFrame=[];
+    if(_castBlock){
+      const _pp=(p,unp)=>{ const c=p.player?null:(state.personas||[]).find(x=>x&&x.id===p.id)||(state.personas||[]).find(x=>x&&x.name===p.name);
+        return {label:p.label||p.name,name:p.player?(state.user||"the player"):p.name,id:p.player?"__user__":((c&&c.id)||p.id||null),speaker:!!p.speaker,player:!!p.player,c}; };
+      if(_pack&&(_pack.people||[]).length+(_pack.unpictured||[]).length>=2){
+        (_pack.people||[]).forEach(p=>_inFrame.push(_pp(p))); (_pack.unpictured||[]).forEach(p=>_inFrame.push(_pp(p,true)));
+      }else if(_textCast){
+        if(speaker)_inFrame.push({label:speaker.name,name:speaker.name,id:speaker.id,speaker:true,player:false,c:speaker});
+        _nearby.forEach(c=>_inFrame.push({label:c.name,name:c.name,id:c.id,speaker:false,player:false,c}));
+        if(!rulePov(_castRule))_inFrame.push({label:state.user||"the player",name:state.user||"the player",id:"__user__",speaker:false,player:true,c:null});
+      }
+    }
+    let _perPerson="";
+    if(_inFrame.length>=2){
+      const _tag=f=>f.label===f.name?f.name+(f.player?" (the player)":""):`${f.label} = ${f.name}${f.player?" (the player)":""}`;
+      const _lastOf=f=>{
+        if(f.speaker)return {t:_imgVisualOnly(replyText),now:true};
+        const inRound=_round.slice().reverse().find(x=>!x.self&&(f.player?x.id==="__user__":(x.id?x.id===f.id:x.who===f.name)));
+        if(inRound)return {t:_imgVisualOnly(inRound.text),now:true,talk:true};
+        for(let i=_msgIdx-1;i>=_sceneStart0&&i>=0;i--){ const m=chat.messages[i]; if(!m||!m.content||m.sysError||m.textMsg)continue;
+          const mine=f.player?m.role==='user':(m.role!=='user'&&(m.speakerId?m.speakerId===f.id:m.speaker===f.name));
+          if(mine){ const t=_imgVisualOnly(m.content); if(t)return {t,now:false}; } }
+        return {t:"",now:false};
+      };
+      // someone who acted in this round is read from their labelled line in the LATEST EXCHANGE (not repeated here)
+      const doing=_inFrame.map(f=>{ const l=_lastOf(f);
+        return `- ${_tag(f)}${f.speaker?", whose line this picture is for":""}: ${l.now&&(l.t||l.talk)?"their own line in the LATEST EXCHANGE below"+(l.t?"":" (they only speak — show them talking, in a pose of their own)"):l.t?"(earlier in the scene) "+briefDesc(l.t,320):"(no action of their own — place them naturally, NOT in anyone else's pose)"}`; });
+      let anyChoice=false;
+      const wearing=_inFrame.map(f=>{ const w=_imgClothesFor(f.c,chat,f.player);
+        if(w.kind==="decided")return `- ${_tag(f)} — already decided, draw exactly this: ${w.text}`;
+        anyChoice=true;
+        if(w.kind==="menu")return `- ${_tag(f)} — choose ONE outfit from what they own, to fit the place and time: ${w.text}`;
+        return `- ${_tag(f)} — nothing given: choose clothes that suit them, the place and the time`; });
+      _perPerson=`WHAT EACH PERSON IN THE FRAME IS DOING — each one from their OWN latest line (dialogue removed). Give every person their own pose, position and action from their own line; never give two people the same pose, and never move one person's action onto another:\n${doing.join("\n")}\n\n`
+        +`WHAT EACH PERSON IS WEARING — everyone wears their OWN clothes. Name each person's garments with their colours, keep them on that person, and never dress two people alike or swap a garment between them:\n${wearing.join("\n")}\nThe latest exchange still overrides any of this where it strips, opens, soaks, borrows or swaps something.\n\n`
+        +(anyChoice&&_dressCtx?_dressCtx+"\n\n":"");
+      _dress=""; _playerDress="";
+    }
+    const _lbl=x=>{ if(!_inFrame.length)return x.who; const f=_inFrame.find(f=>x.id==="__user__"?f.player:(x.id?f.id===x.id:f.name===x.who)); return f&&f.label!==f.name?`${x.who} (${f.label})`:x.who; };
+    const _visualExchange=_roundShown.map(x=>`${_lbl(x)}: ${_imgVisualOnly(x.text)||"(speaks)"}`).join("\n");
+    const usr=_castBlock+_perPerson+_playerDress+_dress+_placeBlock
       +(prevPrompt?`CONTINUITY REFERENCE (the previous frame, for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; IGNORE any lighting in it, that is added automatically; the LOCATION is yours to write and the block above is the authority on it). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
       +_window
-      +`LATEST EXCHANGE (what just happened — the authority on the current moment):\n${latestExchange}`;
-    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220),foreground:!!force,dbg:"Image prompt writer"});
+      +`LATEST EXCHANGE (what just happened, in order since ${state.user||"the player"} last acted — the authority on the current moment; dialogue removed, only what can be seen):\n${_visualExchange}`;
+    // v148.3 — a frame of several people needs room to describe each of them
+    const rewritten=await chatCompletion(epSend("rewritePrompt",sys,{data:usr}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",220)+Math.max(0,_inFrame.length-1)*70,foreground:!!force,dbg:"Image prompt writer"});
     // Style tail: the 30-style picker (state.style) OWNS the quality/aesthetic ending now. Append the
     // selected style's keywords unless the writer already produced them (idempotent — avoids a double
     // tail if a rule template still bakes the same words). This is the global style auto-injection,

@@ -254,8 +254,10 @@ const {chromium}=require('playwright');
      /ceketimi çıkarıyorum/.test(w.usr)&&/Sandalyeyi yakınlaştırıyorum/.test(w.usr), "");
   ok("it names the player by name on his own lines",
      /Emre: Ceketini astım/.test(w.usr), "");
+  // v148.3 — another character in the frame is listed under their OWN label (what each person is doing);
+  // what must never happen is their line landing in THIS character's window as if it were theirs
   ok("another character's line is NOT in this character's window",
-     !/Esma kendi masasından/.test(w.usr), "Esma leaked into Burcu's window");
+     !/Esma kendi masasından/.test(w.usr.slice(w.usr.indexOf("WHAT HAS HAPPENED SINCE THAT PICTURE"),w.usr.indexOf("LATEST EXCHANGE"))), "Esma leaked into Burcu's window");
   ok("the trigger line is not duplicated — it lives in the LATEST EXCHANGE",
      (w.usr.match(/Bir şey içer misin/g)||[]).length===1, "count "+(w.usr.match(/Bir şey içer misin/g)||[]).length);
   ok("the latest exchange is still the authority block at the end",
@@ -382,7 +384,8 @@ const {chromium}=require('playwright');
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       // v128.1 — the cast block (x_img_cast) may lead it; the place still comes before continuity
       // v140.1 — and the player's outfit block after the cast
-      return /const usr=(_castBlock\+)?(_playerDress\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
+      // v148.3 — and the per-person block (what each one is doing and wearing) after the cast
+      return /const usr=(_castBlock\+)?(_perPerson\+)?(_playerDress\+)?_dress\+_placeBlock/.test(src) ? true : "the place block is not wired in"; })());
   ok("the continuity note no longer claims the location is automatic", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)

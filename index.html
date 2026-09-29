@@ -8867,6 +8867,64 @@ function loadState(){
   //
   // ---- v144.1 refresh: INFRASTRUCTURE ----
   // (end INFRASTRUCTURE)
+  /* v146.1 — CLEAN-UP: hidden figures the calendar binder minted from a group "who" field ("Emre and Özlem
+     Özüçak"). They carry only the binder's stub text, were never shown as a character card, but showed up
+     in pickers, residents and plans. A stub whose name is several people or the player is removed, with its
+     residency and any plan that pointed at it. A stub the player has filled in (a bio, a look) is kept. */
+  try{
+    const junk=new Set();
+    (state.personas||[]).forEach(p=>{
+      if(!p||!p.latent||!/^A figure connected to:/.test(String(p.personality||"")))return;
+      if(String(p.backstory||"").trim()||String(p.goals||"").trim()||(p.questIds&&p.questIds.length))return;
+      const u=universeById(p.universeId); const uname=(u&&u.userName)||state.user||"";
+      const nm=splitNames(p.name);
+      if(nm.length>1||(uname&&nm.some(x=>sameName(uname,x,true))))junk.add(p.id);
+    });
+    if(junk.size){
+      state.personas=state.personas.filter(p=>!junk.has(p.id));
+      (state.universes||[]).forEach(u=>(u.locations||[]).forEach(l=>{ if(Array.isArray(l.residents))l.residents=l.residents.filter(id=>!junk.has(id)); }));
+      for(const cid in (state.chats||{})){ const c=state.chats[cid]; (c&&Array.isArray(c.calendar)?c.calendar:[]).forEach(e=>{
+        const hit=junk.has(e.charId)||junk.has(e.charId2)||(Array.isArray(e.charIds)&&e.charIds.some(id=>junk.has(id)));
+        if(junk.has(e.charId))e.charId=null; if(junk.has(e.charId2))e.charId2=null;
+        if(Array.isArray(e.charIds))e.charIds=e.charIds.filter(id=>!junk.has(id));
+        if(hit){   // point the plan at the real people its "who" names (the player dropped)
+          const uni=universeById(c.universeId); const uname=(uni&&uni.userName)||state.user||"";
+          const roster=(state.personas||[]).filter(p=>p&&p.universeId===c.universeId&&!p.removed);
+          const real=splitNames(e.who||e.charName||"").filter(n=>!(uname&&sameName(uname,n,true))).map(n=>findByName(roster,n)).filter(Boolean);
+          if(real.length){ e.charId=e.charId||real[0].id; if(real[1]&&!e.charId2)e.charId2=real[1].id;
+            e.charIds=Array.from(new Set([...(e.charIds||[]),...real.map(x=>x.id)])); }
+        } }); }
+      try{ console.info("[StoryMind] v146.1 removed "+junk.size+" group-name figure(s) the calendar binder had minted"); }catch(_){}
+      store.set("sm_v1461_binderclean",[...junk]);
+      setTimeout(()=>{ try{ persistPersonas(); persistUniverses(); persistChats(); }catch(_){} },0);
+    }
+  }catch(e){ try{ console.warn("[v146.1 binder clean-up]",e); }catch(_){} }
+  /* v146.1 — second-audit prompt fixes. One slot per area. */
+  // ---- v146.1 refresh: ROLEPLAY CORE ----
+  // (end v146.1 ROLEPLAY CORE)
+  //
+  //
+  // ---- v146.1 refresh: LIVING WORLD + INTENTS ----
+  // (end v146.1 LIVING WORLD + INTENTS)
+  //
+  //
+  // ---- v146.1 refresh: CALENDAR + PROMISES + TEXTS ----
+  // (end v146.1 CALENDAR + PROMISES + TEXTS)
+  //
+  //
+  // ---- v146.1 refresh: QUESTS + GAMEMASTER ----
+  // (end v146.1 QUESTS + GAMEMASTER)
+  //
+  //
+  // ---- v146.1 refresh: MEMORY + RELATIONSHIPS ----
+  // (end v146.1 MEMORY + RELATIONSHIPS)
+  //
+  //
+  // ---- v146.1 refresh: INFRASTRUCTURE ----
+  // (end v146.1 INFRASTRUCTURE)
+  //
+  //
+
   //
   //
   /* v37.2 — also readable, not just logged. A pipe that stands down means its migration never
@@ -29707,9 +29765,44 @@ function findByName(pool,name,nameOf){
   const exact=L.filter(x=>_nmFold(get(x))===n); if(exact.length)return exact[0];
   const first=L.filter(x=>sameName(get(x),n,true)); if(first.length===1)return first[0];
   const word=L.filter(x=>nameInText(get(x),n)||nameInText(n,get(x))); if(word.length===1)return word[0];
-  if(n.length>=3){ const pre=L.filter(x=>_nmFold(get(x)).startsWith(n)); if(pre.length===1)return pre[0]; }
+  /* v146.1 — a prefix only stands in for a name when it is most of that name: "Can" is a whole Turkish
+     name, not the start of "Canan", and resolving it there sent pursuits and quest knowledge to the
+     wrong person. The prefix must be 4+ letters and cover at least 70% of the candidate's first name. */
+  if(n.length>=4){ const pre=L.filter(x=>{ const f=_nmFold(get(x)).split(" ")[0]; return f.startsWith(n)&&n.length>=Math.ceil(f.length*0.7); });
+    if(pre.length===1)return pre[0]; }
   return null;
 }
+/* v146.1 — ONE FIELD, SEVERAL PEOPLE. Model-written "who" fields name groups — "Emre and Özlem Özüçak",
+   "Ayla, Berk & Cem", "Burcu ile Sami" — and code that treated the whole string as one name minted a
+   person called "Emre and Özlem Özüçak". splitNames returns the individual names (order kept, blanks and
+   duplicates dropped); it never splits inside a name ("Aslan Berk Atan" stays whole). */
+function splitNames(text){
+  const t=String(text==null?"":text).replace(/\s+/g," ").trim(); if(!t)return [];
+  const parts=t.split(/\s*(?:,|;|&|\+|\/|\band\b|\bve\b|\bile\b|\bund\b|\bwith\b|\bmit\b)\s*/iu).map(x=>x.replace(/^[\s'"“”.-]+|[\s'"“”.-]+$/g,"")).filter(Boolean);
+  const out=[]; parts.forEach(x=>{ if(!out.some(y=>_nmFold(y)===_nmFold(x)))out.push(x); }); return out;
+}
+/* Is `name` the player of this chat's universe (or the generic "you"/"the player")? */
+function isPlayerName(chat,name){
+  const n=_nmFold(name); if(!n)return false;
+  if(["you","the player","player","sen","siz","ben","me","du"].includes(n))return true;
+  const u=chatUserName(chat); return !!u && sameName(u,name,true);
+}
+/* ===== CHAT-SCOPED WORLD (v146.1) =====
+   The universe, places, setting and player name OF A GIVEN CHAT. The cur*() readers answer for the chat
+   that is OPEN, which is another chat's world once the player switches mid-turn or a day end finishes in
+   the background — the second audit found the old chat's reply carrying the other story's setting, its
+   places deciding who could hear, and its player's name. Background code passes its chat to these. */
+function chatUni(chat){ return (chat&&chat.universeId&&universeById(chat.universeId))||curUniverseObj(); }
+function chatLocations(chat){ const u=chatUni(chat); return (u&&Array.isArray(u.locations))?u.locations:[]; }
+function chatLocById(chat,id){ return id?chatLocations(chat).find(l=>l&&l.id===id):undefined; }
+function chatUserName(chat){
+  const u=chatUni(chat);
+  if(!u||(chat&&chat.universeId===state.curUniverse))return state.user||"You";   // the open story: live value
+  const n=u.userName&&String(u.userName).trim();
+  return n||globalUserDefaults().user||"You";
+}
+function chatSubUser(chat,s){ const n=chatUserName(chat); return (s||"").replace(/\{\{user\}\}/g,n); }
+function chatWorldSetting(chat){ const u=chatUni(chat); return (u&&u.setting&&u.setting.trim())?chatSubUser(chat,u.setting.trim()):""; }
 /* PER-CHAT ENGINE LOCKS. Turns, End Day, the time-of-day engines, memory building and texts were all
    fire-and-forget with no guard, so a second Enter, a second End Day or two quick travels ran the same
    work twice at once. `chatBusy(chat,key)` asks; `withChatLock(chat,key,fn)` runs fn exclusively:
@@ -43678,10 +43771,25 @@ function bindPendingTasks(chat){
       if(!e||e.done||!e._needsBind)return;
       if(e.where){ const loc=_ensureLocationByName(uni,e.where); if(loc){ e.locationId=loc.id; e.where=loc.name;
         if(e.subArea){ const s=_ensureSublocationByName(loc,e.subArea); if(s){ e.subId=s.id; e.subName=s.name; } } } }
+      /* (!) v146.1 — THE BINDER MINTED "Emre and Özlem Özüçak". A meeting's `who` is free text that
+         often names several people, the player among them, and the whole string was handed on as ONE
+         character name: nobody matched it, so a hidden half-made person was created with that name and
+         settled in the new place. Now the field is split into names, the player is dropped, and each
+         name is resolved against the real cast. A MEETING only ever binds to people who already exist;
+         only a task/quest-style entry with exactly one unknown, plausible name may create its figure. */
       const who=e.character||e.charName||e.who;
       if(e.locationId && who){
-        const r=_createBoundEntity(uni,{title:e.title,desc:e.title,charName:who,entityType:e.entityType||"npc",locationId:e.locationId,subId:e.subId,sourceId:e.id,where:e.where});
-        if(r.charId)e.charId=r.charId; if(!e.charName)e.charName=who;
+        const names=splitNames(who).filter(n=>!isPlayerName(chat,n));
+        const roster=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&!p.removed);
+        const found=names.map(n=>findByName(roster,n)).filter(Boolean);
+        if(found.length){ e.charId=e.charId||found[0].id; if(found[1]&&!e.charId2)e.charId2=found[1].id;
+          e.charIds=Array.from(new Set([...(e.charIds||[]),...found.map(p=>p.id)])); }
+        const canMint=e.kind!=="meeting" && names.length===1 && !found.length && validCharName(names[0]);
+        if(canMint){
+          const r=_createBoundEntity(uni,{title:e.title,desc:e.title,charName:names[0],entityType:e.entityType||"npc",locationId:e.locationId,subId:e.subId,sourceId:e.id,where:e.where});
+          if(r.charId)e.charId=r.charId;
+        }
+        if(!e.charName)e.charName=who;
       }
       e._needsBind=false; n++;
     });
@@ -43697,6 +43805,9 @@ function _createBoundEntity(uni,spec){
   // gone); a mob-type entity creates nothing now.
   if((spec.entityType||"npc")==="mob")return {made:null,charId:null};
   if(!spec.charName)return {made:null,charId:null};
+  // v146.1 — a group ("A and B") or the player is never one new person (see bindPendingTasks).
+  { const _nm=splitNames(spec.charName); const _u=(uni&&uni.userName)||state.user||"";
+    if(_nm.length!==1||(_u&&sameName(_u,_nm[0],true)))return {made:null,charId:null}; }
   const existing=_questFindPersona(uni.id,spec.charName);
   if(existing&&existing.removed)return {made:null,charId:null,gone:existing};   // never resurrect the dead
   if(existing){ if(spec.questId)existing.questIds=Array.from(new Set([...(existing.questIds||[]),spec.questId])); return {made:"bound",charId:existing.id}; }

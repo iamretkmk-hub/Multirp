@@ -134,6 +134,26 @@ default 20 moves without a word from the player).
   diaries, decisions or after-heat reckonings, nothing from another chat, one line per scene), their
   calendar, words given to or by them, and their quests. Private motives, offstage events, rumours
   and anyone's feelings are deliberately left out.
+- **The player's own knowledge (v148.1)** — the player's character now has a memory and a picture
+  of their people of their own, kept apart from the characters' (no character payload reads them):
+  - `chat.playerMem` — written by `buildPlayerMemory` inside `commitMemoryArc`, one extra
+    `x_player_memory` call per closed arc, from what the player saw and heard (`_playerHeardText`:
+    the transcript minus characters' thoughts and app notices). First person, with `people`,
+    `importance` and `open` threads; capped at 150; a re-committed span is not stored twice; a Retry
+    takes back the memory cut from the discarded reply. `state.playerMemOn=false` turns it off.
+  - `u.userTies {charId:{tie,view,day}}` and `u.userSocialGraphAuto` — the player's side of each
+    tie and who is who, written by `updatePlayerSheet` (`x_player_sheet`, public facts plus shared
+    history, never a character's secrets): once when someone first shares a scene with the player
+    (`maybeSeedPlayerTies`, background) and at every day end for the people in that day's player
+    memories (DAYEND stage `playerSheet`, last). `u.userSocialGraph` is the player's own text
+    (universe editor) and is never overwritten. A universe reset clears the story's entries only.
+  - `_playerKnows` now gives `people` from the player's entry (else only the card's tie WORD — the
+    card's text is the character's private view of the player, in their voice), `social` (who is
+    who: the player's words, the story's paragraph, else the cards' public tie words among the
+    people here) and `memories` from `chat.playerMem` (the characters' memories only while a chat
+    has none of the player's yet). The Auto-RP narrator gets one "Who they are to you" line.
+  - The universe editor shows both lists (entries and memories can be forgotten one by one) and an
+    *Update from the story* button.
 
 
 ## Auto-RP (player narrator)

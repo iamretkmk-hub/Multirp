@@ -331,7 +331,8 @@ const {chromium}=require('playwright');
     __stub.reply=()=>'"Reply number '+(++rn)+'."';
     __stub.bg["Memory arc tracker"]={progress:"finished",topic:"same",summary:"x"};
     let mi=0; const words=["apples oranges bananas picnic","trains rivers bridges journey","mountain music violins concert","harbour boats seagulls fishing"];
-    __stub.bg["Memory (arc)"]=async(d,m)=>({content:words[(mi++)%4]+" "+((JSON.stringify(m).match(/Reply number \d+/g)||[]).join(",")),importance_score:0.6});
+    // v148.1 — the player's own memory of the arc is a call of its own; it must not shift the characters' rotation
+    __stub.bg["Memory (arc)"]=async(d,m)=>/\(you\)$/.test(d)?({content:"my own memory "+Math.random().toString(36).slice(2,8),importance:0.5}):({content:words[(mi++)%4]+" "+((JSON.stringify(m).match(/Reply number \d+/g)||[]).join(",")),importance_score:0.6});
     await sendMessage({chat:c,text:"First line."}); await __settle(); await __sleep(300);
     await sendMessage({chat:c,text:"Second line."}); await __settle(); await __sleep(1200);
     const old=c.messages[c.messages.length-1];

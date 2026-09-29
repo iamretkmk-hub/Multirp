@@ -13389,6 +13389,20 @@ async function dubAsVideo(mid){
 }
 
 /* ===== SMART ROUTER: an LLM picks the model rule from the prompt ===== */
+/* (!) v148.4 — NO INTIMATE SCENE TYPE FOR A FRAME WITH A MINOR IN IT. The router chooses a scene type
+   from the exchange alone, and the contact / sexual types (the intimate path, kissing, embrace, the
+   tableau, temptation, groping, every position, oral, aftermath — and any custom rule marked explicit
+   or labelled as one of those) were on the menu whoever was in the frame. With anyone in the frame who
+   is a minor they are taken off the menu before routing, and the playground refuses them. isMinorChar
+   lives with the world rules; until it is present this check answers "no minor" and changes nothing. */
+const IMG_INTIMATE_RULE_IDS=new Set(["r_intimate_std","r_kissing","r_embrace","r_intimate","r_temptation","r_groping","r_standing_behind","r_oral","r_facesit","r_aftermath"]);
+function _imgRuleIntimate(r){
+  if(!r)return false; const id=String(r.id||"");
+  if(IMG_INTIMATE_RULE_IDS.has(id)||/^r_pen_/.test(id)||r.explicit===true)return true;
+  return /\b(intimate|sex|sexual|erotic|nsfw|nude|naked|kiss|embrace|hug|grop|foreplay|temptation|oral|fellatio|cunnilingus|penetrat|cowgirl|doggy|missionary|anal|aftermath|lingerie|undress)/i.test(String(r.label||""));
+}
+function _imgIsMinor(p){ try{ return !!(p&&typeof isMinorChar==="function"&&isMinorChar(p)); }catch(e){ return false; } }
+function _imgSafeRules(rules){ return (rules||[]).filter(r=>!_imgRuleIntimate(r)); }
 async function pickRule(rules,prompt){
   const active=(rules||[]).filter(r=>r.enabled!==false);
   if(!active.length) return null;
@@ -37223,7 +37237,9 @@ async function illustrate(mid,replyText,force){
       /* (!) v148.4 — without the inner thoughts: a thought that names a kiss or a touch is not the action
          happening, and the router is told to route on the action. The spoken words stay (talk vs contact). */
       +`LATEST EXCHANGE (the authority — what the scene is NOW; route on what it has BECOME, not what it was):\n${(()=>{ try{ return (triggerLine?`${triggerWho}: ${dropThoughtSpans(triggerLine)}\n`:``)+`${who}: ${dropThoughtSpans(replyText)}`; }catch(e){ return latestExchange; } })()}`;
-    const rule=await pickRule(state.imgRules,_routeText);
+    // (!) v148.4 — a minor anywhere in this frame takes every intimate scene type off the menu (see _imgRuleIntimate)
+    const _minorHere=[speaker].concat(_nearby).some(_imgIsMinor);
+    const rule=await pickRule(_minorHere?_imgSafeRules(state.imgRules):state.imgRules,_routeText);
     if(chat&&rule&&rule.label){ if(!chat.lastImgRuleBy||typeof chat.lastImgRuleBy!=="object")chat.lastImgRuleBy={}; chat.lastImgRuleBy[_spkKey]=rule.label; }   // sticky memory for THIS character's next route
     if(rule&&rule.label){const e=document.getElementById('imgrule_'+mid);if(e)e.textContent=rule.label;}
     /* (!) v148.2 — A ONE-PERSON SCENE TYPE WITH OTHERS IN THE ROOM. "Just the speaking character" sent
@@ -37635,7 +37651,9 @@ async function animateScene(mid){
     // The pre-tail prompt when we have it (see _imgCore above): the pose and the action, without
     // the location / lighting / appearance / style furniture the references are meant to decide.
     const _scenePrompt=(msg.imgCore||msg.imgPrompt||msg.content||"").trim();
-    const _vidRule=await pickRule(state.vidRules,_scenePrompt);       // which POSITION this is
+    // (!) v148.4 — and no explicit shot setup for a still with a minor in it (its frame stamp, or the speaker)
+    const _vMinor=((msg.imgMeta&&msg.imgMeta.ids)||[]).concat(msg.speakerId?[msg.speakerId]:[]).some(id=>_imgIsMinor(resolveChar(id,chat)));
+    const _vidRule=await pickRule(_vMinor?_imgSafeRules(state.vidRules):state.vidRules,_scenePrompt);       // which POSITION this is
     const _isExplicit=!!(_vidRule&&_vidRule.explicit);
     const _sys=videoWriterSystem(_vidRule);
     const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Video motion prompt writer"});
@@ -40386,6 +40404,7 @@ async function pgWritePrompt(){
   if(_pg.busy)return;
   if(!state.key){toast("Add your API key in Settings first");return;}
   const rule=_pgRuleObj(); const actor=_pgActorObj();
+  if(_imgIsMinor(actor)&&_imgRuleIntimate(rule)){ toast("That scene type is not available for this character"); return; }   // v148.4
   _pg.busy="write"; renderPlayground();
   try{
     const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
@@ -40439,6 +40458,7 @@ async function pgGenerate(){
   if(!actor){toast("Pick an actor first");return;}
   if(!(_pg.prompt||"").trim()){ await pgWritePrompt(); if(!(_pg.prompt||"").trim())return; }
   const rule=_pgRuleObj();
+  if(_imgIsMinor(actor)&&_imgRuleIntimate(rule)){ toast("That scene type is not available for this character"); return; }   // v148.4
   _pg.busy="gen"; renderPlayground();
   try{
     // Deterministic tail — IDENTICAL to the roleplay pipeline: actor appearance, then the picked

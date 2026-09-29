@@ -324,6 +324,32 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
   ok("inner thoughts are not in what it judges", !/Bir daha gelmem|Nihayet/.test(VD.asked), VD.asked);
   ok("a new area, or someone leaving, is a new picture without asking", VD.asked2===false&&VD.asked3===false&&VD.drew===2, JSON.stringify(VD));
 
+  /* ---------------------------------------------------------------- minors */
+  console.log("\n[no intimate scene type for a frame with a minor in it]");
+  const MN=await pg.evaluate(async()=>{
+    const uni=state.universes[0];
+    if(!state.personas.some(p=>p.id==="p_nil")) state.personas.push({id:"p_nil",name:"Nil",universeId:uni.id,look:{subject:"Girl"},refs:["data:N1"],instructions:"x",personality:"x"});
+    state.imgRules=DEFAULT_IMG_RULES.map(r=>({...r}));
+    let seen=null; const keep=window.pickRule; window.pickRule=async(r,t)=>{ seen=(r||[]).map(x=>x.id); return (r||[])[0]; };
+    const run=async(present)=>{ const c=curChat(); c.locationId="L_cafe"; c.subId="c2"; c.presentIds=present; c.subPos={}; present.forEach(id=>c.subPos[id]="c2");
+      c.messages=[{mid:"n1",role:"user",content:"*I sit down.*",present},{mid:"n2",role:"assistant",speaker:"Sami Özüçak",speakerId:"p_sami",content:"*Gülüyor.*",present}];
+      seen=null; await illustrate("n2","*Gülüyor.*",true); return seen||[]; };
+    const had=typeof window.isMinorChar==="function", keepM=window.isMinorChar;
+    const before=await run(["p_sami","p_nil"]);                     // no isMinorChar in this build: nothing changes
+    window.isMinorChar=p=>!!p&&p.id==="p_nil";
+    const withMinor=await run(["p_sami","p_nil"]);
+    const adults=await run(["p_sami","p_berk"]);
+    if(had)window.isMinorChar=keepM; else delete window.isMinorChar;
+    window.pickRule=keep;
+    const bad=withMinor.filter(id=>_imgRuleIntimate(state.imgRules.find(r=>r.id===id)));
+    return {before:before.length,withMinor,bad,adults:adults.length,total:state.imgRules.length,
+      custom:_imgRuleIntimate({id:"mine",label:"Mine",explicit:true})&&_imgRuleIntimate({id:"x",label:"Slow kiss at the door"})&&!_imgRuleIntimate({id:"y",label:"Walking together"}),
+      covered:["r_intimate_std","r_kissing","r_embrace","r_intimate","r_temptation","r_groping","r_pen_missionary","r_pen_doggy","r_standing_behind","r_oral","r_facesit","r_aftermath"].every(id=>_imgRuleIntimate(state.imgRules.find(r=>r.id===id)))};
+  });
+  ok("with a minor in the frame, no intimate or sexual scene type reaches the router", MN.bad.length===0&&MN.withMinor.length>0&&MN.withMinor.includes("r_pov_talk"), JSON.stringify(MN));
+  ok("every contact / sexual built-in counts, and a custom rule marked explicit or labelled as one does too", MN.covered&&MN.custom, JSON.stringify(MN));
+  ok("adults only, or no isMinorChar in this build: the full menu as before", MN.adults===MN.total&&MN.before===MN.total, JSON.stringify(MN));
+
   await pg.evaluate(()=>{ Object.assign(window,window.__real); });
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

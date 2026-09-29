@@ -106,9 +106,28 @@ const {chromium}=require('playwright');
      /- the woman with no picture = Ayla, whose line this picture is for — NO PICTURE: describe them in words/.test(U.usr)
      && /- the man in IMAGE 1 = Deniz \(picture 1\)/.test(U.usr), U.usr.slice(0,700));
   ok("and that this list's numbers win over the scene template's", /THIS list wins/.test(U.usr) && /no IMAGE number beyond the last one listed/.test(U.usr), U.usr.slice(0,900));
+  /* v148.2 — asked: "the prompt mentions two characters but it only uploads the speaker's image. When
+     there are multiple characters nearby all characters' reference images should be uploaded." A
+     one-person scene type with others in earshot is cast as a group for that picture. */
   const S=await shot("window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''};");
-  ok("a solo scene type stays one person", JSON.stringify(S.people.map(p=>p.n))==='["Ayla"]', JSON.stringify(S.people));
-  ok("and its writer gets no cast block — written exactly as before", S.usr.indexOf("PEOPLE IN THIS FRAME")<0, S.usr.slice(0,200));
+  ok("a solo scene type with others nearby sends everyone's pictures (the reported case)", JSON.stringify(S.people.map(p=>p.n).sort())==='["Ayla","Deniz","Emre","Selin"]', JSON.stringify(S.people));
+  ok("and its writer is told who each of them is", /PEOPLE IN THIS FRAME/.test(S.usr)&&/IMAGE 1 = Ayla, whose line this picture is for/.test(S.usr), S.usr.slice(0,400));
+  ok("the stored scene type is not changed", await pg.evaluate(()=>window.__rule.cast==="solo"));
+  const S1=await shot("window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''}; curChat().presentIds=['p_a']; curChat().messages.forEach(m=>m.present=['p_a']);");
+  ok("a solo scene type with nobody else here stays one person", JSON.stringify(S1.people.map(p=>p.n))==='["Ayla"]', JSON.stringify(S1.people));
+  ok("and its writer gets no cast block — written exactly as before", S1.usr.indexOf("PEOPLE IN THIS FRAME")<0, S1.usr.slice(0,200));
+  const RT=await pg.evaluate(async()=>{ let seen=""; const keep=window.pickRule; window.pickRule=async(r,t)=>{ seen=t; return window.__rule; };
+    const c=curChat(); c.presentIds=["p_a","p_s","p_d"]; await illustrate("m2",c.messages[1].content,true); window.pickRule=keep; return seen; });
+  ok("the scene-type router is told who else is in the scene", /ALSO IN THE SCENE WITH Ayla, within reach of the camera: Selin, Deniz, and Emre \(the player\)/.test(RT), RT.slice(0,300));
+  const CAP=await shot("window.__rule={label:'Group',cast:'group',pov:false,promptStyle:''}; window.editModelMaxRefs=()=>2;");
+  await pg.evaluate(()=>{ window.editModelMaxRefs=()=>10; });
+  ok("more people than picture slots: those past the cap are described in words, not dropped",
+     CAP.people.length===2&&/NO PICTURE: describe them in words/.test(CAP.usr)&&/Selin/.test(CAP.usr)&&/Deniz/.test(CAP.usr), JSON.stringify({p:CAP.people,u:CAP.usr.slice(0,700)}));
+  const TX=await shot("window.usesRefImage=()=>false; window.__rule={label:'Portrait',cast:'solo',pov:false,promptStyle:''}; state.personas.find(p=>p.id==='p_s').look={subject:'Woman',hair:'red curls'}; state.personas.find(p=>p.id==='p_a').look={subject:'Woman',hair:'black bob'};");
+  const TXprompt=await pg.evaluate(()=>{ const r=window.__gen&&window.__gen.prompt; window.usesRefImage=()=>true; return r||""; });
+  ok("a model that draws from words alone: the writer gets every person with their look, to describe each separately",
+     /PEOPLE IN THIS FRAME — the picture is drawn from your words alone/.test(TX.usr)&&/- Ayla, whose line this picture is for: Woman — [^\n]*black bob/.test(TX.usr)&&/- Selin: Woman — [^\n]*red curls/.test(TX.usr)&&/Emre \(the player\)/.test(TX.usr)&&/Describe each person SEPARATELY/.test(TX.usr), TX.usr.slice(0,900));
+  ok("and the speaker's look is not stamped on the tail, where it could belong to anyone", !/black bob/.test(TXprompt), TXprompt);
   const G=await shot("window.__rule={label:'Group',cast:'group',pov:false,promptStyle:''};");
   ok("a group scene type sends everyone in the scene, the player included when it is not his eyes", JSON.stringify(G.people.map(p=>p.n).sort())==='["Ayla","Deniz","Emre","Selin"]', JSON.stringify(G.people));
   ok("the rule editor offers one 'everyone in the scene' choice", await pg.evaluate(()=>

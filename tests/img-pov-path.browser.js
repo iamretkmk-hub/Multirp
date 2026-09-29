@@ -365,7 +365,7 @@ const {chromium}=require('playwright');
   console.log("\n[v100.1 — the location is the writer's, and the face is named]");
   ok("the place is no longer pasted onto the tail", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-      const i=src.indexOf("const _appC=_imgSpeakerAppearance(speaker,{refDriven:_refDriven});");
+      const i=src.search(/const _appC=(?:_textCast\?"":)?_imgSpeakerAppearance\(speaker,\{refDriven:_refDriven\}\);/);   // v148.2 — a cast carries the look
       const blk=src.slice(i,i+1600);
       return !/const _locC=_imgLocationClause\(chat\)/.test(blk)
           && /const _det=\[_appC,_litC\]/.test(blk)

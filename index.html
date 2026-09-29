@@ -8901,6 +8901,24 @@ function loadState(){
   }catch(e){ try{ console.warn("[v146.1 binder clean-up]",e); }catch(_){} }
   /* v146.1 — second-audit prompt fixes. One slot per area. */
   // ---- v146.1 refresh: ROLEPLAY CORE ----
+  /* v146.1 — HEAT NEVER NARRATES THE PLAYER. Four heat fragments told the character to write "what is
+     being done to you" (and heat_target_self to carry the moment on alone), which reads as licence to
+     narrate {{user}}'s hands and choices — exactly what rail_voice forbids. They are block templates, so
+     _refreshPipe cannot reach a stored copy: an override that still carries the OLD sentence word for
+     word has that sentence swapped for the new one, and the rest of the user's edits are kept. */
+  {const HEAT_POV=[
+     ["heat_format","You know exactly what is being done to you, who is doing it, and what you are doing back.","You know exactly what is happening between you and what you are doing in it."],
+     ["heat_format","You are also not observing it from outside yourself — this is happening to you.","You are also not observing it from outside yourself — this is happening to you. Only your half is yours to write: what {{user}} does, says, feels or decides is never narrated or decided by you — you answer it."],
+     ["heat_narr_physical_short","what is being done to you and what you are doing back, with no feeling in it","what your own body is doing and registering, with no feeling in it"],
+     ["heat_narr_physical","What is being done, where, how hard, how fast, what your own body is doing back, what changed since a moment ago. Registered, not judged: no shame in it, no meaning, no admiring words.","What your own body is doing and registering — where, how hard, how fast, what changed since a moment ago. Registered, not judged: no shame in it, no meaning, no admiring words. Only your side of it: what the other person does is theirs to write, never yours."],
+     ["heat_target_self","straight on from your own last line. {{target}} is still right here","straight on from your own last line — with your own words and your own body, never by writing what {{target}} does next. {{target}} is still right here"]];
+   const upH=bag=>{ if(!bag||typeof bag!=="object")return false; let ch=false;
+     HEAT_POV.forEach(([k,o,n])=>{ const v=bag[k]; if(typeof v==="string"&&v.indexOf(o)>=0&&v.indexOf(n)<0){ bag[k]=v.split(o).join(n); ch=true; } });
+     return ch; };
+   try{ if(upH(state.blockTpls)) store.set(K.blockTpls,state.blockTpls); }catch(e){}
+   try{ let any=false; (state.universes||[]).forEach(u=>{ if(u&&u.blockTpls&&upH(u.blockTpls))any=true; });
+        if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
+  }
   // (end v146.1 ROLEPLAY CORE)
   //
   //
@@ -10365,6 +10383,18 @@ function enqueuePresent(mid){
 /* v144.1 — wait until everything queued so far is on screen (FIFO: the last one resolving means all
    did), bounded so a stalled reveal can never hold a turn forever. */
 function presentDrained(ms){ return Promise.race([_presentLast,new Promise(r=>setTimeout(r,ms||120000))]); }
+/* v146.1 — A TYPING INDICATOR WAITS ITS TURN TOO. In a chain the next speaker's dots were appended the
+   moment their generation began, above the previous reply that was still queued, so the screen read
+   "Cem is typing…" before Berk's line and then Berk's line appeared under the dots. The dots now go up
+   once everything queued before them is on screen; _typingGone() removes them (or cancels them unshown). */
+function _typingAfterQueue(chat,node){
+  const put=()=>{ if(node._gone||!chat||state.curChat!==chat.id)return;
+    const list=document.getElementById('chatList'); if(list){ list.appendChild(node); try{ ChatScroll.sync(); }catch(e){} } };
+  const wait=()=>{ if(!_presentPlaying&&!_presentQueue.length)return put();
+    const p=_presentLast; p.then(()=>{ if(p!==_presentLast)wait(); else put(); }); };
+  wait();
+}
+function _typingGone(node){ if(!node)return; node._gone=true; node.remove(); }
 /* ============ v28.5 — CHAT SCROLL. ONE CONTROLLER, ONE RULE ============
    Every earlier attempt DECIDED whether to scroll at particular moments: on append, on each
    typewriter tick, after a front-trim, after a rebuild. But content height changes AFTER those
@@ -11028,19 +11058,29 @@ function _rpCallEnd(c){ _rpCtrls.delete(c); _rpStopSync(); }
 function _rpStopSync(){
   const b=document.getElementById('stopBtn'); if(b) b.classList.toggle('hide',!_rpCtrls.size);
 }
+/* (!) v146.1 — A STOP ENDS WHAT IS RUNNING, NOT WHAT COMES NEXT. With the send button already enabled
+   (an Autopilot beat, a heat beat, a Gamemaster reaction) the stop refused every roleplay call for 1.5 s,
+   so the player's own next line was aborted too; and each stop's 20 s timer was never cleared, so an old
+   one ended a later stop early. Now: the calls in flight are aborted; only a stop inside a player turn
+   (send button disabled) also refuses that turn's further calls, until the button comes back, the player
+   starts a new turn (markPlayerTurn → _rpStopClear) or 20 s pass — and a new stop clears the old one. */
+let _rpStopEnd=null;
+function _rpStopClear(){ if(_rpStopEnd){ try{ _rpStopEnd(); }catch(_){} } _rpStopped=false; }
 function stopReply(){
   if(!_rpCtrls.size)return;
-  _rpStopped=true;
+  _rpStopClear();
   _rpCtrls.forEach(c=>{ try{ c.abort(); }catch(_){} });
-  // The stop lasts until the turn gives the send button back (or 20 s, whichever is first).
   const sb=document.getElementById('sendBtn');
-  const end=()=>{ _rpStopped=false; try{ mo&&mo.disconnect(); }catch(_){} };
-  let mo=null;
-  if(sb&&sb.disabled&&typeof MutationObserver!=="undefined"){
+  if(!(sb&&sb.disabled))return;   // nothing else of a player turn is coming: aborting is the whole stop
+  _rpStopped=true;
+  let mo=null, t=null;
+  const end=()=>{ _rpStopped=false; clearTimeout(t); try{ mo&&mo.disconnect(); }catch(_){} if(_rpStopEnd===end)_rpStopEnd=null; };
+  _rpStopEnd=end;
+  if(typeof MutationObserver!=="undefined"){
     mo=new MutationObserver(()=>{ if(!sb.disabled)end(); });
     mo.observe(sb,{attributes:true,attributeFilter:["disabled"]});
-    setTimeout(end,20000);
-  }else setTimeout(end,1500);
+  }
+  t=setTimeout(end,20000);
 }
 // REFUSAL DETECTOR. A model can return a NON-EMPTY reply that is actually a content refusal —
 // e.g. DeepSeek v4-pro emits a canned Chinese refusal ("你好，我无法给到相关内容。") on content it
@@ -11057,7 +11097,7 @@ function stopReply(){
    ("I can't continue this roleplay", "I won't write that") or a short meta reply that names content,
    guidelines, policy, the request or being an AI. The CJK checks are unchanged. */
 function looksLikeRefusal(txt){
-  const raw=String(txt==null?"":txt).trim();
+  const raw=String(txt==null?"":txt).trim().replace(/[‘’ʼ]/g,"'");
   if(!raw) return false;
   if([/无法(给到|提供|满足|回答|完成|继续)/, /我(不能|无法)(协助|帮助|提供|继续)/, /抱歉[，,].{0,12}(无法|不能)/].some(re=>re.test(raw))) return true;
   const cjk=(raw.match(/[\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g)||[]).length;
@@ -11071,12 +11111,31 @@ function looksLikeRefusal(txt){
   if(/^As an AI\b/i.test(meta)) return true;
   const NOT="(?:can't|cannot|can not|won't|will not|am unable to|'m unable to|am not able to|'m not able to|must decline to|am not comfortable|'m not comfortable)";
   const OP="(?:I'm sorry|I am sorry|I apologi[sz]e|Sorry|Unfortunately)";
-  const WORK="(?:provide|assist|comply|generate|produce|fulfil+|depict|engage in|participate in|role-?play|(?:write|writing|create|creating) (?:(?:that|this|such)(?: kind of)?(?: content| scene| story| material)?(?=[.!,]|$)|explicit|sexual|graphic)|help (?:you )?with (?:that|this)(?: request| content| scene| story)?[.!]?$|continue (?:with )?(?:this|that|the|writing)(?: roleplay| role-play| story| scene| conversation| request| content| thread)?(?=\\s*(?:[.!,]|$|as\\b|because\\b|since\\b)))";
-  const META=/\b(?:content|guidelines?|polic(?:y|ies)|as an AI|AI (?:language )?model|language model|roleplay|role-play|fictional scenario|explicit|sexual(?:ly)?|minors?|non-?consensual|harmful|inappropriate|terms of (?:service|use)|request)\b/i;
+  /* (!) v146.1 — THE WORK A CHARACTER CAN ALSO REFUSE. "I will not continue this conversation. Get out.",
+     "I can't provide what you want from me, Emre" and "I can't engage in this conversation any longer.
+     You hurt me." are a character ending a scene, and they were read as the model refusing. The verbs
+     split in two: STRONG ones only ever mean the writing (generate, comply, write that, continue this
+     roleplay) and count on their own; WEAK ones (provide, continue this, engage in, help with that) are
+     also what people say to each other, so they count only with the meta vocabulary (content, request,
+     guidelines, roleplay…) or as a bare apology that is the whole reply ("I'm sorry, but I can't help
+     with that."). */
+  const STRONG="(?:assist|comply|generate|produce|fulfil+|depict|role-?play|(?:write|writing|create|creating) (?:(?:that|this|such)(?: kind of)?(?: content| scene| story| material)?(?=[.!,]|$)|explicit|sexual|graphic)|continue (?:writing|(?:with )?(?:this|that|the) (?:roleplay|role-play|story|scene|content))|(?:engage|participate) in (?:(?:this|that|such)(?: kind of| type of)? )?(?:roleplay|role-play|content|scenario|explicit|sexual))";
+  const WEAK="(?:provide|engage in|participate in|help (?:you )?with (?:that|this)(?: request| content| scene| story)?[.!]?$|continue (?:with )?(?:this|that|the)(?: conversation| request| thread)?(?=\\s*(?:[.!,]|$|as\\b|because\\b|since\\b)))";
+  const META=/\b(?:content|guidelines?|polic(?:y|ies)|as an AI|AI (?:language )?model|language model|roleplay|role-play|fictional scenario|explicit|sexual(?:ly)?|minors?|non-?consensual|harmful|inappropriate|terms of (?:service|use)|request|assistance)\b/i;
+  const META_HARD=/\b(?:guidelines?|polic(?:y|ies)|as an AI|AI (?:language )?model|language model|terms of (?:service|use))\b/i;
   const head=meta.slice(0,200);
-  if(new RegExp("(?:^|[.!?]\\s+|"+OP+"[,.!]?\\s*(?:but\\s*)?)I\\s*"+NOT+"\\s+"+WORK,"i").test(head)) return true;
+  const lead="(?:^|[.!?]\\s+|"+OP+"[,.!]?\\s*(?:but\\s*)?)I\\s*"+NOT+"\\s+";
+  if(new RegExp(lead+STRONG,"i").test(head)) return true;
+  // In character: the reply acts (*…*), speaks ("…") or turns to someone by name (", Emre.").
+  const inChar=/\*[^*\n]+\*/.test(raw) || /"[^"\n]{2,}"|“[^”\n]{2,}”/.test(raw) || /,\s*\p{Lu}[\p{L}'’-]+\s*[.!?]/u.test(meta);
+  const oneLine=meta.length<=140 && (meta.match(/[.!?]+(?:\s|$)/g)||[]).length<=1;
+  if(new RegExp(lead+WEAK,"i").test(head)){
+    if(META.test(meta) && (!inChar||META_HARD.test(meta))) return true;
+    if(oneLine && !inChar && new RegExp("^"+OP,"i").test(meta)) return true;
+    return false;
+  }
   const generic=new RegExp("(?:^|[.!?]\\s+)(?:"+OP+"[,.!]?\\s*(?:but\\s*)?)?I\\s*"+NOT+"\\b","i");
-  return meta.length<=400 && generic.test(head) && META.test(meta);
+  return meta.length<=400 && generic.test(head) && META.test(meta) && (!inChar||META_HARD.test(meta));
 }
 async function imageCompletion(prompt,model,size){
   if(!state.key)throw{friendly:"No API key set."};
@@ -13248,7 +13307,7 @@ function universeOf(personaId){
 }
 // The universe of the active story (based on its anchor/lead character).
 function curUniverseObj(){
-  const chat=state.curChat&&state.chats[state.curChat];
+  const chat=_worldScope||(state.curChat&&state.chats[state.curChat]);   // v146.1 — a chat-scoped build (inChatWorld)
   const uid=(chat&&chat.universeId)||state.curUniverse;
   return universeById(uid)||state.universes[0]||null;
 }
@@ -14643,7 +14702,7 @@ function migratePresenceNoteIds(){
 // Resolve the player's current sub-area id for a chat, defaulting to the location's entrance.
 function curSubId(chat){
   const c=chat||curChat(); if(!c||!c.locationId)return null;
-  const l=locById(c.locationId); if(!l)return null;
+  const l=chatLocById(c,c.locationId); if(!l)return null;   // v146.1 — this chat's places, not the open story's
   ensureSublocations(l);
   if(c.subId && subById(l,c.subId))return c.subId;
   c.subId=entranceSubId(l);
@@ -14652,7 +14711,7 @@ function curSubId(chat){
 // A character's current sub-area within the present location (defaults to entrance if unknown).
 function charSubId(chat,pid){
   const c=chat||curChat(); if(!c||!c.locationId)return null;
-  const l=locById(c.locationId); if(!l)return null;
+  const l=chatLocById(c,c.locationId); if(!l)return null;   // v146.1 — this chat's places
   ensureSublocations(l);
   if(!c.subPos)c.subPos={};
   const s=c.subPos[pid];
@@ -14673,7 +14732,7 @@ function charSubId(chat,pid){
 function syncPlayerSubArea(chat){
   try{
     const c=chat||curChat(); if(!c||!c.locationId)return false;
-    const l=locById(c.locationId); if(!l)return false;
+    const l=chatLocById(c,c.locationId); if(!l)return false;   // v146.1 — this chat's places
     ensureSublocations(l);
     if(!Array.isArray(l.sublocations)||l.sublocations.length<2)return false;
     const here=curSubId(c);
@@ -14689,7 +14748,7 @@ function syncPlayerSubArea(chat){
     c.subId=dest;
     const s=subById(l,dest);
     c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
-      content:fillTpl(blkTpl("narr_move_self"),{user:state.user,area:(s&&s.name)||"",
+      content:fillTpl(blkTpl("narr_move_self"),{user:turnUser(c),area:(s&&s.name)||"",
         with:fillTpl(blkTpl("narr_move_with"),{names:present.map(p=>p.name).join(", ")})}),
       img:null,imgState:"idle",vidState:"idle",video:null});
     markChatDirty&&markChatDirty(c); persistChats();
@@ -17220,6 +17279,9 @@ async function runFutureTracker(chat){
      handed to every writer: they used to read chat.gameDay after two model calls, when End Day or a
      travel may already have moved it, and computed "tomorrow" from the wrong day. */
   const at={day:chat.gameDay||1,period:chatPeriod(chat)};
+  // v146.1 — the line this pass is reading up to: what it files is stamped with it, so Retry can take back
+  // the entries a discarded reply created (see _retryRollback).
+  const _srcMid=(()=>{ const ms=chat.messages||[]; for(let i=ms.length-1;i>=0;i--){ const m=ms[i]; if(m&&m.role!=='system'&&!m.sysError&&!m.textMsg)return m.mid||null; } return null; })();
   try{
     // v62.1's one-time audit of the stored ledger still runs before anything reads it.
     if(on.promise){ try{ await runPromisePurge(chat); }catch(e){} }
@@ -17263,7 +17325,7 @@ async function runFutureTracker(chat){
         try{ await runFutureUpdate(chat,kind,String(it.id).replace(/^\[|\]$/g,""),turns); }catch(e){}
       }
     }
-    try{ _ftStampChanges(chat,_before); }catch(e){}
+    try{ _ftStampChanges(chat,_before,_srcMid); }catch(e){}
     markChatDirty(chat);
   }catch(e){ try{ console.warn("[future tracker] bailed:",e&&e.message||e); }catch(_){} }
   finally{
@@ -17472,11 +17534,12 @@ function _ftSnapshot(chat){
   return m;
 }
 /* Mark whatever a tracker pass created or changed with the stretch it happened in. */
-function _ftStampChanges(chat,before){
+function _ftStampChanges(chat,before,srcMid){
   const at={day:chat.gameDay||1,period:chatPeriod(chat)};
   _ftSnapshot(chat).forEach((v,id)=>{
     const b=before.get(id);
     if(!b||b.sig!==v.sig)v.obj.ftAt=at;
+    if(!b&&srcMid&&v.kind!=="task"){ v.obj.ftMid=srcMid; v.obj.ftNew=true; }   // v146.1 — created from this line (Retry can undo it)
   });
 }
 async function runFutureReconcile(chat,day,period){
@@ -18764,7 +18827,7 @@ async function _writePsyche(chat,p,targetId,targetName,sig){
     personality:p.personality?clipWords(p.personality,600):"",
     goals:(typeof engineGoals==="function")?engineGoals(p,400):(p.goals?clipWords(p.goals,400):""),
     backstory:p.backstory?clipWords(p.backstory,600):"",
-    with:targetName||state.user,
+    with:targetName||turnUser(chat),
     ties:"",settled:"",promises:"",trackers:"",done:"",scene:"",exchange:"",axes:axes||""
   };
   /* v61.1 — WHAT IS ALREADY DONE. This writer was given the ties, the vows and the scene but
@@ -18807,8 +18870,12 @@ async function _writePsyche(chat,p,targetId,targetName,sig){
   try{ bits.promises=promiseContextForNames(chat,[p.name])||""; }catch(e){}
   try{ bits.trackers=trackerContext(chat,p.id)||""; }catch(e){}
   try{ bits.scene=directorContext(chat,"psyche")||""; }catch(e){}
-  try{ bits.exchange=recentExchangeText(chat,6)||""; }catch(e){}
-  const sys=fillTpl(up("psychePrompt"),{self:p.name,target:targetName||state.user,user:state.user})
+  /* (!) v146.1 — THE MOMENT AS THIS CHARACTER TOOK IT IN. This read the room's raw transcript
+     (recentExchangeText), so a whisper to someone else — and the others' _thoughts_ — reached this
+     character's drives and brakes unmarked, and the brake came back built on a secret they never heard.
+     recentExchangeFor is the per-listener view the fast relationship read already uses. */
+  try{ bits.exchange=recentExchangeFor(chat,p,6).map(m=>`${m.name}: ${m.content}`).join("\n")||""; }catch(e){}
+  const _u=turnUser(chat), sys=fillTpl(up("psychePrompt",chat.universeId),{self:p.name,target:targetName||_u,user:_u})   // v146.1 — this chat's player
           +"\n\n"+engineLangDirective();
   /* (!) v70.1 — {{self}} IS THIS ENGINE'S OWN VALUE AND NOTHING WAS SUPPLYING IT. The shipped
      separator for `settled` reads "HOW {{self}} HAS COME TO FEEL ABOUT {{target}}", and `self` is
@@ -18818,7 +18885,7 @@ async function _writePsyche(chat,p,targetId,targetName,sig){
      this call site passes it; `self` was never added beside it, so the name reached the model
      unsubstituted and the template editor reported it as unrecognised. It is the same fix: an
      engine that HAS a self says so. */
-  const out=await chatCompletion(epSend("psychePrompt",sys,bits,{target:targetName||state.user,self:p.name}),
+  const out=await chatCompletion(inChatWorld(chat,()=>epSend("psychePrompt",sys,bits,{target:targetName||_u,self:p.name})),
     /* v67.1 — this call runs on the GAMEMASTER model but read the PROMPT REWRITER's creativity,
        token and (since v66.1) thinking settings, so turning thinking on for the gamemaster did
        nothing here and the card you were adjusting was not the card in play. The bucket follows
@@ -19490,6 +19557,9 @@ async function runShortTermRel(chat){
   // current default if it doesn't mention all four fast axes, so agitation is always scored.
   if(!(/desire/i.test(sys)&&/comfort/i.test(sys)&&/fear/i.test(sys)&&/agitation/i.test(sys))){ sys=DEFAULT_REL_SHORT; }
   sys+=_gpTail("relInterpretation",chat);   // v20 — genre lens; never touches the axis schema (W6 guard stays authoritative)
+  /* v146.1 — what this read changes, keyed by the line it read up to, so Retry can put it back when that
+     reply is discarded (chat._stUndo is transient; see _retryRollback). */
+  const _undo={mid:(()=>{ const ms=chat.messages||[]; for(let i=ms.length-1;i>=0;i--){ const m=ms[i]; if(m&&m.role!=='system'&&!m.sysError&&!m.textMsg)return m.mid||null; } return null; })(),rows:{}};
   for(const fromP of present){
     if(!participated(fromP))continue;
     // v144.1 — what THIS character took in of the moment, not the room's raw transcript.
@@ -19528,6 +19598,7 @@ async function runShortTermRel(chat){
       const j=parseJSON(out); if(!j||typeof j!=="object")continue;
       // Apply deltas with saturation; decay any axis that wasn't pushed toward its baseline.
       let touched=false;
+      _undo.rows[relDirKey(fromP.id,"__user__")]={st:Object.assign({},o.st),stNote:o.stNote,stNoteDay:o.stNoteDay,stNoteAt:o.stNoteAt,ep:o.episodes.length,op:o.dayOpinions.length};
       const _fd=relDeltasFrom(j,REL_FAST,k=>o.st[k],REL_FAST_CAP);   // v144.1 — capped; an absolute answer read as the change it meant
       if(_fd.absolute){ try{ console.warn("[relationship] fast read for "+fromP.name+" answered with levels, not changes — converted",j); }catch(_){} }
       REL_FAST.forEach(k=>{
@@ -19577,6 +19648,7 @@ async function runShortTermRel(chat){
       }
     }catch(e){/* best-effort */}
   }
+  if(_undo.mid&&Object.keys(_undo.rows).length)chat._stUndo=_undo;
   persistChats();
 }
 // Resting level a fast axis relaxes toward, derived from the slow axes it's supported by.
@@ -20198,7 +20270,7 @@ async function runVoiceCheck(chat,msg,p){
   if(!state.voiceCheckOn||!state.key||!msg||!p)return;
   try{
     const prof=`Character: ${p.name}\nPersonality: ${p.personality||"(none)"}\nSpeaking style: ${p.style||"(none)"}`;
-    const out=await chatCompletion(epSend("voiceCheckPrompt",up("voiceCheckPrompt"),{profile:prof,line:msg.content}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",60),dbg:"Voice check · "+p.name});
+    const out=await chatCompletion(epSend("voiceCheckPrompt",up("voiceCheckPrompt",chat&&chat.universeId),{profile:prof,line:msg.content}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",60),dbg:"Voice check · "+p.name});
     const j=parseJSON(out);
     if(j&&j.ok===false&&j.note){ msg.voiceFlag=j.note.trim(); persistChats(); refreshBubble(msg.mid); }
   }catch(e){/* best-effort */}
@@ -27538,7 +27610,7 @@ Capitals carry the stress: "I said DON'T." Never asterisks — they are narratio
 This is NOT a normal turn and the standard reply format does not apply to it. Ignore any narration→speech→thoughts template, any one-narration limit and any reply-length limit you have been given: they are replaced by the rules here.
 
 ## YOU KNOW WHAT IS HAPPENING
-You are in it. You know exactly what is being done to you, who is doing it, and what you are doing back. Nothing here is coy, implied, or referred to sideways, and nothing is softened into euphemism. You are also not observing it from outside yourself — this is happening to you.
+You are in it. You know exactly what is happening between you and what you are doing in it. Nothing here is coy, implied, or referred to sideways, and nothing is softened into euphemism. You are also not observing it from outside yourself — this is happening to you. Only your half is yours to write: what {{user}} does, says, feels or decides is never narrated or decided by you — you answer it.
 
 ## TWO CHANNELS. THERE IS NO NARRATION IN THIS MODE.
 - **Speech**, in "double quotes" — this is the beat. MANY separate short lines rather than a few long ones, {{lines}} or more: breaking off, changing direction mid-sentence, repeating a word, landing a thought half a beat late.
@@ -27578,7 +27650,7 @@ End mid-momentum on a spoken line, leaving {{user}} an opening to step straight 
      BURCU's backstory and appearance. It named one person and described another, in prose, at the
      top of the payload. Both tokens are still filled, so a customized copy using {{user}} keeps
      working — it just keeps the bug, which is the user's copy to fix. */
-  heat_target_self:`{{target}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line. {{target}} is still right here in the scene with you, and this is who they are:`,
+  heat_target_self:`{{target}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line — with your own words and your own body, never by writing what {{target}} does next. {{target}} is still right here in the scene with you, and this is who they are:`,
   heat_self_header:`# ⚠️ THIS WAS YOUR LAST LINE — CONTINUE STRAIGHT ON FROM IT ⚠️`,
   // v27.9 — the same swap outside a heat run: something moved the scene on and this character is
   // speaking again, with no new line aimed at them. Answering the old one twice is the failure.
@@ -27607,7 +27679,7 @@ Short. One sentence, two at the outside.
 (Shape, in English only so you can see it — write yours in the story language: _I am pushing myself onto him and I know whose oldest friend he is._)`,
   heat_narr_physical:`### THIS BEAT'S THOUGHT: WHAT IS HAPPENING TO YOU, PLAINLY
 ONE thought this beat, between _underscores_, and it is flat and physical.
-What is being done, where, how hard, how fast, what your own body is doing back, what changed since a moment ago. Registered, not judged: no shame in it, no meaning, no admiring words.
+What your own body is doing and registering — where, how hard, how fast, what changed since a moment ago. Registered, not judged: no shame in it, no meaning, no admiring words. Only your side of it: what the other person does is theirs to write, never yours.
 The conscience is the OTHER beat's job, not this one's — keep this one bare and let the contrast between the two do the work.
 Short. One sentence, two at the outside.`,
   heat_more_yes:`in a run that is still going — the next beat is generated separately, after this one lands`,
@@ -28083,7 +28155,7 @@ Your sentences break because your body breaks them, and the break has to be visi
 NEVER "…", never "...", never "—", never a dash, and never breathing spelled as letters ("ah", "mmh", "haah"). An ellipsis is the reflex to resist: every time you reach for one, break the line instead.
 (!) NO square-bracket tags of any kind: no sound tags, no stage directions, nothing in brackets at all. Brackets are voice direction and nothing is speaking this beat aloud — written down they are markup on the page, not writing.`,
   heat_narr_superego_short:`your conscience, registering what your body is doing and what it costs, in one breath`,
-  heat_narr_physical_short:`flat and physical — what is being done to you and what you are doing back, with no feeling in it`,
+  heat_narr_physical_short:`flat and physical — what your own body is doing and registering, with no feeling in it`,
   /* v42.0 — WHAT IT TAKES TO GET A YES. The payload was full of pressure to advance ("move the
      moment forward", "let something land", "do something") and had nothing on the other side of
      the scale, so the cheapest way to satisfy all of it was to agree. YOU DO NOT FOLD exists but
@@ -28481,8 +28553,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
    B.task=task;}
 
   // world — UNIVERSE SETTING
-  const _uni=curUniverseObj();
-  if(_uni&&_uni.setting&&_uni.setting.trim())B.world=`${blkTpl("world_header")}\n${_uni.setting.trim()}`;
+  // (!) v146.1 — THIS chat's universe: curUniverseObj() is the open story's, another world once the
+  // player switched mid-turn (the reply then went out with the other story's setting)
+  const _ws=chatWorldSetting(chat);
+  if(_ws)B.world=`${blkTpl("world_header")}\n${_ws}`;
 
   // format — FORMATTING RULES; if the prompt already starts with its own "#" header, don't
   // wrap it in a second one (that produced an empty-looking duplicate header).
@@ -29468,7 +29542,7 @@ let _dirSeq=0;
    away a reply chat A was still generating. Each player turn stamps its own chat (chat._turnSeq, a
    transient field); a reply started at `seq` is superseded only by a turn IN ITS OWN CHAT. */
 function turnSuperseded(chat,seq){ return !!chat && (chat._turnSeq||0)>seq; }
-function markPlayerTurn(chat){ _heatSeq++; _dirSeq++; if(chat)chat._turnSeq=_dirSeq; }
+function markPlayerTurn(chat){ _heatSeq++; _dirSeq++; if(chat)chat._turnSeq=_dirSeq; try{ _rpStopClear(); }catch(_){} }   // v146.1 — a new turn is not covered by an old Stop
 // (v24.3 — the v19.97 per-beat repeat detector is gone with the beat loop: heat is one
 // extended generation now, so there is no next beat to loop into. _heatNoImg stays declared
 // for autoImgActive but is never raised — the single heat response gets its auto image.)
@@ -29730,7 +29804,7 @@ function isActiveChar(p){ return !!p && !p.removed && !p.latent; }   // v19.997:
    whatever it was handed, so a reply landing after the player switched universe pruned the old chat's
    present list against the new universe's cast (and saved it). Background work must pass its chat. */
 function curCast(chatArg){
-  const chat=chatArg||(state.curChat&&state.chats[state.curChat]);
+  const chat=chatArg||_worldScope||(state.curChat&&state.chats[state.curChat]);   // v146.1 — see inChatWorld
   const uid=(chat&&chat.universeId)||state.curUniverse;
   const out=personasInUniverse(uid).filter(isActiveChar);   // dead/removed excluded from play
   return out;   // may be empty; that's allowed
@@ -29803,6 +29877,42 @@ function chatUserName(chat){
 }
 function chatSubUser(chat,s){ const n=chatUserName(chat); return (s||"").replace(/\{\{user\}\}/g,n); }
 function chatWorldSetting(chat){ const u=chatUni(chat); return (u&&u.setting&&u.setting.trim())?chatSubUser(chat,u.setting.trim()):""; }
+/* v146.1 — THE PLAYER OF A TURN, FROZEN WHEN IT STARTS. state.user and the rest of the player profile
+   are the OPEN story's: entering another universe mid-turn rewrote them, and the old chat's reply went
+   out with the other story's player as its toName, in its day ledger and in its {{user}}. sendMessage
+   takes this snapshot (chat._turnWho, transient) and every step of that turn reads it; a background
+   reply (heat, Autopilot, a Gamemaster reaction) reads the chat's own profile the same way. */
+var _WHO_KEYS=["user","userLook","userSubject","userBio","userPersonality","userStyle","userVoice"];
+function chatUserProfile(chat){
+  const u=chatUni(chat), out={};
+  if(!u||(chat&&chat.universeId===state.curUniverse)){ _WHO_KEYS.forEach(k=>{ out[k]=state[k]; }); return out; }
+  const def=globalUserDefaults(), has=v=>v!=null&&String(v).trim()!=="";
+  _WHO_KEYS.forEach(k=>{ const v=u[k==="user"?"userName":k]; out[k]=has(v)?(k==="user"||k==="userVoice"?String(v).trim():v):def[k]; });
+  return out;
+}
+function turnUser(chat){ return (chat&&chat._turnWho&&chat._turnWho.user)||chatUserName(chat); }
+/* v146.1 — THE CHAT'S WORLD FOR A SYNCHRONOUS BUILD. A reply payload is assembled by dozens of producers
+   that read the open story (curUniverseObj, curLocations, up(), state.user…) — hundreds of reads. Run
+   between two awaits, inChatWorld(chat,fn) makes those readers answer for THIS chat: curUniverseObj and
+   curCast() see it, and the player profile is the turn's. It is restored before fn returns, so no other
+   code ever observes it; fn must be synchronous (anything after its first await is outside the scope). */
+var _worldScope=null;   // var, not let: curUniverseObj can run before this line during boot
+function inChatWorld(chat,fn){
+  if(!chat||_worldScope===chat)return fn();
+  const who=chat._turnWho||chatUserProfile(chat), keep={}, prev=_worldScope;
+  _WHO_KEYS.forEach(k=>{ keep[k]=state[k]; state[k]=who[k]; });
+  _worldScope=chat;
+  try{ return fn(); }
+  finally{ _worldScope=prev; _WHO_KEYS.forEach(k=>{ state[k]=keep[k]; }); }
+}
+/* v146.1 — WHERE A TURN IS HAPPENING: the place and the last arrival there. A reply generated while the
+   player travelled (or walked to another area) must not land in the new scene as if its speaker were there. */
+function _placeSig(chat){
+  if(!chat)return "";
+  const msgs=chat.messages||[]; let tb="";
+  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i]&&msgs[i].travelBeat){ tb=msgs[i].mid||String(i); break; } }
+  return (chat.locationId||chat.location||"")+"|"+tb;
+}
 /* PER-CHAT ENGINE LOCKS. Turns, End Day, the time-of-day engines, memory building and texts were all
    fire-and-forget with no guard, so a second Enter, a second End Day or two quick travels ran the same
    work twice at once. `chatBusy(chat,key)` asks; `withChatLock(chat,key,fn)` runs fn exclusively:
@@ -29857,7 +29967,9 @@ function inSceneIds(chat){
   const c=chat||curChat(); if(!c)return [];
   const ids=presentIds(c);
   if(!c.locationId)return ids.slice();
-  const l=locById(c.locationId); if(!l||!Array.isArray(l.sublocations)||l.sublocations.length<=1)return ids.slice();
+  /* (!) v146.1 — the CHAT's places. locById read the open story's, so once the player entered another
+     universe mid-turn the location was not found and everyone at the place became hearable. */
+  const l=chatLocById(c,c.locationId); if(!l||!Array.isArray(l.sublocations)||l.sublocations.length<=1)return ids.slice();
   const here=curSubId(c);
   return ids.filter(id=>charSubId(c,id)===here);
 }
@@ -30060,8 +30172,8 @@ function charPlaceName(chat,p){
     if(!p)return "";
     const pos=(chat&&chat.worldPositions)||{};
     const wp=pos[p.id];
-    if(wp){ const l=locById(wp); if(l&&l.name)return l.name; }
-    const home=curLocations().find(l=>Array.isArray(l.residents)&&l.residents.includes(p.id));
+    if(wp){ const l=chatLocById(chat,wp); if(l&&l.name)return l.name; }   // v146.1 — this chat's places
+    const home=chatLocations(chat).find(l=>Array.isArray(l.residents)&&l.residents.includes(p.id));
     if(home&&home.name)return home.name;
   }catch(e){}
   return "";
@@ -30105,14 +30217,14 @@ async function narrateCharMove(chat,mover,opts){
       why?`Why they are moving now: ${why}`:``,
       `Time: Day ${chat.gameDay||1}, ${period}`
     ].filter(Boolean).join("\n");
-    const sys=fillTpl(up("charMovePrompt"),{user:state.user});
-    const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
+    const sys=fillTpl(up("charMovePrompt",chat.universeId),{user:turnUser(chat)});   // v146.1 — this chat's world and player
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
     let beat=unquoteWrap(out);
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     const pref=mover.name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
     beat=beat.replace(new RegExp("^\\s*"+pref+"\\s*:\\s*","i"),"").trim();
-    return beat;
+    return /^[\[{]/.test(beat)?"":beat;   // v146.1 — a JSON answer ("{}") is not a beat: the terse note stands in
   }catch(e){ return ""; }
 }
 // v25.10 — ONE movement beat for SEVERAL characters moving in the same moment. The old path made a
@@ -30139,11 +30251,11 @@ async function narrateCharMoveGroup(chat,movers,opts){
       `Time: Day ${chat.gameDay||1}, ${chatPeriod(chat)}`,
       `Write ONE short beat (${Math.min(4,movers.length+1)} sentences at most) covering ALL of them. These are SEPARATE moves reported in one breath, not a group travelling as one: give EACH character a DISTINCT action, manner or detail true to who they are, never recycle the same phrasing between two people, and never write them walking off or arriving as a party. No dialogue.`
     ].filter(Boolean).join("\n");
-    const sys=fillTpl(up("charMovePrompt"),{user:state.user});
-    const out=await chatCompletion(epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
+    const sys=fillTpl(up("charMovePrompt",chat.universeId),{user:turnUser(chat)});
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
     let beat=unquoteWrap(out);
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
-    return beat;
+    return /^[\[{]/.test(beat)?"":beat;   // v146.1 — a JSON answer is not a beat
   }catch(e){ return ""; }
 }
 /* v19.91 — visual-only clear: hides everything currently on screen without touching any data.
@@ -30777,7 +30889,7 @@ function stampStatus(chat,msg){
   const trk=[];
   try{
     if(state.trackOn){
-      for(const t of curTrackers()){
+      for(const t of curTrackers(chat)){   // v146.1 — this chat's trackers (stamped after an await)
         const owner=trackerOwner(t);
         // Only show broadly-relevant trackers in the compact scene strip: story-wide, or
         // user-public. Character-owned and user-private stay out of the global header.
@@ -30948,6 +31060,11 @@ async function deleteMessage(mid){
    line: a character's reply is regenerated by that character (the one-on-one path when they are the
    only one in earshot, so the same payload layout is used), an error re-runs the whole turn. Your own
    message is never duplicated, and nothing earlier than your latest line can be retried. */
+/* (!) v146.1 — ONLY A REPLY TO THE PLAYER. This took whatever character line came last, so after an
+   Autopilot beat, a Gamemaster reaction or a heat beat, Retry regenerated THAT line as an answer to the
+   player's old message — the character answered twice. The latest line must be a reply said to the
+   player (toId "__user__"), or a retryable notice (a failure, a Stop, a refusal, an empty reply);
+   anything else after the player's line means there is nothing to retry. */
 function _retryTarget(chat){
   const msgs=(chat&&chat.messages)||[];
   let u=-1;
@@ -30955,8 +31072,10 @@ function _retryTarget(chat){
   if(u<0)return null;
   for(let i=msgs.length-1;i>u;i--){
     const m=msgs[i];
-    if(!m||m.role!=='assistant'||m.textMsg||m.presenceNote||m.narratorEvent||m.dayMarker)continue;
-    if(m.sysError?m.retryable:m.speakerId) return {u,i,m,player:msgs[u]};
+    if(!m||m.role!=='assistant'||m.textMsg||m.presenceNote||m.narratorEvent||m.dayMarker||m.uiNote)continue;
+    if(m.sysError) return m.retryable?{u,i,m,player:msgs[u]}:null;
+    if(m.speakerId&&m.toId==="__user__"&&!m.heatBeat&&!m.apBeat&&!m.reaction&&!m.entrance) return {u,i,m,player:msgs[u]};
+    return null;
   }
   return null;
 }
@@ -30975,6 +31094,54 @@ function _dropMsgForRetry(chat,mid){
   try{ mediaDB.kvDelete("mvid:"+mid); }catch(e){}
   const node=document.querySelector('[data-mid="'+mid+'"]'); if(node)node.remove();
 }
+/* v146.1 — WHAT A DISCARDED REPLY LEFT BEHIND. Retry used to take the line out of the transcript and
+   nothing else: the memories cut from it, the plans and promises the future tracker filed from it and
+   the fast relationship move it caused all stayed, and memDoneIdx already pointed past its slot, so the
+   new reply was never remembered at all. This removes what records the old line as its source:
+     - memories whose srcMids include it (a condensed long-term memory is left alone), and the memory
+       pointer is moved back before the span those memories covered, so it is cut again with the new line;
+     - calendar entries and promises the future tracker CREATED from it (stamped ftMid) — changes it made
+       to entries that already existed are not undone;
+     - the fast relationship read taken on it (chat._stUndo), with the cadence set so it re-reads.
+   `at` is the index the old line had before it was taken out. Returns the number of items removed.
+   Runs under the memory lock, so a build in flight finishes first and its memories are seen here. */
+async function _retryRollback(chat,mid,at){
+  if(!chat||!mid)return 0;
+  let n=0;
+  await withChatLock(chat,"memBuild",async()=>{
+    const gone=(state.memory||[]).filter(x=>x&&Array.isArray(x.srcMids)&&x.srcMids.includes(mid)&&!memSpansTime(x));
+    if(gone.length){
+      const ids=new Set(gone.map(x=>x.id));
+      let first=Infinity;
+      gone.forEach(x=>x.srcMids.forEach(s=>{ const i=chat.messages.findIndex(y=>y&&y.mid===s); if(i>=0&&i<first)first=i; }));
+      state.memory=state.memory.filter(x=>!ids.has(x.id)); n+=gone.length;
+      try{ persistMemory(); }catch(e){}
+      const from=Math.min(first,(typeof at==="number"&&at>=0)?at:Infinity);
+      if(isFinite(from)&&typeof chat.memDoneIdx==="number"&&chat.memDoneIdx>=from-1){ chat.memDoneIdx=from-1; chat.memEvent=null; }
+    }else{
+      // never committed: the pointer must still not sit on (or past) the slot the new line will take
+      if(typeof at==="number"&&at>=0&&typeof chat.memDoneIdx==="number"&&chat.memDoneIdx>=at){ chat.memDoneIdx=at-1; chat.memEvent=null; }
+    }
+  });
+  n+=_retryRollbackPlans(chat,mid);
+  const su=chat._stUndo;
+  if(su&&su.mid===mid){
+    Object.keys(su.rows||{}).forEach(k=>{ const o=chat.rel&&chat.rel[k], r=su.rows[k]; if(!o||!r)return;
+      o.st=Object.assign({},r.st); o.stNote=r.stNote; o.stNoteDay=r.stNoteDay; o.stNoteAt=r.stNoteAt;
+      if(Array.isArray(o.episodes))o.episodes.length=Math.min(o.episodes.length,r.ep);
+      if(Array.isArray(o.dayOpinions))o.dayOpinions.length=Math.min(o.dayOpinions.length,r.op); n++; });
+    chat._stUndo=null;
+    chat._stCount=Math.max(0,(state.stInterval||3)-1);   // the new reply gets its own read
+  }else chat._stCount=Math.max(0,(chat._stCount||0)-1);   // the old reply's turn does not count twice
+  markChatDirty(chat); persistChats();
+  return n;
+}
+function _retryRollbackPlans(chat,mid){
+  let n=0;
+  if(Array.isArray(chat.calendar)){ const k=chat.calendar.length; chat.calendar=chat.calendar.filter(e=>!(e&&e.ftMid===mid&&e.ftNew)); n+=k-chat.calendar.length; }
+  if(Array.isArray(chat.promises)){ const k=chat.promises.length; chat.promises=chat.promises.filter(e=>!(e&&e.ftMid===mid&&e.ftNew)); n+=k-chat.promises.length; }
+  return n;
+}
 async function retryLastReply(mid){
   const chat=curChat(); if(!chat)return;
   if(chatBusy(chat,"turn")){ toast("Still answering — one moment"); return; }
@@ -30982,27 +31149,39 @@ async function retryLastReply(mid){
   if(!t||(mid&&t.m.mid!==mid)){ toast("Only the latest reply can be retried"); return; }
   const m=t.m, text=String(t.player.content||"").trim();
   if(!text){ toast("Nothing to answer"); return; }
-  if(m.sysError){
+  // v146.1 — a notice for ONE character (a failed, refused, empty or stopped reply in a group turn)
+  // asks that character again; any other notice re-runs the whole turn.
+  const _one=m.sysError&&m.retrySpeakerId?resolveChar(m.retrySpeakerId,chat):null;
+  if(m.sysError&&!_one){
     // the turn failed: drop its error notices and run the whole turn again for the same line
     chat.messages.slice(t.u+1).filter(x=>x&&x.sysError&&x.retryable).forEach(x=>_dropMsgForRetry(chat,x.mid));
     persistChats();
     await sendMessage({chat,text,retry:"error"});
     refreshRetryMark(); return;
   }
-  const p=resolveChar(m.speakerId,chat);
+  const p=_one||resolveChar(m.speakerId,chat);
   if(!p||!inSceneIds(chat).includes(p.id)){ toast(((p&&p.name)||m.speaker||"They")+" can't hear you any more — nothing to retry"); return; }
   const scene=inSceneCast(chat);
+  const _toId=_one?(m.retryToId||"__user__"):(m.toId||"__user__");
+  const _whisper=_one?!!t.player.whisperTo:!!m.whisperTo;
+  const _slot=chat.messages.indexOf(m);   // where the old line sat (memory pointers are indices)
   _dropMsgForRetry(chat,m.mid); persistChats();
-  if(scene.length===1 && !m.whisperTo){
+  if(!_one)await _retryRollback(chat,m.mid,_slot);   // v146.1 — what the discarded reply produced goes with it
+  if(scene.length===1 && !_whisper && !_one){
     await sendMessage({chat,text,retry:"reply"});   // the one-on-one path, same payload layout
   }else{
     const _unlock=holdChatLock(chat,"turn");
+    const _ownWho=!chat._turnWho; if(_ownWho)chat._turnWho=chatUserProfile(chat);   // v146.1 — see sendMessage
     const sb=document.getElementById('sendBtn'); if(sb)sb.disabled=true;
+    let ok=false;
     try{
       markPlayerTurn(chat);   // a Gamemaster reaction to the old reply is stale now
-      await playCharacterTurn(chat,p,state.user,{answerTo:m.toId||"__user__",whisperBack:!!m.whisperTo});
-    }finally{ if(sb)sb.disabled=false; _unlock(); persistChats(); }
+      ok=await playCharacterTurn(chat,p,turnUser(chat),{answerTo:_toId,whisperBack:_whisper,notice:true});
+      // v146.1 — the new line is remembered and analysed like any reply (never the directors again)
+      if(ok){ try{ maybeBuildMemory(chat); }catch(e){} try{ postTurn(chat,{analysisOnly:true}); }catch(e){} }
+    }finally{ if(sb)sb.disabled=false; if(_ownWho)delete chat._turnWho; _unlock(); persistChats(); }
   }
+  if(!_one){ try{ _retryRollbackPlans(chat,m.mid); }catch(e){} }   // a tracker pass that was still reading the old line
   refreshRetryMark();
 }
 /* v19.9 (#10) — media prompt popup + per-video loop toggle */
@@ -31541,6 +31720,11 @@ async function sendMessage(opts){
   const _cmd=!retry&&text.startsWith("/")&&!/^\/whisper\s/i.test(text);
   if(!_cmd&&chatBusy(chat,"turn")){ if(fromInput)_sendBusyHint(inp); return false; }
   const _unlock=_cmd?null:holdChatLock(chat,"turn");
+  /* v146.1 — the player of this turn, frozen now: entering another story mid-turn rewrites state.user,
+     and every step below (toName, ledgers, {{user}} in the payloads) reads this instead. */
+  const _ownWho=!_cmd&&!chat._turnWho;
+  if(_ownWho)chat._turnWho=chatUserProfile(chat);
+  let _userMsg=null;
   try{
     if(!retry){
       // ----- /whisper Name message — a private aside only that character hears; others just see that a
@@ -31576,7 +31760,8 @@ async function sendMessage(opts){
         finally{ if(_lockUi){ inp.disabled=false; if(sendBtn)sendBtn.disabled=false; inp.placeholder=_ph; } }
       }
 
-      chat.messages.push({mid:newMid(),role:"user",content:text,present:presentIds(chat).slice()});
+      chat.messages.push({mid:newMid(),role:"user",content:text,present:inSceneIds(chat).slice()});   // v146.1 — earshot (re-stamped below)
+      _userMsg=chat.messages[chat.messages.length-1];
       try{ speakPlayerTurn(chat.messages[chat.messages.length-1]); }catch(e){}   // v122.1 — the player's own voice, before the reply
       chat.lastActive=Date.now();
       // v28.9 — if a character put a rumor to you last turn, this is the answer. Judging it in the
@@ -31595,6 +31780,10 @@ async function sendMessage(opts){
     // v26.5 — before anything routes, make sure the player is not stranded in an area the scene has
     // walked out of (see syncPlayerSubArea). This also repairs saves already stuck in that state.
     if(syncPlayerSubArea(chat))appendNewBubbles();
+    /* (!) v146.1 — WHO HEARD THE PLAYER is who shares their area, stamped after the player has followed
+       the scene (above): `present` held everyone at the place, so a character in the back room was
+       counted as having heard what was said at the counter, and remembered it. */
+    if(_userMsg)_userMsg.present=inSceneIds(chat).slice();
     // ----- Nobody nearby: the user is speaking to themselves. Let directors react, no character speaks. -----
     /* (!) v144.1 — EARSHOT, not the location. Solo vs multi was chosen from presentCast (everyone at
        the place), so a character alone in another room of the house answered a line they could not
@@ -31623,12 +31812,12 @@ async function sendMessage(opts){
     }
     // ===== SINGLE CHARACTER IN EARSHOT: direct flow =====
     const solo=present[0];
-    const list=document.getElementById('chatList');
     const typing=document.createElement('div');
     typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(solo)}${esc(solo.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-    if(_open()&&list){list.appendChild(typing);ChatScroll.sync();}
+    _typingAfterQueue(chat,typing);   // v146.1 — after anything still queued on screen
     document.getElementById('sendBtn').disabled=true;
     const _seq=_dirSeq;   // v144.1 — the same supersede guard playCharacterTurn has (see turnSuperseded)
+    const _who=turnUser(chat), _at=_placeSig(chat);   // v146.1 — see playCharacterTurn
 
     try{
       heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
@@ -31642,10 +31831,12 @@ async function sendMessage(opts){
       }
       // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
       // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
-      const _tOpts={ chat, selfP:solo, targetName:state.user, targetId:"__user__" };
+      const _tOpts={ chat, selfP:solo, targetName:_who, targetId:"__user__" };
+      // v146.1 — assembled in THIS chat's world (see inChatWorld), then the model is called
+      let messages=inChatWorld(chat,()=>{
       const _hb=buildSystemPromptBlocks(injected,_tOpts);
       const _tb=buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
-          targetName:state.user, targetId:"__user__", multi:false, injected });
+          targetName:_who, targetId:"__user__", multi:false, injected });
       /* (!) v41.6 — HEAT BEAT 1 IS A HEAT PAYLOAD, EVEN WITH ONE CHARACTER PRESENT. heatBeginTurn()
          above claims this reply as beat 1 of the run and sets chat._heatBeat, which the comment on
          that function calls "what switches the payload to the `heat` layout" — but this path asked
@@ -31663,17 +31854,19 @@ async function sendMessage(opts){
       const taggedHistory=tagLastForTarget(history);
       /* v33.0 — user payload template first; null means "not enabled, or it failed" and we use the
          classic head/history/tail assembly, which is what the default template reproduces anyway. */
-      let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHistory,
-        {chat,npc:solo,targetName:state.user},
+      let msgs=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHistory,
+        {chat,npc:solo,targetName:_who},
         ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
           buildTailBlocks({ chat, selfP:solo, selfId:solo.id, selfName:solo.name,
-            targetName:state.user, targetId:"__user__", multi:false, injected })));
-      if(!messages){
-        messages=[];
-        if(_pl.head)messages.push({role:"system",content:_pl.head});
-        messages.push(...taggedHistory);
-        if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+            targetName:_who, targetId:"__user__", multi:false, injected })));
+      if(!msgs){
+        msgs=[];
+        if(_pl.head)msgs.push({role:"system",content:_pl.head});
+        msgs.push(...taggedHistory);
+        if(_pl.tail)msgs.push({role:"system",content:_pl.tail});
       }
+      return msgs;
+      });
       if(chat.pendingGmNudge){
         messages.push({role:"system",content:`[Director's note — do not mention or acknowledge this as out-of-character. React to it naturally in-scene as ${solo.name}:] ${chat.pendingGmNudge}`});
         chat.pendingGmNudge=null;persistChats();
@@ -31681,22 +31874,30 @@ async function sendMessage(opts){
       // v144.1 — generation, the repeat/narration retry, refusal fallback and clean-up are shared with
       // every other character reply (see generateCharacterReply).
       const g=await generateCharacterReply(chat,solo,messages,{dbg:"Roleplay reply"});
-      typing.remove();
+      _typingGone(typing);
+      // v146.1 — a refusal or an empty reply leaves a notice with Retry on it (it was a passing toast)
       if(g.refused){
-        toast("The model declined this content — try a different model for this scene in Settings → LLMs");
+        _pushRetryNotice(chat,"The model declined this content — try a different model for this scene in Settings → LLMs");
         return;
       }
       // Empty reply even after the token-bump retry — surface a clear hint instead of a blank bubble.
       if(!g.text){
-        toast("Empty reply — try raising Max tokens in Settings (reasoning models need headroom)");
+        _pushRetryNotice(chat,"Empty reply — try raising Max tokens in Settings (reasoning models need headroom)");
         return;
       }
       if(turnSuperseded(chat,_seq))return;   // v144.1 — the player took another turn in this chat meanwhile
+      /* (!) v146.1 — the player travelled (or walked to another area) while this was written: it
+         answers a scene that is gone, so it is not posted into the new one. */
+      if(_placeSig(chat)!==_at||!inSceneIds(chat).includes(solo.id)){
+        try{ _alog("reply.dropped",solo.name+"'s reply was written for a scene the player has left — not posted"); }catch(_){}
+        return;
+      }
       const reply=g.text;
-      const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
+      const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:inSceneIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
         // v44.5 — a solo reply is always to {{user}}; recorded so that if someone walks in mid-scene,
         // the line they find waiting is already marked as somebody else's to answer.
-        toId:"__user__",toName:state.user};
+        // v146.1 — `present` by earshot, and the player frozen at the start of the turn.
+        toId:"__user__",toName:_who};
       stampStatus(chat,msg);chat.messages.push(msg);
       // ON SCREEN: append + reveal this one line, in order, via the presentation queue. Not awaited,
       // so the turn loop proceeds (memory/presence/GM run in the background) while it rolls.
@@ -31711,19 +31912,20 @@ async function sendMessage(opts){
       // only done in the multi-character path, so one-on-one scenes never ran presence detection.
       await runPresenceTracker(chat);
       maybeBuildMemory(chat);
-      // v144.1 — a retried reply answers a line the directors already had their turn on
-      if(opts.retry!=="reply")postTurn(chat);
+      /* v144.1 — a retried reply answers a line the directors already had their turn on. v146.1 — but
+         the new reply is still ANALYSED (relationships, plans and promises): postTurn's analysis part
+         only, after retryLastReply rolled back what the discarded reply produced. */
+      postTurn(chat,opts.retry==="reply"?{analysisOnly:true}:undefined);
       heatEndTurn(chat);       // v135.1 — beat 1 ends with this reply; the run opens its own beats
       if(opts.retry!=="reply")maybeHeatBursts(chat);   // v19.5
     }catch(err){
-      typing.remove();
-      // v144.1 — the player pressed Stop: no error bubble (Retry is on the last reply if they want one)
-      if(err&&err.stopped){ try{ toast("Stopped."); }catch(_){} }
-      else{
-      chat.messages.push({mid:newMid(),role:"assistant",speaker:"System",content:(err.friendly||"Something went wrong."),sysError:true,retryable:true,img:null,imgState:"idle",vidState:"idle",video:null});
-      persistChats();appendNewBubbles(); }
+      _typingGone(typing);
+      /* v144.1 — the player pressed Stop: no error bubble. v146.1 — but a notice Retry can act on (the
+         turn has no reply to retry otherwise), and one toast. */
+      if(err&&err.stopped){ try{ toast("Stopped."); }catch(_){} _pushRetryNotice(chat,"Stopped — Retry asks again."); }
+      else _pushRetryNotice(chat,err.friendly||"Something went wrong.");
     }finally{ heatEndTurn(chat); document.getElementById('sendBtn').disabled=false;}
-  }finally{ if(_unlock)_unlock(); }
+  }finally{ if(_ownWho)delete chat._turnWho; if(_unlock)_unlock(); }
 }
 // Parse and execute an out-of-character command.
 /* ===== TEXT MESSAGING v2 =====================================================
@@ -32518,7 +32720,7 @@ async function sendWhisper(chat,rest){
   markPlayerTurn(chat);   // v144.1 — per-chat (see turnSuperseded)
   apPlayerActed(chat);            // v116.0 — a whisper is the player's turn too
   if(chat)chat._exitedIds=null;   // fresh player turn — last turn's departures stop mattering
-  chat.messages.push({mid:newMid(),role:"user",content:body,present:presentIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
+  chat.messages.push({mid:newMid(),role:"user",content:body,present:inSceneIds(chat).slice(),whisperTo:target.id,whisperToName:target.name});
   chat.lastActive=Date.now(); ChatScroll.follow();
   {const bn=document.getElementById('recapBanner'); if(bn)bn.classList.add('hide');}
   appendNewBubbles(); persistChats();
@@ -32529,7 +32731,7 @@ async function sendWhisper(chat,rest){
        and it was live. `whisperBack` marks their reply private to the player and hands them the note
        that says so. One channel, and it is the private one — a reply with nowhere private to go is
        a reply that leaks. */
-    await playCharacterTurn(chat,target,state.user,{whisperBack:true});   // ONLY the whispered-to character responds
+    await playCharacterTurn(chat,target,turnUser(chat),{whisperBack:true,notice:true});   // ONLY the whispered-to character responds
     await runPresenceTracker(chat);
     maybeBuildMemory(chat);
     postTurn(chat);
@@ -32902,6 +33104,48 @@ function dropStarNarration(text){
     return out;
   }).join("\n");
 }
+/* (!) v146.1 — _THOUGHT_ SPANS, READ THE SAME WAY. The three readers used /_[^_]*_/, which only removes a
+   CLOSED pair: `"Hi." _He must never know I took the money.` kept the whole thought, and a stray
+   underscore paired with one on the next line and deleted what lay between. Now, per line (never across
+   a newline): an underscore OPENS when it is not inside a word and a word follows it, CLOSES when a word
+   precedes it and none follows; snake_case and in-word underscores are left alone, and underscores inside
+   a quotation are text. A closed pair is a thought, quotes and all. An unclosed opener runs to the next
+   opener or the end of the line, and a closer with no opener reaches back to the line start (or the last
+   quote) — but in those two guesses a quotation is kept, since the likelier mistake is a thought the
+   model forgot to close before it spoke. */
+function dropThoughtSpans(text){
+  if(!text)return "";
+  const W=/[\p{L}\p{N}]/u;
+  return String(text).split("\n").map(line=>{
+    if(line.indexOf("_")<0)return line;
+    const Q=_quoteSpans(line);
+    const inQ=i=>Q.some(q=>i>=q[0]&&i<q[1]);
+    const lastQEnd=i=>{ let e=0; Q.forEach(q=>{ if(q[1]<=i&&q[1]>e)e=q[1]; }); return e; };
+    const ws=ch=>ch===undefined||/\s/.test(ch);
+    const drop=[]; let open=-1, lastEnd=0;
+    for(let i=0;i<line.length;i++){
+      if(line[i]!=='_'||inQ(i))continue;
+      let j=i; while(line[j+1]==='_')j++;
+      const pv=line[i-1], nx=line[j+1];
+      if(pv!==undefined&&nx!==undefined&&W.test(pv)&&W.test(nx)){ i=j; continue; }   // snake_case, in-word
+      const canOpen=!ws(nx)&&!(pv!==undefined&&W.test(pv)), canClose=!ws(pv)&&!(nx!==undefined&&W.test(nx));
+      if(open>=0){
+        if(canClose){ drop.push([open,j+1,true]); lastEnd=j+1; open=-1; }
+        else if(canOpen){ drop.push([open,i,false]); open=i; }
+      }else if(canOpen){ open=i; }
+      else if(canClose){ drop.push([Math.max(lastEnd,lastQEnd(i)),j+1,false]); lastEnd=j+1; }
+      i=j;
+    }
+    if(open>=0)drop.push([open,line.length,false]);
+    if(!drop.length)return line;
+    let out="";
+    for(let i=0;i<line.length;i++){
+      const d=drop.find(x=>i>=x[0]&&i<x[1]);
+      out+=(!d||(!d[2]&&inQ(i)))?line[i]:(out.endsWith(" ")?"":" ");
+    }
+    return out;
+  }).join("\n");
+}
 // Remove *narration* / _stage directions_ from a message, keeping spoken dialogue and plain
 // prose. Used only for OLDER messages in the roleplay history window (tiered compaction):
 // recent turns are always sent in full so the model keeps the immediate scene's detail.
@@ -32910,7 +33154,7 @@ function dropStarNarration(text){
 function stripNarration(text){
   if(!text) return text;
   let t=dropStarNarration(text);                // *asterisk narration* (v144.1 — see dropStarNarration)
-  t=t.replace(/_[^_]*_/g,"");                    // _underscore emphasis/stage directions_
+  t=dropThoughtSpans(t);                         // _underscore thoughts/stage directions_ (v146.1 — see dropThoughtSpans)
   t=t.replace(/\([^)]*\)/g,"");                  // (parenthetical asides)
   t=t.replace(/\[[^\]]*\]/g,"");                 // [bracketed directions]
   t=t.replace(/[ \t]{2,}/g," ").replace(/\n{2,}/g,"\n").trim();
@@ -32924,8 +33168,7 @@ function stripNarration(text){
 // returns "" so it can be dropped (a character never learns another character's private narration).
 function spokenOnly(text){
   if(!text) return "";
-  return dropStarNarration(text)   // *asterisk narration*, balanced or not (v144.1)
-    .replace(/_[^_]*_/g," ")       // _underscore stage directions_
+  return dropThoughtSpans(dropStarNarration(text))   // *asterisk narration* (v144.1) and _thoughts_ (v146.1), balanced or not
     .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
 }
 /* v30.5 — WHAT SOMEONE IN THE ROOM ACTUALLY PERCEIVES.
@@ -32965,8 +33208,7 @@ function crossHeard(text){
 }
 function perceivedOnly(text){
   if(!text) return "";
-  return String(text)
-    .replace(/_[^_]*_/g," ")       // _inner thought_ — nobody else can perceive this, ever
+  return dropThoughtSpans(String(text))   // _inner thought_ — nobody else can perceive this, ever (v146.1 — closed or not)
     .replace(/[ \t]{2,}/g," ").replace(/\s*\n\s*\n\s*/g,"\n").trim();
 }
 // Map a chat message to an API message (role + name + content). Shared by all roleplay
@@ -33384,7 +33626,7 @@ function rpModel(){
 function noteNobodyHere(chat){
   try{
     const elsewhere=(typeof offEarshotCast==="function")?offEarshotCast(chat):[];
-    const here=chat.locationId?locById(chat.locationId):null;
+    const here=chat.locationId?chatLocById(chat,chat.locationId):null;
     const areaName=(here&&subById(here,curSubId(chat))||{}).name||"here";
     let gone="";
     try{
@@ -33414,6 +33656,10 @@ function noteNobodyHere(chat){
 function _routerLastLine(raw){ raw=String(raw||""); return raw.length>1600?raw.slice(0,800)+"\n[…]\n"+raw.slice(-700):raw; }
 async function runMultiCharTurn(chat,playerText,stimulus){
   const cap=Math.max(1,state.mcChainCap||4);
+  const _who=turnUser(chat);   // v146.1 — this chat's player, frozen for the turn
+  /* v146.1 — every reply of the chain: a failure leaves a notice Retry can act on (opts.notice), and a
+     Stop comes back here as an error (opts.throwStop) so the chain ends at once — see the catch below. */
+  const _pOpts=o=>Object.assign({notice:true,throwStop:true},o||{});
   document.getElementById('sendBtn').disabled=true;
   try{
     const _pchain={net:false};   // v144.1 — one uncued presence check per chain (see runPresenceTracker)
@@ -33431,7 +33677,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     if(cast.length<2){ // exactly one present → direct single reply
       const solo=cast[0];
       heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
-      try{ await playCharacterTurn(chat,solo,state.user); } finally{ heatEndTurn(chat); }
+      try{ await playCharacterTurn(chat,solo,_who,_pOpts()); } finally{ heatEndTurn(chat); }
       maybeBuildMemory(chat);postTurn(chat);
       maybeHeatBursts(chat);   // v19.5
       return;
@@ -33444,8 +33690,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     // ROUTER 1 — who did the player address, who responds
     let responders=[],addressed="group";
     try{
-      const sys=fillTpl(up("routerPlayer"),{user:state.user});
-      const out=await chatCompletion(epSend("routerPlayer",sys,{roster:roster,stimulus:(stimulus||`${state.user} just said:\n"${playerText}"`),exchange:castConvoText(chat,8)}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
+      const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerPlayer",fillTpl(up("routerPlayer"),{user:_who}),{roster:roster,stimulus:(stimulus||`${_who} just said:\n"${playerText}"`),exchange:castConvoText(chat,8)})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Turn router · player"});
       const j=parseJSON(out);
       if(j){addressed=j.addressed||"group";
         responders=(Array.isArray(j.responders)?j.responders:[]).map(n=>findByName(cast,n)).filter(Boolean);   // v144.1 — "Ayla" resolves "Ayla Demir" (it fell back to cast[0])
@@ -33476,7 +33721,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
          so that is the line each of them answers. Unpinned, responder #2 was re-aimed at responder
          #1 — the freshest line in the room by then — and when #1 had put a question to the player,
          #2 answered it for him. `answerTo` keeps the whole group answering the person who spoke. */
-      try{ ok=await playCharacterTurn(chat,r,state.user,{answerTo:"__user__",noWait:true}); } finally{ heatEndTurn(chat); }
+      try{ ok=await playCharacterTurn(chat,r,_who,_pOpts({answerTo:"__user__",noWait:true})); } finally{ heatEndTurn(chat); }
       if(ok){lastSpeaker=r;turns++;spokenThisChain.add(r.id);}
       const tr=await runPresenceTracker(chat,{chain:_pchain});
       try{ await runWearingTracker(chat); }catch(_){}   // v48.2 — cue-gated; an ordinary turn costs nothing
@@ -33510,9 +33755,9 @@ async function runMultiCharTurn(chat,playerText,stimulus){
         // generous safety cap keeps head+tail on the rare reply that exceeds it.
         const _lastRaw=((chat.messages.filter(m=>!m.sysError&&m.role==='assistant').slice(-1)[0]||{}).content||"");
         const _lastLine=(lastSpeaker?lastSpeaker.name+": ":"")+_routerLastLine(_lastRaw);
-        const _presentNames=[state.user,...cast.map(c=>c.name)].join(", ");
+        const _presentNames=[_who,...cast.map(c=>c.name)].join(", ");
         const _hooksSheet=others.map(c=>`- ${c.name}`+(c.interject&&c.interject.trim()?` — hooks: ${briefDesc(c.interject,140)}`:"")).join("\n");
-        const sys=fillTpl(up("routerChar"),{user:state.user,speaker:lastSpeaker?lastSpeaker.name:cast[0].name,
+        const sys=fillTpl(up("routerChar",chat.universeId),{user:_who,speaker:lastSpeaker?lastSpeaker.name:cast[0].name,
           last_line:_lastLine||"(nothing yet)",present_characters:_presentNames,hooks:_hooksSheet||"(none)"});
         /* v30.6 — the user message used to repeat the speaker, the hooks sheet and the last line,
            all three of which the system prompt already carries as {{speaker}}, {{hooks}} and
@@ -33520,7 +33765,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
            five inputs arrived twice, on a call that fires after every character line in a
            multi-character chain and returns eighty tokens of JSON. The system prompt is the record;
            the user message is the question. */
-        const out=await chatCompletion(epSend("routerChar",sys,{data:`Should one of the other characters present respond to that, or does the turn return to ${state.user}? Return only the JSON.`}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
+        const out=await chatCompletion(inChatWorld(chat,()=>epSend("routerChar",sys,{data:`Should one of the other characters present respond to that, or does the turn return to ${_who}? Return only the JSON.`})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",80),dbg:"Turn router · character"});
         const j=parseJSON(out);
         if(j&&j.continue===true&&j.responder&&String(j.responder).toLowerCase()!=="null"){
           next=findByName(others,j.responder);
@@ -33529,7 +33774,7 @@ async function runMultiCharTurn(chat,playerText,stimulus){
       if(!next)break;                 // scene returns to the player (the common case)
       // If this pick already spoke, it's a self-defense rebound — consume their one allowance.
       if(spokenThisChain.has(next.id))defendedThisChain.add(next.id);
-      const ok=await playCharacterTurn(chat,next,lastSpeaker?lastSpeaker.name:state.user,{noWait:true});
+      const ok=await playCharacterTurn(chat,next,lastSpeaker?lastSpeaker.name:_who,_pOpts({noWait:true}));
       if(ok){lastSpeaker=next;turns++;spokenThisChain.add(next.id);}
       const tr=await runPresenceTracker(chat,{chain:_pchain});
       try{ await runWearingTracker(chat); }catch(_){}   // v48.2 — cue-gated; an ordinary turn costs nothing
@@ -33540,10 +33785,16 @@ async function runMultiCharTurn(chat,playerText,stimulus){
     postTurn(chat);
     maybeHeatBursts(chat);   // v19.5
   }catch(err){
-    if(err&&err.stopped){ try{ toast("Stopped."); }catch(_){} }   // v144.1 — Stop is not an error
-    else{
-    chat.messages.push({mid:newMid(),role:"assistant",speaker:"System",content:(err.friendly||"Something went wrong."),sysError:true,retryable:true,img:null,imgState:"idle",vidState:"idle",video:null});
-    persistChats();appendNewBubbles(); }
+    /* v144.1 — Stop is not an error. (!) v146.1 — and it ENDS the turn: no router 2, no next speaker,
+       no postTurn or heat run (the throw skipped them), one toast, and a notice Retry can act on — for
+       the character who was cut off when someone already answered, else for the whole turn. */
+    if(err&&err.stopped){
+      try{ toast("Stopped."); }catch(_){}
+      const _u=chat.messages.map(m=>!!(m&&m.role==='user'&&!m.textMsg)).lastIndexOf(true);
+      const _some=chat.messages.slice(_u+1).some(m=>m&&m.role==='assistant'&&m.speakerId&&!m.sysError);
+      _pushRetryNotice(chat,"Stopped — Retry asks again.",(_some&&err.speakerId)?{retrySpeakerId:err.speakerId,retryToId:err.answerTo||null}:null);
+    }
+    else _pushRetryNotice(chat,err.friendly||"Something went wrong.");
   }finally{
     heatEndTurn(chat);
     /* v144.1 — generation no longer waits for each reveal, but the TURN still ends when its lines are
@@ -33705,7 +33956,7 @@ async function apBeat(chat){
   _sugSeq++; _sugBusy=false; _sugOpts=[]; renderAutoBar();
   try{ _alog("autopilot.beat",pick.p.name+(pick.hanging?" (question left hanging)":"")+" · "+chat._apBeats+"/"+state.apCap); }catch(e){}
   try{
-    const ok=await playCharacterTurn(chat,pick.p,pick.addressed,{note:pick.note});
+    const ok=await playCharacterTurn(chat,pick.p,pick.addressed,{note:pick.note,tag:"apBeat"});   // v146.1 — tagged: Retry never takes an Autopilot beat
     if(!ok){ chat._apBeats=Math.max(chat._apBeats,state.apCap); return false; }   // failed — wait for the player
     if(turnSuperseded(chat,seq))return true;   // the player cut in; their own turn runs the pipeline
     try{ await runPresenceTracker(chat); }catch(e){}
@@ -33977,7 +34228,7 @@ async function smStep(chat){
       if(!pick)return;
       chat._smCharRun=(chat._smCharRun||0)+1;
       const seq=_dirSeq;
-      const ok=await playCharacterTurn(chat,pick.p,pick.addressed);
+      const ok=await playCharacterTurn(chat,pick.p,pick.addressed,{tag:"apBeat"});   // v146.1 — a Story-mode beat is not a reply Retry can take
       if(ok&&!turnSuperseded(chat,seq)){
         try{ await runPresenceTracker(chat); }catch(e){}
         try{ maybeBuildMemory(chat); }catch(e){}
@@ -34499,7 +34750,7 @@ async function generateCharacterReply(chat,p,messages,opts){
          (_hit?!_mine.some(x=>repeatKind(_again,x))
               :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
     }
-  }catch(e){}
+  }catch(e){ if(e&&e.stopped)throw e; }   // (!) v146.1 — Stop during the retry is a stop, not "keep the first answer"
   /* REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
      canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it. Retry
      ONCE on the fallback model; if it also refuses, or the only candidate IS the model that refused,
@@ -34511,7 +34762,7 @@ async function generateCharacterReply(chat,p,messages,opts){
       try{
         const alt=await chatCompletion(messages,fb,Object.assign({},rpOpts,{dbg:rpOpts.dbg.replace(/^Roleplay reply/,"Roleplay reply (refusal fallback)")}));
         if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
-      }catch(e){/* keep refused=true; honest message from the caller */}
+      }catch(e){ if(e&&e.stopped)throw e; /* otherwise keep refused=true; honest message from the caller */ }
     }
   }
   if(refused) return {text:"",raw:reply,refused:true,model};
@@ -34524,20 +34775,35 @@ async function generateCharacterReply(chat,p,messages,opts){
     {heat:wasHeat});
   return {text:text||"",raw:reply,refused:false,model};
 }
+/* v146.1 — a player-facing notice the Retry button can act on: after a Stop, a refusal, an empty reply
+   or a failed reply. `extra` may name the one character to ask again (retrySpeakerId / retryToId);
+   without it Retry re-runs the whole turn for the player's line. */
+function _pushRetryNotice(chat,text,extra){
+  const m=Object.assign({mid:newMid(),role:"assistant",speaker:"System",content:String(text||"Something went wrong."),sysError:true,retryable:true,
+    img:null,imgState:"idle",vidState:"idle",video:null},extra||{});
+  chat.messages.push(m); markChatDirty(chat); persistChats();
+  if(state.curChat===chat.id){ try{ appendNewBubbles(); refreshRetryMark(); }catch(e){} }
+  return m;
+}
 async function playCharacterTurn(chat,p,addressed,opts){
+  opts=opts||{};
   const _seq=_dirSeq;   // v26.5 — a player turn started after this one supersedes it (see turnSuperseded)
   const _hseq=_heatSeq, _wasHeat=!!(chat&&chat._heatBeat);   // v27.4 — heat cancellation (below)
+  /* v146.1 — frozen before the first await: the player this line is said to (the chat's own, never the
+     story the player may open meanwhile) and where the scene stands (see _placeSig / the drop below). */
+  const _who=turnUser(chat), _at=_placeSig(chat), _wasHere=inSceneIds(chat).includes(p.id);
   const present=presentCast(chat);
   const others=present.filter(c=>c.id!==p.id);   // only characters actually present
-  const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list&&state.curChat===chat.id){list.appendChild(typing);ChatScroll.sync();}   // v144.1 — never into another chat's window
+  _typingAfterQueue(chat,typing);   // v146.1 — after the lines queued before it; never into another chat's window
+  const _notice=(text)=>{ if(opts.notice)_pushRetryNotice(chat,text,{retrySpeakerId:p.id,retryToId:opts.answerTo||null}); else toast(text); };
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
       try{
-        const r=await retrieveMemories(castConvoText(chat,4),chat,p.id);
+        // v146.1 — the query is what THIS character heard: a whisper to someone else is not in it
+        const r=await retrieveMemories(castConvoText(chat,4,p.id),chat,p.id);
         injected={
           recent:(r.recent||[]),
           diary:(r.diary||[]),
@@ -34550,15 +34816,18 @@ async function playCharacterTurn(chat,p,addressed,opts){
     // NOT the router-time `addressed`: in a chain of responders `addressed` can name someone who is no
     // longer the last speaker, which left RESPONSE GUIDANCE naming a different person than the line the
     // model actually sees last (e.g. it said "responding to Emre" while the last line was Cansu's).
-    let targetName=state.user, targetId="__user__";
+    let targetName=_who, targetId="__user__";
     /* v44.5 — the pin, when a call site knows better than the transcript does. The transcript can
        only report who spoke LAST; it cannot know that this character was queued to answer someone
        else. When pinned, the tail highlights that same line (answerTo below), so the header, the
        guidance and the quoted line all name one person — the contradiction that let a second
        responder answer a question meant for the player. */
-    const _whisperBack=!!(opts&&opts.whisperBack);
-    const _pin=(opts&&opts.answerTo)||null;
-    if(_pin==="__user__"){ targetName=state.user; targetId="__user__"; }
+    const _whisperBack=!!opts.whisperBack;
+    const _pin=opts.answerTo||null;
+    /* v146.1 — the payload is assembled in THIS chat's world (inChatWorld): the builders read the open
+       story's setting, places, prompts and player, which were another story's once the player switched. */
+    let messages=inChatWorld(chat,()=>{
+    if(_pin==="__user__"){ targetName=_who; targetId="__user__"; }
     else {
       const _pc=_pin?(present.find(c=>c.id===_pin)||others.find(c=>c.id===_pin)):null;
       if(_pc){ targetName=_pc.name; targetId=_pc.id; }
@@ -34566,7 +34835,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
         const ll=lastDialogueLine(chat,p);   // the SAME line the tail highlights — never a different person
         const ls=ll&&ll.name;
         if(ls){
-          if(ls===state.user){ targetName=state.user; targetId="__user__"; }
+          if(ls===_who){ targetName=_who; targetId="__user__"; }
           else { const t=present.find(c=>c.name===ls)||others.find(c=>c.name===ls); if(t){ targetName=t.name; targetId=t.id; } else { targetName=ls; targetId=null; } }
         }
         if(addressed==='group'){ targetName=null; targetId=null; }   // aimed at the room, no single target
@@ -34579,36 +34848,39 @@ async function playCharacterTurn(chat,p,addressed,opts){
     const _pl=buildPayload(_kind,_hb,_tb);
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
-    let messages=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName},
+    let msgs=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName},
       ()=>Object.assign({},buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
         buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected, answerTo:_pin })));
-    if(!messages){
-      messages=[];
-      if(_pl.head)messages.push({role:"system",content:_pl.head});
-      messages.push(...taggedHist);
-      if(_pl.tail)messages.push({role:"system",content:_pl.tail});
+    if(!msgs){
+      msgs=[];
+      if(_pl.head)msgs.push({role:"system",content:_pl.head});
+      msgs.push(...taggedHist);
+      if(_pl.tail)msgs.push({role:"system",content:_pl.tail});
     }
     /* v49.1 — fires LAST, in the slot the addressee note proved rules survive in. */
     if(_whisperBack){
-      const _wg=fillTpl(blkTpl("whisper_back_guidance"),{user:state.user,self:p.name});
-      if(_wg.trim()) messages.push({role:"system",content:_wg});
+      const _wg=fillTpl(blkTpl("whisper_back_guidance"),{user:_who,self:p.name});
+      if(_wg.trim()) msgs.push({role:"system",content:_wg});
     }
+    return msgs;
+    });
     /* v116.0 — a call site's own closing note (Autopilot: "the player is quiet, take the beat"). */
-    if(opts&&opts.note&&String(opts.note).trim()) messages.push({role:"system",content:String(opts.note)});
+    if(opts.note&&String(opts.note).trim()) messages.push({role:"system",content:String(opts.note)});
     if(chat.pendingGmNudge){
       messages.push({role:"system",content:`[Director's note — react naturally in-scene as ${p.name}, do not mention this:] ${chat.pendingGmNudge}`});
       chat.pendingGmNudge=null;persistChats();
     }
     // v144.1 — generation, retry, refusal fallback and clean-up: the shared generator.
     const g=await generateCharacterReply(chat,p,messages);
-    typing.remove();
+    _typingGone(typing);
     // The model declined this content (not a token/length issue) — say so honestly and skip the
     // turn instead of pushing the refusal text as a bubble or blaming Max tokens.
-    if(g.refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return false; }
+    // v146.1 — in a player turn (opts.notice) it is a notice Retry can act on, not a passing toast.
+    if(g.refused){ _notice(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return false; }
     const cleaned=g.text;
     // Empty reply (model returned nothing even after the token-bump retry) — don't push a blank
     // bubble or run image/voice on nothing. Skip this character's turn cleanly.
-    if(!cleaned){ toast(""+p.name+": empty reply (try raising Max tokens in Settings)"); return false; }
+    if(!cleaned){ _notice(""+p.name+": empty reply (try raising Max tokens in Settings)"); return false; }
     // v26.5 — the player took their turn while this was generating (a gamemaster reaction racing
     // the player's own reply). Their turn answers the same moment, so drop this one rather than
     // giving one character two replies to it. v144.1 — a turn in THIS chat; see turnSuperseded.
@@ -34617,14 +34889,26 @@ async function playCharacterTurn(chat,p,addressed,opts){
     // generating. Nobody asked for it any more, so drop it instead of pushing a bubble the user
     // just switched off. This is the "heat keeps talking after I turn it off" fix.
     if(_wasHeat && (!state.heatOn || _hseq!==_heatSeq)) return false;
-    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
+    /* (!) v146.1 — THE SCENE MOVED WHILE THIS WAS BEING WRITTEN. The player travelled (or the speaker
+       left earshot) during generation, and the line landed in the new place as if its speaker stood
+       there. It answers a moment that is gone, so it is dropped (and logged). */
+    if(_placeSig(chat)!==_at || (_wasHere && !inSceneIds(chat).includes(p.id))){
+      try{ _alog("reply.dropped",p.name+"'s reply was written for a scene the player has left — not posted"); }catch(_){}
+      return false;
+    }
+    /* v146.1 — `present` is who could HEAR it (earshot), not everyone at the place: a character in the
+       back room does not learn what was said at the counter. castHistory and the memory builders read it. */
+    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:inSceneIds(chat).slice(),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
     /* v44.5 — WHO THIS LINE WAS SAID TO, recorded on the line itself. Everyone in the room hears
        it, but only one person was asked. Without this the next speaker sees "Merhaba Emre, Nil'le
        mi karsilastiniz?" as simply the newest thing said and answers it — as Emre. Read back by
        lastDialogueLine() and turned into the addressee guard in RESPONSE GUIDANCE. */
-    if(targetId){ msg.toId=targetId; msg.toName=targetName||(targetId==="__user__"?state.user:""); }
-    if(_whisperBack){ msg.whisperTo="__user__"; msg.whisperToName=state.user; }   // v49.1 — private both ways
+    if(targetId){ msg.toId=targetId; msg.toName=targetName||(targetId==="__user__"?_who:""); }
+    if(_whisperBack){ msg.whisperTo="__user__"; msg.whisperToName=_who; }   // v49.1 — private both ways
     if(chat._heatBeat)msg.heatBeat=true;   // v27.1 — so a burst can never chain off its own output
+    // v146.1 — what kind of line this is, so Retry only ever takes a reply to the player
+    if(opts.tag)msg[opts.tag]=true;
+    if(addressed==="arriving"||addressed==="leaving")msg.entrance=addressed;
     stampStatus(chat,msg);chat.messages.push(msg);
     const shown=enqueuePresent(msg.mid);   // queued at once, so the order on screen is the order pushed
     // BACKGROUND: persist + fire image pipeline immediately (text is ready) + voice check. The
@@ -34637,12 +34921,19 @@ async function playCharacterTurn(chat,p,addressed,opts){
     // reveal so a heat run or an autopilot beat paces to the animation. (!) v144.1 — the player-turn
     // chain passes noWait: it waited out every typewriter reveal before even asking for the next
     // line (about 20 s per long line at 28 cps), though the queue alone already keeps the order.
-    if(!(opts&&opts.noWait)) await shown;
+    if(!opts.noWait) await shown;
     return true;
   }catch(err){
-    typing.remove();
+    _typingGone(typing);
+    /* (!) v146.1 — A STOP ENDS THE CHAIN. This swallowed the stopped error like any failure, so the
+       chain went on to router 2, the next speaker and postTurn, with a "Name: Stopped." toast each. A
+       caller that owns a chain (opts.throwStop) gets the stop back; anyone else gets one toast. */
+    if(err&&err.stopped){
+      if(opts.throwStop){ err.speakerId=p.id; err.answerTo=opts.answerTo||null; throw err; }
+      toast("Stopped."); return false;
+    }
     // Don't abort the whole multi-character turn if one character's reply fails.
-    toast(""+p.name+": "+(err.friendly||"reply failed"));
+    _notice(""+p.name+": "+(err.friendly||"reply failed"));
     return false;
   }
 }
@@ -34816,7 +35107,8 @@ async function runPresenceTracker(chat,opts){
     // Sub-area (privacy) context: the areas of the current location, where the player is, and
     // who is in which area. Lets the tracker route "goes to the toilet"-style moves between areas
     // (which change earshot) instead of treating them as leaving the location entirely.
-    const hereLoc=chat.locationId?locById(chat.locationId):null;
+    const hereLoc=chat.locationId?chatLocById(chat,chat.locationId):null;   // v146.1 — this chat's places
+    const _user=turnUser(chat);
     let subBlock="", playerArea="";
     if(hereLoc && Array.isArray(hereLoc.sublocations) && hereLoc.sublocations.length>1){
       ensureSublocations(hereLoc);
@@ -34824,11 +35116,11 @@ async function runPresenceTracker(chat,opts){
       const pSub=subById(hereLoc,curSubId(chat));
       playerArea=pSub?pSub.name:"Entrance";
       const whereLines=presentCast(chat).map(p=>{ const s=subById(hereLoc,charSubId(chat,p.id)); return `  ${p.name}: ${s?s.name:"Entrance"}`; });
-      subBlock=`\n\nAREAS within ${hereLoc.name}: ${areaNames.join(", ")}.\n${state.user} (the player) is in: ${playerArea}.\nWho is in which area:\n${whereLines.join("\n")||"  (only the player)"}\n`+
+      subBlock=`\n\nAREAS within ${hereLoc.name}: ${areaNames.join(", ")}.\n${_user} (the player) is in: ${playerArea}.\nWho is in which area:\n${whereLines.join("\n")||"  (only the player)"}\n`+
         `If someone PRESENT moves to a DIFFERENT area of this same place (e.g. steps out to the toilet, goes to the bedroom, heads to the lounge), report it in "move" — NOT as an exit. Only use "exit" when they leave the whole place.`;
     }
-    const sys=fillTpl(up("presencePrompt"),{user:state.user});
-    const out=await chatCompletion(epSend("presencePrompt",sys,{roster:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}`,exchange:castConvoText(chat,4)}),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",110),dbg:"Presence tracker"});
+    // v146.1 — built in this chat's world (its prompt override, its player, the exchange's labels)
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("presencePrompt",fillTpl(up("presencePrompt"),{user:_user}),{roster:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}`,exchange:castConvoText(chat,4)})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",110),dbg:"Presence tracker"});
     const j=parseJSON(out);
     if(!j)return result;
     const all=cast.concat(chat.tempChars||[]);
@@ -34913,7 +35205,7 @@ async function runPresenceTracker(chat,opts){
       // v25.10 — simultaneous arrivals are narrated as ONE beat and recorded in ONE presence note
       // (notePresence natively takes a name list), instead of a bubble per entrant with the same
       // narration. Where each came FROM is read BEFORE their world position is overwritten below.
-      const hereLocObj=chat.locationId?locById(chat.locationId):null;
+      const hereLocObj=chat.locationId?chatLocById(chat,chat.locationId):null;
       const toName=(hereLocObj&&hereLocObj.name)||(chat&&chat.location)||"";
       const toDesc=(hereLocObj&&hereLocObj.description)||"";
       // RP-triggered arrival → the recent exchange is the "why".
@@ -39248,6 +39540,19 @@ function saveVidCues(){
 async function runWatchTurn(chat,text){
   const line=String(text||"").trim();
   if(!chat||!line)return;
+  /* (!) v146.1 — A CUE IS A TURN, AND ONE TURN RUNS AT A TIME. This bypassed the turn lock, so a cue
+     landing while the player's own turn was answering ran a second reply beside it (two answers, each
+     missing the other). A cue that arrives while a turn is running is dropped — it was a moment on
+     screen, and the running turn is already answering the scene. */
+  if(chatBusy(chat,"turn")){
+    try{ _alog("watch.skip","a video cue arrived while a turn was running — skipped"); }catch(_){}
+    if(chat.watchingNow){ chat.watchingNow=null; markChatDirty(chat); persistChats(); }
+    return;
+  }
+  const _unlock=holdChatLock(chat,"turn");
+  const _ownWho=!chat._turnWho; if(_ownWho)chat._turnWho=chatUserProfile(chat);
+  markPlayerTurn(chat);   // supersedes a Gamemaster reaction or Autopilot beat still being written
+  chat._exitedIds=null;
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,watchCue:true,
     present:presentIds(chat).slice(),content:line,img:null,imgState:"idle",vidState:"idle",video:null});
   chat.lastActive=Date.now();
@@ -39255,6 +39560,8 @@ async function runWatchTurn(chat,text){
   try{
     await runMultiCharTurn(chat,line,"This just happened in front of them:\n\""+line+"\"");
   }finally{
+    if(_ownWho)delete chat._turnWho;
+    _unlock();
     // The block is a ONE-TURN stimulus. Leaving it set would have the next typed message answered
     // as though the same thing were still on screen.
     if(chat.watchingNow){ chat.watchingNow=null; markChatDirty(chat); persistChats(); }
@@ -40318,11 +40625,11 @@ function noteWhereabouts(chat,ids,opts){
     const o=opts||{};
     const per=String(o.period||chatPeriod(chat)||"").trim();
     const placeId=o.placeId||chat.locationId||null;
-    const place=String(o.place||(placeId?((locById(placeId)||{}).name||""):"")||chat.location||"").trim();
+    const place=String(o.place||(placeId?((chatLocById(chat,placeId)||{}).name||""):"")||chat.location||"").trim();   // v146.1 — this chat's places
     const who=[...new Set((ids||[]).filter(Boolean))];
     if(!who.length)return;
     const nameOf=id=>{
-      if(id==="__user__")return String(state.user||"").trim();
+      if(id==="__user__")return String(turnUser(chat)||"").trim();   // (!) v146.1 — this chat's player, not the open story's
       const c=(state.personas||[]).find(x=>x&&x.id===id);
       return c?c.name:"";
     };
@@ -44835,11 +45142,20 @@ async function charQuestDeleteUI(id){
   persistUniverses(); toast("Character quest deleted"); _refreshQuestViews();
 }
 
-async function postTurn(chat){
+async function postTurn(chat,ptOpts){
   /* v96.1 — the player's own scene is the first thing the day ledger knows about. Everyone in
      earshot was here, in this part of the day, with each other and with the player — recorded once
      per period and place however many turns the scene runs for. */
   try{ const _here=presentIds(chat); if(_here.length) noteWhereabouts(chat,_here.concat(["__user__"])); }catch(e){}
+  /* v146.1 — ANALYSIS ONLY, for a retried reply: the relationship read and the future tracker run on
+     the new reply (retryLastReply has rolled back what the discarded one produced); the directors, the
+     pulse, texts and trackers do not run twice for one player line. (Freeform trackers keep what the
+     first reply moved: they record no source to undo, so re-running them would count the moment twice.) */
+  if(ptOpts&&ptOpts.analysisOnly){
+    if(state.relOn)runShortTermRel(chat).catch(()=>{});
+    runFutureTracker(chat).catch(()=>{});
+    return;
+  }
   // v19.8 — world pulse: background, never awaited; own gates inside (toggle, caps, period change).
   try{ maybeWorldPulse(chat); }catch(e){}
   // A character may text the player first — at most once per in-game period; background, own gates.
@@ -45159,10 +45475,11 @@ async function playGamemasterBeat(chat,nudge){
 // Classify a freshly-triggered event and store it as chat.activeEvent.
 async function setupActiveEvent(chat,eventText){
   try{
-    const known=curCast().map(c=>c.name).join(", ");
-    const ctx=directorContext(chat,"scene");
-    const _mem=directorMemoryDigest(chat,8);
-    const out=await chatCompletion(epSend("sceneSetup",up("sceneSetup")+_gpTail("stakes",chat)+"\n\n"+engineLangDirective(),{scene:ctx||"",memories:_mem||"",cast:`Known characters already in the cast: ${known}\nPlayer: ${state.user}`,event:eventText}),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.4),max:fnTok("gm",200),dbg:"Scene writer: setup"});
+    // v146.1 — THIS chat's cast, world and player (the open story's used to be read here)
+    const roster=curCast(chat);
+    const known=roster.map(c=>c.name).join(", ");
+    const _msgs=inChatWorld(chat,()=>epSend("sceneSetup",up("sceneSetup")+_gpTail("stakes",chat)+"\n\n"+engineLangDirective(),{scene:directorContext(chat,"scene")||"",memories:directorMemoryDigest(chat,8)||"",cast:`Known characters already in the cast: ${known}\nPlayer: ${turnUser(chat)}`,event:eventText}));
+    const out=await chatCompletion(_msgs,state.gmModel,{fn:"gm",temp:fnTemp("gm",0.4),max:fnTok("gm",200),dbg:"Scene writer: setup"});
     // If the classifier reply doesn't parse, still set up a minimal environment
     // event so the Scene Writer keeps driving the scene instead of going silent.
     const j=parseJSON(out)||{type:"environment",summary:eventText};
@@ -45194,7 +45511,11 @@ async function setupActiveEvent(chat,eventText){
     // real active persona, no participant is set: the beat simply stages no arrival (no temp chars).
     if(j.type==="character" && j.participant && validCharName(j.participant.name)){
       const pn=String(j.participant.name).trim();
-      let card=state.personas.find(p=>p.name.toLowerCase()===pn.toLowerCase());
+      /* (!) v146.1 — FROM THIS STORY ONLY. The lookup searched every persona in every universe, so an
+         "Ayla" from another story was staged as this event's participant, became the speaker and sat
+         in this chat's presentIds (which lets an event participant through from anywhere). Resolved
+         against this chat's active cast (findByName: exact, then a unique first name), never the player. */
+      let card=isPlayerName(chat,pn)?null:findByName(roster,pn);
       if(card && !isActiveChar(card))card=null;                 // don't reanimate a dead/removed character
       if(card && charBarredHere(chat,card))card=null;           // v21 — world rule bars them from this place
       if(card){
@@ -45631,7 +45952,7 @@ async function runSceneWriter(chat){
       const wantName=String(j.bring_in).trim();
       const already=presentCast(chat).some(c=>c.name.toLowerCase()===wantName.toLowerCase());
       if(!already){
-        let card=state.personas.find(p=>p.name.toLowerCase()===wantName.toLowerCase());
+        let card=isPlayerName(chat,wantName)?null:findByName(curCast(chat),wantName);   // v146.1 — this story's cast only (see setupActiveEvent)
         if(card && !isActiveChar(card))card=null;   // never reanimate a dead/removed character
         // Only an EXISTING roster character can be brought in — never invent one. If the name isn't a
         // real active persona (or it's barred from this place), the bring_in silently does nothing.
@@ -45825,7 +46146,7 @@ async function gamemasterReactions(chat){
       }
     }catch(e){console.warn("[router] gm-reaction router failed — no reaction played:",e&&e.message||e);}
     if(!next)break;
-    const ok=await playCharacterTurn(chat,next,addr);
+    const ok=await playCharacterTurn(chat,next,addr,{tag:"reaction"});   // v146.1 — a reaction, not a reply Retry can take
     if(!ok)break;
     lastSpeaker=next;turns++;spokenThisChain.add(next.id);
     await runPresenceTracker(chat);
@@ -45833,11 +46154,11 @@ async function gamemasterReactions(chat){
 }
 // A single character reacts to a narrator event (used in solo scenes).
 async function playSingleReaction(chat,p,eventText){
-  const list=document.getElementById('chatList');
   const typing=document.createElement('div');
   typing.className="bubble ai";typing.innerHTML=`<div class="meta">${avatarHTML(p)}${esc(p.name)}</div><div class="typing"><span></span><span></span><span></span></div>`;
-  if(list&&state.curChat===chat.id){list.appendChild(typing);ChatScroll.sync();}
+  _typingAfterQueue(chat,typing);   // v146.1 — after anything still queued on screen
   const _seq=_dirSeq;
+  const _who=turnUser(chat), _at=_placeSig(chat);   // v146.1 — see playCharacterTurn
   try{
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
@@ -45846,44 +46167,50 @@ async function playSingleReaction(chat,p,eventText){
     }catch(e){injected={recent:[],diary:[],longterm:[]};}}
     // v19 payload assembly: block content unchanged; block ORDER from the "gm" payload layout.
     // v144.1 — built for THIS character in THIS chat (selfP), not the open chat's first-present.
-    const _tOpts={ chat, selfP:p, targetName:state.user, targetId:"__user__" };
+    const _tOpts={ chat, selfP:p, targetName:_who, targetId:"__user__" };
+    // v146.1 — assembled in THIS chat's world (see inChatWorld)
+    const _msgs=inChatWorld(chat,()=>{
     const _hb=buildSystemPromptBlocks(injected,_tOpts);
     const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
-        targetName:state.user, targetId:"__user__", multi:false, injected });
+        targetName:_who, targetId:"__user__", multi:false, injected });
     const _pl=buildPayload("gm",_hb,_tb);
     // Same witness/scene-scoped history as every other character reply (see castHistory) — so a
     // gamemaster-prompted responder also never inherits dialogue from before they arrived.
     const history=castHistory(chat,p);
     const taggedHistory=tagLastForTarget(history);
-    let _msgs=ptBuildMessages("gm",Object.assign({},_hb,_tb),taggedHistory,
-      {chat,npc:p,targetName:state.user},
+    let m=ptBuildMessages("gm",Object.assign({},_hb,_tb),taggedHistory,
+      {chat,npc:p,targetName:_who},
       ()=>Object.assign({},buildSystemPromptBlocks(injected,_tOpts),
         buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name,
-          targetName:state.user, targetId:"__user__", multi:false, injected })));
-    if(!_msgs){
-      _msgs=[];
-      if(_pl.head)_msgs.push({role:"system",content:_pl.head});
-      _msgs.push(...taggedHistory);
-      if(_pl.tail)_msgs.push({role:"system",content:_pl.tail});
+          targetName:_who, targetId:"__user__", multi:false, injected })));
+    if(!m){
+      m=[];
+      if(_pl.head)m.push({role:"system",content:_pl.head});
+      m.push(...taggedHistory);
+      if(_pl.tail)m.push({role:"system",content:_pl.tail});
     }
+    return m;
+    });
     /* (!) v144.1 — `const reply` was reassigned two lines later, so EVERY one-on-one reaction threw a
        TypeError after the call was paid for: a "reaction failed" toast and nothing posted. It also
        skipped the refusal, empty and "Name:" safeguards the other paths have; it now shares them. */
     const g=await generateCharacterReply(chat,p,_msgs,{dbg:"Roleplay reply (gamemaster reaction)"});
-    typing.remove();
+    _typingGone(typing);
     // v26.5 — the player spoke while this was generating: their turn already answers the beat, so
     // pushing this too would give ONE character two replies to the same moment.
     if(turnSuperseded(chat,_seq))return;
     if(g.refused){ toast(""+p.name+": the model declined this content — try a different model for this scene in Settings → LLMs"); return; }
     if(!g.text){ toast(""+p.name+": empty reply (try raising Max tokens in Settings)"); return; }
+    if(_placeSig(chat)!==_at||!inSceneIds(chat).includes(p.id))return;   // v146.1 — the scene moved on meanwhile
     const reply=g.text;
-    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:presentIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null};
+    // v146.1 — heard by who shares the area; tagged a reaction (Retry never takes one)
+    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:inSceneIds(chat).slice(),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,reaction:true};
     stampStatus(chat,msg);chat.messages.push(msg);
     persistChats();appendNewBubbles();
     autoVisualize(msg.mid,reply);   // v29: image — or scene routing while the video window is open
     autoSpeakMsg(msg,p);
     runVoiceCheck(chat,msg,p);
-  }catch(err){typing.remove();toast(""+(err.friendly||"reaction failed"));}
+  }catch(err){_typingGone(typing);toast(""+(err.friendly||"reaction failed"));}
 }
 // Manual TEST trigger for a confrontation: pick a character who has an open suspicion about the
 // player (or, failing that, any nearby/known character) and have them come settle it. Lets you

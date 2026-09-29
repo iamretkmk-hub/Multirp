@@ -384,10 +384,11 @@ const {chromium}=require('playwright');
     await Promise.all([p1,p2]); __stub.delay=0; await __settle();
     const one=__lines(c);
     const p3=runWatchTurn(c,"A dog barks."); await p3; await __settle();
-    return {inFlight, one, two:__lines(c)};
+    return {inFlight, one, two:__lines(c), retry:_retryTarget(c)};
   });
   ok("a cue arriving mid-turn does not start a second reply", vc.inFlight===1&&vc.one.filter(l=>/Reply\./.test(l)).length===1&&!vc.one.some(l=>/explodes/.test(l)), JSON.stringify(vc));
   ok("a cue on an idle chat still plays its beat and a reply", /A dog barks/.test(vc.two.join("|"))&&vc.two.filter(l=>/Reply\./.test(l)).length===2, JSON.stringify(vc.two));
+  ok("a reply to a video cue is not retried as an answer to the player's older line", vc.retry===null, JSON.stringify(vc.retry));
 
   console.log("\n[typing dots never run ahead of a queued line]");
   const ty=await pg.evaluate(async()=>{

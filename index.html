@@ -3792,8 +3792,10 @@ NEVER A TASK OR A PROMISE: small requests done on the spot ("make me a coffee", 
 WHAT IS ALREADY ON RECORD is listed with ids. Never report one of those as new. If the lines CHANGE one (a new time or place, someone added, a detail given, different wording) report "update" with its id. If they END one (it was done, called off, broken, released) report "ended" with its id.
 WHAT IS BEING DISCUSSED BUT NOT YET AGREED is listed too. When it gets its answer, report it as "new" with stage "agreed". Do not report it again as "planning".
 
+THE LATEST LINES are numbered #1, #2 … For each item, "line" is the number of the line that settled it: the answer that agreed it, or the line that changed or ended it — never the line that only asked.
+
 Return ONLY JSON:
-{"items":[{"kind":"meeting|task|promise","action":"new|update|ended","stage":"planning|agreed","id":"<only for update or ended>","holder":"<who is bound, or who will do it>","about":"<one short line: what it is>"}]}
+{"items":[{"kind":"meeting|task|promise","action":"new|update|ended","stage":"planning|agreed","id":"<only for update or ended>","holder":"<who is bound, or who will do it>","about":"<one short line: what it is>","line":<the number of the line that settled it>}]}
 Most turns bind nothing. {"items":[]} is the normal answer.`},
   /* v137.1 — WHO IS COMING OVER. Replaces a regex over the player's text that filed a walk-in on
      the word "come" whatever the answer was, and adds the half that never existed: a character who
@@ -8982,6 +8984,9 @@ function loadState(){
   //
   //
   // ---- v147.2 refresh: CALENDAR + PROMISES + TEXTS ----
+  /* The tracker's lines are numbered and each item names the line that settled it, so what a pass files is
+     stamped with THAT reply (Retry of a later reply no longer takes back a plan agreed a turn earlier). */
+  _refreshPipe("x_future_tracker","You watch a roleplay for the moments that bind the FUTURE","\"line\":<the number of the line that settled it>",X_ENGINE_PROMPTS.x_future_tracker.def);
   // (end v147.2 CALENDAR + PROMISES + TEXTS)
   //
   //
@@ -15918,16 +15923,39 @@ function periodForHour(h){
    seventeen hundred rather than five in the morning. */
 /* v146.1 — ONE word list per part of the day, shared by the hour reader and the period inference so
    the two cannot drift: English, then Turkish with the suffixed forms people actually write. */
-const _TR_MORNING_W="morning|breakfast|sabah|sabaha|sabahki|sabahleyin|sabahları|kahvaltı|kahvaltıda|kahvaltıya|kahvaltıdan";
+// v147.2 — dawn/sunrise and sunset/dusk name a part of the day as surely as "morning" and "evening" do.
+const _TR_MORNING_W="morning|breakfast|dawn|sunrise|daybreak|first light|şafak|şafakta|gün doğarken|sabah|sabaha|sabahki|sabahleyin|sabahları|kahvaltı|kahvaltıda|kahvaltıya|kahvaltıdan";
 const _TR_NOON_W="midday|noon|lunch|öğlen|öğle|öğlene|öğleye|öğlenki|öğleyin|öğle yemeği|öğle yemeğinde";
 const _TR_AFTERNOON_W="afternoon|öğleden sonra|ikindi|ikindiye";
-const _TR_EVENING_W="evening|dinner|supper|akşam|akşama|akşamki|akşamleyin|akşamları|akşamüstü|akşamüstüne|akşam yemeği|akşam yemeğinde";
+const _TR_EVENING_W="evening|dinner|supper|sunset|dusk|gün batımı|gün batımında|gün batımına|gün batarken|akşam|akşama|akşamki|akşamleyin|akşamları|akşamüstü|akşamüstüne|akşam yemeği|akşam yemeğinde";
 const _TR_NIGHT_W="night|tonight|midnight|gece|geceye|geceki|geceleyin|gece yarısı";
 const _TR_HOUR={"bir":1,"iki":2,"üç":3,"dört":4,"beş":5,"altı":6,"yedi":7,"sekiz":8,"dokuz":9,"on":10,"onbir":11,"on bir":11,"oniki":12,"on iki":12};
+const _EN_HOUR={"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10,"eleven":11,"twelve":12};
+/* (!) v147.2 — DOES WHAT FOLLOWS THE NUMBER FOLLOW A CLOCK TIME? "about 10 or 12 guards", "about 20 or so
+   of them", "around 3 and a half hours", "around 15 at most" and "at 3 bars" were filed as times, because
+   "or"/"and"/"at" were let through as time words and "at N" was never checked at all. The second number of
+   a range, "or so" and "and a half" are stepped over and the word AFTER them decides; "at most"/"or more"
+   make it a count. `strict` (after "around"/"about", or a spelled-out hour): any other word is a count. Not
+   strict ("at"/"saat" + digits): only a plural or counted noun is — or any word after 13–23 ("At 20 she left"). */
+function _clockFollowOk(rest,strict,n){
+  let r=String(rest||"").replace(/^\s+/,"");
+  const eat=re=>{ const m=r.match(re); if(m)r=r.slice(m[0].length).replace(/^\s+/,""); };
+  eat(/^(?:or|to|-|–)\s*(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?![\p{L}\p{N}])/u);
+  eat(/^(?:or\s+so|and\s+a\s+half|and\s+half|buçuk)(?![\p{L}])/u);
+  if(/^(?:at\s+(?:most|least)|or\s+(?:more|less|fewer))(?![\p{L}])/u.test(r))return false;
+  const w=(r.match(/^\p{L}[\p{L}'’]*/u)||[""])[0];
+  if(!w)return true;
+  if(strict&&/^then\s+(?:more|some|others|another|less)(?![\p{L}])/u.test(r))return false;   // "about 6, then more came"
+  if(/^(?:o['’]clock|in|at|on|or|and|then|sharp|tonight|tomorrow|today|this|that|later|yarın|bu|gibi|civarı|civarında|pm|am|with|for|when)$/u.test(w))return true;
+  if(strict||(n!=null&&n>12))return false;
+  return !(/^(?:people|persons|men|women|kids|children|times|kişi|tane|adam)$/u.test(w)||(/^[a-z]+s$/.test(w)&&w.length>3&&!/(?:ss|us|is)$/.test(w)));
+}
 function statedHour(text){
   const t=" "+String(text||"").toLocaleLowerCase("tr")+" ";
   const W=x=>new RegExp("(?<![\\p{L}\\p{N}])(?:"+x+")(?![\\p{L}\\p{N}])","u");
   let h=null, mer=null, lead0=false;
+  const _ENW="one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
+  const _num=x=>/^\d/.test(x)?parseInt(x,10):(_EN_HOUR[x]||null);
   /* v144.1 — "9pm", "9 pm", "9:30 p.m." carry their own half of the day, with or without "at". */
   let m=t.match(/(?<![\p{L}\p{N}])(\d{1,2})(?:[:.][0-5]\d)?\s*(a\.?m\.?|p\.?m\.?)(?!\p{L})/u);
   if(m&&+m[1]>=1&&+m[1]<=12){ h=+m[1]; mer=m[2][0]; }
@@ -15936,18 +15964,34 @@ function statedHour(text){
     if(m){ h=parseInt(m[1],10); lead0=/^0\d/.test(m[1]); }
   }
   if(h==null){
-    /* (!) v146.1 — "around"/"about" are also how a COUNT is said: "about 20 guards" was filed as
-       Evening and "around 5 minutes later" as 17:00. After those two a number is a clock time only
-       when a word that could follow a time (or nothing) follows it — never a noun. */
-    const _CLK="(?!\\s+(?!o['’]clock|in\\b|at\\b|on\\b|or\\b|and\\b|then\\b|sharp|tonight|tomorrow|today|this|that|later|yarın|bu\\b|gibi|civarı)\\p{L})";
-    m=t.match(/(?<![\p{L}\p{N}])(?:saat|at)\s+([01]?\d|2[0-3])(?![\p{L}\p{N}])/u)
-     || t.match(new RegExp("(?<![\\p{L}\\p{N}])(?:around|about)\\s+([01]?\\d|2[0-3])(?![\\p{L}\\p{N}])"+_CLK,"u"))
-     || t.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])\s*o['’]clock/u)                                  // "8 o'clock"
-     || t.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])['’](?:de|da|te|ta)(?![\p{L}\p{N}])/u);    // "7'de"
-    if(m) h=parseInt(m[1],10);
+    // v147.2 — "half past eight", "quarter past 7", "quarter to 9" (8:45: the hour before).
+    m=t.match(new RegExp("(?<![\\p{L}\\p{N}])(half\\s+past|quarter\\s+past|quarter\\s+to)\\s+(\\d{1,2}|"+_ENW+")(?![\\p{L}\\p{N}])","u"));
+    if(m){ const x=_num(m[2]); if(x>=1&&x<=12) h=/to$/.test(m[1])?(x===1?12:x-1):x; }
   }
   if(h==null){
-    m=t.match(/(?<![\p{L}\p{N}])saat\s+(on\s+bir|on\s+iki|onbir|oniki|bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz|on)(?:de|da|te|ta)?(?![\p{L}\p{N}])/u);
+    /* (!) v146.1 — "around"/"about" are also how a COUNT is said: "about 20 guards" was filed as
+       Evening and "around 5 minutes later" as 17:00. After those two a number is a clock time only
+       when a word that could follow a time (or nothing) follows it — never a noun.
+       v147.2 — the follow test is _clockFollowOk, for "at"/"saat" too, and a spelled-out hour counts. */
+    const RX=[[/(?<![\p{L}\p{N}])(?:saat|at)\s+([01]?\d|2[0-3])(?![\p{L}\p{N}])/gu,false],
+      [/(?<![\p{L}\p{N}])(?:around|about)\s+([01]?\d|2[0-3])(?![\p{L}\p{N}])/gu,true],
+      [new RegExp("(?<![\\p{L}\\p{N}])(?:at|around|about)\\s+("+_ENW+")(?![\\p{L}\\p{N}])","gu"),true]];
+    for(const [rx,strict] of RX){
+      for(const mm of t.matchAll(rx)){ const x=_num(mm[1]); if(x!=null&&_clockFollowOk(t.slice(mm.index+mm[0].length),strict,x)){ h=x; break; } }
+      if(h!=null)break;
+    }
+    if(h==null){
+      m=t.match(new RegExp("(?<![\\p{L}\\p{N}])([01]?\\d|2[0-3]|"+_ENW+")\\s*o['’]clock","u"))                // "8 o'clock", "eight o'clock"
+       || t.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])['’](?:de|da|te|ta)(?![\p{L}\p{N}])/u);    // "7'de"
+      if(m) h=_num(m[1]);
+    }
+  }
+  if(h==null){
+    m=t.match(/(?<![\p{L}\p{N}])saat\s+(on\s+bir|on\s+iki|onbir|oniki|bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz|on)(?:de|da|te|ta)?(?![\p{L}\p{N}])/u)
+      /* v147.2 — "akşam dokuzda", "sabah yedi buçukta" without "saat": after a part-of-the-day word any hour;
+         alone, only the locative forms that are no other word ("onda" is "in him", "üçte bir" a third). */
+      || t.match(new RegExp("(?<![\\p{L}\\p{N}])(?:"+[_TR_MORNING_W,_TR_NOON_W,_TR_AFTERNOON_W,_TR_EVENING_W,_TR_NIGHT_W].join("|")+")\\s+(on\\s+bir|on\\s+iki|bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz|on)(?:\\s+buçuk)?(?:de|da|te|ta)(?![\\p{L}\\p{N}])","u"))
+      || t.match(/(?<![\p{L}\p{N}])(on\s+bir|on\s+iki|iki|üç|dört|beş|altı|yedi|sekiz|dokuz)(?:\s+buçuk)?(?:de|da|te|ta)(?![\p{L}\p{N}])(?!\s+bir(?![\p{L}]))/u);
     if(m){ h=_TR_HOUR[m[1].replace(/\s+/g," ").trim()]||null; }
   }
   if(h==null)return null;
@@ -15984,9 +16028,12 @@ function _calInferDayPeriod(text,today){
   const NUM="(\\d{1,2}|iki|üç|dört|beş|altı|yedi|two|three|four|five|six|seven)";
   const _M=s=>t.match(new RegExp("(?<![\\p{L}\\p{N}])"+s+"(?![\\p{L}\\p{N}])","u"));
   const nd=_M(NUM+"\\s*gün\\s+(?:sonra|içinde)") || _M("in\\s+"+NUM+"\\s*days?") || _M(NUM+"\\s*days?\\s+(?:from now|later)");
+  // v147.2 — "in 2 weeks", "3 hafta sonra": whole weeks, inside the 60-day horizon.
+  const nw=_M("in\\s+"+NUM+"\\s*weeks?") || _M(NUM+"\\s*weeks?\\s+(?:from now|later)") || _M(NUM+"\\s*hafta\\s+(?:sonra|içinde)");
   if(_B("day after tomorrow|öbür gün|yarından sonra").test(t)) day=today+2;
   // (!) v144.1 — before "now": "3 days from now" was filed for today because "now" matched first.
   else if(nd){ const n=words[nd[1]]||parseInt(nd[1],10); if(n>=1&&n<=60)day=today+n; }
+  else if(nw){ const n=(words[nw[1]]||parseInt(nw[1],10))*7; if(n>=7&&n<=60)day=today+n; }
   else if(_B("tomorrow|yarın|yarınki|yarına").test(t)) day=today+1;
   // v146.1 — "in a week" / "bir hafta sonra" are next week too.
   else if(_B("next week|in a week|in one week|a week from now|a week later|haftaya|gelecek hafta|önümüzdeki hafta|bir hafta sonra|1 hafta sonra").test(t)) day=today+7;
@@ -16006,6 +16053,7 @@ function _calInferDayPeriod(text,today){
   else if(_B(_TR_NOON_W).test(t)) period="Midday";
   else if(_B(_TR_EVENING_W).test(t)) period="Evening";
   else if(_B(_TR_NIGHT_W).test(t)) period="Night";
+  else if(_B("early tomorrow|tomorrow early|early in the day|yarın erkenden|yarın erken").test(t)) period="Morning";   // v147.2
   if(day==null && period && !weekday && _B("this|bu").test(t)) day=today;
   return {day,period};
 }
@@ -16082,9 +16130,16 @@ function _calIsDup(cal,cand,opts){
   const _isP=n=>{ try{ return _chat?isPlayerName(_chat,n):sameName(String(state.user||""),n,true); }catch(_){ return false; } };
   const names=n=>splitNames(n).filter(x=>!_isP(x)&&!/^\{\{\s*user\s*\}\}$/i.test(x));
   const exName=e=>(e&&e.executor&&e.executor!=="user"&&!meetIsBoth(e))?[String(e.executor).trim()]:[];
-  const cNames=names(cand.who).concat(exName(cand));
+  /* v147.2 — a plan's people: the names in `who`, its executor, and whoever its stored ids name (a plan
+     written with ids and an older label is still about those people). */
+  const _pool=(state.personas||[]).filter(p=>p&&(!_chat||!_chat.universeId||p.universeId===_chat.universeId));
+  const people=e=>{ const out=names(e.who).concat(exName(e));
+    planCharIds(e).forEach(id=>{ const p=_pool.find(x=>x.id===id); if(p&&!_isP(p.name)&&!out.some(n=>sameName(n,p.name,true)))out.push(p.name); });
+    return out; };
+  const cNames=people(cand);
   const placeTxt=e=>_nmFold(e.where||e.whereRaw||"");
   const pDiff=(a,b)=>{ const x=PERIODS.indexOf(a.period), y=PERIODS.indexOf(b.period); return (x<0||y<0)?0:Math.abs(x-y); };
+  const bothTimed=(a,b)=>PERIODS.indexOf(a.period)>=0&&PERIODS.indexOf(b.period)>=0;
   return (cal||[]).some(e=>{
     if(!e||e.done||e===cand||e.day==null)return false;
     const dd=Math.abs(e.day-cand.day);
@@ -16092,14 +16147,20 @@ function _calIsDup(cal,cand,opts){
     if(e.locationId&&cand.locationId&&e.locationId!==cand.locationId)return false;
     const pa=placeTxt(e), pb=placeTxt(cand);
     if(!(e.locationId&&cand.locationId)&&pa&&pb&&!pa.includes(pb)&&!pb.includes(pa))return false;
-    const exactTitle=_nmFold(e.title||"")===_nmFold(cand.title||"");
-    if(exactTitle&&dd===0)return true;
-    const sameTitle=exactTitle||_titleSimilar(e.title,cand.title);
+    /* (!) v147.2 — DIFFERENT PEOPLE ARE NEVER THE SAME MEETING. "Meet Mara at the cafe" was dropped as a
+       re-wording of "Meet Aria at the cafe" (title words), and v146.1's exact-title rule dropped "Coffee"
+       with Mara in the Evening because of "Coffee" with Aria in the Morning, and "Training session" for
+       two other people. Both sides name people and none of them is shared → a different meeting. */
+    const oN=people(e);
+    const shared=oN.some(n=>cNames.some(x=>sameName(n,x,true)));
+    if(cNames.length&&oN.length&&!shared)return false;
+    // v147.2 — an exact title is the same meeting only at (about) the same time, like a similar one.
+    const sameTitle=_nmFold(e.title||"")===_nmFold(cand.title||"")||_titleSimilar(e.title,cand.title);
     if(sameTitle&&!(dd===0&&pDiff(e,cand)>=2))return true;
-    if(dd===0&&cNames.length&&pDiff(e,cand)<2){
-      const oN=names(e.who).concat(exName(e));
-      if(oN.some(n=>cNames.some(x=>sameName(n,x,true))))return true;
-    }
+    /* (!) v147.2 — the same person on the same day is the same meeting only when BOTH times are known and
+       close: pDiff reads a missing period as 0, so "Help Aria move boxes" (no time given) was dropped
+       beside "Dinner with Aria". Without a time of its own, only the title can make it a repeat. */
+    if(dd===0&&shared&&bothTimed(e,cand)&&pDiff(e,cand)<2)return true;
     return false;
   });
 }
@@ -16117,7 +16178,7 @@ function playerHomeLoc(chat){
 // player lands at the player's home; the player going to a character lands at the character's home).
 function _resolvePlanLoc(chat,where,executor,counterpart){
   const raw=String(where||"").trim(), low=raw.toLowerCase();
-  const un=String(state.user||"").toLowerCase();
+  const un=String(chatUserName(chat)||"").toLowerCase();
   const cn=(counterpart&&counterpart.name)?counterpart.name.toLowerCase():"";
   const homeWord = low==="" || /\b(place|home|house|room|apartment|flat|ev|oda)\b/.test(low);
   const firstPerson  = /\b(my|mine|benim|evim|odam)\b/.test(low) || (un&&low.includes(un));
@@ -16171,7 +16232,7 @@ async function runCalendarEngine(chat,opts){
     // {{user}} and a character, OR two characters (not {{user}})") — and this call site never
     // substituted it, so the meetings detector read the literal characters "{{user}}" on every
     // single turn and had to guess which party the rules were talking about.
-    const msgs=[{role:"system",content:fillTpl(up("calPrompt"),{user:state.user||"the player"})+"\n\n"+engineLangDirective()}];
+    const msgs=[{role:"system",content:fillTpl(up("calPrompt"),{user:chatUserName(chat)||"the player"})+"\n\n"+engineLangDirective()}];   // v147.2 — this chat's player (the tracker runs after an await; the open story may be another)
     // Include recent phone texts alongside the spoken scene — a plan made over text is still a plan.
     recentExchangeMsgsWithTexts(chat,(opts&&opts.turns)||ENGINE_RECENT_TURNS+4).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${today}, ${(_at&&_at.period)||chatPeriod(chat)}.\n\nALREADY TRACKED MEETINGS (do NOT re-emit these, nor any re-wording or translation of them):\n${openItems||"(none yet)"}\n\nBased ONLY on the exchange above, return {"new":[...]}: genuinely NEW dated meetings agreed in this exchange.`});
@@ -16194,7 +16255,7 @@ async function runCalendarEngine(chat,opts){
       const tasks=(!(opts&&opts.fromTracker)&&parsed&&Array.isArray(parsed.tasks))?parsed.tasks:[];
       for(const t of tasks.slice(0,3)){
         if(!t||!t.title)continue;
-        const _su=x=>String(x||"").replace(/\{\{\s*user\s*\}\}/gi,state.user);
+        const _su=x=>String(x||"").replace(/\{\{\s*user\s*\}\}/gi,chatUserName(chat));
         const title=_su(String(t.title).trim()); if(title.length<3)continue;
         const cast=(state.personas||[]).filter(x=>x&&x.universeId===chat.universeId&&isActiveChar(x));
         const findC=n=>findByName(cast,n);   // v144.1 — Turkish-folded, ambiguity → nobody
@@ -16221,7 +16282,7 @@ async function runCalendarEngine(chat,opts){
           charIds:group.map(c=>c.id),charId:group[0].id,charId2:group[1]?group[1].id:null,
           withUser:false,certainty:"certain",probability:null,
           detail:_su(String(t.about||"").trim()).slice(0,300),
-          origin:`${state.user} asked ${assignee.name} to do this`,
+          origin:`${chatUserName(chat)} asked ${assignee.name} to do this`,
           where,locationId,character:group.map(c=>c.name).join(", ")});
       }
     }catch(_){}
@@ -16381,11 +16442,11 @@ async function estimateAttendance(chat,e){
   let feel="";
   try{ const o=relPeek(chat,p.id,"__user__"); feel=relFeelSummary(o); }catch(_){}
   const where=((e.locationId&&locById(e.locationId))||{}).name||e.where||"";
-  const dir=meetIsBoth(e)?`${state.user} and ${p.name} would each make their own way to ${where||"the place agreed"}`
-          :(meetMode(e)==="user"?`${state.user} would come to ${p.name}`:`${p.name} would come to ${state.user}`);
-  const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${state.user}\n${feel||"neutral / no strong feeling"}\n\n# The meeting\n"${e.title}"${where?` at ${where}`:""}${e.period?` (${e.period})`:""} on day ${e.day} — ${dir}. ${p.name} did NOT firmly commit.\n\nHow likely is ${p.name} to actually attend? Return {"probability": N}.`;
+  const dir=meetIsBoth(e)?`${chatUserName(chat)} and ${p.name} would each make their own way to ${where||"the place agreed"}`
+          :(meetMode(e)==="user"?`${chatUserName(chat)} would come to ${p.name}`:`${p.name} would come to ${chatUserName(chat)}`);
+  const usr=`# ${p.name}\n${charBioBlock(p,{self:false})}\n\n# How ${p.name} feels about ${chatUserName(chat)}\n${feel||"neutral / no strong feeling"}\n\n# The meeting\n"${e.title}"${where?` at ${where}`:""}${e.period?` (${e.period})`:""} on day ${e.day} — ${dir}. ${p.name} did NOT firmly commit.\n\nHow likely is ${p.name} to actually attend? Return {"probability": N}.`;
   try{
-    const out=await chatCompletion(epSend("attendanceEstimate",fillTpl(up("attendanceEstimate"),{user:state.user}),{data:usr}),
+    const out=await chatCompletion(epSend("attendanceEstimate",fillTpl(up("attendanceEstimate"),{user:chatUserName(chat)}),{data:usr}),
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance estimate · "+p.name});
     const j=parseJSON(out)||{}; let n=Number(j.probability);
     e.probability=isFinite(n)?Math.max(0,Math.min(100,Math.round(n))):50;
@@ -16416,7 +16477,7 @@ async function _adjustAttendance(chat){
     e._adjAt=slot;
     try{
       const convo=recentExchangeMsgsWithTexts(chat,6).map(m=>`${m.name}: ${m.content}`).join("\n");
-      const out=await chatCompletion(epSend("attendancePersuade",fillTpl(up("attendancePersuade"),{user:state.user,char:p.name,probability:(e.probability!=null?e.probability:50)}),{meeting:`The meeting: "${e.title}"${e.period?` (${e.period})`:""}, day ${e.day}.`,exchange:convo}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance persuasion · "+p.name});
+      const out=await chatCompletion(epSend("attendancePersuade",fillTpl(up("attendancePersuade"),{user:chatUserName(chat),char:p.name,probability:(e.probability!=null?e.probability:50)}),{meeting:`The meeting: "${e.title}"${e.period?` (${e.period})`:""}, day ${e.day}.`,exchange:convo}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:fnTok("mem",60),dbg:"Attendance persuasion · "+p.name});
       const j=parseJSON(out)||{}; let n=Number(j.probability); if(!isFinite(n))continue;
       if(e.done||e.prompted)continue;                  // resolved (or being resolved) while the call was out
       n=Math.max(0,Math.min(100,Math.round(n)));
@@ -16455,15 +16516,27 @@ async function _adjustAttendance(chat){
      - the tracker filed it in the very last stretch (the future reconcile has not judged it yet);
      - Do Not Disturb kept it from resolving.
    `endPeriod` absent: the whole day passed. */
+/* (!) v147.2 — three corrections:
+     - an OLDER day's meeting is never rolled: the Do Not Disturb and last-stretch tests ran before the
+       day test, so a meeting missed days ago came back as "moved to today" once DND was switched on;
+     - the part of the day that is current counts as still ahead only for the PLAYER's meetings. A meeting
+       between two characters is due from the start of its part of the day and the calendar executor runs
+       it then; it rolled at every End Day with a notice to the player about other people's plans;
+     - a slot a live Scene Writer event kept from resolving (`eventHeld`, stamped by resolveDueMeetings)
+       moves on: nobody could have gone. */
 function _calRollsAtDayEnd(chat,e,day,endPeriod){
   if(!e||e.day==null)return false;
   if(e.day>day)return true;
-  if(chat&&chat.dnd&&_planIncludesUser(e))return true;
+  if(e.day<day)return false;
+  const mine=_planIncludesUser(e,chat);
+  if(chat&&chat.dnd&&mine)return true;
   if(e.ftAt&&e.ftAt.day===day&&(!endPeriod||e.ftAt.period===endPeriod))return true;
+  if(mine&&e.eventHeld===day)return true;
   const endIdx=PERIODS.indexOf(endPeriod);
-  if(e.day<day||endIdx<0)return false;
+  if(endIdx<0)return false;
   const pi=PERIODS.indexOf(e.period);
-  if(pi<0||pi>=endIdx)return true;
+  if(pi<0||pi>endIdx)return true;
+  if(pi===endIdx)return mine;
   return e.snoozedAt!=null&&Math.floor(e.snoozedAt/10)===day;
 }
 function plantUnkeptMeetingMemories(chat,day,endPeriod){
@@ -16495,6 +16568,8 @@ function plantUnkeptMeetingMemories(chat,day,endPeriod){
           e.day=sl?sl.day:now; if(sl)e.period=sl.period;
           rolled.push(e);
         }else{ calClose(c,e,"lapsed"); lapsed.push(e); }
+        // v147.2 — the notices are the player's: another pair's plan moves (or lapses) without one.
+        if(!_planIncludesUser(e,c)){ const L=rolled.indexOf(e)>=0?rolled:lapsed; L.splice(L.indexOf(e),1); }
         touched=true; return;
       }
       if(!state.mem)return;
@@ -16661,13 +16736,13 @@ function _plantNoShowMemory(chat,p,e,reason,variant){
     if(variant==="stood_up"){ key="mem_noshow_stood_up"; emotion="hurt"; }
     else if(variant==="user_no_show"){ key="mem_noshow_user"; emotion="hurt"; }
     const where=((e&&e.locationId&&locById(e.locationId))||{}).name||(e&&e.where)||"";
-    const content=fillTpl(blkTpl(key),{user:state.user||"they",title:briefDesc(String((e&&e.title)||"what we arranged"),120),
+    const content=fillTpl(blkTpl(key),{user:chatUserName(chat)||"they",title:briefDesc(String((e&&e.title)||"what we arranged"),120),
       at:where?fillTpl(blkTpl("mem_plan_at"),{place:where}):""}).trim();
     if(!content)return;
     if((memoriesOf(p.id)||[]).some(m=>{const t=(typeof memText==="function")?memText(m):(m&&m.content);return t&&String(t).toLowerCase()===content.toLowerCase();}))return;
     rememberMemory({ id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
       ownerId:p.id, character:p.name, content, type:"EXPERIENCE", emotion,
-      people:memPeople(p.name,state.user),
+      people:memPeople(p.name,chatUserName(chat)),
       importance:0.6, tags:["no_show","meeting"], location:where||(chat&&chat.location)||"",
       date:Date.now(), gameDay:(chat&&chat.gameDay)||1, gamePeriod:_memPeriod(chat),
       source:"calendar_noshow",
@@ -16723,16 +16798,16 @@ function meetingBackstory(chat,e,p,opts){
       ? "it was floated rather than settled — nobody gave a firm yes, so whoever is going is going on an open question"
       : "both sides agreed to it"}${e.source==="auto"?", in conversation":""}.`);
   lines.push(mode==="both"
-    ? `WHO TRAVELS: neither hosts. ${state.user} and ${p?p.name:"the other"} each make their own way to ${where||"the place"} and arrive separately — they are NOT travelling together and do not meet on the road.`
+    ? `WHO TRAVELS: neither hosts. ${chatUserName(chat)} and ${p?p.name:"the other"} each make their own way to ${where||"the place"} and arrive separately — they are NOT travelling together and do not meet on the road.`
     : (mode==="user"
-        ? `WHO TRAVELS: ${state.user} goes to ${p?p.name:"them"}, alone.`
-        : `WHO TRAVELS: ${p?p.name:"They"} comes to ${state.user}, alone.`));
+        ? `WHO TRAVELS: ${chatUserName(chat)} goes to ${p?p.name:"them"}, alone.`
+        : `WHO TRAVELS: ${p?p.name:"They"} comes to ${chatUserName(chat)}, alone.`));
   if(p){
     const mem=_meetMemLines(e,p,3);
     if(mem.length) lines.push(`WHAT ${p.name.toUpperCase()} REMEMBERS THAT BEARS ON IT (their own memories — do not retell them, let them colour the beat):\n- ${mem.join("\n- ")}`);
     let feel="";
     try{ feel=relFeelSummary(relPeek(chat,p.id,"__user__")); }catch(_){}
-    if(feel) lines.push(`HOW ${p.name.toUpperCase()} FEELS ABOUT ${String(state.user||"them").toUpperCase()} RIGHT NOW: ${String(feel).slice(0,300)}`);
+    if(feel) lines.push(`HOW ${p.name.toUpperCase()} FEELS ABOUT ${String(chatUserName(chat)||"them").toUpperCase()} RIGHT NOW: ${String(feel).slice(0,300)}`);
   }
   lines.push(`WRITE ONE BRIEF CLAUSE of why they are going and how it sits with them — enough to bring it back to mind before the two of them are face to face. Do not summarise the plan, do not resolve anything, and do not have anyone speak.`);
   return lines.join("\n");
@@ -16752,13 +16827,13 @@ async function narrateMeetingOutcome(chat,e,p){
   try{
     if(state.key){
       const scene=recentExchangeMsgs(chat,4).map(m=>`${m.name}: ${m.content}`).join("\n");
-      const ask=`In this roleplay, ${state.user} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${state.user} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
+      const ask=`In this roleplay, ${chatUserName(chat)} waited${where?` at ${where}`:""} for ${name} — they had a plan: "${e.title}". ${name} never came. Write ONE short, vivid past-tense narrator sentence, in the SAME LANGUAGE as the scene below, of ${chatUserName(chat)} waiting and ${name} never showing up. No quotes, no dialogue — just the beat.\n\nScene:\n${scene}`;
       const out=await chatCompletion(epSend("x_meeting_no_show_beat",up("x_meeting_no_show_beat")+"\n\n"+langDirective(),{data:ask}),
         state.memModel,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",90),dbg:"Meeting no-show beat"});
       line=String(out||"").trim().replace(/^["'—\s]+|["'\s]+$/g,"");
     }
   }catch(_){}
-  if(!line) line=`${state.user} waited${where?` at ${where}`:""}, but ${name} never came.`;
+  if(!line) line=`${chatUserName(chat)} waited${where?` at ${where}`:""}, but ${name} never came.`;
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,
     content:`— ${line} —`,present:presentIds(chat).slice(),
     img:null,imgState:"idle",vidState:"idle",video:null});
@@ -16770,8 +16845,23 @@ const CAL_SNOOZE_MAX=2;
 async function resolveDueMeetings(chat){
   if(!state.calOn||!chat)return false;
   if(chat.dnd)return false;                                          // Do Not Disturb silences meetings
-  if(chat.activeEvent && !chat.activeEvent.resolved)return false;    // never crash a live event
   const today=chat.gameDay||1, slot=_calSlot(chat);
+  /* (!) v147.2 — A LIVE EVENT DOES NOT UNDO BEING TOGETHER. The event gate came first, so with any Scene
+     Writer event running — even "rain starts" — the player could sit with the person at the very place
+     through the whole slot, and End Day then logged it unkept and told them "never came". Now: a meeting
+     whose counterpart is here, at its place, is met whatever is going on; an environment event blocks
+     nothing; any other live event holds the rest, stamped `eventHeld` so End Day moves them on, not blames. */
+  const _dueToday=chatCalendar(chat).filter(x=>!x.done && !x.prompted && x.day===today && planDueNow(chat,x) && _planIncludesUser(x,chat));
+  let _met=0;
+  _dueToday.forEach(x=>{ const p=meetingCounterpart(chat,x);
+    if(p&&(!x.locationId||x.locationId===(chat.locationId||null))&&presentIds(chat).includes(p.id)){ calClose(chat,x,"met"); _met++; } });
+  if(_met){ persistChats(); try{ updateCalendarBadge(); }catch(_){} }
+  const _ev=chat.activeEvent;
+  if(_ev && !_ev.resolved && _ev.type!=="environment"){               // never crash a live event
+    let _held=0; _dueToday.forEach(x=>{ if(!x.done&&x.eventHeld!==today){ x.eventHeld=today; _held++; } });
+    if(_held)persistChats();
+    return false;
+  }
   // Only the player's own meetings resolve here; char↔char offstage plans (no user) belong to the
   // world-pulse executor.
   /* (!) v144.1 — TODAY'S MEETINGS ONLY. planDueNow is true for every overdue entry, so the morning
@@ -16841,7 +16931,7 @@ async function _resolveDueMeeting(chat,e,opts){
        is the easiest thing to write. */
     const _bs=meetingBackstory(chat,e,p);
     const why=`${_bs}\n\nThey are arriving now, at the end of that journey, and they made it ALONE — nobody travelled with them.`
-      +(meetIsBoth(e)?` ${state.user} came to this place separately, by their own way; the two of them did NOT travel together and did not meet on the road.`:"");
+      +(meetIsBoth(e)?` ${chatUserName(chat)} came to this place separately, by their own way; the two of them did NOT travel together and did not meet on the road.`:"");
     let narr="";
     try{ narr=await narrateCharMove(chat,p,{dir:"enter",fromName:charPlaceName(chat,p),
       toName:(hereObj&&hereObj.name)||(chat&&chat.location)||"", toDesc:(hereObj&&hereObj.description)||"", why}); }catch(_){}
@@ -16913,7 +17003,7 @@ async function _resolveDueMeeting(chat,e,opts){
       }
     }
     settle("stood_up");
-    try{ _calNotice(chat,`${p?p.name:"They"} went to ${locName||"the meeting place"} for "${e.title}", but ${state.user} wasn't there`); }catch(_){}
+    try{ _calNotice(chat,`${p?p.name:"They"} went to ${locName||"the meeting place"} for "${e.title}", but ${chatUserName(chat)} wasn't there`); }catch(_){}
     if(p)_plantNoShowMemory(chat,p,e,null,"stood_up");
     return false;
   }
@@ -17211,7 +17301,7 @@ function chatPromises(chat){
 function livePromises(chat){ return chatPromises(chat).filter(pr=>pr&&pr.status==="open"); }
 function _prResolveId(chat,name){
   const n=String(name||"").trim(); if(!n)return "";
-  const low=n.toLowerCase(), un=String(state.user||"").toLowerCase().trim();
+  const low=n.toLowerCase(), un=String(chatUserName(chat)||"").toLowerCase().trim();
   if(low==="user"||low==="player"||low==="{{user}}"||(un&&low===un))return "__user__";
   const uid=(chat&&chat.universeId)||state.curUniverse||null;
   const pool=(state.personas||[]).filter(x=>x&&(!uid||x.universeId===uid));
@@ -17221,8 +17311,8 @@ function _prResolveId(chat,name){
   const near=pool.find(x=>String(x.name||"").toLowerCase().split(/\s+/)[0]===first);
   return near?near.id:"";
 }
-function _prLabel(id,fallback){
-  if(id==="__user__")return state.user||"You";
+function _prLabel(id,fallback,chat){   // v147.2 — chat: whose player "__user__" is
+  if(id==="__user__")return (chat?chatUserName(chat):state.user)||"You";
   try{ const l=ownerLabel(id); if(l)return l; }catch(e){}
   return fallback||"someone";
 }
@@ -17268,13 +17358,20 @@ function _prNames(t,chat){
    Turkish casing, on the words that are not somebody's name ("Fatma" is not a negation). */
 const _PR_NEG_TR=/(?:m[ae]y[ae]c[ae][kğ]|m[ıiuü]yor|m[ae]m[ıiuü]ş|m[ae]z(?:s[ıi]n(?:[ıi]z)?|l[ae]r|[ıi]m|s[ıi]k|d[ıi])?$|m[ae]d[ıiuü](?:m|n|k|n[ıi]z|l[ae]r)?$|m[ae]s[ıi]n$|m[ae]y[ıi]n(?:[ıi]z)?$)/u;
 const _PR_NEG_TR_IMP=new Set(["söyleme","yapma","gitme","gelme","anlatma","dokunma","bakma","içme","çıkma","girme","yaklaşma","karışma","bulaşma","konuşma","arama","açma"]);
+// v147.2 — "-mAmAlI" (you must not: "görüşmemelisin") and "-mAyAbil" (you may not: "gelmeyebilirsin").
+const _PR_NEG_TR2=/m[ae]m[ae]l[ıi]|m[ae]y[ae]bil/u;
 function _prNeg(t,names){
   const s=String(t||"");
-  if(/(?<![\p{L}])(not|never|no|asla|hiç|değil|sakın)(?![\p{L}])|n['’]t(?![\p{L}])/iu.test(s))return true;
+  // v147.2 — "cannot", and the apostrophe-less "wont"/"dont"/"cant" people type.
+  if(/(?<![\p{L}])(not|never|no|cannot|wont|dont|cant|didnt|shouldnt|mustnt|asla|hiç|değil|sakın)(?![\p{L}])|n['’]t(?![\p{L}])/iu.test(s))return true;
   const W=s.match(/\p{L}[\p{L}\p{M}]*/gu)||[];
+  /* v147.2 — a Turkish sentence that ENDS on a bare -mA is a negative imperative ("Berk'le görüşme", "Onunla
+     buluşma") for any verb, not only the listed ones; an English line ("you will become") never is. */
+  const _en=/(?<![\p{L}])(you|will|the|to|and|i|my|your|shall)(?![\p{L}])/iu.test(s);
   // a capitalised word past the first is a name ("Yılmaz"), never a verb
   return W.some((w0,i)=>{ if(i>0&&/^\p{Lu}/u.test(w0))return false; const w=w0.toLocaleLowerCase("tr");
-    return !(names&&names.has(_nmFold(w)))&&(_PR_NEG_TR_IMP.has(w)||(w.length>=6&&_PR_NEG_TR.test(w))); });
+    return !(names&&names.has(_nmFold(w)))&&(_PR_NEG_TR_IMP.has(w)||(w.length>=6&&(_PR_NEG_TR.test(w)||_PR_NEG_TR2.test(w)))
+      ||(!_en&&i===W.length-1&&i>0&&w.length>=5&&/m[ae]$/u.test(w))); });
 }
 /* The same thing said another way: "keep/stay away from X" and "don't go near X" are one prohibition,
    "stop seeing X" is "not seeing X"; a few verbs that mean the same are one word; English -ing/-ed/-s are
@@ -17294,7 +17391,23 @@ function _prStem(w){
     else if(x.length>4&&/[^s]s$/.test(x))x=x.slice(0,-1);
     x=_PR_SYN[x]||x;
   }
+  // v147.2 — Turkish "görüş-"/"buluş-" (meet) is "gör-" (see), as meet/visit are "see" above.
+  x=x.replace(/^(?:gorus|bulus)(m?)[ae]/,"gor$1e").replace(/^(?:gorus|bulus)/,"gor");   // the suffix vowel follows "gör"
   return x.slice(0,5);
+}
+/* v147.2 — WHOSE: "your mother" / "my mother", "kardeşimi" / "kardeşini" (my / your sibling) are one word
+   apart and two different promises. English: the possessive before a noun. Turkish: the same word with the
+   1st-person "m" where the other has the 2nd/3rd-person "n" ("annemin"/"annenin", "evime"/"evine"). */
+function _prOwnerClash(a,b){
+  const en=t=>{ const o={}; for(const m of String(t||"").matchAll(/(?<![\p{L}])(my|your|his|her|their|our)\s+(\p{L}{3,})/giu)){
+    const k=_prStem(m[2]); if(_PR_STOP.has(m[2].toLowerCase()))continue; (o[k]=o[k]||new Set()).add(m[1].toLowerCase()); } return o; };
+  const A=en(a), B=en(b);
+  if(Object.keys(A).some(k=>B[k]&&![...A[k]].some(x=>B[k].has(x))))return true;
+  const W=t=>(String(t||"").match(/\p{L}+/gu)||[]).map(w=>_nmFold(w)).filter(w=>w.length>=5);
+  const wb=W(b);
+  return W(a).some(x=>wb.some(y=>{ if(x.length!==y.length||x===y||x.slice(0,3)!==y.slice(0,3))return false;
+    let d=-1; for(let i=0;i<x.length;i++){ if(x[i]!==y[i]){ if(d>=0)return false; d=i; } }
+    return d>=3&&((x[d]==="m"&&y[d]==="n")||(x[d]==="n"&&y[d]==="m")); }));
 }
 // Words that name a part of the day or a day: two promises tied to different ones are different words.
 const _PR_WHEN=new Set(["morning","evening","night","afternoon","noon","midnight","tonight","tomorrow","today","weekend",
@@ -17313,6 +17426,11 @@ function _prSame(a,b,chat){
   const whenOf=t=>new Set(_prNorm(t).split(" ").map(w=>_nmFold(w)).filter(w=>_PR_WHEN.has(w)));
   const WA=whenOf(a), WB=whenOf(b);
   if(WA.size&&WB.size&&![...WA].some(w=>WB.has(w)))return false;       // "every night" vs "every morning"
+  // v147.2 — numbers tell promises apart ("pay 100 gold" / "pay 500 gold", "home by 10" / "home by 12").
+  const numOf=t=>new Set(String(t||"").match(/\d+/g)||[]);
+  const DA=numOf(a), DB=numOf(b);
+  if(DA.size&&DB.size&&![...DA].some(x=>DB.has(x)))return false;
+  if(_prOwnerClash(a,b))return false;                                  // "your mother" vs "my mother"
   const nameStems=new Set([...NA].map(n=>n.slice(0,5)));
   const words=t=>[...new Set(_prNorm(t).split(" ").filter(w=>w&&!_PR_STOP.has(w)&&!_PR_PRON.test(w)&&!_PR_WHEN.has(_nmFold(w))).map(_prStem)
     .filter(w=>w&&!nameStems.has(w)))];
@@ -17320,8 +17438,10 @@ function _prSame(a,b,chat){
   if(!A.length||!B.length)return !A.length&&!B.length&&NA.size>0;       // only the name left on both sides
   const sb=new Set(B); let hit=0; A.forEach(w=>{ if(sb.has(w))hit++; });
   const r=hit/Math.min(A.length,B.length);
-  // the same people named and the same polarity: half the content words is a restatement
-  return r>=(NA.size?0.5:0.6);
+  /* the same people named and the same polarity: half the content words is a restatement.
+     (!) v147.2 — but not ONE shared word: "…tell Hakan about the money" / "…about the baby" and "help Aria
+     move" / "help Aria cook" merged on "tell"/"help" alone. With a name: two shared words, or two thirds. */
+  return NA.size?((hit>=2&&r>=0.5)||r>=0.67):r>=0.6;
 }
 function recordPromise(chat,o,day){
   if(!chat||!o||!o.promise)return null;
@@ -17331,7 +17451,9 @@ function recordPromise(chat,o,day){
   if(!holderId)return null;                       // a commitment with no owner cannot be held to
   const toId=toName?_prResolveId(chat,toName):"";
   const promise=briefDesc(String(o.promise).trim(),220);   // v62.1 — word-safe, like every other cap
-  const dup=list.find(x=>x&&x.status==="open"&&x.holderId===holderId&&_prSame(x.promise,promise,chat));
+  /* (!) v147.2 — and to the same person: "I will come to your birthday party" to Aria and the same words to
+     Mara are two promises (it merged them, and Mara's was lost). A side with no recipient still matches. */
+  const dup=list.find(x=>x&&x.status==="open"&&x.holderId===holderId&&!(x.toId&&toId&&x.toId!==toId)&&_prSame(x.promise,promise,chat));
   if(dup){ dup.day=dup.day||day; dup.seenDay=day||dup.seenDay; return dup; }    // already given; restating it changes nothing (but it was raised)
   /* (!) v61.1 — AN UNRECOGNISED KIND IS A MIS-SCRAPE, NOT A PROMISE. This used to fall back to
      "promise" for anything, which meant a line the extractor could not even classify still entered
@@ -17350,8 +17472,8 @@ function recordPromise(chat,o,day){
   if(!showsAs||/^(always|forever|from now on|her zaman|bundan sonra)\b/i.test(showsAs))return null;
   const e={
     id:"pr_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
-    holderId, holderName:_prLabel(holderId,holderName),
-    toId, toName:toId?_prLabel(toId,toName):toName,
+    holderId, holderName:_prLabel(holderId,holderName,chat),
+    toId, toName:toId?_prLabel(toId,toName,chat):toName,
     ask:briefDesc(String(o.ask||"").trim(),200),
     promise, showsAs,
     kind,
@@ -17379,7 +17501,10 @@ function _prPrune(chat,day){
   list.forEach(pr=>{
     if(!pr||pr.status!=="open")return;
     if(pr.seenDay==null){ pr.seenDay=d; changed=true; return; }
-    if(pr.kind==="secret"||pr.kind==="prohibition")return;
+    /* (!) v147.2 — an ARRANGEMENT ("we are exclusive now") and a CHANGE ("I quit drinking") are standing
+       states, kept by living them, not by talking about them — they lapsed at 21 days like the rest. Only a
+       plain promise (a thing still to be done) goes quiet from neglect. */
+    if(pr.kind&&pr.kind!=="promise")return;
     if((d-(pr.seenDay||pr.day||d))>=PR_LAPSE_DAYS){ pr.status="lapsed"; pr.statusDay=d; pr.note="no longer mentioned"; changed=true; }
   });
   let keep=list.filter(pr=>pr&&(pr.status==="open"||((d-(pr.statusDay||pr.day||0))<=7)));
@@ -17585,7 +17710,7 @@ async function runPromiseEngine(chat,opts){
       .map(pr=>`- [${pr.id}] ${pr.holderName}${pr.toName?` → ${pr.toName}`:""}: ${pr.promise}${pr.ask?` (asked: ${pr.ask})`:""}`)
       .join("\n");
     const cast=[chatUserName(chat)||"You",...curCast(chat).map(c=>c.name)].filter(Boolean).join(", ");   // v146.1 — this chat's cast, not the open one's
-    const msgs=[{role:"system",content:fillTpl(up("promisePrompt"),{user:state.user,day:String(day)})+"\n\n"+engineLangDirective()}];
+    const msgs=[{role:"system",content:fillTpl(up("promisePrompt"),{user:chatUserName(chat),day:String(day)})+"\n\n"+engineLangDirective()}];
     recentExchangeMsgsWithTexts(chat,(opts&&opts.turns)||ENGINE_RECENT_TURNS).forEach(m=>msgs.push(m));
     msgs.push({role:"user",content:`Current: Day ${day}, ${(_at&&_at.period)||chatPeriod(chat)}.\nPeople who can be a holder: ${cast}\n\nCOMMITMENTS ALREADY ON THE LEDGER (never re-emit one — report a change to it in "updates" instead):\n${openList||"(none yet)"}\n\nFrom the exchange above ONLY, return the JSON.`});
     const out=await chatCompletion(msgs,state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:fnTok("mem",420),dbg:"Promises & commitments"});
@@ -17682,17 +17807,24 @@ async function runFutureTracker(chat){
     const len=_ftConvoLen(chat);
     chat.futureWatch=(Array.isArray(chat.futureWatch)?chat.futureWatch:[]).filter(w=>w&&len-(w.since||0)<=FT_WATCH_TTL);
     const watch=chat.futureWatch.map(w=>`- ${w.kind.toUpperCase()}: ${w.about}${w.holder?` (${w.holder})`:""}`).join("\n")||"(nothing)";
-    const sys=fillTpl(up("x_future_tracker"),{user:state.user||"the player"})+"\n\n"+engineLangDirective();
+    const sys=fillTpl(up("x_future_tracker"),{user:chatUserName(chat)||"the player"})+"\n\n"+engineLangDirective();   // v147.2 — this chat's player
+    /* (!) v147.2 — THE LINE THAT SETTLED IT. A pass that coalesced two turns (a turn landing while the last pass
+       was out) stamped everything it filed with the NEWEST reply, so a Retry of that reply took back a meeting
+       agreed a turn earlier. The lines are numbered and each item names its line; its entries are stamped with
+       that line's mid (else the pass's own source line, as before). */
+    const _lines=_exchangeWithTexts(chat,ENGINE_RECENT_TURNS);
     const out=await chatCompletion(epSend("x_future_tracker",sys,{record:_ftRecord(chat)||"(nothing yet)",watch,
-        convo:`Now: Day ${at.day}, ${at.period}.\n`+_ftConvoText(chat,ENGINE_RECENT_TURNS)}),
+        convo:`Now: Day ${at.day}, ${at.period}.\n`+_lines.map((m,i)=>`#${i+1} ${m.name}: ${m.content}`).join("\n")}),
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.1),max:fnTok("mem",300),dbg:"Future tracker"});
     const j=parseJSON(out);
     const items=(j&&Array.isArray(j.items))?j.items:(Array.isArray(j)?j:[]);
     let promiseDone=false;
-    const _before=_ftSnapshot(chat);   // v131.1 — whatever this pass files or changes is stamped with its stretch
+    const _lineMid=it=>{ const k=parseInt(String(it&&it.line!=null?it.line:"").replace(/^#/,""),10);
+      const L=(k>=1&&k<=_lines.length)?_lines[k-1]:null; return (L&&L.mid)||_srcMid; };
     if(!chat.ftStretch)chat.ftStretch={day:chat.gameDay||1,period:chatPeriod(chat),start:Math.max(0,len-ENGINE_RECENT_TURNS)};
     for(const it of items.slice(0,4)){
       if(!it)continue;
+      const _before=_ftSnapshot(chat);   // v131.1 — whatever this pass files or changes is stamped with its stretch (v147.2: per item)
       const kind=String(it.kind||"").toLowerCase(), action=String(it.action||"new").toLowerCase();
       if(!on[kind])continue;
       const about=briefDesc(String(it.about||"").trim(),160), holder=String(it.holder||"").trim();
@@ -17718,8 +17850,8 @@ async function runFutureTracker(chat){
       }else if(it.id){
         try{ await runFutureUpdate(chat,kind,String(it.id).replace(/^\[|\]$/g,""),turns); }catch(e){}
       }
+      try{ _ftStampChanges(chat,_before,at,_lineMid(it)); }catch(e){}
     }
-    try{ _ftStampChanges(chat,_before,at,_srcMid); }catch(e){}
     markChatDirty(chat);
   }catch(e){ try{ console.warn("[future tracker] bailed:",e&&e.message||e); }catch(_){} }
   finally{
@@ -17736,23 +17868,23 @@ async function runTaskExtract(chat,opts){
   const uni=universeById(chat.universeId); if(!uni)return null;
   const roster=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p));
   const turns=(opts&&opts.turns)||ENGINE_RECENT_TURNS;
-  const sys=fillTpl(up("x_task_extract"),{user:state.user||"the player"})+"\n\n"+engineLangDirective();
+  const sys=fillTpl(up("x_task_extract"),{user:chatUserName(chat)||"the player"})+"\n\n"+engineLangDirective();
   const _at=(opts&&opts.at)||{day:chat.gameDay||1,period:chatPeriod(chat)};   // v144.1 — the turn's day, not the clock's
   const out=await chatCompletion(epSend("x_task_extract",sys,{
       noticed:`${(opts&&opts.about)||"(a task)"}${opts&&opts.holder?` — held by ${opts.holder}`:""}\nNow: Day ${_at.day}, ${_at.period}.`,
-      cast:roster.map(p=>p.name).concat(state.user||"the player").join(", "),
+      cast:roster.map(p=>p.name).concat(chatUserName(chat)||"the player").join(", "),
       convo:_ftConvoText(chat,turns)}),
     state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",600),dbg:"Task writer"});
   const j=parseJSON(out); const t=j&&j.task;
   if(!t||!t.title)return null;
-  const me=String(state.user||"").toLowerCase();
+  const me=String(chatUserName(chat)||"").toLowerCase();
   const isMe=n=>{ const k=String(n||"").trim().toLowerCase(); return k===me||k==="{{user}}"||k==="user"||k==="player"; };
   const byName=n=>{ const k=String(n||"").trim().toLowerCase(); if(!k)return null;
     return roster.find(p=>p.name.toLowerCase()===k)||roster.find(p=>p.name.toLowerCase().split(/\s+/)[0]===k.split(/\s+/)[0])||null; };
-  const su=x=>String(x||"").replace(/\{\{\s*user\s*\}\}/gi,state.user||"you").trim();
+  const su=x=>String(x||"").replace(/\{\{\s*user\s*\}\}/gi,chatUserName(chat)||"you").trim();
   const day=_at.day;
   const title=su(t.title).slice(0,90), desc=su(t.desc).slice(0,800);
-  const giver=isMe(t.assigned_by)?(state.user||"you"):((byName(t.assigned_by)||{}).name||"");
+  const giver=isMe(t.assigned_by)?(chatUserName(chat)||"you"):((byName(t.assigned_by)||{}).name||"");
   const tgtP=byName(t.target), tgtMe=isMe(t.target);
   if(isMe(t.holder)){
     // THE PLAYER'S TASK — beside the story's quests, marked as a task so no arc is chained after it.
@@ -17780,7 +17912,7 @@ async function runTaskExtract(chat,opts){
     id:"cq_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
     source:"task", holderId:holder.id, holderName:holder.name,
     targetId:tgtMe?"__user__":(tgtP&&tgtP.id!==holder.id?tgtP.id:null),
-    targetName:tgtMe?(state.user||"the player"):(tgtP&&tgtP.id!==holder.id?tgtP.name:""),
+    targetName:tgtMe?(chatUserName(chat)||"the player"):(tgtP&&tgtP.id!==holder.id?tgtP.name:""),
     title, desc, motive:su(t.motive).slice(0,240),
     assignedBy:giver, when:su(t.when).slice(0,120), where:su(t.where).slice(0,60),
     /* A task that runs through the player is carried out, not asked for: no text ask, no approach
@@ -17809,11 +17941,15 @@ function _ftEntry(chat,kind,id){
       show:`MEETING: ${e.title}\nwho: ${e.who||""}\nday: ${e.day!=null?e.day:""}\nperiod: ${e.period||""}\nwhere: ${e.where||""}\ndetail: ${e.detail||""}`,
       apply:c=>{
         if(c.title)e.title=briefDesc(String(c.title),90);
+        const _d0=e.day, _p0=e.period||null;
         if(c.day!=null&&Number.isFinite(+c.day)&&+c.day>=day&&+c.day<=day+60)e.day=Math.round(+c.day);
         if(c.period&&PERIODS.indexOf(c.period)>=0)e.period=c.period;
         /* (!) v146.1 — a meeting moved on purpose is a NEW appointment: it had kept `_rolledFrom` (and its
-           snoozes), so the next day end let it lapse silently as "already put off once". */
-        if(c.day!=null||c.period){ const sl=_calSaneSlot(chat,e.day,e.period); if(sl){ e.day=sl.day; e.period=sl.period; } _calFreshSlot(e); }
+           snoozes), so the next day end let it lapse silently as "already put off once".
+           (!) v147.2 — only when it really moved: a restated, unchanged day or time undid the player's
+           "Later" and cleared `_rolledFrom`, so a meeting the tracker kept restating rolled forever. */
+        if(c.day!=null||c.period){ const sl=_calSaneSlot(chat,e.day,e.period); if(sl){ e.day=sl.day; e.period=sl.period; }
+          if(e.day!==_d0||(e.period||null)!==_p0)_calFreshSlot(e); }
         /* (!) v144.1 — WHO CHANGED, SO THE IDS CHANGE. Only the label was rewritten, so every
            id-first reader (payload scoping, the counterpart, the executor) still acted on the old
            people. Names resolve against this world's active cast; unknown ones are dropped. */
@@ -17925,7 +18061,10 @@ async function runFutureUpdate(chat,kind,id,turns){
 /* Every entry of the record with a signature of what it says, so a pass can see what it touched. */
 function _ftSnapshot(chat){
   const m=new Map(), sig=o=>{ try{ return JSON.stringify(o); }catch(e){ return String(Math.random()); } };
-  const put=(kind,o)=>{ if(o&&o.id)m.set(o.id,{kind,obj:o,sig:sig(Object.assign({},o,{ftAt:null}))}); };
+  /* (!) v147.2 — a MEETING counts as changed only when what it says changed: its title, day, time or people.
+     Any field did before — a detail, or the resolver's `prompted`/`snoozes` while the pass was out — and the
+     stamp made End Day read a meeting missed that morning as "filed in the last stretch" and roll it. */
+  const put=(kind,o)=>{ if(o&&o.id)m.set(o.id,{kind,obj:o,sig:sig(kind==="meeting"?[o.title,o.day,o.period,o.who]:Object.assign({},o,{ftAt:null}))}); };
   try{ chatCalendar(chat).forEach(e=>put("meeting",e)); }catch(e){}
   try{ chatPromises(chat).forEach(p=>put("promise",p)); }catch(e){}
   try{ const uni=universeById(chat.universeId);
@@ -19674,15 +19813,21 @@ function recentSceneMsgsFor(chat,p,n){
               content:m.content}));
 }
 function recentExchangeMsgsWithTexts(chat,n){
-  const fallback=(curCast()[0]&&curCast()[0].name)||"Narrator";
+  return _exchangeWithTexts(chat,n).map(m=>({role:m.role,name:m.name,content:m.content}));
+}
+/* The same window with each line's `mid` (the future tracker names the line that settled a plan by it).
+   v147.2 — this chat's player and cast: the engines reading it run after an await, when the open story
+   may be another one (state.user / curCast() answered for that one). */
+function _exchangeWithTexts(chat,n){
+  const _cc=curCast(chat), fallback=(_cc[0]&&_cc[0].name)||"Narrator", _un=chatUserName(chat);
   // v23.5 — player-only NOTICE bubbles (world-event news, quest/plan announcements, calendar
   // notices, day markers) are meta, not dialogue — and they were eating most of the small window
   // this engine reads, pushing the exchange where a meeting was actually agreed OUT of view (the
   // "it didn't register my meeting" bug: a burst of world events after the agreement blinded the
   // tracker). Filter them BEFORE taking the window so every slot is real conversation.
   return chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.worldEvent&&!m.questNote&&!m.calNote&&!m.dayMarker).slice(-(n||ENGINE_RECENT_TURNS))
-    .map(m=>({role:m.role==='user'?'user':'assistant',
-              name:sanitizeName(m.role==='user'?state.user:(m.speaker||fallback)),
+    .map(m=>({mid:m.mid||null,role:m.role==='user'?'user':'assistant',
+              name:sanitizeName(m.role==='user'?_un:(m.speaker||fallback)),
               content:(m.textMsg?`(text message${m.role==='user'&&m.textWithName?" to "+m.textWithName:""}) `:"")+m.content}));
 }
 
@@ -32902,7 +33047,7 @@ function _notePlayerTexting(chat,toId){
   chat._textSeenAt=now;
   chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,present:present.slice(),
     textNotice:true, textWith:toId||null,
-    content:fillTpl(up("x_text_notice"),{user:state.user}),img:null,imgState:"idle",vidState:"idle",video:null});
+    content:fillTpl(up("x_text_notice"),{user:chatUserName(chat)}),img:null,imgState:"idle",vidState:"idle",video:null});
   markChatDirty(chat); persistChats(); appendNewBubbles();
 }
 /* ===== v137.1 — WHO IS COMING, READ FROM WHAT THEY SAID =========================================
@@ -32935,13 +33080,13 @@ function _textArrivalData(chat,p){
   const here=chat.locationId?locById(chat.locationId):null;
   const mine=(here&&here.name)||chat.location||"";
   const theirs=(()=>{ try{ return String(charLocationLine(p,chat)||"").replace(/^Location:\s*/,"").split(" — ")[0].split(" (")[0].trim(); }catch(_){ return ""; } })();
-  const open=_openMeetingsWithToday(chat,p).map(e=>`- "${e.title}"${e.period?` (${e.period})`:""}${e.where?` at ${e.where}`:""} — ${meetMode(e)==="char"?`${p.name} comes to ${state.user}`:(meetMode(e)==="user"?`${state.user} goes to ${p.name}`:"each goes to the place")}`).join("\n");
+  const open=_openMeetingsWithToday(chat,p).map(e=>`- "${e.title}"${e.period?` (${e.period})`:""}${e.where?` at ${e.where}`:""} — ${meetMode(e)==="char"?`${p.name} comes to ${chatUserName(chat)}`:(meetMode(e)==="user"?`${chatUserName(chat)} goes to ${p.name}`:"each goes to the place")}`).join("\n");
   const th=_textThreadTail(chat,p,8).map(m=>{
     const when=(m.gday!=null)?`Day ${m.gday}${m.gperiod?", "+m.gperiod:""}`:"earlier";
     if(m.meetNote) return `[${when}] ${textMeetNote(chat,m)}`;
-    return `[${when}] ${m.role==="user"?state.user:p.name}: ${m.content}`;
+    return `[${when}] ${m.role==="user"?chatUserName(chat):p.name}: ${m.content}`;
   }).join("\n");
-  return {now:`Day ${chat.gameDay||1}, ${chatPeriod(chat)}.\n${state.user} is at ${mine||"a place you do not know"}. ${p.name} is ${theirs?`at ${theirs}`:"elsewhere"}.`,
+  return {now:`Day ${chat.gameDay||1}, ${chatPeriod(chat)}.\n${chatUserName(chat)} is at ${mine||"a place you do not know"}. ${p.name} is ${theirs?`at ${theirs}`:"elsewhere"}.`,
     plans:open||"(none)", thread:th||"(empty)"};
 }
 async function runTextArrival(chat,p){
@@ -32951,7 +33096,7 @@ async function runTextArrival(chat,p){
   if(chat._arrBusy[p.id])return null;
   chat._arrBusy[p.id]=true;
   try{
-    const sys=fillTpl(up("x_text_arrival"),{user:state.user||"the player",char:p.name})+"\n\n"+engineLangDirective();
+    const sys=fillTpl(up("x_text_arrival"),{user:chatUserName(chat)||"the player",char:p.name})+"\n\n"+engineLangDirective();
     const out=await chatCompletion(epSend("x_text_arrival",sys,_textArrivalData(chat,p)),
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.1),max:fnTok("mem",120),dbg:"Text arrival · "+p.name});
     const j=parseJSON(out)||{};
@@ -32975,15 +33120,16 @@ function _textComing(chat,p,period){
   const ex=_openMeetingsWithToday(chat,p)[0];
   if(ex){
     // The plan they are acting on: it happens here, today, and they are the one travelling.
+    const _mv=ex.day!==today||(ex.period||null)!==per;
     Object.assign(ex,{day:today,period:per,executor:p.name,executorId:p.id,withUser:true,
       certainty:"certain",probability:null,locationId:here,where,prompted:false});
-    _calFreshSlot(ex);   // v146.1 — "on my way" sets its day and time anew
+    if(_mv)_calFreshSlot(ex);   // v146.1 — "on my way" sets its day and time anew (v147.2: only when it moves them)
     persistChats(); try{ updateCalendarBadge(); }catch(_){}
     return ex;
   }
   // v144.1 — {sameDay}: a similarly titled visit TOMORROW used to swallow today's "on my way".
   const e=addCalendarEntry(chat,{kind:"meeting",source:"text_coming",
-    title:`${p.name} comes over to ${state.user}`, who:p.name, character:p.name, charName:p.name,
+    title:`${p.name} comes over to ${chatUserName(chat)}`, who:p.name, character:p.name, charName:p.name,
     executor:p.name, executorId:p.id, charId:p.id, withUser:true,
     day:today, period:per, where, locationId:here, certainty:"certain", probability:null,
     origin:`${p.name} said so over text`, prompted:false},{sameDay:true});
@@ -33004,7 +33150,7 @@ async function _textArrive(chat,p){
   const hereObj=chat.locationId?locById(chat.locationId):null;
   const last=textThreadMsgs(chat,p.id).filter(m=>m.role==="assistant").slice(-1)[0];
   const why=(e?meetingBackstory(chat,e,p)+"\n\n":"")
-    +`${p.name} came to ${state.user}, alone, and has just texted that they are here${last?`: "${briefDesc(String(last.content||""),120)}"`:""}. ${state.user} knows they are coming and is expecting them. They are arriving now, at the end of that journey.`;
+    +`${p.name} came to ${chatUserName(chat)}, alone, and has just texted that they are here${last?`: "${briefDesc(String(last.content||""),120)}"`:""}. ${chatUserName(chat)} knows they are coming and is expecting them. They are arriving now, at the end of that journey.`;
   let narr="";
   try{ narr=await narrateCharMove(chat,p,{dir:"enter",fromName:charPlaceName(chat,p),
     toName:(hereObj&&hereObj.name)||chat.location||"", toDesc:(hereObj&&hereObj.description)||"", why}); }catch(_){}

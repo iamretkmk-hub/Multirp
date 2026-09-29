@@ -44949,7 +44949,7 @@ function charQuestComplete(chat,uni,q,day,failed,result,shown,opts){
   if(result)q.result=String(result).slice(0,240);
   try{
     q.progress=Array.isArray(q.progress)?q.progress:[];
-    q.progress.push({day:q.completedDay,text:failed?`Failed${q.result?": "+q.result:"."}`:`Completed${q.result?": "+q.result:"."}`});
+    q.progress.push({day:q.completedDay,text:lapse?`Let go${q.result?": "+q.result:"."}`:failed?`Failed${q.result?": "+q.result:"."}`:`Completed${q.result?": "+q.result:"."}`});
   }catch(e){}
   if(chat){
     chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,worldEvent:true,
@@ -45018,7 +45018,7 @@ function charQuestSheetLines(c,opts){
     });
     const doneQ=mine.filter(q=>q.status!=="active"&&q.completedDay!=null)
       .sort((a,b)=>(b.completedDay||0)-(a.completedDay||0))[0];
-    if(doneQ)L.push(`RECENTLY ${doneQ.status==="failed"?"LOST":"ACHIEVED"} — "${doneQ.title}"${doneQ.result?`: ${doneQ.result}`:""} (day ${doneQ.completedDay}). You know this outcome; you may speak and act from it.`);
+    if(doneQ)L.push(`RECENTLY ${doneQ.lapsed?"LET GO":doneQ.status==="failed"?"LOST":"ACHIEVED"} — "${doneQ.title}"${doneQ.result?`: ${doneQ.result}`:""} (day ${doneQ.completedDay}). You know this outcome; you may speak and act from it.`);
     return L.join("\n");
   }catch(e){ return ""; }
 }
@@ -45391,7 +45391,7 @@ function openQuestLines(uni,day){
       const who=q.targetName||"someone";
       const state=q.status==="active"
         ? `in progress since day ${q.createdDay||"?"}`
-        : `${q.status==="failed"?"came to nothing":"finished"} on day ${q.completedDay||"?"}${q.result?` — ${briefDesc(String(q.result),120)}`:""}`;
+        : `${q.status==="failed"?(q.lapsed?"was let go":"came to nothing"):"finished"} on day ${q.completedDay||"?"}${q.result?` — ${briefDesc(String(q.result),120)}`:""}`;
       return `- ${q.holderName||"someone"} → ${who}: "${q.title||""}" (${state})`;
     };
     // v144.1 — bounded: the newest 12 open pursuits (and a count of the rest), 5 recently closed
@@ -45559,15 +45559,15 @@ async function charQuestSpawnNowUI(btn){
    toward the per-run cap, the day is stamped BEFORE the call (so an overlapping run cannot step the
    same quest twice), a non-move is counted, and a pursuit that has not moved for CQ_LAPSE_DAYS days or
    CQ_MAX_STALLS attempts lapses — closed as "came to nothing", which the player sees and the holder
-   remembers. Asks of the player lapse the same way once three nudges have gone unanswered. */
+   remembers. An ask of the player lapses once it has waited CQ_ASK_LAPSE_DAYS with nothing moving. */
 const CQ_STEP_PER_RUN=2, CQ_SPAWN_PER_PERIOD=2, CQ_MAX_STALLS=5, CQ_LAPSE_DAYS=7, CQ_ASK_LAPSE_DAYS=4, CQ_UNASKED_LAPSE_DAYS=12, CQ_KEEP_CLOSED=30;
 const _cqLapseShown=()=>sLine({en:"Nothing came of it in the end.",tr:"Sonunda bundan bir şey çıkmadı.",de:"Am Ende wurde nichts daraus."});
 // Close what has gone quiet and keep the closed tail bounded. Pure code, no model calls.
 /* (!) v146.1 — LAPSE WHAT IS DEAD, NOT WHAT IS SLOW. In a 24-day run every closed pursuit had lapsed, 9
    of them with no attempt at all, and asks the player had taken up lapsed "unanswered" with a frustrated
    memory for the holder:
-   · an ask of the player lapses only while it is still WAITING for an answer (awaitingUser), three
-     nudges in, and the clock runs from the last nudge OR the last progress note — once the player has
+   · an ask of the player lapses only while it is still WAITING for an answer (awaitingUser), and the
+     clock runs from the last nudge OR the last progress note (v147.2: not gated on nudges) — once the player has
      engaged the pursuit is theirs to carry and nothing times it out;
    · a char→char / solitary pursuit (and a task a character took on through another character) lapses
      on repeated declined ATTEMPTS: CQ_MAX_STALLS in a row, or CQ_LAPSE_DAYS without a move with at least
@@ -45588,8 +45588,12 @@ function _cqLapseAndPrune(chat,uni,day){
     if(q.source==="task"&&!steppable)continue;          // judged from evidence by the reconciler, not timed out
     let why="";
     if(q.targetId==="__user__"){
-      if(q.awaitingUser&&(q.nudges||0)>=3&&day-_cqLastActivity(q)>=CQ_ASK_LAPSE_DAYS)
-        why=`The ask to ${state.user||"the player"} was never taken up, and ${q.holderName||"they"} let the pursuit go.`;
+      /* (!) v147.2 — NOT ON NUDGES. "three nudges in" was unreachable: an in-person ask never re-approaches
+         while it waits, and a text follow-up needs a reply first, so an ignored ask sat at nudges 1 and held
+         one of the holder's two slots for ever. The clock alone decides now (last nudge / progress note).
+         Neutral wording: q.result reaches the holder's settled events and quest sheet. */
+      if(q.awaitingUser&&day-_cqLastActivity(q)>=CQ_ASK_LAPSE_DAYS)
+        why=`Time went by without the matter moving, and ${q.holderName||"they"} let the pursuit go.`;
       else if(!q.delivered&&day-(q.createdDay||day)>=CQ_UNASKED_LAPSE_DAYS)
         why="The moment to ask never came, and the pursuit lapsed.";
     }else{
@@ -46049,38 +46053,73 @@ async function postTurn(chat){
      "chicken breasts"). */
 const _icRe=s=>new RegExp("(?<![\\p{L}\\p{N}])(?:"+s+")(?![\\p{L}\\p{N}])","u");
 const _icReG=s=>new RegExp("(?<![\\p{L}\\p{N}])(?:"+s+")(?![\\p{L}\\p{N}])","gu");
+/* (!) v147.2 — THE v146.1 LISTS WERE FIT TO ONE FIXTURE. A fresh set caught 20/48 explicit lines; the
+   idiom blanker erased real sentence-final lines ("Fuck me.", "He kept fucking her."); a medical exam
+   ("undress for the nurse", "examined her breasts"), a fist fight on a bed and a grief hug read as
+   private. Now four tiers, tuned on tests/fixtures/intimacy-dev.js and scored (not tuned) on
+   tests/fixtures/intimacy-heldout.js:
+   · HARD — only means sex ("had sex", "slept together", "erection", "sevişti", "beni becer"): always enough;
+   · STRONG — undressing, nudity, body contact ("her breasts", "unzipped his jeans", "soyundu"): enough
+     alone, but in a MEDICAL / VIOLENCE / GRIEF context (a doctor, a wound, a punch, a funeral anywhere in
+     the text) it takes two different ones — the exam and the fight use the same words;
+   · WEAK — suggestive (a kiss, a moan, "onto the bed"): two different KINDS needed (a kiss in English and
+     one in Turkish are one kind), and none count in such a context;
+   · the idiom blanker only takes "fuck you/him/her" as a curse at the START of a clause ("Fuck you!",
+     "Fuck me, it's cold"), never "…kept fucking her." / "Fuck me." */
 const _icPoss="(?:her|his|my|your|their)";
-const _icCloth="(?:clothes|dress|blouse|shirt|skirt|top|bra|panties|underwear|lingerie|jeans|pants|trousers|knickers|boxers|nightgown|robe)";
-// Idioms that only LOOK intimate — removed before either list is tested.
+const _icCloth="(?:clothes|dress|blouse|shirt|skirt|top|bra|panties|underwear|lingerie|jeans|pants|trousers|shorts|knickers|boxers|nightgown|nightie|robe|sweater|jumper|t-shirt|hoodie|stockings)";
+const _icObj="(?:me|her|him|you|them|each other)";
+const _icEnd="(?=\\s*(?:[,.!?;:…\"”]|$)|\\s+(?:slowly|hard|harder|deep|deeper|again|until|while|from behind|with a|right there|gently|roughly|all night))";   // "entered her." — not "entered her room"
+const _icClause="(?<=(?:^|[.!?,;:\"“”—(\\n])\\s*)";     // start of a clause
+// Idioms that only LOOK intimate — removed before any list is tested.
 const INTIMACY_NOT_EN=_icReG([
-  "fuck(?:ing)? (?:me|him|her|you|it|this|that|off|them)(?=\\s*[,!.?]|$)","fuck (?:off|this|that)",
-  "naked (?:eye|truth|walls?|ambition|aggression|greed|flame|bulb|blade|steel)",
-  "moan(?:s|ed|ing)? (?:about|over)","chicken breasts?","breasts? of (?:chicken|turkey|duck|lamb)",
+  "fuck(?:ing)? (?:off|it|this|that)","fuck(?:s|ed|ing)? (?:\\p{L}+ )?up",
+  _icClause+"(?:fuck|screw) (?:you|him|her|them)(?=\\s*(?:[,!?.]|$))",_icClause+"fuck me(?=\\s*(?:[,!?]|$))",   // "Fuck you!", "Fuck me, it's cold" — "Fuck me." stays
+  "naked (?:eye|truth|walls?|ambition|aggression|greed|flame|bulb|blade|steel)","nude (?:lipstick|colou?rs?|shades?|tones?|heels|make-?up|palette|polish)",
+  "moan(?:s|ed|ing)? (?:about|over)","chicken (?:thighs? and )?breasts?","breasts? of (?:chicken|turkey|duck|lamb)","(?:chicken|turkey|duck) (?:thighs?|breasts?)",
   "kiss(?:es|ed|ing)? "+_icPoss+" (?:cheeks?|forehead|brow|hands?|ring|head|hair|knuckles)","kiss(?:es|ed|ing)? the (?:ring|baby|child|kid|cheek|hand)",
-  "kiss(?:ed)? (?:\\p{L}+ )?goodbye","kiss my ass"].join("|"));
+  "kiss(?:ed)? (?:\\p{L}+ )?goodbye","kiss my ass","(?:caress|strok)(?:es|ed|ing|e)? "+_icPoss+" (?:cheeks?|face|hair|hand|back)","(?:made|make|makes|making) out (?:of|to be|that|what|the|a|his|her)"].join("|"));
 const INTIMACY_NOT_TR=_icReG([
-  "amına (?:koy|koyayım|koyim|koydu)\\p{L}*","siktir\\p{L}*","sikerim","sikeyim","siker\\p{L}*","sikim(?:de|e)? (?:değil|degil)",
+  "amına (?:koy|koyayım|koyim|koydu)\\p{L}*","siktir\\p{L}*","sikerim","sikeyim","siker\\p{L}*","sikim(?:de|e)? (?:değil|degil)","sikko\\p{L}*",
   "(?:can|kafa|ağz|agz|moral)\\p{L}{0,4} sikt\\p{L}*",       // "canımı sikti" — "sıktı" typed without ı
-  "el(?:ini|lerini) öp\\p{L}*","yanağından öp\\p{L}*","alnından öp\\p{L}*","(?:yanağına|alnına) (?:bir )?öpücük\\p{L}*",
+  "el(?:ini|lerini) öp\\p{L}*","yanağından öp\\p{L}*","alnından öp\\p{L}*","(?:yanağına|alnına) (?:bir )?öpücük\\p{L}*","(?:yanağını|saçlarını|saçını|başını|elini|kediyi|kedisini|köpeği|köpeğini|atını) okşa\\p{L}*","ayak(?:ları|ı) çıplak",
   "(?:acıyla|acı içinde|ağrıyla|sancıyla) inl\\p{L}*","çıplak (?:göz|ayak|el|gerçek|duvar)\\p{L}*","ciplak (?:goz|ayak)\\p{L}*",
-  "meme kanser\\p{L}*","bebek\\p{L}* meme\\p{L}*"].join("|"));
-// STRONG — one is enough.
+  "meme kanser\\p{L}*","bebek\\p{L}* meme\\p{L}*","meme şekl\\p{L}*","göğüs göğüse","göğüs ger\\p{L}*"].join("|"));
+// HARD — only means sex; enough on its own, in any context.
+const INTIMACY_HARD_EN=_icRe([
+  "(?:had|have|has|having|wanted|want|wants) (?:\\p{L}+ )?sex","sex (?:with|on|in|again|all)","ma(?:ke|de|kes|king) love","making out","made out with","blow ?jobs?","hand ?jobs?","oral sex",
+  "sl(?:ept|eep|eeps|eeping) (?:together|with (?:him|her|you|me))(?! in (?:the|a) (?:same )?(?:tent|room|cabin|barn|car|cell|hut)| to (?:stay|keep) warm| for warmth)",
+  "fuck(?:ed|s|ing)? "+_icObj+"(?! up| over| around)","(?:we|they|you|i) fucked","fucked (?:against|on the|in the|until|all night|like)",
+  "(?:am|'m|are|'re|is|'s|was|were|kept|keep|been|be|started|stop|stopped|while) fucking "+_icObj,"fuck (?:me|her|him)(?=\\s*(?:[.]|harder|hard|now))",
+  _icPoss+" (?:cock|dick|pussy|clit|cunt|tits)","(?:cock|dick) (?:pressed|slid|throbb\\p{L}*)","erection\\p{L}*","hard-?on","boner",
+  "orgasm\\p{L}*","climax(?:ed|ing)","c(?:ame|um|umming|omes) (?:inside|in|on) (?:me|her|him|you)(?![\\p{L}]| (?:and|room|house))","(?:she|he|i|you) came (?:hard|again|with a)",
+  "(?:you|him|it) inside (?:me|her)","(?:slid|slide|slides|sliding|push\\p{L}*|thrust\\p{L}*|mov\\p{L}*|sink\\p{L}*|sank|ease\\p{L}*|eas\\p{L}*) (?:\\p{L}+ )?(?:inside|into) (?:you|her|him|me)"+_icEnd,
+  "enter(?:ed|s|ing)? (?:her|him|me)"+_icEnd,"penetrat\\p{L}* (?:her|him|me|you)","wet for (?:you|me|him|her)","finger(?:ed|s|ing) (?:her|him|me|you)"+_icEnd,
+  "touch(?:ed|es|ing)? (?:herself|himself|myself|yourself)","masturbat\\p{L}*","(?:take|took|takes|taking) (?:him|her|you|me) (?:in|into) (?:her|his|my|your) mouth",
+  "(?:was|is|got|grew|getting|rock) hard (?:against|for|in) (?:her|him|me|you)"].join("|"));
+const INTIMACY_HARD_TR=_icRe([
+  "seviş\\p{L}*","sevis(?:tik|tiler|mek|iyor|elim|meye)\\p{L}*","seks (?:yap|yaptı|yaptık|yaptılar|yapmak|yapıyor)\\p{L}*","seks(?:e|te|ten|le)",
+  "sikiş\\p{L}*","sikis\\p{L}*","sikti\\p{L}*","sikiyor\\p{L}*","sikmeye","sik(?:in|ini|ine|inin|ime|imi)","amcık\\p{L}*","amcik\\p{L}*","yar{1,2}a[kğ]\\p{L}*",
+  "(?:beni|seni|onu|onları|birbirlerini) (?:\\p{L}+ )?becer\\p{L}*","orgazm\\p{L}*","klitoris\\p{L}*",
+  "içime (?:gir|al|boşal)\\p{L}*","içine boşal\\p{L}*","(?:onu|beni|seni) (?:\\p{L}+ )?içine al\\p{L}*"].join("|"));
+// STRONG — undressing, nudity, contact: enough alone, but two different ones in a medical/violence/grief context.
 const INTIMACY_STRONG_EN=_icRe([
-  "(?:had|have|has|having|wanted|want) sex","sex (?:with|on|in)","ma(?:ke|de|kes|king) love","making out","made out","blow ?jobs?",
-  "fuck(?:ed|s) (?:me|her|him|you|them)","we fucked","(?:were|was|are|is|kept|been) fucking","fucking (?:me|her|him) (?:hard|slowly|deep)",
-  _icPoss+" (?:cock|dick|pussy|clit|nipples?|breasts?|tits)","nipples? (?:harden\\p{L}*|stiffen\\p{L}*)","cock (?:pressed|slid|throbb\\p{L}*)",
-  "orgasm\\p{L}*","climax(?:ed|ing)","c(?:ame|um|umming|omes) inside (?:me|her|him)","(?:you|him|it) inside (?:me|her)","wet for (?:you|me|him|her)",
-  "thrust(?:s|ed|ing)? (?:into|inside|deeper)","penetrat\\p{L}* (?:her|him|me)","grind(?:s|ed|ing)? (?:against|on|into) (?:her|him|me)",
-  "topless","undress(?:es|ed|ing)?","strip(?:s|ped|ping)? (?:naked|down to|off "+_icPoss+")",
+  _icPoss+" (?:nipples?|breasts?|ass|butt|crotch|groin)","nipples? (?:harden\\p{L}*|stiffen\\p{L}*)",
+  "thrust(?:s|ed|ing)? (?:into|inside|deeper)","grind(?:s|ed|ing)? (?:against|on|into) (?:her|him|me)",
+  "topless","undress(?:es|ed|ing)?","strip(?:s|ped|ping)? (?:naked|down to|off "+_icPoss+")","wearing nothing (?:underneath|beneath|but)",
   "(?:was|were|lay|lying|laid|stood|standing|sat|got|get|is|are|stripped|completely|stark|half)(?: there)? naked","naked (?:body|bodies|skin|chest|breasts?|in (?:bed|his arms|her arms))",
-  "(?:was|were|lay|lying|posed|is|are) nude","in the nude",
+  _icPoss+" naked \\p{L}+","naked(?=\\s*(?:[,.!?;]|$))","(?:was|were|lay|lying|posed|is|are) nude","in the nude",
   "unzip(?:s|ped|ping)? "+_icPoss+" (?:jeans|pants|trousers|fly|dress|skirt)","unbutton(?:s|ed|ing)? "+_icPoss+" (?:blouse|shirt|jeans|pants|trousers|dress|bra)",
   "(?:take|took|taking|takes) off "+_icPoss+" "+_icCloth,"slip(?:s|ped|ping)? out of "+_icPoss+" "+_icCloth,
-  "(?:slid|slide|slides|slip|slipped|slips|pull|pulled|pulls|tug|tugged|push|pushed) "+_icPoss+" "+_icCloth+" (?:off|down|aside|up over|over "+_icPoss+" head)",
+  "(?:slid|slide|slides|slip|slipped|slips|pull|pulled|pulls|tug|tugged|push|pushed|lift|lifted|lifts) "+_icPoss+" "+_icCloth+" (?:off|down|aside|up|over "+_icPoss+" head)",
+  _icCloth+" (?:pooled|pools|fell|falls|dropped|drops|slid|slides|hit|hits) (?:to|at|around|on) (?:the floor|"+_icPoss+" (?:feet|ankles))",
   "(?:hand|hands|fingers) (?:slid|slide|slides|slipped|slips|crept|moved|moves) (?:under|beneath|inside|up) "+_icPoss+" (?:shirt|blouse|dress|skirt|top|sweater|panties|bra)",
   _icPoss+" (?:bra|panties|knickers|lingerie|underwear)","panties",
   "legs (?:around|round) "+_icPoss+" (?:waist|hips)","straddl(?:e|es|ed|ing) (?:her|him|me|his|my|your)","(?:rode|rides|riding|ride) (?:him|me)",
-  "climb(?:s|ed)? on top of (?:me|him|her)","(?:got|gets|is|was) on top of (?:me|him|her)",
+  "climb(?:s|ed)? on top of (?:me|him|her)","(?:got|gets|is|was) on top of (?:me|him|her)","between "+_icPoss+" (?:legs|thighs)",
+  "spread (?:"+_icPoss+" )?(?:legs|thighs)","(?:opened|open|opens|parted|part|parts) "+_icPoss+" (?:legs|thighs)",
+  "bent (?:her|him|me) over (?:the|a|his|her) (?:desk|table|bed|counter|sofa|couch|chair|bench)","(?:took|takes|take|taking) (?:her|him)(?=\\s*(?:[.!]|$|right there|from behind|again))",
+  "lick(?:s|ed|ing)? the tip(?! of)","kiss(?:es|ed|ing)? (?:his|her|my|your) way (?:down|up|along|across)",
   "tongues? (?:tangled|tangle|entwined|met|danced|explored)","tongue (?:in|into) "+_icPoss+" mouth",
   "suck(?:s|ed|ing)? (?:on )?"+_icPoss+" (?:fingers?|neck|nipples?|lips?|cock|tongue|earlobe)",
   "lick(?:s|ed|ing)? (?:a (?:slow |wet )?(?:line|trail|path) (?:down|up|along|across)|"+_icPoss+" (?:neck|stomach|nipples?|breasts?|thighs?|chest|body|skin))",
@@ -46088,45 +46127,81 @@ const INTIMACY_STRONG_EN=_icRe([
   "mouth (?:moves?|moved|trails?|trailed|travels?|travelled) lower",
   "kiss(?:es|ed|ing)? (?:him|her|me|you) (?:hard|deeply|passionately|hungrily)","kiss(?:es|ed|ing)? "+_icPoss+" (?:neck|throat|lips|mouth|collarbone|chest|thighs?|stomach|breasts?)",
   "kiss(?:es|ed|ing)? (?:down|along|across|up) "+_icPoss,"trail(?:s|ed|ing)? kisses",
-  "pinned (?:her|him|me) (?:to|on|against) the (?:bed|mattress|sheets)","moan(?:s|ed|ing)? "+_icPoss+" name",
+  "pinned (?:her|him|me) (?:to|on|against) the (?:bed|mattress|sheets)","(?:moan|groan)(?:s|ed|ing)? "+_icPoss+" name","(?:undid|undoes|undo|undoing|unbuckl\\p{L}*) "+_icPoss+" (?:belt|bra|jeans|fly|trousers)","(?:dress|skirt|nightgown|nightie) (?:rode|rides|riding|hiked|bunched) up",
   "in bed together","into bed with (?:him|her|me|you)"].join("|"));
 const INTIMACY_STRONG_TR=_icRe([
-  "seviş\\p{L}*","sevis(?:tik|tiler|mek|iyor|elim|meye)\\p{L}*","seks","seks (?:yap|yaptı|yaptık|yaptılar|yapmak|yapıyor)\\p{L}*","seks(?:e|te|ten|le)",
-  "sikiş\\p{L}*","sikis\\p{L}*","sikti\\p{L}*","sikiyor\\p{L}*","sikmeye","sik(?:in|ini|ine|inin|ime|imi)","amcık\\p{L}*","amcik\\p{L}*",
-  "orgazm\\p{L}*","penis\\p{L}*","vajina\\p{L}*","klitoris\\p{L}*",
-  "memesin\\p{L}*","memeleri\\p{L}*","memelerin\\p{L}*","meme uç\\p{L}*","meme ucu\\p{L}*",
+  "seks","penis\\p{L}*","vajina\\p{L}*","memesin\\p{L}*","memeleri\\p{L}*","memelerin\\p{L}*","meme uç\\p{L}*","meme ucu\\p{L}*",
   "göğüsleri\\p{L}*","göğüslerin\\p{L}*","gogusleri\\p{L}*","göğs(?:üne|ünü|ünden) (?:dokun|okşa|avuçla|öp|yala|bastır)\\p{L}*",
   "çırılçıplak\\p{L}*","cirilciplak\\p{L}*","çıplak (?:bed|vücud|ten|kalça|göğ|halde)\\p{L}*",
   "soyun","soyunun","soyundu\\p{L}*","soyunuyor\\p{L}*","soyunup","soyundur\\p{L}*","soyunmaya","soyunarak",
-  "(?:elbise|gömle[kğ]|pantolon|etek|sutyen|külot|kilot|iç çamaşır|üstündekiler)\\p{L}* (?:\\p{L}+ )?(?:çıkar|sıyır|indir|yırt|çöz)\\p{L}*",
+  "(?:onu|beni|seni|birbirlerini) (?:\\p{L}+ )?soy(?:du|dular|up|arken|maya|uyor)\\p{L}*",
+  "(?:elbise|gömle[kğ]|pantolon|etek|sutyen|külot|kilot|iç çamaşır|üstündekiler|kıyafet|giysi)\\p{L}* (?:\\p{L}+ )?(?:çıkar|sıyır|indir|yırt|çöz)\\p{L}*",
   "düğmelerini (?:tek tek |yavaşça |yavaş yavaş |bir bir )?(?:açtı|açıyor|açarak|çözdü|çözüyor|çözerek)",
+  "(?:eteğ|elbises|gömleğ|tişört|külot|pantolon)\\p{L}* (?:altına|içine) (?:sok|kaydır|dal|gir|uzan)\\p{L}*",
+  "bacaklarını (?:iki yana |ona |yavaşça )?(?:aç|ayır)(?:tı|ıyor|arak|ıp|dı)\\p{L}*","(?:sertleşmiş|kalkmış|sertleşen) (?:\\p{L}+ )?(?:aleti|organ|sik|penis)\\p{L}*",
   "dudaklarından öp\\p{L}*","(?:boynunu|boynundan|göğsünü|dudaklarını|kulağını|karnını|bacaklarını|tenini) (?:öp|yala|ısır|em)\\p{L}*",
   "(?:dudaklarını|dudağını|memesini|parmaklarını|dilini) em(?:di|iyor|erek|meye)\\p{L}*",
   "öpüş(?:tü|tüler|üyor|üyorlar|me|meye|erek|tük)\\p{L}*","(?:ateşli|tutkuyla|tutkulu|derin|aç gözlülükle)\\p{L}* (?:bir (?:şekilde )?)?öp\\p{L}*",
-  "(?:kalça|göğüs|göğs|meme|uyluk|kasık)\\p{L}* (?:okşa|avuçla|sık(?:tı|ıyor|arak|ıp)|yala)\\p{L}*","bacaklarını (?:onun )?(?:beline|kalçasına) dola\\p{L}*",
-  "(?:kulağına|zevkle|hazla|tutkuyla|adını) inl\\p{L}*","içime (?:gir|al|boşal\\p{L}*)","içine boşal\\p{L}*","dilini (?:onun )?ağzına\\p{L}*",
-  "(?:onunla|benimle|seninle|birlikte) yat(?:tı|tık|tılar|mak|mış|acak)\\p{L}*","tırnaklarını sırt\\p{L}* geçir\\p{L}*"].join("|"));
-// WEAK — suggestive, but ordinary often enough that it takes two different ones.
-const INTIMACY_WEAK_EN=([
-  "kiss(?:es|ed|ing)? (?:him|her|me|you|each other)","(?:lean(?:s|ed)?|leaning) in for a kiss","moan(?:s|ed|ing)?","gasp(?:s|ed|ing)?",
-  "caress(?:es|ed|ing)? "+_icPoss,"bare skin","naked","nude","(?:take|took|takes|taking) (?:her|him|me) to bed","in bed with (?:him|her|me|you)",
-  "(?:onto|on) the bed","(?:at|undoing|undid|undoes) "+_icPoss+" buttons","pulls? (?:him|her|me) (?:closer|down)","pulled (?:him|her|me) (?:closer|down)",
-  "breath (?:catch|catches|caught|hitch\\p{L}*)","(?:his|her) (?:thighs?|hips) against","shirt (?:hits|hit|falls|fell) (?:to )?the floor","bedroom",
-  "arch(?:es|ed|ing)? "+_icPoss+" back","(?:bit|bites|biting|nibbl\\p{L}*) "+_icPoss+" (?:lip|ear|earlobe|neck)"]).map(_icRe);
-const INTIMACY_WEAK_TR=([
-  "öp(?:tü|tüm|er|üyor|ücük|erek|meye|müş)\\p{L}*","okşa\\p{L}*","inle\\p{L}*","inliyor\\p{L}*","çıplak\\p{L}*","ciplak\\p{L}*",
-  "sutyen\\p{L}*","külot\\p{L}*","ten tene","ten\\p{L}* (?:gezin|dokun)\\p{L}*","yatağa (?:attı|yatırdı|yatırıp|çekti|devirdi|uzandılar)\\p{L}*",
-  "üstüne (?:çık|eğil|uzan)\\p{L}*","soy(?:arken|du|up)","nefes\\p{L}* (?:hızlandı|kesildi|titredi)","titri\\p{L}*","sarıl\\p{L}*"]).map(_icRe);
-/* Does this text read as intimate? `weakEnough` lowers the bar to one weak cue — used for lines a heat
-   run wrote, which are already known to be the heat scene's own text. */
+  "(?:kalça|göğüs|göğs|meme|uyluk|kasık)\\p{L}* (?:okşa|avuçla|kavra|sık(?:tı|ıyor|arak|ıp)|yala)\\p{L}*","bacaklarını (?:onun )?(?:beline|kalçasına) dola\\p{L}*",
+  "(?:kulağına|zevkle|hazla|tutkuyla|adını) inl\\p{L}*","dilini (?:onun )?ağzına\\p{L}*",
+  "(?:onunla|benimle|seninle|birlikte) (?:\\p{L}+ ){0,2}yat(?:tı|tık|tılar|mak|mış|acak|mıştı|tıktan)\\p{L}*","tırnaklarını sırt\\p{L}* geçir\\p{L}*",
+  "onun içine gir\\p{L}*","(?<!\\p{L}{2}(?:ın|in|un|ün) )içine gir\\p{L}*",   // "içine girdi" — not "odanın içine girdi"
+  "(?<=(?:^|[.!?\\n])\\s*)ağzına al(?:dı|ıyor|arak|ıp)\\p{L}*","(?:onu|onları) ağzına al\\p{L}*"].join("|"));
+// WEAK — suggestive but ordinary often enough: two different KINDS are needed. [kind, regex]
+const INTIMACY_WEAK=[
+  ["kiss","kiss(?:es|ed|ing)? (?:him|her|me|you|each other)(?! (?:grand\\p{L}*|mother|father|mom|mum|dad|son|daughter|baby|child|kids?|sister|brother|aunt|uncle|dog|cat)\\b)"],["kiss","(?:lean(?:s|ed)?|leaning) in for a kiss"],["kiss","öp(?:tü|tüm|er|üyor|ücük|erek|meye|müş)\\p{L}*"],
+  ["sound","moan(?:s|ed|ing)?"],["sound","gasp(?:s|ed|ing)?"],["sound","breath (?:catch|catches|caught|hitch\\p{L}*)"],["sound","inle\\p{L}*"],["sound","inliyor\\p{L}*"],
+  ["touch","caress(?:es|ed|ing)? "+_icPoss],["touch","okşa\\p{L}*"],["touch","ten tene"],["touch","ten\\p{L}* (?:gezin|dokun)\\p{L}*"],["touch","(?:his|her) (?:thighs?|hips) against"],
+  ["nude","bare skin"],["nude","naked"],["nude","nude"],["nude","çıplak\\p{L}*"],["nude","ciplak\\p{L}*"],
+  ["bed","(?:take|took|takes|taking) (?:her|him|me) to bed"],["bed","in bed with (?:him|her|me|you)"],["bed","(?:onto|on) the bed"],["bed","(?:stumbl|pull|drag|led|lead|carr)\\p{L}* (?:\\p{L}+ )?(?:into|to) the bedroom"],
+  ["bed","yatağa (?:attı|yatırdı|yatırıp|çekti|devirdi|uzandılar)\\p{L}*"],["bed","onu yatakta"],
+  ["undress","(?:at|undoing|undid|undoes) "+_icPoss+" buttons"],["undress","shirt (?:hits|hit|falls|fell) (?:to )?the floor"],["undress","sutyen\\p{L}*"],["undress","külot\\p{L}*"],
+  ["pose","pull(?:s|ed)? (?:him|her|me) (?:closer|down)"],["pose","arch(?:es|ed|ing)? "+_icPoss+" back"],["pose","(?:bit|bites|biting|nibbl\\p{L}*) "+_icPoss+" (?:lip|ear|earlobe|neck)"],
+  ["pose","onto (?:his|her|my|your) lap"],["pose","üstüne (?:çık|eğil|uzan|yığıl)\\p{L}*"],["pose","altına al\\p{L}*"],
+  ["climax","(?<=(?:^|[.!?,;:\\n]|(?<!\\p{L})(?:ve|o da|sonunda|aynı anda|birlikte))\\s*)boşal(?:dı|ıyor|ırken|acağım|ıyorum|ınca)\\p{L}*"]].map(([k,s])=>[k,_icRe(s)]);
+// CONTEXT — a doctor, a wound, a fight or a funeral anywhere in the text: the body words are not a love scene.
+const INTIMACY_CTX_EN=_icRe([
+  "doctors?","nurses?","hospital\\p{L}*","clinic\\p{L}*","patients?","exam\\p{L}*","check-?up","surgeon\\p{L}*","surgery","wound\\p{L}*","bandag\\p{L}*","stethoscope",
+  "midwi\\p{L}+","paramedic\\p{L}*","ambulance","fever\\p{L}*","rash","lumps?","infection","injur\\p{L}*","x-?rays?","scans?","breastfeed\\p{L}*","crowning","contractions?",
+  "physio\\p{L}*","therapist","medic","compressions?","gash\\p{L}*",
+  "punch\\p{L}*","kick\\p{L}*","fists?","knife","knives","blade","dagger","sword","stab\\p{L}*","guns?","pistol","rifle","bullets?","blood\\p{L}*","bled","bleed\\p{L}*",
+  "strangl\\p{L}*","chok(?:e|ed|es|ing) (?:him|her|me|you)","wrestl\\p{L}*","brawl\\p{L}*","fight\\p{L}*","fought","beat(?:s|ing|en)? (?:him|her|me|them|up)","jaw","split lip",
+  "prisoners?","captive","guards?","soldiers?","thief","bandits?","attack\\p{L}*","assault\\p{L}*","tortur\\p{L}*","hostage","claw(?:ed|ing)",
+  "funeral","graves?","graveside","mourn\\p{L}*","sobb\\p{L}*","sobs","wept","weeping","crying(?! out)","condolence\\p{L}*","passed away","died"].join("|"));
+const INTIMACY_CTX_TR=_icRe([
+  "doktor\\p{L}*","hemşire\\p{L}*","hastane\\p{L}*","klinik\\p{L}*","muayene\\p{L}*","hastalık\\p{L}*","hastanın","hastayı","yara(?![kğ])\\p{L}*","kanser\\p{L}*","tarama\\p{L}*",
+  "ameliyat\\p{L}*","sargı\\p{L}*","ambulans\\p{L}*","ebe","ebeler\\p{L}*","doğum\\p{L}*","emzir\\p{L}*","ateş(?:i|le) (?:yüksel|çık)\\p{L}*","jinekolog\\p{L}*","reçete\\p{L}*","ilaç\\p{L}*",
+  "kızarıklık\\p{L}*","nabz\\p{L}*","nabız","önlüğ\\p{L}*","önlük\\p{L}*","steteskop\\p{L}*","ciğer\\p{L}*",
+  "yumru[kğ]\\p{L}*","tekme\\p{L}*","bıça[kğ]\\p{L}*","kılı[çc]\\p{L}*","silah\\p{L}*","tabanca\\p{L}*","kurşun\\p{L}*","kan(?:ı|ın|a|la|lar|lı|ıyor\\p{L}*|adı|ayan|ama\\p{L}*)?",
+  "döv\\p{L}*","daya[kğ]\\p{L}*","boğuş\\p{L}*","güreş\\p{L}*","kavga\\p{L}*","saldır\\p{L}*","boğazını sık\\p{L}*","vurdu","tokat\\p{L}*","asker\\p{L}*","gardiyan\\p{L}*","mahkum\\p{L}*",
+  "hırsız\\p{L}*","haydut\\p{L}*","suratına","yakasından",
+  "cenaze\\p{L}*","mezar\\p{L}*","yas","yasta","ağla\\p{L}*","hıçkır\\p{L}*","taziye\\p{L}*","öldü","vefat\\p{L}*","rahmetli\\p{L}*"].join("|"));
+/* Does this text read as intimate? `weakEnough` lowers the bar to one weak cue (one strong one in a
+   medical/violence/grief context) — used for lines a heat run wrote, already known to be the heat scene.
+   v147.2 — pure regex on purpose: this runs on every turn (GM, quest approach, confrontation gate), so a
+   model judge would sit on the hot path; the held-out score is reported by tests/qc3-quests.browser.js. */
 function intimacyReads(text,weakEnough){
   const raw=String(text||""); if(!raw.trim())return false;
-  const en=raw.toLowerCase().replace(INTIMACY_NOT_EN," ");
-  const tr=raw.toLocaleLowerCase("tr").replace(INTIMACY_NOT_TR," ");
-  if(INTIMACY_STRONG_EN.test(en)||INTIMACY_STRONG_TR.test(tr))return true;
-  // distinct cues: each weak pattern counts once, however often it matches
-  const weak=INTIMACY_WEAK_EN.filter(r=>r.test(en)).length+INTIMACY_WEAK_TR.filter(r=>r.test(tr)).length;
-  return weak>=(weakEnough?1:2);
+  // both blankers on both copies: a mixed-language scene must not keep "naked truth" in the Turkish copy
+  const en=raw.toLowerCase().replace(/[’‘]/g,"'").replace(INTIMACY_NOT_EN," ").replace(INTIMACY_NOT_TR," ");
+  const tr=raw.toLocaleLowerCase("tr").replace(/[’‘]/g,"'").replace(INTIMACY_NOT_TR," ").replace(INTIMACY_NOT_EN," ");
+  if(INTIMACY_HARD_EN.test(en)||INTIMACY_HARD_TR.test(tr))return true;
+  const ctx=INTIMACY_CTX_EN.test(en)||INTIMACY_CTX_TR.test(tr);
+  // distinct cues: a phrase counts once however often it matches
+  const strong=[..._icHits(INTIMACY_STRONG_EN,en),..._icHits(INTIMACY_STRONG_TR,tr)];
+  if(!ctx&&strong.length)return true;
+  // In a clinic or a fight clothes come off and bodies get named; what nobody does there is kiss, lick
+  // or moan a name — so a context needs two strong cues, one of them an ACT (one, with weakEnough).
+  if(ctx)return strong.some(t=>INTIMACY_ACT.test(t))&&strong.length>=(weakEnough?1:2);
+  const kinds=new Set(INTIMACY_WEAK.filter(([k,r])=>r.test(en)||r.test(tr)).map(([k])=>k));
+  return kinds.size>=(weakEnough?1:2);
+}
+const INTIMACY_ACT=/kiss|lick|suck|tongue|moan|groan|grind|rode|ride|riding|öp|yala|em(?:di|iyor|erek|meye)|inl|dola/u;
+// The DIFFERENT strong cues a text carries (distinct matched phrases: "her breasts … her breasts" is one).
+function _icHits(re,s){
+  const g=new RegExp(re.source,"gu"), seen=new Set(); let m;
+  while((m=g.exec(s))){ seen.add(m[0].replace(/\s+/g," ")); if(m[0]==="")g.lastIndex++; }
+  return [...seen];
 }
 /* Is a HEAT run actually live? state.heatOn is a standing setting, and with it on every reply is written
    as a heat beat — so neither the setting nor the heatBeat tag says anything about THIS scene.

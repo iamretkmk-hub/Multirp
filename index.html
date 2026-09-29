@@ -777,6 +777,11 @@
   /* removed (dead) character: kept on record but out of play */
   .charCard.removed{filter:grayscale(.85) brightness(.6);border-color:rgba(255,80,80,.4);}
   .charCard.latent{filter:grayscale(.55) brightness(.72);border-color:rgba(150,150,170,.4);}
+  .charCard .cc-undisc-badge{background:rgba(70,70,95,.88);}
+  .charCard .cc-del{position:absolute;top:7px;right:44px;z-index:4;width:30px;height:30px;border:none;border-radius:999px;cursor:pointer;background:rgba(150,20,20,.8);color:#fff;display:flex;align-items:center;justify-content:center;}
+  .undiscGroup{grid-column:1/-1;margin-top:6px;border:1px dashed var(--border);border-radius:14px;padding:6px 10px;}
+  .undiscGroup>summary{cursor:pointer;font-weight:600;color:var(--muted);padding:4px 0;}
+  .undiscGroup>.charGrid{margin-top:8px;}
   .charCard.removed .cc-img{opacity:.7;}
   .charCard .cc-dead-badge{position:absolute;top:7px;left:7px;z-index:3;font-size:11px;font-weight:600;letter-spacing:.02em;color:#fff;background:rgba(150,20,20,.85);backdrop-filter:blur(4px);padding:3px 8px;border-radius:999px;}
   .charCard .cc-revive{position:absolute;bottom:48px;left:50%;transform:translateX(-50%);z-index:4;border:none;border-radius:999px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;background:linear-gradient(135deg,#b32be0,#7b2ff7);color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.4);}
@@ -20552,7 +20557,7 @@ function toggleTrackerGenForm(){
   if(f){ f.remove(); return; }   // already open → close (× / click-outside / toggle button)
   const uni=editingUniverse; if(!uni){ toast("Save the universe first"); return; }
   const opts=['<option value="__story__">The story (no owner)</option>']
-    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join("");
+    .concat((state.personas||[]).filter(p=>uni&&p.universeId===uni.id&&!p.latent).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join("");   // v146.1 — no undiscovered
   // A centered popup overlay (not an inline block at the bottom of the universe editor).
   f=document.createElement('div'); f.id='tgForm';
   f.style.cssText="position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.6)";
@@ -20659,7 +20664,7 @@ function teSetOwnerType(ot){
 function _teRenderCharList(selectedIds){
   const box=document.getElementById('teCharList'); if(!box)return;
   const sel=new Set(selectedIds||[]);
-  const chars=_teUniverseChars();
+  const chars=_teUniverseChars().filter(p=>!p.latent||sel.has(p.id));   // v146.1 — undiscovered only if it already owns this tracker
   if(!chars.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; return; }
   box.innerHTML=chars.map(p=>`<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
     <input type="checkbox" class="teCharChk" value="${esc(p.id)}" ${sel.has(p.id)?"checked":""}>
@@ -20805,7 +20810,7 @@ function renderLocEditor(){
   // Build a name lookup for residents from the personas in this universe.
   const uid=editingUniverse?editingUniverse.id:null;
   _ueLocs.forEach((l,i)=>{
-    const resNames=(l.residents||[]).map(id=>(state.personas.find(p=>p.id===id)||{}).name).filter(Boolean).join(", ");
+    const resNames=(l.residents||[]).map(id=>state.personas.find(p=>p.id===id)).filter(p=>p&&!p.latent).map(p=>p.name).join(", ");   // v146.1 — undiscovered not listed
     const row=document.createElement('div'); row.className="card"; row.style.padding="8px";
     const thumb=l.image
       ? `<img src="${escUrl(l.image)}" data-view style="width:100%;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:zoom-in">`
@@ -20962,7 +20967,8 @@ function editLocation(i){
   leSetType(l.type||"poi");
   // Residents picker — characters in this universe.
   const uid=editingUniverse?editingUniverse.id:null;
-  const cands=state.personas.filter(p=>!uid||p.universeId===uid);
+  // v146.1 — undiscovered characters are not offered; the ones already living here are kept on save
+  const cands=state.personas.filter(p=>(!uid||p.universeId===uid)&&!p.latent);
   const cur=new Set(l.residents||[]);
   const box=document.getElementById('leResidents');
   if(!cands.length){ box.innerHTML=`<div class="desc">No characters in this universe yet.</div>`; }
@@ -21078,7 +21084,8 @@ function saveLocationEdit(){
   const tp=document.getElementById('leTravel').value.trim();
   l.travelPeriods=tp===""?null:Math.max(0,+tp||0);
   { const gv=document.getElementById('leGossip'); if(gv) l.gossipChance=Math.max(0,Math.min(1,(+gv.value||0)/100)); }
-  l.residents=Array.from(document.querySelectorAll('#leResidents .leResChk:checked')).map(c=>c.value);
+  { const hiddenRes=(l.residents||[]).filter(id=>(state.personas||[]).some(p=>p&&p.id===id&&p.latent));   // v146.1 — not shown, not dropped
+    l.residents=Array.from(document.querySelectorAll('#leResidents .leResChk:checked')).map(c=>c.value).concat(hiddenRes); }
   ensureSublocations(l); // guarantee an entrance survives the save
   // Per-area gossip multipliers (0..1). Store only when not the default 1.0 to keep data tidy.
   document.querySelectorAll('#leSubs .leSubGossip').forEach(r=>{
@@ -21404,24 +21411,59 @@ async function deleteUniverse(){
   closeModal('universeModal');showUniverseGrid();updateStorage&&updateStorage();toast("Universe and all its content deleted");
 }
 
+/* (!) v146.1 — ONE RULE FOR UNDISCOVERED (latent) CHARACTERS. They were hidden from this list alone and
+   shown in pickers, residents, plans, the map, trackers and text contacts — so a stray one ("Emre and
+   Özlem Özüçak", a group minted as one person) was visible everywhere except the one place it could be
+   deleted. Now: latent = not met yet. Every player-facing picker and play list leaves them out
+   (isActiveChar), and this list keeps them in a collapsed, clearly marked "Undiscovered" group, where
+   they can be opened, edited, revealed or deleted. */
 function renderPersonas(){
   const uid=state.curUniverse;
   const el=document.getElementById('personaList');el.innerHTML="";
-  // v20 — undiscovered (latent) characters stay HIDDEN here until revealed in play (/seek, arrival).
-  personasInUniverse(uid).filter(p=>!p.latent).forEach(p=>{
+  const all=personasInUniverse(uid);
+  const hidden=all.filter(p=>p.latent&&!p.removed);
+  all.filter(p=>!(p.latent&&!p.removed)).forEach(p=>el.appendChild(_personaCard(p)));
+  try{ updateTextBadges(); }catch(e){}
+  // "add new" tile
+  const add=document.createElement('div');add.className="charCard add";
+  add.innerHTML=`<div class="cc-plus">＋<small>New character</small></div>`;
+  add.addEventListener('click',()=>editPersona(null));
+  el.appendChild(add);
+  if(hidden.length){
+    const g=document.createElement('details'); g.className="undiscGroup"; g.id="undiscGroup";
+    try{ if(sessionStorage.getItem("sm_undisc_open")==="1")g.open=true; }catch(e){}
+    g.addEventListener('toggle',()=>{ try{ sessionStorage.setItem("sm_undisc_open",g.open?"1":""); }catch(e){} });
+    g.innerHTML=`<summary>${icon("eye")} Undiscovered (${hidden.length}) <span class="desc" style="display:inline;font-weight:400">— characters you haven't met yet; they stay out of play until found</span></summary><div class="charGrid"></div>`;
+    const grid=g.querySelector('.charGrid');
+    hidden.forEach(p=>grid.appendChild(_personaCard(p)));
+    el.appendChild(g);
+  }
+}
+// Reveal from the character list: out of hiding, with no arrival staged (the player may not be in a scene).
+function revealPersonaUI(id){
+  const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p||!p.latent)return;
+  p.latent=false; p.boundLocId=null; persistPersonas(); renderPersonas();
+  toast(`${p.name} is now known — in play`);
+}
+async function deletePersonaById(id){
+  const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p)return;
+  editingPersona=p; await deletePersona();
+}
+function _personaCard(p){
     const c=document.createElement('div');c.className="charCard"+(p.removed?" removed":(p.latent?" latent":""));
     const desc=p.personality||p.scenario||p.backstory||"";
     const visual=p.image
       ? `<img class="cc-img" src="${escUrl(p.image)}" alt="">`
       : `<div class="cc-emoji">${esc(p.avatar||"🎭")}</div>`;
-    const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">removed</div>`:(p.latent?`<div class="cc-dead-badge" title="Undiscovered — /seek to reveal">undiscovered</div>`:"");
-    const reviveBtn=p.removed?`<button class="cc-revive" title="Revive" data-revive>Revive</button>`:"";
+    const deadBadge=p.removed?`<div class="cc-dead-badge" title="Removed from play — card kept">removed</div>`:(p.latent?`<div class="cc-dead-badge cc-undisc-badge" title="Undiscovered — find them in play (/seek), or reveal them here">undiscovered — not met yet</div>`:"");
+    const reviveBtn=p.removed?`<button class="cc-revive" title="Revive" data-revive>Revive</button>`
+      :(p.latent?`<button class="cc-revive" title="Reveal: bring into play now" data-reveal>Reveal</button><button class="cc-del" title="Delete ${esc(p.name)}" data-del><svg class="ic"><use href="#i-x"/></svg></button>`:"");
     c.innerHTML=`
       ${visual}
       <div class="cc-grad"></div>
       ${deadBadge}
       <button class="cc-edit" title="Edit" data-edit><svg class="ic"><use href="#i-edit"/></svg></button>
-      ${p.removed?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${esc(p.id)}" style="display:none"></span></button>`}
+      ${(p.removed||p.latent)?"":`<button class="cc-text" title="Text ${esc(p.name)}" data-text><svg class="ic"><use href="#i-message"/></svg><span class="cc-textbadge" data-textbadge="${esc(p.id)}" style="display:none"></span></button>`}
       ${reviveBtn}
       <div class="cc-info">
         <div class="cc-name">${esc(p.name)}</div>
@@ -21438,20 +21480,15 @@ function renderPersonas(){
         toast(`${p.name} revived — back in play`);
         return;
       }
+      if(ev.target.closest('[data-reveal]')){ ev.stopPropagation(); revealPersonaUI(p.id); return; }
+      if(ev.target.closest('[data-del]')){ ev.stopPropagation(); deletePersonaById(p.id); return; }
       // The pencil goes straight to the editor; tapping the card opens the character page (profile
       // + everything bound to them: diaries, images, videos).
       if(ev.target.closest('[data-edit]')){ ev.stopPropagation(); editPersona(p.id); return; }
       if(ev.target.closest('[data-text]')){ ev.stopPropagation(); openTextWith(p.id); return; }
       openCharacterPage(p.id);
     });
-    el.appendChild(c);
-  });
-  try{ updateTextBadges(); }catch(e){}
-  // "add new" tile
-  const add=document.createElement('div');add.className="charCard add";
-  add.innerHTML=`<div class="cc-plus">＋<small>New character</small></div>`;
-  add.addEventListener('click',()=>editPersona(null));
-  el.appendChild(add);
+    return c;
 }
 
 /* ===== CHARACTER PAGE ===== a per-character hub: their profile plus everything BOUND to them in
@@ -29667,7 +29704,7 @@ function curChat(){
      video in the chat. Tapping the pin toggles it (and re-enables auto-gen on unpin).
    - Portrait keeps inline images; the rail is hidden by CSS but the pin still freezes
      auto-gen and shows a small sticky pinned banner above the list. */
-let _heatSeq=0,_heatBusy=false,_heatNoImg=false;   // v19.5 heat-of-the-moment state
+let _heatSeq=0,_heatNoImg=false;   // v19.5 heat-of-the-moment state (v146.1 — the burst-running flag is per chat: chat._heatBusy)
 /* v26.5 — DIRECTOR CANCELLATION. Gamemaster reactions run fire-and-forget while the player is free
    to keep typing, so a character could be generating their reaction to a GM beat at the very moment
    sendMessage started their reply to the player's line: two turns for one character, both answering
@@ -33884,7 +33921,7 @@ function _apBlocked(chat){
   if(!state.key)return "nokey";
   const inp=document.getElementById('chatInput');
   if(inp&&inp.value.trim())return "typing";
-  if(_apBusy||_heatBusy||chat._gmBusy)return "busy";
+  if(_apBusy||chat._heatBusy||chat._gmBusy)return "busy";
   const sb=document.getElementById('sendBtn'); if(sb&&sb.disabled)return "busy";
   if(inp&&inp.disabled)return "busy";
   if(_presentPlaying||_presentQueue.length)return "busy";
@@ -34436,7 +34473,7 @@ function _smBarHTML(chat){
    path. `_heatOpened` records that beat 1 was claimed, so a run started by toggling heat on
    mid-turn (where no reply was marked) still writes all N beats itself. */
 function heatBeginTurn(chat){
-  if(!state.heatOn||!chat||_heatBusy) return false;
+  if(!state.heatOn||!chat||chat._heatBusy) return false;
   const total=Math.max(1,Math.min(10,+state.heatN||5));
   chat.heatNarrN=(+chat.heatNarrN||0)+1;
   chat._heatBeat={total:String(total),n:"1",narrN:String(chat.heatNarrN)};
@@ -34446,7 +34483,7 @@ function heatBeginTurn(chat){
 /* (!) v135.1 — ONLY THE TURN THAT OPENED THE BEAT CLOSES IT. While a burst run is writing (_heatBusy)
    the beat on the chat is the RUN's, not the player turn's — heatBeginTurn refuses to open one then —
    so a turn finishing underneath it must leave it alone (runHeatBursts clears its own). */
-function heatEndTurn(chat){ if(chat&&!_heatBusy) delete chat._heatBeat; }
+function heatEndTurn(chat){ if(chat&&!chat._heatBusy) delete chat._heatBeat; }
 /* v135.1 — HEAT OFF LEAVES NO BEAT BEHIND. chat._heatBeat is what switches the payload to the heat
    layout and guidance; it is transient and is meant to live for one reply. The one-on-one send path
    opened it (heatBeginTurn) and never closed it — it relied on runHeatBursts' finally, and that run
@@ -34640,7 +34677,7 @@ function heatNarrMode(chat){
 function heatNarrBlock(chat){ return blkTpl(heatNarrMode(chat)==="superego"?"heat_narr_superego":"heat_narr_physical"); }
 function heatNarrShort(chat){ return blkTpl(heatNarrMode(chat)==="superego"?"heat_narr_superego_short":"heat_narr_physical_short"); }
 function maybeHeatBursts(chat){
-  if(!state.heatOn||_heatBusy||!chat)return;
+  if(!state.heatOn||!chat||chat._heatBusy)return;
   // v19.97 — PER-TURN single-flight: the burst runs at most once per new tail line. Two hook sites
   // (solo sendMessage + runMultiCharTurn) plus fire-and-forget dispatch made a double-burst per
   // turn possible; keying to the tail mid makes that impossible even if _heatBusy timing races.
@@ -34655,14 +34692,16 @@ function maybeHeatBursts(chat){
   runHeatBursts(chat).catch(()=>{});
 }
 async function runHeatBursts(chat){
-  if(!state.heatOn||_heatBusy||!chat)return;
+  /* (!) v146.1 — PER CHAT. One global _heatBusy meant a burst running in one story blocked heat (and
+     let heatEndTurn leave a stale beat) in every other story until it finished. */
+  if(!state.heatOn||!chat||chat._heatBusy)return;
   const total=Math.max(1,Math.min(10,+state.heatN||5));   // v37.0 — 1 is legal: one heat-form reply
   /* v39.9 — the player-facing reply was beat 1 (heatBeginTurn), so this run writes 2..N. When heat
      was switched on mid-turn no reply was marked and the run owns every beat, starting at 1. */
   const first=chat._heatOpened?1:0;
   delete chat._heatOpened;
   const mySeq=_heatSeq;
-  _heatBusy=true;
+  chat._heatBusy=true;
   try{
     for(let i=first;i<total;i++){
       // Re-checked before EVERY beat, not just once at the top: the player can type and the toggle
@@ -34688,7 +34727,7 @@ async function runHeatBursts(chat){
       finally{ delete chat._heatBeat; }
       if(!ok)break;                // refused, empty, or cancelled — don't keep hammering
     }
-  }finally{ _heatBusy=false; _heatNoImg=false; if(chat)delete chat._heatBeat; }
+  }finally{ chat._heatBusy=false; _heatNoImg=false; delete chat._heatBeat; }
 }
 /* One character produces one message, shown with its own name/avatar.
    `opts.answerTo` PINS who this turn is answering, overriding the "freshest line in the room"
@@ -38282,7 +38321,8 @@ function _pgRuleObj(){ return (state.imgRules||[]).filter(r=>r&&r.enabled!==fals
 function _pgLabelEl(t){ const l=document.createElement('div'); l.className="pgLabel"; l.textContent=t; return l; }
 function openPlayground(actorName){
   const uni=curUniverseObj(); if(!uni){toast("Open a universe first");return;}
-  const cast=personasInUniverse(uni.id);
+  // v146.1 — undiscovered characters are not offered (unless their own page asked for them by name)
+  const cast=personasInUniverse(uni.id).filter(p=>!p.latent||(actorName&&p.name===actorName));
   if(!cast.length){toast("This universe has no characters yet");return;}
   if(actorName){ const p=cast.find(x=>x&&x.name===actorName); if(p)_pg.actorId=p.id; }
   if(!_pg.actorId||!cast.find(x=>x.id===_pg.actorId))_pg.actorId=cast[0].id;
@@ -38300,7 +38340,7 @@ function openPlayground(actorName){
 }
 function renderPlayground(){
   const box=document.getElementById('playgroundBody'); if(!box)return;
-  const uni=curUniverseObj(); const cast=uni?personasInUniverse(uni.id):[];
+  const uni=curUniverseObj(); const cast=uni?personasInUniverse(uni.id).filter(p=>!p.latent||p.id===_pg.actorId):[];   // v146.1 — no undiscovered
   const rules=(state.imgRules||[]).filter(r=>r&&r.enabled!==false);
   const rule=_pgRuleObj();
   box.innerHTML="";
@@ -42961,7 +43001,10 @@ function questMarkDone(qid,opts){
   if(opts.failed||opts.abandoned)q.failed=true;
   if(opts.abandoned)q.abandoned=true;
   if(opts.result)q.result=String(opts.result).slice(0,240);
-  const next=_activateNextQuest(uni,q.arc);
+  // v146.1 — closing a quest that was NOT the live one (a locked quest, from the editor) must not unlock
+  // a second live quest beside the one already running.
+  const otherLive=quests.some(x=>x&&x!==q&&x.arc===q.arc&&!x.done&&x.startActive!==false);
+  const next=otherLive?null:_activateNextQuest(uni,q.arc);
   persistUniverses();
   _qlog(q.abandoned?"abandoned":q.failed?"failed":"done",`"${q.title}"${q.result?" — "+q.result.slice(0,120):""}${next?` · pre-authored next unlocked: "${next.title}"`:""}`);
   return {quest:q,next};
@@ -43198,7 +43241,7 @@ async function generateNextQuest(chat,uni,arc){
     npcName:String(qq.npc||"").slice(0,60),
     castNames:String(qq.cast||"").split(/[,&]|\band\b| ve /i).map(s=>s.trim()).filter(Boolean).slice(0,5),
     locationId:null, subId:null, npcId:null, entityType:"npc",
-    startActive:true, done:false, entityCreated:false, progress:[]
+    startActive:true, done:false, entityCreated:false, progress:[], createdDay:day   // v146.1 — born on
   };
   gd.quests.push(q);
   await _materializeQuest(chat,uni,q);
@@ -43286,9 +43329,12 @@ function _questDayPlayerLines(chat,day,cap){
   }
   return out.slice(-(cap||12));
 }
-async function _reconcileQuestVerdicts(chat,day,uni){
+async function _reconcileQuestVerdicts(chat,day,uni,skip){
     const quests=(uni.gameData&&Array.isArray(uni.gameData.quests))?uni.gameData.quests:[];
-    const active=quests.filter(q=>q&&!q.done&&q.startActive!==false);
+    /* (!) v146.1 — a quest the retry wrote a moment ago (skip), or one born after the day being judged,
+       has no evidence of its own in today's memories — judging it read the PREVIOUS quest's day as its
+       own and could close it at once. */
+    const active=quests.filter(q=>q&&!q.done&&q.startActive!==false&&!(skip&&skip.has(q.id))&&!(q.createdDay!=null&&q.createdDay>day));
     if(!active.length)return;
     // Build one section per quest: full objective + the day's memories of the quest's own cast,
     // labeled per owner. A quest whose cast can't be resolved (or formed no memories today) still
@@ -43371,29 +43417,64 @@ async function _reconcileQuestVerdicts(chat,day,uni){
    arc that still has quests, is not concluded and has none live gets the chain run again — at most two
    arcs per day end. It runs BEFORE today's verdicts, so a continuation that fails inside this very pass
    waits for the next day end instead of being re-asked at once. An arc whose quests were all deleted
-   is gone, and is left alone. */
+   is gone, and is left alone.
+   (!) v146.1 — BOUNDED. It retried one call a day for ever (a model that would not continue an arc was
+   asked daily), and it revived legacy arcs that had simply ended before arcMeta existed. Now only an arc
+   with an arcMeta entry is retried, at most ARC_RETRY_LIMIT times in a row (arcMeta[arc].retries, reset
+   once the arc has a live quest again); after that it waits for the player (▶ next / End this arc).
+   Returns the ids of the quests it brought to life, so today's verdicts leave them alone. */
+const ARC_RETRY_LIMIT=3;
 async function _retryStalledArcs(chat,uni,day){
-  const gd=uni&&uni.gameData; if(!gd||!Array.isArray(gd.quests))return 0;
-  const meta=gd.arcMeta||{};
+  const gd=uni&&uni.gameData; if(!gd||!Array.isArray(gd.quests))return [];
+  const meta=(gd.arcMeta&&typeof gd.arcMeta==="object")?gd.arcMeta:{};
   const arcs=[...new Set(gd.quests.filter(q=>q&&q.arc&&q.source!=="task").map(q=>q.arc))];
-  let n=0;
+  let n=0; const born=[];
   for(const arc of arcs){
     if(n>=2)break;
-    if(meta[arc]&&meta[arc].complete)continue;
-    if(gd.quests.some(q=>q&&q.arc===arc&&!q.done&&q.startActive!==false))continue;
-    _qlog("chain.retry",`day ${day}: arc "${arc}" has no live quest — running the chain again`);
+    const am=meta[arc];
+    if(!am||typeof am!=="object"||am.complete)continue;        // legacy (no arcMeta) or concluded: left alone
+    if(gd.quests.some(q=>q&&q.arc===arc&&!q.done&&q.startActive!==false)){ if(am.retries){ am.retries=0; persistUniverses(); } continue; }
+    if((am.retries||0)>=ARC_RETRY_LIMIT)continue;
+    am.retries=(am.retries||0)+1; persistUniverses();
+    _qlog("chain.retry",`day ${day}: arc "${arc}" has no live quest — running the chain again (${am.retries}/${ARC_RETRY_LIMIT})`);
     n++;
-    try{ await maybeGenerateNextQuest(chat,uni,arc); }catch(e){}
+    let r=null;
+    try{ r=await maybeGenerateNextQuest(chat,uni,arc); }catch(e){}
+    if(r&&r.quest){ born.push(r.quest.id); am.retries=0; persistUniverses(); }
+    else if(r&&r.complete){ am.retries=0; persistUniverses(); }
   }
-  return n;
+  return born;
 }
 async function reconcileQuestsForDay(chat,day,uni){
   try{
     if(!chat||!state.key)return;
     uni=uni||universeById(chat.universeId); if(!uni)return;
-    try{ await _retryStalledArcs(chat,uni,day); }catch(e){}
-    try{ await _reconcileQuestVerdicts(chat,day,uni); }catch(e){ try{ console.warn("[reconcileQuestsForDay] bailed:",e); }catch(_){} }
+    let born=[];
+    try{ born=await _retryStalledArcs(chat,uni,day)||[]; }catch(e){}
+    try{ await _reconcileQuestVerdicts(chat,day,uni,new Set(born)); }catch(e){ try{ console.warn("[reconcileQuestsForDay] bailed:",e); }catch(_){} }
   }catch(e){ try{ console.warn("[reconcileQuestsForDay] bailed:",e); }catch(_){} }
+}
+/* v146.1 — END THIS ARC (Quests screen). The player closes a story line for good: its live and locked
+   quests are closed as abandoned (no chain follows them), and the arc is marked concluded, so neither
+   the day-end retry nor a deleted quest brings it back. */
+async function questEndArcUI(idx){
+  const u=_questsUni(); if(!u)return;
+  const arc=(window._qArcNames||[])[idx]; if(!arc)return;
+  if(!(await uiConfirm("Its open quests are closed as abandoned and nothing new is written for it. The history stays.",{title:`End the arc "${arc}"?`,ok:"End arc",danger:true})))return;
+  questEndArc(u,arc,(curChat()&&curChat().gameDay)||1);
+  toast("Arc ended: "+arc); _refreshQuestViews();
+}
+function questEndArc(uni,arc,day){
+  const gd=uni.gameData=(uni.gameData&&typeof uni.gameData==="object")?uni.gameData:{};
+  gd.arcMeta=(gd.arcMeta&&typeof gd.arcMeta==="object")?gd.arcMeta:{};
+  gd.arcMeta[arc]=Object.assign({},gd.arcMeta[arc],{complete:true,endedByPlayer:true});
+  (Array.isArray(gd.quests)?gd.quests:[]).forEach(q=>{
+    if(!q||q.arc!==arc||q.done)return;
+    q.done=true; q.failed=true; q.abandoned=true; q.completedDay=day||null;
+    q.result=q.result||`${state.user||"The player"} ended this story line.`;
+  });
+  persistUniverses();
+  _qlog("arc.ended",`arc "${arc}" ended by the player`);
 }
 /* v20.5 (Stage 3) — removed ARPG: genQuestArc (old) */
 
@@ -43422,7 +43503,9 @@ async function questMarkDoneUI(qid,how){
     const gd=uni.gameData||{}, arc=res.quest.arc;
     const live=(gd.quests||[]).some(q=>q&&q.arc===arc&&!q.done&&q.startActive!==false);
     const concluded=!!(gd.arcMeta&&gd.arcMeta[arc]&&gd.arcMeta[arc].complete);
-    if(!live&&!concluded)toast("Couldn't write the next quest — it will be tried again at the end of the day");
+    // v146.1 — the day-end chain holding this arc's lock is writing it right now: not a failure
+    if(_qGenBusy.has(uni.id+"|"+arc))toast("The next quest is already being written");
+    else if(!live&&!concluded)toast("Couldn't write the next quest — it will be tried again at the end of the day");
   }
   _refreshQuestViews();
 }
@@ -43593,7 +43676,13 @@ function questEditSave(qid){
   let closeAs=null;
   {const st=gv("qeStatus");
    if(st==="done"||st==="failed"){ if(!q.done)closeAs=st; else{ q.failed=(st==="failed"); if(!q.failed)q.abandoned=false; } }
-   else{ q.done=false; q.failed=false; q.abandoned=false; q.cancelled=false; q.startActive=(st!=="locked"); }}
+   else{
+     q.done=false; q.failed=false; q.abandoned=false; q.cancelled=false; q.startActive=(st!=="locked");
+     // v146.1 — one live quest per arc: reopening beside a newer live quest reopens it locked
+     if(q.startActive&&((u.gameData&&u.gameData.quests)||[]).some(x=>x&&x!==q&&x.arc===q.arc&&!x.done&&x.startActive!==false)){
+       q.startActive=false; try{ toast("Another quest in this arc is live — reopened as locked"); }catch(e){}
+     }
+   }}
   q.result=gv("qeResult").trim().slice(0,300);
   // Progress log: "day N: text" per line; lines without the day prefix keep the current game day.
   {const curDay=(curChat()&&curChat().gameDay)||1;
@@ -43617,9 +43706,15 @@ async function questDeleteUI(qid){
   gd.quests=(Array.isArray(gd.quests)?gd.quests:qs).filter(x=>x!==q);
   persistUniverses(); toast("Quest deleted"); _refreshQuestViews();
   /* (!) v144.1 — deleting the LIVE quest left its arc with nothing live and nothing to follow. The
-     chain runs on — unless that was the arc's last quest (then the arc itself is gone), or a task. */
-  if(wasLive&&q.source!=="task"&&q.arc&&gd.quests.some(x=>x&&x.arc===q.arc)){
-    try{ await maybeGenerateNextQuest(curChat(),u,q.arc); }catch(e){}
+     chain runs on — unless that was the arc's last quest (then the arc itself is gone), or a task.
+     (!) v146.1 — but not on its own: deleting a quest is often the player saying "not this story", and
+     re-designing at once handed them another one. They choose: write what follows, or end the arc. */
+  if(wasLive&&q.source!=="task"&&q.arc&&gd.quests.some(x=>x&&x.arc===q.arc)
+     &&!(gd.arcMeta&&gd.arcMeta[q.arc]&&gd.arcMeta[q.arc].complete)
+     &&!gd.quests.some(x=>x&&x.arc===q.arc&&!x.done&&x.startActive!==false)){
+    const v=await uiChoose("The arc has no live quest now.",[{label:"Write what follows",value:"next"},{label:"End this arc",value:"end"}],{title:`"${q.arc}"`,icon:"compass"});
+    if(v==="next"){ try{ await maybeGenerateNextQuest(curChat(),u,q.arc); }catch(e){} }
+    else if(v==="end"){ questEndArc(u,q.arc,(curChat()&&curChat().gameDay)||1); toast("Arc ended: "+q.arc); }
     _refreshQuestViews();
   }
 }
@@ -43707,6 +43802,7 @@ function openQuestsModal(){
   const arcs={};
   quests.forEach((q,i)=>{ const a=q.arc||"Quests"; (arcs[a]=arcs[a]||[]).push({q,i}); });
   const arcNames=Object.keys(arcs);
+  window._qArcNames=arcNames;   // v146.1 — index-addressed (arc names with quotes can't break the onclick)
   let body;
   if(!arcNames.length){
     body=`<div class="desc">No quests yet. Describe an arc focus below and create one — it designs the arc's OPENING quest; each next quest is then written from how you actually play the previous one (your choices, the cast's own schemes, the world's events).</div>`;
@@ -43747,7 +43843,9 @@ function openQuestsModal(){
           </div></div>`;
       }).join("");
       const concluded=!!(gd.arcMeta&&gd.arcMeta[a]&&gd.arcMeta[a].complete);
-      return `<div class="desc" style="margin:10px 0 4px;font-weight:600;color:var(--accent)">${icon("compass")} ${esc(a)}${concluded?` <span style="color:var(--good);font-weight:400">· concluded</span>`:""}</div>${rows}`;
+      // v146.1 — End this arc: a story line the player is done with stops for good
+      const endBtn=(!concluded&&!inArc.every(q=>q.source==="task"))?` <button class="btn sec small" style="margin-left:6px;font-weight:400" title="End this arc: close its open quests and write nothing more for it" onclick="questEndArcUI(${arcNames.indexOf(a)})">End this arc</button>`:"";
+      return `<div class="desc" style="margin:10px 0 4px;font-weight:600;color:var(--accent)">${icon("compass")} ${esc(a)}${concluded?` <span style="color:var(--good);font-weight:400">· ${gd.arcMeta[a].endedByPlayer?"ended":"concluded"}</span>`:""}${endBtn}</div>${rows}`;
     }).join("");
   }
   // v23.2 — CHARACTER QUESTS: the cast's own pursuits (born at day end from goals + undercurrents).
@@ -44117,8 +44215,9 @@ function charQuestNote(uni,q,day,text){
 /* v144.1 — `shown`: the bubble's body in the STORY language. `result` is the engine's English record
    (fed to the designer, the goals curator and the holder's memory); printing it verbatim put English in
    a Turkish story. Omitted: the result is shown only when the story itself is in English. "" = header only. */
-function charQuestComplete(chat,uni,q,day,failed,result,shown){
+function charQuestComplete(chat,uni,q,day,failed,result,shown,opts){
   if(!q||q.status!=="active")return;
+  const lapse=!!(opts&&opts.lapse);   // v146.1 — a pursuit let go: no blame, no frustration
   q.status=failed?"failed":"done"; q.awaitingUser=false;
   q.completedDay=day||(chat&&chat.gameDay)||1;
   if(result)q.result=String(result).slice(0,240);
@@ -44135,8 +44234,9 @@ function charQuestComplete(chat,uni,q,day,failed,result,shown){
   try{
     rememberMemory({id:"m_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
       ownerId:q.holderId,character:q.holderName,
-      content:`My own pursuit ("${q.title}") ${failed?"came to nothing":"came through"}${q.result?": "+q.result:"."}`,
-      type:"EXPERIENCE",emotion:failed?"frustrated":"satisfied",importance:0.75,tags:["quest"],
+      content:lapse?`I let my own pursuit ("${q.title}") go — it had stopped going anywhere, and that is all right.`
+        :`My own pursuit ("${q.title}") ${failed?"came to nothing":"came through"}${q.result?": "+q.result:"."}`,
+      type:"EXPERIENCE",emotion:lapse?"resigned":(failed?"frustrated":"satisfied"),importance:lapse?0.45:0.75,tags:lapse?["quest","lapsed"]:["quest"],
       people:memPeople(q.holderName),
       date:Date.now(),gameDay:q.completedDay,source:"char_quest",
       universeId:uni?uni.id:(chat&&chat.universeId)||null,chatId:(chat&&chat.id)||null});
@@ -44268,13 +44368,22 @@ function questNamesChar(q,selfName){
   const sn=String(selfName||"").trim(); if(!sn||!q)return false;
   const names=[q.charName,q.npcName].concat(Array.isArray(q.castNames)?q.castNames:[]);
   if(names.some(n=>n&&sameName(n,sn,true)))return true;
-  return _nameCapInText(`${q.title||""} ${q.desc||""}`,sn);
+  return _nameCapInText(q.title||"",sn)||_nameCapInText(q.desc||"",sn);   // v146.1 — each on its own: the desc's first word starts a sentence
 }
 // Whole-word, folded, and the occurrence starts with a capital — a name, not the common word it spells.
 function _nameCapInText(text,name){
   const re=_nmRe(name); if(!re)return false;
   const g=new RegExp(re.source,"giu"), t=asciiFold(String(text||""));
-  for(const m of t.matchAll(g)){ if(/\p{Lu}/u.test(m[0].charAt(0)))return true; }
+  for(const m of t.matchAll(g)){
+    if(!/\p{Lu}/u.test(m[0].charAt(0)))continue;
+    /* (!) v146.1 — a sentence starts with a capital whatever the word: "Can you find the ledger?" named a
+       character called Can. At the start of a sentence, a name followed by a pronoun or article ("Can
+       you", "Will we", "May I") is the common word asking something, not the person. */
+    const before=t.slice(0,m.index).replace(/\s+$/,"");
+    const initial=!before||/[.!?…:;"“”(\n]$/.test(before);
+    if(initial&&/^\s+(?:you|u|i|we|they|he|she|it|someone|anyone|somebody|anybody|the|a|an|this|that|these|those|there|not|please|me|us|my|your)(?![\p{L}\p{N}])/iu.test(t.slice(m.index+m[0].length)))continue;
+    return true;
+  }
   return false;
 }
 function _goalsSettledTexts(p){ return settledEventLines(null,p); }
@@ -44492,7 +44601,7 @@ function checkCharQuestApproach(chat){
       if(!open)continue;
       const ask=String(q.ask||q.desc||q.title||"").slice(0,300);
       const intent=`${holder.name} comes to ${state.user} about their OWN pursuit "${q.title}": ${briefDesc(String(q.desc||""),240)} What they want from ${state.user}: ${ask}. This is ${holder.name}'s own initiative — they explain what they need and why it matters to them, in their own manner. ${state.user} is free to agree, bargain, or refuse.`;
-      const fired=startOverture(chat,{accuser:holder,intent,
+      const fired=startOverture(chat,{accuser:holder,intent,questAsk:true,
         summary:`${holder.name} seeks out ${state.user} — about "${q.title}"`,
         evidence:0.7,
         accuserNature:holder.personality?String(holder.personality).slice(0,200):""});
@@ -44513,9 +44622,10 @@ function checkCharQuestApproach(chat){
 // room toward it. Open gates are skipped (they fire on their own next turn).
 function charQuestStagingSummary(chat){
   try{
-    if(!chat||state.charQuestsOn===false)return "";
+    if(!chat||state.charQuestsOn===false||!state.sceneOn||chat.dnd)return "";   // v146.1 — nobody can come: say nothing
     const uni=universeById(chat.universeId); if(!uni)return "";
     const today=chat.gameDay||1;
+    if(chat._cqApproachDay===today)return "";   // v146.1 — today's one approach is spent
     const lines=[];
     for(const q of _cqActive(uni)){
       if(q.targetId!=="__user__"||q.awaitingUser)continue;
@@ -44523,6 +44633,9 @@ function charQuestStagingSummary(chat){
       if((q.nudges||0)>=3)continue;
       if(q.lastNudgeDay!=null&&today-q.lastNudgeDay<2)continue;
       if(_cqGateOpen(chat,q))continue;
+      // v146.1 — truthful: only holders who could actually come (active, not barred from here)
+      const holder=(state.personas||[]).find(p=>p&&p.id===q.holderId);
+      if(!holder||!isActiveChar(holder)||charBarredHere(chat,holder))continue;
       const g=q.gate||{};
       let need="";
       if(g.type==="user_alone")need=`${q.holderName} is waiting for a moment when ${state.user} is alone`;
@@ -44585,6 +44698,12 @@ async function runCharQuestSpawn(chat,day,uni,opts){
     if(!uni)return 0;
     const all=_charQuests(uni);
     const period=(opts&&opts.period)||null;
+    /* (!) v146.1 — BIRTHS NEVER OUTRUN STEPS. Two spawns and two steps per stretch meant the offstage
+       backlog grew without bound and pursuits lapsed without ever being attempted. While more live
+       offstage pursuits (char→char, solitary, and tasks run through a character) are open than
+       CQ_STEP_PER_RUN×3, nobody is asked for a new one. */
+    const offstageLive=all.filter(q=>q&&q.status==="active"&&(q.solitary||(q.targetId&&q.targetId!=="__user__"))).length;
+    if(offstageLive>CQ_STEP_PER_RUN*3){ _cqSpawnNote(uni,day,`${offstageLive} offstage pursuits are still open — they get a turn before anyone starts another`); return 0; }
     /* v129.1 — NO CAP ON HOW MANY. A pursuit is born when a character's life calls for one, and there
        is no ceiling on running ones and no queue of one-a-day: the model sees every open quest and
        declines a duplicate. What bounds the cost is WHO is asked: at a change of the time of day,
@@ -44718,29 +44837,52 @@ async function charQuestSpawnNowUI(btn){
 const CQ_STEP_PER_RUN=2, CQ_SPAWN_PER_PERIOD=2, CQ_MAX_STALLS=5, CQ_LAPSE_DAYS=7, CQ_ASK_LAPSE_DAYS=4, CQ_UNASKED_LAPSE_DAYS=12, CQ_KEEP_CLOSED=30;
 const _cqLapseShown=()=>sLine({en:"Nothing came of it in the end.",tr:"Sonunda bundan bir şey çıkmadı.",de:"Am Ende wurde nichts daraus."});
 // Close what has gone quiet and keep the closed tail bounded. Pure code, no model calls.
+/* (!) v146.1 — LAPSE WHAT IS DEAD, NOT WHAT IS SLOW. In a 24-day run every closed pursuit had lapsed, 9
+   of them with no attempt at all, and asks the player had taken up lapsed "unanswered" with a frustrated
+   memory for the holder:
+   · an ask of the player lapses only while it is still WAITING for an answer (awaitingUser), three
+     nudges in, and the clock runs from the last nudge OR the last progress note — once the player has
+     engaged the pursuit is theirs to carry and nothing times it out;
+   · a char→char / solitary pursuit (and a task a character took on through another character) lapses
+     on repeated declined ATTEMPTS: CQ_MAX_STALLS in a row, or CQ_LAPSE_DAYS without a move with at least
+     two attempts since. A pursuit the per-run cap never reached is not its own fault; it lapses only
+     after CQ_UNASKED_LAPSE_DAYS with no attempt ever made;
+   · a lapse is nobody's fault: the holder remembers letting it go (charQuestComplete opts.lapse), not
+     being ignored. */
+function _cqLastActivity(q){
+  let d=Math.max(q.lastNudgeDay||0,q.createdDay||0);
+  (q.progress||[]).forEach(p=>{ if(p&&+p.day>d)d=+p.day; });
+  return d;
+}
 function _cqLapseAndPrune(chat,uni,day){
   const all=_charQuests(uni); let n=0;
   for(const q of all.slice()){
-    if(!q||q.status!=="active"||q.source==="task")continue;
+    if(!q||q.status!=="active")continue;
+    const steppable=q.solitary||(q.targetId&&q.targetId!=="__user__");
+    if(q.source==="task"&&!steppable)continue;          // judged from evidence by the reconciler, not timed out
     let why="";
     if(q.targetId==="__user__"){
-      if((q.nudges||0)>=3&&day-(q.lastNudgeDay||q.createdDay||day)>=(q.awaitingUser?CQ_ASK_LAPSE_DAYS:CQ_ASK_LAPSE_DAYS*2))
-        why=`The ask to ${state.user||"the player"} went unanswered and the pursuit lapsed.`;
+      if(q.awaitingUser&&(q.nudges||0)>=3&&day-_cqLastActivity(q)>=CQ_ASK_LAPSE_DAYS)
+        why=`The ask to ${state.user||"the player"} was never taken up, and ${q.holderName||"they"} let the pursuit go.`;
       else if(!q.delivered&&day-(q.createdDay||day)>=CQ_UNASKED_LAPSE_DAYS)
         why="The moment to ask never came, and the pursuit lapsed.";
     }else{
       const quiet=day-(q.lastMoveDay||q.createdDay||day);
-      if((q.stalls||0)>=CQ_MAX_STALLS||quiet>=CQ_LAPSE_DAYS)
+      if((q.stalls||0)>=CQ_MAX_STALLS||(quiet>=CQ_LAPSE_DAYS&&(q.stalls||0)>=2))
         why=`The pursuit lapsed: nothing moved on it for ${Math.max(quiet,1)} day${quiet===1?"":"s"}.`;
+      else if(q.lastStepDay==null&&day-(q.createdDay||day)>=CQ_UNASKED_LAPSE_DAYS)
+        why="The pursuit lapsed: it never got under way.";
     }
-    if(why){ charQuestComplete(chat,uni,q,day,true,why,_cqLapseShown()); q.lapsed=true; n++; }
+    if(why){ q.lapsed=true; charQuestComplete(chat,uni,q,day,true,why,_cqLapseShown(),{lapse:true}); n++; }
   }
   // Settled pursuits are kept for the modal, the settled-events feed and the designer's "recently
   // closed" list — the newest CQ_KEEP_CLOSED of them; older ones go.
   const closed=all.filter(q=>q&&q.status!=="active").sort((x,y)=>(y.completedDay||0)-(x.completedDay||0));
   if(closed.length>CQ_KEEP_CLOSED){
     const drop=new Set(closed.slice(CQ_KEEP_CLOSED));
-    uni.gameData.charQuests=all.filter(q=>!drop.has(q));
+    /* (!) v146.1 — IN PLACE. Replacing uni.gameData.charQuests with a filtered copy orphaned the array a
+       spawn running at the same time had already captured, so the pursuit it pushed was lost. */
+    for(let i=all.length-1;i>=0;i--){ if(drop.has(all[i]))all.splice(i,1); }
     n++;
   }
   if(n)persistUniverses();
@@ -45156,36 +45298,111 @@ async function postTurn(chat){
 /* (!) v144.1 — WORDS, NOT STEMS. The old cues were bare stems behind `\b`, so they fired on everyday
    words ("Amcam geldi", "götürdüm", "boşalttı", "zevkli", "cocktail", "grinding coffee", "stripped of
    his rank", "climax", "in bed with fever") and missed the real ones: JS `\b` does not see ö/ç as
-   letters, so "öpücük" and "çıplak" never matched. Now: Unicode letter boundaries (/u lookarounds),
-   text lowercased the Turkish way, and only forms/phrases that mean the intimate thing. A stem that is
-   also a common word is gone; a phrase ("stripped naked", "make love") stands in for it. */
+   letters, so "öpücük" and "çıplak" never matched.
+   (!) v146.1 — STRONG CUES, OR TWO WEAK ONES. The v144.1 list missed 38 of 49 explicit lines ("They had
+   sex", "Beni sikti", "Soyun.") and still fired on 20 of 36 ordinary ones: bayram hand-kissing, "chicken
+   breasts", a cat being stroked, a cry of pain, and Turkish swearing — which locked out confrontations in
+   the middle of a shouting match. And the whole text was lowercased the Turkish way, which turns English
+   "I" into "ı", so "In bed…"/"Into bed…" and ALL-CAPS lines could never match. Now:
+   · English is lowercased the default way and Turkish the Turkish way, each tested on its own copy;
+   · everyday idioms (swearing, "naked eye", "moaned about", "elini öp", "acıyla inledi", "chicken
+     breasts") are blanked out before matching;
+   · a STRONG cue (something that only means the intimate thing: "had sex", "sevişti", "unzipped his
+     jeans", "memesini") is enough on its own; a WEAK cue (a kiss, a moan, "yatağa yatırdı") needs a
+     second, different one. Body words only count with a person attached ("her breasts", not
+     "chicken breasts"). */
 const _icRe=s=>new RegExp("(?<![\\p{L}\\p{N}])(?:"+s+")(?![\\p{L}\\p{N}])","u");
-const INTIMACY_CUES=_icRe([
-  "sikiş\\p{L}*","sikis\\p{L}*","sikmek","sikiyor\\p{L}*","sikeyim","siker\\p{L}*","amına","amcık\\p{L}*","amcik\\p{L}*",
-  "göğüsler\\p{L}*","gögüsler\\p{L}*","goguslerin\\p{L}*","memeler\\p{L}*","memesin\\p{L}*","meme uç\\p{L}*",
-  "çıplak\\p{L}*","çırılçıplak\\p{L}*","ciplak\\p{L}*",
-  "soyundu\\p{L}*","soyunuyor\\p{L}*","soyunup","soyundur\\p{L}*","soyunmaya",
-  "yatağa (?:attı|yatırdı|çekti|devirdi)\\p{L}*",
-  "öp\\p{L}*","opucuk\\p{L}*","opust\\p{L}*","opus(?:tu|tuler|meye)\\p{L}*",
-  "okşa\\p{L}*","oksad\\p{L}*","oksay\\p{L}*",
-  "inledi\\p{L}*","inliyor\\p{L}*","inleme\\p{L}*",
-  "penis\\p{L}*","vajina\\p{L}*","klitoris\\p{L}*","orgazm\\p{L}*",
-  "seviş\\p{L}*","sevis(?:tik|tiler|mek|iyor|elim)\\p{L}*","ten tene"].join("|"));
-const INTIMACY_CUES_EN=_icRe([
-  "fuck(?:ed|ing)? (?:me|her|him)","pussy","nipples?","breasts","naked","nude","undress\\p{L}*",
-  "stripp?(?:ed|ing|s)? (?:naked|down to|off (?:her|his|their|my))",
-  "moan(?:s|ed|ing)?","thrust(?:s|ed|ing)? (?:into|inside|deeper)","orgasm\\p{L}*",
-  "grind(?:s|ed|ing)? (?:against|on|into) (?:her|him|me)","grinding (?:against|on|into) (?:her|him|me)",
-  "straddl(?:es|ed|ing) (?:her|him|me)","kiss(?:es|ed|ing)?","caress\\p{L}*","bare skin",
-  "in bed together","into bed with","(?:take|took|taking|takes) (?:her|him|me) to bed","ma(?:ke|de|kes|king) love",
-  "making out","blow ?jobs?","penetrat\\p{L}* (?:her|him|me)"].join("|"));
-/* Is a HEAT run actually live? state.heatOn is a standing setting — left on, it made every one-on-one
-   scene "private" forever, so a solo scene never got a Gamemaster arrival. What counts is a burst in
-   flight (_heatBusy / chat._heatBeat) or heat beats at the tail of the transcript. */
+const _icReG=s=>new RegExp("(?<![\\p{L}\\p{N}])(?:"+s+")(?![\\p{L}\\p{N}])","gu");
+const _icPoss="(?:her|his|my|your|their)";
+const _icCloth="(?:clothes|dress|blouse|shirt|skirt|top|bra|panties|underwear|lingerie|jeans|pants|trousers|knickers|boxers|nightgown|robe)";
+// Idioms that only LOOK intimate — removed before either list is tested.
+const INTIMACY_NOT_EN=_icReG([
+  "fuck(?:ing)? (?:me|him|her|you|it|this|that|off|them)(?=\\s*[,!.?]|$)","fuck (?:off|this|that)",
+  "naked (?:eye|truth|walls?|ambition|aggression|greed|flame|bulb|blade|steel)",
+  "moan(?:s|ed|ing)? (?:about|over)","chicken breasts?","breasts? of (?:chicken|turkey|duck|lamb)",
+  "kiss(?:es|ed|ing)? "+_icPoss+" (?:cheeks?|forehead|brow|hands?|ring|head|hair|knuckles)","kiss(?:es|ed|ing)? the (?:ring|baby|child|kid|cheek|hand)",
+  "kiss(?:ed)? (?:\\p{L}+ )?goodbye","kiss my ass"].join("|"));
+const INTIMACY_NOT_TR=_icReG([
+  "amına (?:koy|koyayım|koyim|koydu)\\p{L}*","siktir\\p{L}*","sikerim","sikeyim","siker\\p{L}*","sikim(?:de|e)? (?:değil|degil)",
+  "(?:can|kafa|ağz|agz|moral)\\p{L}{0,4} sikt\\p{L}*",       // "canımı sikti" — "sıktı" typed without ı
+  "el(?:ini|lerini) öp\\p{L}*","yanağından öp\\p{L}*","alnından öp\\p{L}*","(?:yanağına|alnına) (?:bir )?öpücük\\p{L}*",
+  "(?:acıyla|acı içinde|ağrıyla|sancıyla) inl\\p{L}*","çıplak (?:göz|ayak|el|gerçek|duvar)\\p{L}*","ciplak (?:goz|ayak)\\p{L}*",
+  "meme kanser\\p{L}*","bebek\\p{L}* meme\\p{L}*"].join("|"));
+// STRONG — one is enough.
+const INTIMACY_STRONG_EN=_icRe([
+  "(?:had|have|has|having|wanted|want) sex","sex (?:with|on|in)","ma(?:ke|de|kes|king) love","making out","made out","blow ?jobs?",
+  "fuck(?:ed|s) (?:me|her|him|you|them)","we fucked","(?:were|was|are|is|kept|been) fucking","fucking (?:me|her|him) (?:hard|slowly|deep)",
+  _icPoss+" (?:cock|dick|pussy|clit|nipples?|breasts?|tits)","nipples? (?:harden\\p{L}*|stiffen\\p{L}*)","cock (?:pressed|slid|throbb\\p{L}*)",
+  "orgasm\\p{L}*","climax(?:ed|ing)","c(?:ame|um|umming|omes) inside (?:me|her|him)","(?:you|him|it) inside (?:me|her)","wet for (?:you|me|him|her)",
+  "thrust(?:s|ed|ing)? (?:into|inside|deeper)","penetrat\\p{L}* (?:her|him|me)","grind(?:s|ed|ing)? (?:against|on|into) (?:her|him|me)",
+  "topless","undress(?:es|ed|ing)?","strip(?:s|ped|ping)? (?:naked|down to|off "+_icPoss+")",
+  "(?:was|were|lay|lying|laid|stood|standing|sat|got|get|is|are|stripped|completely|stark|half)(?: there)? naked","naked (?:body|bodies|skin|chest|breasts?|in (?:bed|his arms|her arms))",
+  "(?:was|were|lay|lying|posed|is|are) nude","in the nude",
+  "unzip(?:s|ped|ping)? "+_icPoss+" (?:jeans|pants|trousers|fly|dress|skirt)","unbutton(?:s|ed|ing)? "+_icPoss+" (?:blouse|shirt|jeans|pants|trousers|dress|bra)",
+  "(?:take|took|taking|takes) off "+_icPoss+" "+_icCloth,"slip(?:s|ped|ping)? out of "+_icPoss+" "+_icCloth,
+  "(?:slid|slide|slides|slip|slipped|slips|pull|pulled|pulls|tug|tugged|push|pushed) "+_icPoss+" "+_icCloth+" (?:off|down|aside|up over|over "+_icPoss+" head)",
+  "(?:hand|hands|fingers) (?:slid|slide|slides|slipped|slips|crept|moved|moves) (?:under|beneath|inside|up) "+_icPoss+" (?:shirt|blouse|dress|skirt|top|sweater|panties|bra)",
+  _icPoss+" (?:bra|panties|knickers|lingerie|underwear)","panties",
+  "legs (?:around|round) "+_icPoss+" (?:waist|hips)","straddl(?:e|es|ed|ing) (?:her|him|me|his|my|your)","(?:rode|rides|riding|ride) (?:him|me)",
+  "climb(?:s|ed)? on top of (?:me|him|her)","(?:got|gets|is|was) on top of (?:me|him|her)",
+  "tongues? (?:tangled|tangle|entwined|met|danced|explored)","tongue (?:in|into) "+_icPoss+" mouth",
+  "suck(?:s|ed|ing)? (?:on )?"+_icPoss+" (?:fingers?|neck|nipples?|lips?|cock|tongue|earlobe)",
+  "lick(?:s|ed|ing)? (?:a (?:slow |wet )?(?:line|trail|path) (?:down|up|along|across)|"+_icPoss+" (?:neck|stomach|nipples?|breasts?|thighs?|chest|body|skin))",
+  "(?:lips|mouth) (?:found|finds|trailed|trails|moved|moves|brushed|traced) (?:down )?"+_icPoss+" (?:neck|throat|collarbone|chest|skin|thighs?|stomach)",
+  "mouth (?:moves?|moved|trails?|trailed|travels?|travelled) lower",
+  "kiss(?:es|ed|ing)? (?:him|her|me|you) (?:hard|deeply|passionately|hungrily)","kiss(?:es|ed|ing)? "+_icPoss+" (?:neck|throat|lips|mouth|collarbone|chest|thighs?|stomach|breasts?)",
+  "kiss(?:es|ed|ing)? (?:down|along|across|up) "+_icPoss,"trail(?:s|ed|ing)? kisses",
+  "pinned (?:her|him|me) (?:to|on|against) the (?:bed|mattress|sheets)","moan(?:s|ed|ing)? "+_icPoss+" name",
+  "in bed together","into bed with (?:him|her|me|you)"].join("|"));
+const INTIMACY_STRONG_TR=_icRe([
+  "seviş\\p{L}*","sevis(?:tik|tiler|mek|iyor|elim|meye)\\p{L}*","seks","seks (?:yap|yaptı|yaptık|yaptılar|yapmak|yapıyor)\\p{L}*","seks(?:e|te|ten|le)",
+  "sikiş\\p{L}*","sikis\\p{L}*","sikti\\p{L}*","sikiyor\\p{L}*","sikmeye","sik(?:in|ini|ine|inin|ime|imi)","amcık\\p{L}*","amcik\\p{L}*",
+  "orgazm\\p{L}*","penis\\p{L}*","vajina\\p{L}*","klitoris\\p{L}*",
+  "memesin\\p{L}*","memeleri\\p{L}*","memelerin\\p{L}*","meme uç\\p{L}*","meme ucu\\p{L}*",
+  "göğüsleri\\p{L}*","göğüslerin\\p{L}*","gogusleri\\p{L}*","göğs(?:üne|ünü|ünden) (?:dokun|okşa|avuçla|öp|yala|bastır)\\p{L}*",
+  "çırılçıplak\\p{L}*","cirilciplak\\p{L}*","çıplak (?:bed|vücud|ten|kalça|göğ|halde)\\p{L}*",
+  "soyun","soyunun","soyundu\\p{L}*","soyunuyor\\p{L}*","soyunup","soyundur\\p{L}*","soyunmaya","soyunarak",
+  "(?:elbise|gömle[kğ]|pantolon|etek|sutyen|külot|kilot|iç çamaşır|üstündekiler)\\p{L}* (?:\\p{L}+ )?(?:çıkar|sıyır|indir|yırt|çöz)\\p{L}*",
+  "düğmelerini (?:tek tek |yavaşça |yavaş yavaş |bir bir )?(?:açtı|açıyor|açarak|çözdü|çözüyor|çözerek)",
+  "dudaklarından öp\\p{L}*","(?:boynunu|boynundan|göğsünü|dudaklarını|kulağını|karnını|bacaklarını|tenini) (?:öp|yala|ısır|em)\\p{L}*",
+  "(?:dudaklarını|dudağını|memesini|parmaklarını|dilini) em(?:di|iyor|erek|meye)\\p{L}*",
+  "öpüş(?:tü|tüler|üyor|üyorlar|me|meye|erek|tük)\\p{L}*","(?:ateşli|tutkuyla|tutkulu|derin|aç gözlülükle)\\p{L}* (?:bir (?:şekilde )?)?öp\\p{L}*",
+  "(?:kalça|göğüs|göğs|meme|uyluk|kasık)\\p{L}* (?:okşa|avuçla|sık(?:tı|ıyor|arak|ıp)|yala)\\p{L}*","bacaklarını (?:onun )?(?:beline|kalçasına) dola\\p{L}*",
+  "(?:kulağına|zevkle|hazla|tutkuyla|adını) inl\\p{L}*","içime (?:gir|al|boşal\\p{L}*)","içine boşal\\p{L}*","dilini (?:onun )?ağzına\\p{L}*",
+  "(?:onunla|benimle|seninle|birlikte) yat(?:tı|tık|tılar|mak|mış|acak)\\p{L}*","tırnaklarını sırt\\p{L}* geçir\\p{L}*"].join("|"));
+// WEAK — suggestive, but ordinary often enough that it takes two different ones.
+const INTIMACY_WEAK_EN=([
+  "kiss(?:es|ed|ing)? (?:him|her|me|you|each other)","(?:lean(?:s|ed)?|leaning) in for a kiss","moan(?:s|ed|ing)?","gasp(?:s|ed|ing)?",
+  "caress(?:es|ed|ing)? "+_icPoss,"bare skin","naked","nude","(?:take|took|takes|taking) (?:her|him|me) to bed","in bed with (?:him|her|me|you)",
+  "(?:onto|on) the bed","(?:at|undoing|undid|undoes) "+_icPoss+" buttons","pulls? (?:him|her|me) (?:closer|down)","pulled (?:him|her|me) (?:closer|down)",
+  "breath (?:catch|catches|caught|hitch\\p{L}*)","(?:his|her) (?:thighs?|hips) against","shirt (?:hits|hit|falls|fell) (?:to )?the floor","bedroom",
+  "arch(?:es|ed|ing)? "+_icPoss+" back","(?:bit|bites|biting|nibbl\\p{L}*) "+_icPoss+" (?:lip|ear|earlobe|neck)"]).map(_icRe);
+const INTIMACY_WEAK_TR=([
+  "öp(?:tü|tüm|er|üyor|ücük|erek|meye|müş)\\p{L}*","okşa\\p{L}*","inle\\p{L}*","inliyor\\p{L}*","çıplak\\p{L}*","ciplak\\p{L}*",
+  "sutyen\\p{L}*","külot\\p{L}*","ten tene","ten\\p{L}* (?:gezin|dokun)\\p{L}*","yatağa (?:attı|yatırdı|yatırıp|çekti|devirdi|uzandılar)\\p{L}*",
+  "üstüne (?:çık|eğil|uzan)\\p{L}*","soy(?:arken|du|up)","nefes\\p{L}* (?:hızlandı|kesildi|titredi)","titri\\p{L}*","sarıl\\p{L}*"]).map(_icRe);
+/* Does this text read as intimate? `weakEnough` lowers the bar to one weak cue — used for lines a heat
+   run wrote, which are already known to be the heat scene's own text. */
+function intimacyReads(text,weakEnough){
+  const raw=String(text||""); if(!raw.trim())return false;
+  const en=raw.toLowerCase().replace(INTIMACY_NOT_EN," ");
+  const tr=raw.toLocaleLowerCase("tr").replace(INTIMACY_NOT_TR," ");
+  if(INTIMACY_STRONG_EN.test(en)||INTIMACY_STRONG_TR.test(tr))return true;
+  // distinct cues: each weak pattern counts once, however often it matches
+  const weak=INTIMACY_WEAK_EN.filter(r=>r.test(en)).length+INTIMACY_WEAK_TR.filter(r=>r.test(tr)).length;
+  return weak>=(weakEnough?1:2);
+}
+/* Is a HEAT run actually live? state.heatOn is a standing setting, and with it on every reply is written
+   as a heat beat — so neither the setting nor the heatBeat tag says anything about THIS scene.
+   (!) v146.1 — the v144.1 test counted heatBeat tags (and the in-flight beat), and heat writes them on
+   every turn: one-on-one scenes stayed "private" for good and the Gamemaster never came. Live means a
+   heat scene the player explicitly started (a clip over this story raised heat), or heat lines in the
+   recent tail that actually read as intimate. */
 function _heatLive(chat){
   if(!state.heatOn||!chat)return false;
-  if(_heatBusy||chat._heatBeat)return true;
-  return (chat.messages||[]).slice(-4).some(m=>m&&m.heatBeat);
+  try{ if(chat.sceneDockId&&typeof _sceneDock!=="undefined"&&_sceneDock&&_sceneDock.chatId===chat.id)return true; }catch(e){}
+  const beats=(chat.messages||[]).slice(-6).filter(m=>m&&m.heatBeat&&m.content);
+  return beats.length>0&&intimacyReads(beats.map(m=>String(m.content)).join("\n"),true);
 }
 /* Is the player in a private moment right now? Two independent signals, either is enough:
    (a) the recent exchange reads as intimate, or (b) they are alone with exactly one character in a
@@ -45196,8 +45413,8 @@ function sceneIsPrivateMoment(chat,turns){
     const present=presentCast(chat);
     if(present.length===1&&_heatLive(chat))return true;
     const msgs=(chat.messages||[]).filter(m=>m&&!m.sysError&&!m.dayMarker&&!m.presenceNote&&!m.worldEvent&&!m.questNote&&!m.calNote&&m.content);
-    const recent=msgs.slice(-(turns||4)).map(m=>String(m.content)).join("\n").toLocaleLowerCase("tr");
-    if(INTIMACY_CUES.test(recent)||INTIMACY_CUES_EN.test(recent))return true;
+    // v146.1 — the lowercasing (EN default, TR Turkish) happens inside intimacyReads, per language
+    if(intimacyReads(msgs.slice(-(turns||4)).map(m=>String(m.content)).join("\n")))return true;
     // Alone together somewhere private (a bedroom, a closed sub-area) with nobody else in earshot.
     if(present.length===1){
       const here=charSubId(chat,present[0].id);
@@ -45215,6 +45432,7 @@ function _gmTurnCount(chat){
     &&(m.role==='user'||(m.speaker&&m.speaker!=="Narrator"))).length;
 }
 async function maybeGamemaster(chat,force){
+  let _gmPrevCheck=null;   // v146.1 — the window stamp before this check claimed it
   // Item 8 — Do Not Disturb: when chat.dnd is on, the Gamemaster is fully silenced. Any ongoing
   // event is quietly resolved (marked resolved so the Scene Writer stops advancing it) and no new
   // event/nudge is ever formed. This does NOT touch reply generation, memory, trackers, etc. — only
@@ -45239,11 +45457,17 @@ async function maybeGamemaster(chat,force){
     if(presentCast(chat).length===0) every=Math.min(every,2);
     // only check on the configured cadence, and never twice within the same window
     if(turns<every)return;
-    // a stamp written under the old line count can sit above the new turn count — treat it as unset
-    const _last=(chat.gmLastCheck||0)>turns?0:(chat.gmLastCheck||0);
+    /* (!) v146.1 — a stamp above the turn count (messages were deleted, or it was written under the old
+       line count) is CLAMPED to the count, not treated as unset: "unset" fired the director on the very
+       next line after the player deleted a few messages. It waits a fresh window instead. */
+    if((chat.gmLastCheck||0)>turns){ chat.gmLastCheck=turns; markChatDirty(chat); }
+    const _last=chat.gmLastCheck||0;
     if(turns-_last<every)return;
-    chat.gmLastCheck=turns;persistChats();
+    _gmPrevCheck=_last; chat.gmLastCheck=turns;persistChats();
   }
+  // v146.1 — a beat dropped because the player moved on gives the window back (it was never used)
+  const _gmGiveBack=()=>{ if(_gmPrevCheck!=null&&chat.gmLastCheck===_gmStamp){ chat.gmLastCheck=_gmPrevCheck; markChatDirty(chat); } };
+  const _gmStamp=chat.gmLastCheck;
   /* (!) v144.1 — postTurn does not await this, so the judge and the author used to finish after the
      player's NEXT message and post a beat judged on a scene that had already moved on. Any player turn
      in THIS chat supersedes it (turnSuperseded), the same way it drops a stale reaction. */
@@ -45290,7 +45514,7 @@ async function maybeGamemaster(chat,force){
           exchange:since,staging:staging,world:worldRaw}),
         state.gmModel,{fn:"gm",temp:fnTemp("gm",0.2),max:fnTok("gm",120),dbg:"Gamemaster: judge"});
       const j=parseJSON(judgeOut);
-      if(turnSuperseded(chat,_gmSeq))return;
+      if(turnSuperseded(chat,_gmSeq)){ _gmGiveBack(); return; }
       // The judge now reports TWO independent signals: staleness (the scene has stalled) and a
       // tension trigger (the scene is healthy but ripe for an external complication). Intervene if
       // EITHER fires — previously this gated on j.stale only, so every trigger-only event (the
@@ -45339,7 +45563,7 @@ async function maybeGamemaster(chat,force){
       state.gmModel,{fn:"gm",temp:fnTemp("gm",0.9),max:fnTok("gm",160),dbg:"Gamemaster: event"});
     const clean=unquoteWrap(nudge);
     if(!clean)return;
-    if(turnSuperseded(chat,_gmSeq)){ try{ _alog("gm.stale","the player moved on while the beat was being written — dropped"); }catch(_){} return; }
+    if(turnSuperseded(chat,_gmSeq)){ _gmGiveBack(); try{ _alog("gm.stale","the player moved on while the beat was being written — dropped"); }catch(_){} return; }
     /* (!) v76.1 — DECLINING IS AN ANSWER. A Gamemaster prompt that offers the author a way to say
        "nothing happens here" is the right prompt — a monitor notices a stall but cannot tell a
        stall from a silence that is doing work. The engine had no way to hear it, so the refusal
@@ -45603,9 +45827,12 @@ async function runOvertureJudge(chat,ev,playerTurn){
 // is acting on (a courtship, a wish to reconcile, a pledge of loyalty, an alliance, an offer of
 // protection). `evidence` is how genuine/strong the feeling is.
 function startOverture(chat,opts){
-  if(!chat||!state.sceneOn||state.confrontOn===false)return false;   // shares the confront toggle
-  if(chat.activeEvent && !chat.activeEvent.resolved)return false;    // never stack on a live event
   opts=opts||{};
+  /* (!) v146.1 — the confront toggle governs confrontation-born overtures only. A character-quest ask
+     (opts.questAsk) is governed by the character-quest toggle, which checkCharQuestApproach already
+     checked; sharing confrontOn here silently killed every in-person ask with confrontations off. */
+  if(!chat||!state.sceneOn||(state.confrontOn===false&&!opts.questAsk))return false;
+  if(chat.activeEvent && !chat.activeEvent.resolved)return false;    // never stack on a live event
   const offerer=opts.accuser; if(!offerer||!offerer.id)return false;
   if(!isActiveChar(offerer))return false;   // a removed/dead character can't make an overture
   const evidence=Math.max(0,Math.min(1, opts.evidence!=null?opts.evidence:0.5));
@@ -48051,7 +48278,7 @@ function openMemEditor(id){
   // Owner picker: every character in the current universe (so you can author for anyone).
   const sel=document.getElementById('memEditOwner'); sel.innerHTML="";
   const uni=curUniverseObj();
-  const chars=state.personas.filter(p=>!uni||!p.universeId||p.universeId===uni.id);
+  const chars=state.personas.filter(p=>(!uni||!p.universeId||p.universeId===uni.id)&&(!p.latent||(m&&m.ownerId===p.id)));   // v146.1 — no undiscovered (unless it owns this memory)
   // default owner for a NEW memory: first present cast, else first in universe
   const present=presentCast(); const defOwner=(m&&m.ownerId)||(present[0]&&present[0].id)||(chars[0]&&chars[0].id)||"";
   chars.forEach(p=>{ const o=document.createElement('option'); o.value=p.id; o.textContent=(p.avatar||"🎭")+" "+p.name; if(p.id===defOwner)o.selected=true; sel.appendChild(o); });

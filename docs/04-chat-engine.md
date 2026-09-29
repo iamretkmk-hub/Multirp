@@ -183,7 +183,7 @@ Implementation: `chat._heatBeat` (transient) switches `playCharacterTurn` to the
 **`heat` payload layout** — same blocks, but the heat format rules, heat response guidance and
 heat guardrails fragments are swapped in, and when the speaker continues their *own* last line
 the "responding to" blocks say so instead of naming a stale target (doc 05). Max-tokens gets a
-headroom bump. Guards: single flight (`_heatBusy`), once per tail message (`_heatRanMid`),
+headroom bump. Guards: single flight per chat (`chat._heatBusy`), once per tail message (`_heatRanMid`),
 cancelled by any new player input (`_heatSeq`).
 
 ## Presence & witness scoping (why characters don't "hear" everything)

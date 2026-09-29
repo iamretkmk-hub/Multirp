@@ -43,9 +43,10 @@ const {chromium}=require('playwright');
   const P=await pg.evaluate(()=>{
     const c=curChat(); const r={};
     const test=t=>{ c.messages=[{mid:"x",role:"user",content:t}]; return sceneIsPrivateMoment(c); };
-    ["Amcam geldi","götürdüm","boşalttı","zevkli","stripped of his rank","grinding coffee","climax","in bed with fever","cocktail","Salon boşaldı"]
+    // v146.1 — a cheek kiss and bare feet are ordinary (they were "intimate" under v144.1)
+    ["Amcam geldi","götürdüm","boşalttı","zevkli","stripped of his rank","grinding coffee","climax","in bed with fever","cocktail","Salon boşaldı","Yanağına bir öpücük kondurdu.","ÇIPLAK ayaklarla yürüdü"]
       .forEach(t=>r["F:"+t]=test(t));
-    ["Yanağına bir öpücük kondurdu.","ÇIPLAK ayaklarla yürüdü","She leaned in for a kiss","He stood there naked"]
+    ["Onu tutkuyla öptü.","Çırılçıplak yatıyordu.","She leaned in for a kiss and moaned","He stood there naked"]
       .forEach(t=>r["T:"+t]=test(t));
     return r;
   });
@@ -55,7 +56,7 @@ const {chromium}=require('playwright');
     const c=curChat(); c.presentIds=["p_a"]; state.heatOn=true;
     c.messages=[{mid:"a",role:"user",content:"Let's look at the ledger."},{mid:"b",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"Fine.",present:["p_a"]}];
     const off=sceneIsPrivateMoment(c);
-    c.messages.push({mid:"c",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"…",heatBeat:true,present:["p_a"]});
+    c.messages.push({mid:"c",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"She pulls him onto the bed, gasping.",heatBeat:true,present:["p_a"]});   // v146.1 — a heat line that reads as heat
     const live=sceneIsPrivateMoment(c);
     state.heatOn=false; c.presentIds=[];
     return {off,live};
@@ -173,7 +174,7 @@ const {chromium}=require('playwright');
     const stalls=qs.map(q=>q.stalls||0);
     const worldEvents=c.messages.filter(m=>m.worldEvent&&!/came to nothing|emeli/.test(m.content)).length;
     // a pursuit that has stalled its limit, and one quiet for over a week, lapse without a call
-    qs[0].stalls=CQ_MAX_STALLS; qs[1].createdDay=-10; window.__calls=[];
+    qs[0].stalls=CQ_MAX_STALLS; qs[1].createdDay=-10; qs[1].stalls=2; window.__calls=[];   // v146.1 — a quiet week lapses only after attempts were declined
     await runCharQuestPursuit(c,6,uni);
     return {n1,calls1,calls2,calls3,again,stalls,worldEvents,st:qs.map(q=>q.status+(q.lapsed?"/lapsed":"")),
       lapsedCalls:window.__calls.filter(d=>/step/.test(d)).length,

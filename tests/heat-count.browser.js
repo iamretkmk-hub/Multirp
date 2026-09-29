@@ -83,8 +83,8 @@ const {chromium}=require('playwright');
     state._heatWasOn=false; state.heatOn=true; heatBeginTurn(chat);
     _heatFollowScene(false); out.scene=!chat._heatBeat && state.heatOn===false && replyKind(chat,"solo")==="solo";
     // a burst run owns its beat: a player turn ending underneath it must not close it
-    state.heatOn=true; _heatBusy=true; chat._heatBeat={total:"3",n:"2",narrN:"1"};
-    heatEndTurn(chat); out.busyKept=!!chat._heatBeat; _heatBusy=false; heatEndTurn(chat);
+    state.heatOn=true; chat._heatBusy=true; chat._heatBeat={total:"3",n:"2",narrN:"1"};
+    heatEndTurn(chat); out.busyKept=!!chat._heatBeat; chat._heatBusy=false; heatEndTurn(chat);
     // the one-on-one send path closes beat 1 even when heat went off mid-reply (the clip was closed)
     const stubs=["chatCompletion","presentCast","runPresenceTracker","postTurn","maybeBuildMemory",
       "autoVisualize","autoSpeakMsg","runVoiceCheck","speakPlayerTurn","settleRumors","enqueuePresent"];

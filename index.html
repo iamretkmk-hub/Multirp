@@ -14926,7 +14926,7 @@ function syncPlayerSubArea(chat){
     if(!dest||dest===here)return false;
     c.subId=dest;
     const s=subById(l,dest);
-    c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+    c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,subTo:dest,   // v147.2 — the area the player is in from here (location gossip reads it)
       content:fillTpl(blkTpl("narr_move_self"),{user:turnUser(c),area:(s&&s.name)||"",
         with:fillTpl(blkTpl("narr_move_with"),{names:present.map(p=>p.name).join(", ")})}),
       img:null,imgState:"idle",vidState:"idle",video:null});
@@ -15124,21 +15124,31 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     // This is purely the EXIT-time roll. Ownership is unchanged — the rumor still reaches the
     // LOCATION's residents below — and the separate End-Day propagation never re-spreads it.
     const locChance = (typeof leftLoc.gossipChance==="number") ? leftLoc.gossipChance : ((leftLoc.type==="home")?0:0.3);
-    let mult = 1;
-    if(leftSubId && Array.isArray(leftLoc.sublocations)){
-      const sub=leftLoc.sublocations.find(s=>s&&s.id===leftSubId);
-      if(sub && typeof sub.gossipMult==="number") mult=Math.max(0,Math.min(1,sub.gossipMult));
-    }
-    const chance = locChance * mult;
-    if(chance<=0)return;
-    if(Math.random()>=chance)return;    // the place stayed quiet this time
+    const multOf=id=>{ const sub=(id&&Array.isArray(leftLoc.sublocations))?leftLoc.sublocations.find(s=>s&&s.id===id):null;
+      return (sub&&typeof sub.gossipMult==="number")?Math.max(0,Math.min(1,sub.gossipMult)):1; };
+    if(locChance<=0)return;
     // The visit window: messages since the last arrival (travelBeat) — i.e. what happened HERE.
     const msgs=chat.messages||[];
     let startIdx=0;
     for(let i=msgs.length-1;i>=0;i--){ if(msgs[i] && msgs[i].travelBeat){ startIdx=i+1; break; } }
-    const visitMsgs=msgs.slice(startIdx).filter(m=>m && m.role!=='system' && !m.sysError && !m.dayMarker && !m.presenceNote
-      && !m.textMsg && !m.uiNote && !m.worldEvent && !m.questNote && !m.calNote);
-    if(visitMsgs.length<2)return;       // nothing really happened here
+    /* (!) v147.2 — THE AREA EACH LINE WAS SAID IN. The multiplier was the one of the area the player
+       LEFT from, so a whole evening in a private back room (×0) leaked like the floor once they walked
+       out through the entrance, and a word at the door leaked nothing after a last minute in the back.
+       A player's move between areas is stamped on its note (subTo), so every line carries the area it
+       was said in: lines from an area that leaks nothing are dropped, and the roll uses the average
+       multiplier of the lines that are left. Older notes carry no stamp: then the exit area, as before. */
+    const win=msgs.slice(startIdx);
+    const stamped=win.some(m=>m&&m.presenceNote&&m.subTo);
+    let area=stamped?(()=>{ try{ return entranceSubId(leftLoc); }catch(e){ return null; } })():leftSubId;
+    const areaOf=new Map();
+    win.forEach(m=>{ if(!m)return; if(stamped&&m.presenceNote&&m.subTo)area=m.subTo; areaOf.set(m,area); });
+    const visitMsgs=win.filter(m=>m && m.role!=='system' && !m.sysError && !m.dayMarker && !m.presenceNote
+      && !m.textMsg && !m.uiNote && !m.worldEvent && !m.questNote && !m.calNote && multOf(areaOf.get(m))>0);
+    if(visitMsgs.length<2)return;       // nothing really happened here (or all of it was private)
+    const mult=visitMsgs.reduce((a,m)=>a+multOf(areaOf.get(m)),0)/visitMsgs.length;
+    const chance = locChance * mult;
+    if(chance<=0)return;
+    if(Math.random()>=chance)return;    // the place stayed quiet this time
     const fallbackName=(curCast(chat)[0]&&curCast(chat)[0].name)||"someone";
     /* (!) v146.1 — THE PLACE ONLY REPEATS WHAT THE ROOM COULD HAVE CAUGHT. This read raw content, so a
        whisper's secret and every _thought_ went into the prompt and came back as "people are saying…",
@@ -15166,7 +15176,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     const others=presentNames.length?presentNames.join(", "):"(no one in particular)";
     // Who the talk is ABOUT — the player plus whoever was with them. Stored on the memory so the
     // people-weighting in retrieval, and the Memory screen, both know who this concerns.
-    const subjectPeople=[...new Set([state.user].concat(presentNames).filter(Boolean))];
+    const subjectPeople=[...new Set([chatUserName(chat)].concat(presentNames).filter(Boolean))];
     // OWNERSHIP (your design): the leak is owned by EVERY character TICKED at this location (its
     // `residents` list — the people who frequent it) — INCLUDING the gossiped character themselves if
     // they're ticked here. The place's social fabric hears "people are saying…", subject included.
@@ -15177,7 +15187,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     if(!ticked.length)return;   // a place with no regulars has no one to spread or hear the talk
     const model=(state.gossipModel&&state.gossipModel.trim())?state.gossipModel:state.memModel;
     const sys=fillTpl(up("poiGossip"),{
-      user:state.user, place:leftLoc.name||"the place",
+      user:chatUserName(chat), place:leftLoc.name||"the place",
       place_desc:(leftLoc.description||"").slice(0,200), others, visit
     });
     const out=await chatCompletion(epSend("poiGossip",sys+"\n\n"+engineLangDirective(),{},{place:(leftLoc.name||"this place")}),model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",260),dbg:"Location gossip · "+(leftLoc.name||"?")});
@@ -15560,7 +15570,7 @@ function moveToSub(subId,companionIds){
   // Note who moved with you, for the scene.
   const names=(companionIds||[]).map(id=>{ const p=resolveChar(id,chat); return p?p.name:null; }).filter(Boolean);
   const withTxt=names.length?fillTpl(blkTpl("narr_move_with"),{names:names.join(", ")}):"";
-  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,subTo:subId,   // v147.2 — the area the player is in from here (location gossip reads it)
     content:fillTpl(blkTpl("narr_move_self"),{user:state.user,area:s.name,with:withTxt}),
     img:null,imgState:"idle",vidState:"idle",video:null});
   // MEMORY ARC: moving to a different sub-area ends the current arc (the scene physically shifted).
@@ -46506,7 +46516,8 @@ async function runConfrontJudge(chat,ev,playerTurn){
     const floor=ev.floor!=null?ev.floor:0, ceil=ev.ceiling!=null?ev.ceiling:1;
     const before=ev.conviction!=null?ev.conviction:0.6;
     ev.conviction=Math.max(floor,Math.min(ceil,before+d));
-    ev._lastJudge={delta:d,reason:(j.reason||"").slice(0,200),lied:!!j.player_lied_or_evaded};
+    // v147.2 — only a real judgement counts as a judged turn (the rupture shortcut and _evOutcome read it)
+    if(typeof j.delta==="number")ev._lastJudge={delta:d,reason:(j.reason||"").slice(0,200),lied:!!j.player_lied_or_evaded};
     if(j.player_lied_or_evaded) ev._evasions=(ev._evasions||0)+1;
     return ev.conviction-before;
   }catch(e){ return 0; }

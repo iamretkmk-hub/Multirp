@@ -50,14 +50,14 @@ const {chromium}=require('playwright');
   await pg.evaluate(async()=>{ window.__calls=[]; await commitMemoryArc(curChat(),0,3,4,"Afternoon"); });
   const ayla=await promptFor("Memory \\(arc\\) · Ayla");
   const burcu=await promptFor("Memory \\(arc\\) · Burcu");
-  const cem=await promptFor("Bystander gist · Cem");
+  const cem=await promptFor("Memory \\(arc\\) · Cem");   // v147.2 — Cem is silent but within earshot: a listener memory, not the gist
   ok("Ayla's memory build ran", ayla.length>0, "no Ayla memBuild call");
   ok("Ayla's memBuild input has no whisper meant for Burcu", ayla.length>0&&ayla.indexOf("SECRETWHISPER")<0, ayla.slice(0,400));
   ok("Ayla's memBuild input has no thought of Burcu's", ayla.length>0&&ayla.indexOf("THOUGHTBURCU")<0, ayla.slice(0,400));
   ok("Burcu, the target, does get the whisper, marked as one", /SECRETWHISPER/.test(burcu)&&/whispered to Burcu alone/.test(burcu), burcu.slice(0,400));
   ok("and her own thought", /THOUGHTBURCU/.test(burcu));
-  ok("the bystander gist ran for Cem", cem.length>0, "no gist call");
-  ok("the bystander gist sees neither the whisper nor the thought", cem.length>0&&!/SECRETWHISPER|THOUGHTBURCU/.test(cem), cem.slice(0,400));
+  ok("Cem (silent, in earshot) gets a listener memory build", cem.length>0&&/within earshot, heard every line/.test(cem), "no listener memBuild call");
+  ok("the listener build sees neither the whisper nor the thought", cem.length>0&&!/SECRETWHISPER|THOUGHTBURCU/.test(cem), cem.slice(0,400));
   ok("a line said aloud still reaches Ayla", /figs/.test(ayla)&&/market/.test(ayla));
 
   await pg.evaluate(async()=>{ window.__calls=[]; state.stInterval=1; curChat()._stCount=0;

@@ -218,6 +218,18 @@ const {chromium}=require('playwright');
   ok("with no picture of anyone, nothing is sent and the reason is shown",
      NP.calls===0&&!NP.clip&&!NP.busy&&NP.toasts.some(t=>/reference pictures/.test(t)), JSON.stringify(NP));
 
+  // v148.4 — a minor in the clip: the writer is held to non-sexual, everyday action
+  console.log("\n[a minor in the clip]");
+  ok("no minor in the cast: no hard limit is added", !/HARD LIMIT — someone in this clip is a minor/.test(R.sys), "");
+  const MN=await pg.evaluate(async()=>{
+    const sel=state.personas.find(p=>p.name==="Selin"); const keep=sel.age; sel.age=15;
+    window.__writer=[]; window.__bodies=[]; const rt=window.toast; window.toast=()=>{};
+    try{ await sceneVideo("a2"); }finally{ sel.age=keep; window.toast=rt; }
+    const msgs=window.__writer[0]||[]; return (msgs.find(x=>x.role==="system")||{}).content||"";
+  });
+  ok("with a minor in the cast the writer is told nothing sexual, suggestive or intimate may appear",
+     /HARD LIMIT — someone in this clip is a minor/.test(MN)&&/Everyone fully and ordinarily clothed/.test(MN), MN.slice(-500));
+
   console.log("\n[the prompts are editable]");
   ok("the writer and the audio rule are registry prompts on their own card", await pg.evaluate(()=>
       ["x_scene_video_writer","x_scene_video_audio_rule"].every(k=>!!PROMPT_BY_KEY[k]&&!!K[k]

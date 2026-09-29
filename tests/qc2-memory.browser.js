@@ -79,7 +79,7 @@ const {chromium}=require('playwright');
     const mems=state.memory.map(m=>({who:m.ownerId,src:m.srcMids||[]}));
     return {ev1,mems,done:chat.memDoneIdx,ev2:chat.memEvent,aylaPrompt:prompts["Memory (arc) · Ayla"]||""}; });
   const ayMems=pr.mems.filter(m=>m.who==="p_ay"), buMems=pr.mems.filter(m=>m.who==="p_bu");
-  ok("after the partial failure the arc stays open, and records that Ayla's part is done", !!pr.ev1&&pr.ev1.open&&pr.ev1.fails===1&&pr.ev1.doneTo&&pr.ev1.doneTo.p_ay===5&&!("p_bu" in pr.ev1.doneTo), JSON.stringify(pr.ev1));
+  ok("after the partial failure the arc stays open, and records that Ayla's part is done (v147.2: by mid)", !!pr.ev1&&pr.ev1.open&&pr.ev1.fails===1&&pr.ev1.doneTo&&pr.ev1.doneTo.p_ay==="r5"&&!("p_bu" in pr.ev1.doneTo), JSON.stringify(pr.ev1));
   ok("Ayla (whose memory landed) remembers what came after: a second memory of r6..r11 only",
     ayMems.length===2&&ayMems[1].src[0]==="r6"&&ayMems[1].src.indexOf("r11")>=0&&ayMems[1].src.indexOf("r1")<0, JSON.stringify(ayMems));
   ok("her retry prompt carries only the new lines", /money fight/.test(pr.aylaPrompt)&&!/harbour/.test(pr.aylaPrompt), pr.aylaPrompt.slice(0,300));

@@ -14416,7 +14416,7 @@ function castLookSheet(chat,extraIds){
 function directorMemoryDigest(chat,n){
   try{
     if(!state.mem||!Array.isArray(state.memory)||!state.memory.length)return "";
-    const pool=visibleMemories().filter(m=>m&&m.type!=="DIARY");
+    const pool=visibleMemories(chat).filter(m=>m&&m.type!=="DIARY");
     if(!pool.length)return "";
     const today=(chat&&chat.gameDay)||curGameDay();
     const who=new Set(); try{ (presentCast(chat)||[]).forEach(p=>{ if(p&&p.name)who.add(p.name.toLowerCase()); }); }catch(e){}
@@ -14926,7 +14926,7 @@ function syncPlayerSubArea(chat){
     if(!dest||dest===here)return false;
     c.subId=dest;
     const s=subById(l,dest);
-    c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+    c.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,subTo:dest,   // v147.2 — the area the player is in from here (location gossip reads it)
       content:fillTpl(blkTpl("narr_move_self"),{user:turnUser(c),area:(s&&s.name)||"",
         with:fillTpl(blkTpl("narr_move_with"),{names:present.map(p=>p.name).join(", ")})}),
       img:null,imgState:"idle",vidState:"idle",video:null});
@@ -15124,21 +15124,31 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     // This is purely the EXIT-time roll. Ownership is unchanged — the rumor still reaches the
     // LOCATION's residents below — and the separate End-Day propagation never re-spreads it.
     const locChance = (typeof leftLoc.gossipChance==="number") ? leftLoc.gossipChance : ((leftLoc.type==="home")?0:0.3);
-    let mult = 1;
-    if(leftSubId && Array.isArray(leftLoc.sublocations)){
-      const sub=leftLoc.sublocations.find(s=>s&&s.id===leftSubId);
-      if(sub && typeof sub.gossipMult==="number") mult=Math.max(0,Math.min(1,sub.gossipMult));
-    }
-    const chance = locChance * mult;
-    if(chance<=0)return;
-    if(Math.random()>=chance)return;    // the place stayed quiet this time
+    const multOf=id=>{ const sub=(id&&Array.isArray(leftLoc.sublocations))?leftLoc.sublocations.find(s=>s&&s.id===id):null;
+      return (sub&&typeof sub.gossipMult==="number")?Math.max(0,Math.min(1,sub.gossipMult)):1; };
+    if(locChance<=0)return;
     // The visit window: messages since the last arrival (travelBeat) — i.e. what happened HERE.
     const msgs=chat.messages||[];
     let startIdx=0;
     for(let i=msgs.length-1;i>=0;i--){ if(msgs[i] && msgs[i].travelBeat){ startIdx=i+1; break; } }
-    const visitMsgs=msgs.slice(startIdx).filter(m=>m && m.role!=='system' && !m.sysError && !m.dayMarker && !m.presenceNote
-      && !m.textMsg && !m.uiNote && !m.worldEvent && !m.questNote && !m.calNote);
-    if(visitMsgs.length<2)return;       // nothing really happened here
+    /* (!) v147.2 — THE AREA EACH LINE WAS SAID IN. The multiplier was the one of the area the player
+       LEFT from, so a whole evening in a private back room (×0) leaked like the floor once they walked
+       out through the entrance, and a word at the door leaked nothing after a last minute in the back.
+       A player's move between areas is stamped on its note (subTo), so every line carries the area it
+       was said in: lines from an area that leaks nothing are dropped, and the roll uses the average
+       multiplier of the lines that are left. Older notes carry no stamp: then the exit area, as before. */
+    const win=msgs.slice(startIdx);
+    const stamped=win.some(m=>m&&m.presenceNote&&m.subTo);
+    let area=stamped?(()=>{ try{ return entranceSubId(leftLoc); }catch(e){ return null; } })():leftSubId;
+    const areaOf=new Map();
+    win.forEach(m=>{ if(!m)return; if(stamped&&m.presenceNote&&m.subTo)area=m.subTo; areaOf.set(m,area); });
+    const visitMsgs=win.filter(m=>m && m.role!=='system' && !m.sysError && !m.dayMarker && !m.presenceNote
+      && !m.textMsg && !m.uiNote && !m.worldEvent && !m.questNote && !m.calNote && multOf(areaOf.get(m))>0);
+    if(visitMsgs.length<2)return;       // nothing really happened here (or all of it was private)
+    const mult=visitMsgs.reduce((a,m)=>a+multOf(areaOf.get(m)),0)/visitMsgs.length;
+    const chance = locChance * mult;
+    if(chance<=0)return;
+    if(Math.random()>=chance)return;    // the place stayed quiet this time
     const fallbackName=(curCast(chat)[0]&&curCast(chat)[0].name)||"someone";
     /* (!) v146.1 — THE PLACE ONLY REPEATS WHAT THE ROOM COULD HAVE CAUGHT. This read raw content, so a
        whisper's secret and every _thought_ went into the prompt and came back as "people are saying…",
@@ -15166,7 +15176,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     const others=presentNames.length?presentNames.join(", "):"(no one in particular)";
     // Who the talk is ABOUT — the player plus whoever was with them. Stored on the memory so the
     // people-weighting in retrieval, and the Memory screen, both know who this concerns.
-    const subjectPeople=[...new Set([state.user].concat(presentNames).filter(Boolean))];
+    const subjectPeople=[...new Set([chatUserName(chat)].concat(presentNames).filter(Boolean))];
     // OWNERSHIP (your design): the leak is owned by EVERY character TICKED at this location (its
     // `residents` list — the people who frequent it) — INCLUDING the gossiped character themselves if
     // they're ticked here. The place's social fabric hears "people are saying…", subject included.
@@ -15177,7 +15187,7 @@ async function runLocationGossipLeak(chat, leftLoc, leftSubId){
     if(!ticked.length)return;   // a place with no regulars has no one to spread or hear the talk
     const model=(state.gossipModel&&state.gossipModel.trim())?state.gossipModel:state.memModel;
     const sys=fillTpl(up("poiGossip"),{
-      user:state.user, place:leftLoc.name||"the place",
+      user:chatUserName(chat), place:leftLoc.name||"the place",
       place_desc:(leftLoc.description||"").slice(0,200), others, visit
     });
     const out=await chatCompletion(epSend("poiGossip",sys+"\n\n"+engineLangDirective(),{},{place:(leftLoc.name||"this place")}),model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",260),dbg:"Location gossip · "+(leftLoc.name||"?")});
@@ -15560,7 +15570,7 @@ function moveToSub(subId,companionIds){
   // Note who moved with you, for the scene.
   const names=(companionIds||[]).map(id=>{ const p=resolveChar(id,chat); return p?p.name:null; }).filter(Boolean);
   const withTxt=names.length?fillTpl(blkTpl("narr_move_with"),{names:names.join(", ")}):"";
-  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,
+  chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,subTo:subId,   // v147.2 — the area the player is in from here (location gossip reads it)
     content:fillTpl(blkTpl("narr_move_self"),{user:state.user,area:s.name,with:withTxt}),
     img:null,imgState:"idle",vidState:"idle",video:null});
   // MEMORY ARC: moving to a different sub-area ends the current arc (the scene physically shifted).
@@ -16369,7 +16379,7 @@ async function estimateAttendance(chat,e){
   if(!chat||!e||e.certainty!=="likely"||!state.key)return;
   const p=meetingCounterpart(chat,e); if(!p)return;
   let feel="";
-  try{ const o=relObj(chat,p.id,"__user__"); feel=relFeelSummary(o); }catch(_){}
+  try{ const o=relPeek(chat,p.id,"__user__"); feel=relFeelSummary(o); }catch(_){}
   const where=((e.locationId&&locById(e.locationId))||{}).name||e.where||"";
   const dir=meetIsBoth(e)?`${state.user} and ${p.name} would each make their own way to ${where||"the place agreed"}`
           :(meetMode(e)==="user"?`${state.user} would come to ${p.name}`:`${p.name} would come to ${state.user}`);
@@ -16721,7 +16731,7 @@ function meetingBackstory(chat,e,p,opts){
     const mem=_meetMemLines(e,p,3);
     if(mem.length) lines.push(`WHAT ${p.name.toUpperCase()} REMEMBERS THAT BEARS ON IT (their own memories — do not retell them, let them colour the beat):\n- ${mem.join("\n- ")}`);
     let feel="";
-    try{ feel=relFeelSummary(relObj(chat,p.id,"__user__")); }catch(_){}
+    try{ feel=relFeelSummary(relPeek(chat,p.id,"__user__")); }catch(_){}
     if(feel) lines.push(`HOW ${p.name.toUpperCase()} FEELS ABOUT ${String(state.user||"them").toUpperCase()} RIGHT NOW: ${String(feel).slice(0,300)}`);
   }
   lines.push(`WRITE ONE BRIEF CLAUSE of why they are going and how it sits with them — enough to bring it back to mind before the two of them are face to face. Do not summarise the plan, do not resolve anything, and do not have anyone speak.`);
@@ -18673,7 +18683,7 @@ async function _fireArrival(chat,subId,item){
         try{ const sheet=relSheetBlockFull(p); if(sheet)X.push(`# WHO THESE PEOPLE ARE TO YOU\n${sheet}`); }catch(e){}
         try{
           if(state.relOn){
-            const o=relObj(chat,p.id,"__user__");
+            const o=relPeek(chat,p.id,"__user__");
             /* v37.2 — written as a state a person is in, not a row of axis labels. */
             const considered=relConsideredNarrative(o)||relConsideredProse(o);
             const momentary=relMomentaryNarrative(o)||relMomentaryProse(o);
@@ -18980,7 +18990,10 @@ function relObj(chat,fromId,toId){
 function clampRel(v){ return Math.max(-100,Math.min(100,v)); }
 /* v144.1 — relObj for READERS. relObj creates the record it is asked about, so building a payload
    (feelingsBlock) wrote a blank pair for everyone the reply path merely looked at, and those blanks
-   were saved, counted and shown as relationships that never happened. */
+   were saved, counted and shown as relationships that never happened.
+   (!) v147.2 — and at every other read-only site (relOverview, retrieval, attendance, scene cuts, the
+   world round, Story State…): Story State alone wrote a blank for every pair of the cast when opened.
+   relObj stays for the writers (the fast read, the daily read, neglect drift, world rel moves). */
 function relPeek(chat,fromId,toId){
   const k=relDirKey(fromId,toId);
   if(chat&&chat.rel&&chat.rel[k]&&typeof chat.rel[k]==="object")return relObj(chat,fromId,toId);
@@ -19205,7 +19218,7 @@ function psycheRefreshIfStale(chat,p,targetId,targetName){
   }catch(e){}
 }
 async function _writePsyche(chat,p,targetId,targetName,sig){
-  const o=targetId?relObj(chat,p.id,targetId):null;
+  const o=targetId?relPeek(chat,p.id,targetId):null;
   const num=(k)=>{ try{ const v=(o&&o.st&&o.st[k]!=null)?o.st[k]:(o&&o[k]!=null?o[k]:null); return v==null?null:Math.round(v); }catch(e){ return null; } };
   /* (!) relObj hands back a ZEROED record for a pair with no history, so sending the readings
      unconditionally would ship "desire: 0, comfort: 0, trust: 0…" on the first turn of every
@@ -19567,11 +19580,11 @@ function relOverview(chat){
   const present=presentCast(c);
   const lines=[];
   for(let i=0;i<present.length;i++){
-    const op=relObj(c,present[i].id,"__user__");
+    const op=relPeek(c,present[i].id,"__user__");
     if(relHasContent(op))lines.push(`${present[i].name} → ${state.user}: ${relDescription(op)}`);
     for(let j=0;j<present.length;j++){
       if(i===j)continue;
-      const o=relObj(c,present[i].id,present[j].id);
+      const o=relPeek(c,present[i].id,present[j].id);
       if(relHasContent(o))lines.push(`${present[i].name} → ${present[j].name}: ${relDescription(o)}`);
     }
   }
@@ -19916,8 +19929,21 @@ function relDeltasFrom(j,keys,curOf,cap){
   const ks=Object.keys(raw); const d={};
   if(!ks.length)return {d,absolute:false,big:false};
   const big=ks.some(k=>Math.abs(raw[k])>cap);   // reported only: clamped below, never a reason to convert
-  const live=ks.filter(k=>Math.abs(curOf(k)||0)>=10);
-  const echo=live.length>=3 && live.filter(k=>Math.abs(raw[k]-(curOf(k)||0))<=2).length>=Math.ceil(live.length*0.6);
+  /* (!) v147.2 — AN ECHO ONLY COUNTS WHERE ONE STEP COULD NOT HAVE MADE IT. Any axis within 2 of its
+     current value used to count, so after day 1 — when the levels ARE yesterday's deltas — a second
+     betrayal (−25 on axes sitting at −25) read as "levels, unchanged" and moved nothing; and a fast
+     read answering two levels ({desire 30, comfort 42}) never reached the three axes the rule needed,
+     so it was added on top. An axis now signals "levels" only when it echoes its current value AND
+     that value (or the answer itself) is beyond `cap`, which no single change can be. Levels: two or
+     more such axes, and most of the axes past the cap echoing; or every non-zero axis echoing (two
+     at least) with one of them past the cap. */
+  const cur=k=>curOf(k)||0;
+  const echoes=k=>Math.abs(raw[k]-cur(k))<=2;
+  const strong=ks.filter(k=>Math.abs(cur(k))>cap);
+  const sig=ks.filter(k=>raw[k]&&echoes(k)&&(Math.abs(cur(k))>cap||Math.abs(raw[k])>cap));
+  const nz=ks.filter(k=>raw[k]);
+  const echo=(sig.length>=2&&sig.length>=Math.ceil(strong.length*0.6))
+          || (sig.length>=1&&nz.length>=2&&nz.every(echoes));
   ks.forEach(k=>{ const x=!raw[k]?0:(echo?raw[k]-(curOf(k)||0):raw[k]); d[k]=Math.max(-cap,Math.min(cap,Math.round(x)))||0; });
   return {d,absolute:echo,big};
 }
@@ -20476,7 +20502,7 @@ function openStoryState(){
     // Collect, per "from" character, the list of targets they have content toward.
     const owners=new Map();   // fromId -> [{toId,toName,o}]
     const noteTarget=(fromId,toId,toName)=>{
-      const o=relObj(chat,fromId,toId);
+      const o=relPeek(chat,fromId,toId);
       if(!relHasContent(o))return;
       if(!owners.has(fromId))owners.set(fromId,[]);
       owners.get(fromId).push({toId,toName,o});
@@ -22545,10 +22571,21 @@ async function generateSchedule(persona,routineText,forUniverse){
 // the player card + the most-recent LONG-AXIS opinions this character holds (empty on first run).
 // Writes the result to persona.relationshipsGen (a NEW field — it never overwrites the author's
 // hand-written socialGraph). Returns the text, or null on failure.
-async function generateRelationshipsFor(persona,forUniverse,guidance){
+/* v147.2 — opts.chat: the story this sheet is rewritten for (the day-end pass hands its own), whose
+   player, bio and look are the ones written into it and whose relationship map supplies the opinions.
+   opts.background: the day-end pass is background work — it goes through the breaker like every other
+   engine instead of as a foreground call; the editor's Generate button stays foreground. */
+async function generateRelationshipsFor(persona,forUniverse,guidance,opts){
   if(!persona||!state.key)return null;
   const uni=forUniverse||universeById(persona.universeId)||curUniverseObj();
   if(!uni)return null;
+  const o=opts||{};
+  /* (!) v147.2 — the story's player, not the open one's: the day-end rewrite used state.user/userBio/
+     userLook, so a day ending after the player opened another universe wrote that universe's player
+     into the sheet, and matched the player's tie by the wrong name (it was then dropped). */
+  const chat=(o.chat&&o.chat.universeId===uni.id)?o.chat:(chatForUniverse(uni.id)||null);
+  const who=chatUserProfile(chat||{universeId:uni.id});
+  const _user=String(who.user||"").trim()||"the player";
   // v44.3 — undiscovered and removed characters are not people anyone in this world knows yet, so
   // they are not written a tie. Without this every character came out of the generator with a
   // relationship toward an NPC the player has never met and cannot see on the Characters screen.
@@ -22571,20 +22608,19 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
   };
 
   // The player card.
-  const userBits=[`THE PLAYER: ${state.user}`];
-  if(state.userBio&&state.userBio.trim())userBits.push(`  Background: ${state.userBio.trim()}`);
-  if(state.userLook&&state.userLook.trim())userBits.push(`  Appearance: ${state.userLook.trim()}`);
+  const userBits=[`THE PLAYER: ${_user}`];
+  if(who.userBio&&String(who.userBio).trim())userBits.push(`  Background: ${String(who.userBio).trim()}`);
+  if(who.userLook&&String(who.userLook).trim())userBits.push(`  Appearance: ${String(who.userLook).trim()}`);
 
   // Most-recent LONG-AXIS opinions this character currently holds (from the live chat's rel map).
   // On first generation this is typically empty — then the sheet is built from cards alone.
-  const chat=chatForUniverse(uni.id)||curChat();
   const opinionLines=[];
   if(chat&&chat.rel){
     const add=(toId,toName)=>{
       const o=chat.rel[relDirKey(persona.id,toId)];
       if(o){ const d=relDescription(o); if(d&&d.trim())opinionLines.push(`- toward ${toName}: ${d.trim()}`); }
     };
-    add("__user__",state.user);
+    add("__user__",_user);
     others.forEach(p=>add(p.id,p.name));
   }
   const opinionBlock=opinionLines.length
@@ -22593,7 +22629,7 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
 
   const locBlock=locs.length?`\n\nLOCATIONS in this world (use ONLY these for "lives together / where"):\n`+locs.map(l=>`- ${l.name}${l.type==='home'?' (a home)':''}`).join("\n"):"";
 
-  const sys=fillTpl(up("relGenPrompt"),{char:persona.name,user:state.user});
+  const sys=fillTpl(up("relGenPrompt"),{char:persona.name,user:_user});
   const userMsg=
     `WORLD SETTING:\n${uni.setting||"(none given)"}\n\n`+
     `${card(persona,"YOU ARE")}\n\n`+
@@ -22601,12 +22637,12 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
     `${userBits.join("\n")}`+
     locBlock+
     opinionBlock+
-    (guidance&&guidance.trim()?`\n\nPLAYER'S INSTRUCTION (authoritative — this is the truth of who ${state.user} is to ${persona.name} and how the ties should read; honor it exactly):\n${guidance.trim()}`:"")+
-    `\n\nNow write ${persona.name}'s relationship sheet toward every person above (including ${state.user}).`;
+    (guidance&&guidance.trim()?`\n\nPLAYER'S INSTRUCTION (authoritative — this is the truth of who ${_user} is to ${persona.name} and how the ties should read; honor it exactly):\n${guidance.trim()}`:"")+
+    `\n\nNow write ${persona.name}'s relationship sheet toward every person above (including ${_user}).`;
 
   let out;
   try{
-    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.5),max:fnTok("unigen",1100),foreground:true,dbg:"Relationship generator · "+persona.name});
+    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),Object.assign({fn:"unigen",temp:fnTemp("unigen",0.5),max:fnTok("unigen",1100),dbg:"Relationship generator · "+persona.name},o.background?{}:{foreground:true}));
   }catch(e){ return null; }
   const text=(out||"").trim();
   if(!text)return null;
@@ -22619,7 +22655,7 @@ async function generateRelationshipsFor(persona,forUniverse,guidance){
       const entry=j[key]; if(!entry||typeof entry!=="object")continue;
       const k=(key||"").toLowerCase().trim();
       let id=null;
-      if(k===(state.user||"").toLowerCase().trim()||k==="player"||k==="user"||k==="{{user}}")id="__user__";
+      if(k===_user.toLowerCase().trim()||k==="player"||k==="user"||k==="{{user}}")id="__user__";
       else id=nameToId[k]||null;
       if(!id||id===persona.id)continue;   // skip unknown names and self
       rels[id]={ tie:deStutter(entry.tie), relationship:deStutter(entry.relationship||entry.desc) };
@@ -23100,7 +23136,7 @@ async function reEvaluateRelationshipsForDay(chat,day,daySnapshot){
     // v144.1 — a real shift (REL_REGEN_SWING), not any one-point nudge: see evalRelationship.
     const moved=relMovedToday(chat,p.id,day,true);
     if(!moved) continue;
-    try{ await generateRelationshipsFor(p,uni); }catch(e){}
+    try{ await generateRelationshipsFor(p,uni,"",{chat,background:true}); }catch(e){}   // v147.2 — this story's player; background work
     await new Promise(r=>setTimeout(r,300));
   }
 }
@@ -24654,9 +24690,11 @@ function memoriesOf(ownerId){return state.memory.filter(m=>m.ownerId===ownerId);
    Carrying two opposite standing decisions at once is the failure this closes.
    All four callers of this function are injection-side (retrieval, the prefilter, the director
    digest); nothing user-facing reads it, so the filter belongs here rather than in each of them. */
-function visibleMemories(){
-  const ids=new Set(curCast().map(c=>c.id));
-  const uni=state.curUniverse||null;
+/* (!) v147.2 — the chat's cast and universe, when a chat is given. It read the OPEN story's, so a
+   reply still being written after the player opened another universe retrieved nothing at all. */
+function visibleMemories(chat){
+  const ids=new Set(curCast(chat).map(c=>c.id));
+  const uni=(chat&&chat.universeId)||state.curUniverse||null;
   return state.memory.filter(m=>{
     if(!ids.has(m.ownerId)) return false;
     if(m.superseded) return false;                                // reversed later; no longer held
@@ -33143,7 +33181,7 @@ async function maybeProactiveText(chat,opts){
   if(!pool.length)return false;
   const scored=pool.map(p=>{
     let s=0,signal="";
-    try{ const o=relObj(chat,p.id,"__user__");
+    try{ const o=relPeek(chat,p.id,"__user__");
       const fast=Math.max(Math.abs(o.st.desire||0),Math.abs(o.st.fear||0),Math.abs(o.st.agitation||0),Math.abs(o.st.comfort||0));
       s+=fast/40; s+=Math.abs(o.affection||0)/90;
       if(o.lastSlowDeltaDay===scoreDay && o.lastSlowDelta){ s+=Object.keys(o.lastSlowDelta).reduce((a,k)=>a+Math.abs(o.lastSlowDelta[k]||0),0)/8; }
@@ -33163,7 +33201,7 @@ async function maybeProactiveText(chat,opts){
   if(!scored.length)return false;
   const {p}=scored[0];
   try{
-    const o=relObj(chat,p.id,"__user__");
+    const o=relPeek(chat,p.id,"__user__");
     /* v37.2 — was [relTag, relConsideredProse, relMomentaryProse].join("; "), which produced
        "neutral; clearly repulsion; strongly fear/tension; clearly terror; strongly provoked &
        angry" — five axis labels, opening with "neutral" while contradicting it four times. */
@@ -34855,7 +34893,7 @@ function _playerKnows(chat){
     if(state.mem&&me&&Array.isArray(state.memory)){
       const today=chat.gameDay||1;
       const seen=new Set();
-      const pool=visibleMemories().filter(m=>m&&m.type!=="DIARY"&&m.type!=="DECISION"&&m.source!=="after_heat"
+      const pool=visibleMemories(chat).filter(m=>m&&m.type!=="DIARY"&&m.type!=="DECISION"&&m.source!=="after_heat"
         &&(!m.chatId||m.chatId===chat.id)
         &&(Array.isArray(m.people)?m.people:[]).some(x=>String(x).toLowerCase().trim()===me));
       const top=pool.map(m=>({m,s:1/(1+Math.max(0,today-(m.gameDay||today))*0.35)+Math.max(0,Math.min(1,m.importance||0))*0.6}))
@@ -35065,12 +35103,13 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
      Grouped by speaker now: each person who has beats gets a reckoning from her own, and the
      marker only moves once they are all done. */
   const bySpeaker=new Map();
-  beats.forEach(m=>{ const k=m.speaker; if(!bySpeaker.has(k))bySpeaker.set(k,[]); bySpeaker.get(k).push(m); });
+  // v147.2 — grouped by who spoke (speakerId), so two same-named people are two reckonings
+  beats.forEach(m=>{ const k=m.speakerId||m.speaker; if(!bySpeaker.has(k))bySpeaker.set(k,[]); bySpeaker.get(k).push(m); });
   _afterHeatBusy=true;
   let _any=false;
   try{
-    for(const [speaker,mine] of bySpeaker){
-      const ok=await _afterHeatFor(c,speaker,mine,dayStamp,periodStamp);
+    for(const [,mine] of bySpeaker){
+      const ok=await _afterHeatFor(c,mine[0].speaker,mine,dayStamp,periodStamp);
       if(ok)_any=true;
     }
     c._afterHeatMid=last.mid; markChatDirty(c); try{ persistChats(); }catch(_){}
@@ -35080,11 +35119,40 @@ async function runAfterHeat(chat,dayStamp,periodStamp){
 }
 /* One person's reckoning, from her own beats. Split out of runAfterHeat so a scene with two people
    in it produces two decisions instead of one confused one. */
+/* (!) v147.2 — WHOSE RECKONING. The person was found by NAME across every universe
+   (state.personas.find(x=>x.name===speaker)), so with a same-named character in another story listed
+   first, that one received this story's decision on their card and a DECISION memory stamped with
+   this chat. Now: the beats' own speakerId, in this chat's universe; a name only as the fallback for
+   beats that carry no id, and only among this chat's cast. */
+function _afterHeatPerson(c,speaker,beats){
+  const uid=(c&&c.universeId)||null;
+  const inUni=x=>x&&!x.removed&&(!uid||!x.universeId||x.universeId===uid);
+  const ids=[...new Set((beats||[]).map(m=>m&&m.speakerId).filter(Boolean))];
+  for(const id of ids){ const x=(state.personas||[]).find(q=>q&&q.id===id); if(inUni(x))return x; }
+  if(ids.length)return null;
+  return findByName((state.personas||[]).filter(inUni),speaker)||null;
+}
+/* v147.2 — the reckoning is prose written to her. An answer that is JSON (a template asking for a
+   field), an empty object, or a cut-off fragment was stored verbatim — "{}" became her DECISION.
+   A JSON answer gives up its text field if it has one; anything else without real sentences is refused. */
+function _afterHeatProse(raw){
+  let t=String(raw==null?"":raw).replace(/```[a-z]*|```/gi,"").trim();
+  if(/^[\[{]/.test(t)){
+    const j=parseJSON(t); let v="";
+    if(j&&typeof j==="object"&&!Array.isArray(j)){ for(const k of ["text","reckoning","decision","content","afterwards","after"]){ if(typeof j[k]==="string"&&j[k].trim()){ v=j[k]; break; } } }
+    t=String(v||"").trim();
+  }
+  t=t.replace(/^["'\s]+|["'\s]+$/g,"");
+  if(!t||/[{}]/.test(t.slice(0,2)))return "";
+  if(t.split(/\s+/).filter(w=>/\p{L}/u.test(w)).length<4)return "";
+  return t;
+}
 async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
-  const p=(state.personas||[]).find(x=>x&&x.name===speaker&&!x.removed);
+  const p=_afterHeatPerson(c,speaker,beats);
   if(!p||!beats.length)return false;
+  const _user=chatUserName(c);   // v147.2 — this story's player
   // who it was with: the other person present, else the player — never herself
-  let otherName=state.user;
+  let otherName=_user;
   try{
     const present=presentCast(c).filter(x=>x&&x.id!==p.id&&x.name!==p.name);
     if(present.length===1)otherName=present[0].name;
@@ -35095,7 +35163,7 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
        toward X" and "the two pulls" are about HIM, not about nobody. Memory retrieval is skipped on
        purpose: it costs a model call, and the bio, the ties and the standing are what a reckoning
        turns on. */
-    const _ctx=(()=>{
+    const _ctx=inChatWorld(c,()=>{   // v147.2 — built in this story's world (synchronous)
       const out={};
       try{
         const _inj={recent:[],diary:[],longterm:[]};
@@ -35117,7 +35185,7 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
         out.pulls=j("drives");
       }catch(e){}
       return out;
-    })();
+    });
     /* (!) v70.3 — ONE SLOT COULD NOT HOLD A HISTORY. The previous decision was already scoped to
        the right person, but it lived in a single `p.afterHeat` that every reckoning overwrote — so
        a night with someone else in between wiped the chain, and the next reckoning about the FIRST
@@ -35143,7 +35211,7 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
         return "Time has passed since it happened — the day has moved on and you are looking back at it.";
       }catch(_){ return ""; }
     })();
-    const sys=fillTpl(up("afterHeatPrompt"),{char:p.name,other:otherName,user:state.user});
+    const sys=fillTpl(up("afterHeatPrompt"),{char:p.name,other:otherName,user:_user});
     const ask=`${p.name}'s reckoning, after ${otherName}.`
       +(whenNow?`\n\nWHEN THIS IS BEING DECIDED:\n${whenNow}`:"")
       +(prev?`\n\nWHAT SHE DECIDED LAST TIME ABOUT ${otherName} (say what has changed, do not repeat it):\n${prev}`:"");
@@ -35152,9 +35220,9 @@ async function _afterHeatFor(c,speaker,beats,dayStamp,periodStamp){
        that opens "You are {{char}}." was shipping those eight characters to the model. epSend takes
        a vars map for exactly this — passed, so the three names resolve here. */
     const out=await chatCompletion(epSend("afterHeatPrompt",sys,Object.assign({ask,scene},_ctx),
-      {char:p.name,self:p.name,other:otherName,user:state.user}),
+      {char:p.name,self:p.name,other:otherName,user:_user}),
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.6),max:Math.max(fnTok("mem",300),420),dbg:"After it is over · "+p.name});
-    const text=String(out||"").trim().replace(/^["'\s]+|["'\s]+$/g,"");
+    const text=_afterHeatProse(out);
     if(text){
       /* (!) v94.1 — AND WHICH STORY IT BELONGS TO. This record is the one piece of story state
          that lives on the PERSONA rather than on the chat: relationships are `chat.rel`, promises
@@ -41301,7 +41369,7 @@ function _pulseKnows(chat,p,otherName,day){
   return rec.length?rec.join("\n"):"- (nothing charged recently)";
 }
 function _pulseTie(chat,a,b){
-  const e=relSheetEntry(a,b.id); const o=relObj(chat,a.id,b.id);
+  const e=relSheetEntry(a,b.id); const o=relPeek(chat,a.id,b.id);
   return `${e&&e.tie?e.tie+"; ":""}${o?relTag(o):""}${o&&o.desc?"; "+String(o.desc).slice(0,140):""}`;
 }
 /* v25.x — WORLD PULSE shared guards: one offstage event per character per (day, period). Every
@@ -41371,7 +41439,7 @@ async function runOffstageInteraction(chat,uni){
       const a=g[i],b=g[j],key=[a.id,b.id].sort().join("|");
       if(chat.pulseTried[key])continue;
       let score=0;
-      const oa=relObj(chat,a.id,b.id),ob=relObj(chat,b.id,a.id);
+      const oa=relPeek(chat,a.id,b.id),ob=relPeek(chat,b.id,a.id);
       [oa,ob].forEach(o=>{ if(!o)return; if(Math.abs(o.affection||0)>=30)score++; if(Math.abs(o.trust||0)>=30)score++; });
       const dn=(p,other)=>((state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=2&&(String(m.content||"").toLowerCase().includes(other.name.toLowerCase())||String(m.content||"").toLowerCase().includes(String(_un||"").toLowerCase()))&&((m.importance||0)>=0.5||m.type==="OBSERVATION")).length);
       score+=2*dn(a,b)+2*dn(b,a);
@@ -41508,7 +41576,7 @@ function _cutScore(chat,p){
   }catch(e){}
   // "Important" — how much weight this bond already carries, either direction.
   try{
-    const o=relObj(chat,p.id,"__user__");
+    const o=relPeek(chat,p.id,"__user__");
     const w=Math.abs(o.affection||0)+Math.abs(o.trust||0)+Math.abs(o.desire||0)+Math.abs(o.respect||0);
     if(w>=120){ sc+=3; why.push("a heavy bond"); } else if(w>=60){ sc+=1; }
   }catch(e){}
@@ -41558,7 +41626,7 @@ async function runSceneCut(chat){
   const tpl=fillTpl(up("sceneCut"),{
     char:p.name, user:state.user||"the player",
     sheet:_pulseSheet(p), tie:_pulseTie(c,p,{name:state.user||"the player"})||"(no tie on record)",
-    view:(typeof settledViewOf==="function"?(settledViewOf(relObj(c,p.id,"__user__"))||""):"")||"(nothing settled yet)",
+    view:(typeof settledViewOf==="function"?(settledViewOf(relPeek(c,p.id,"__user__"))||""):"")||"(nothing settled yet)",
     last_seen:lastSeen, live:_cutLive(c,p)||"(nothing outstanding between them)",
     memories:mem, today, char_at:charAt,
     user_at:(c.location||"somewhere"), places:_pulsePlaces(c),
@@ -41653,7 +41721,7 @@ async function runWorldRound(chat,uni){
       /* (!) v146.1 — "real" is a sheet tie, a written view, or a feeling that is not flat. Testing the
          string was always true: relTag answers "neutral" for nothing at all, so the sort was a no-op. */
       const rows=pool.filter(b=>b!==a).map(b=>{ const t=_pulseTie(chat,a,b)||"";
-        const e=relSheetEntry(a,b.id), o=relObj(chat,a.id,b.id);
+        const e=relSheetEntry(a,b.id), o=relPeek(chat,a.id,b.id);
         return {s:`${a.name}→${b.name}: ${t}`,real:!!((e&&e.tie)||(o&&o.desc)||(o&&relTag(o)!=="neutral"))}; });
       return rows.filter(r=>r.real).concat(rows.filter(r=>!r.real));
     });
@@ -41955,7 +42023,7 @@ async function runGoalPursuit(chat,day,uni,period){
       for(const o of others){ if(seen.has(o.id))continue; seen.add(o.id);
         const t=_pulseTie(chat,p,o); if(t&&t.replace(/[;\s]/g,"").length){
           // slow bond + how they feel about them RIGHT NOW (fast axes), so mood shapes the plan
-          let mom=""; try{ const ro=relObj(chat,p.id,o.id); mom=relMomentaryProse(ro)||""; }catch(_){}
+          let mom=""; try{ const ro=relPeek(chat,p.id,o.id); mom=relMomentaryProse(ro)||""; }catch(_){}
           ties.push(`${o.name}: ${t}${mom?` — right now: ${String(mom).slice(0,140)}`:""}`);
         }
         if(ties.length>=6)break; }
@@ -46448,7 +46516,8 @@ async function runConfrontJudge(chat,ev,playerTurn){
     const floor=ev.floor!=null?ev.floor:0, ceil=ev.ceiling!=null?ev.ceiling:1;
     const before=ev.conviction!=null?ev.conviction:0.6;
     ev.conviction=Math.max(floor,Math.min(ceil,before+d));
-    ev._lastJudge={delta:d,reason:(j.reason||"").slice(0,200),lied:!!j.player_lied_or_evaded};
+    // v147.2 — only a real judgement counts as a judged turn (the rupture shortcut and _evOutcome read it)
+    if(typeof j.delta==="number")ev._lastJudge={delta:d,reason:(j.reason||"").slice(0,200),lied:!!j.player_lied_or_evaded};
     if(j.player_lied_or_evaded) ev._evasions=(ev._evasions||0)+1;
     return ev.conviction-before;
   }catch(e){ return 0; }
@@ -46908,7 +46977,9 @@ async function runSceneWriter(chat){
     if(ev.kind==="confrontation" && !broughtIn){
       const c=ev.conviction!=null?ev.conviction:0.6;
       if(ev.turn>=ev.minTurns && c<=0.28){ resolved=true; ev._outcome="defused"; }
-      else if(c>=0.9){ resolved=true; ev._outcome="rupture"; }
+      // (!) v147.2 — only after a judged player turn: a confrontation OPENED at 0.9+ (a severe trigger)
+      // ended in rupture on its first beat, before the player had said a word in their defence.
+      else if(c>=0.9&&ev._lastJudge){ resolved=true; ev._outcome="rupture"; }
       else if(force){ resolved=true; ev._outcome=_evOutcome(ev,confrontOutcomeFromConviction); }
       else { resolved=false; }   // stay open; conviction hasn't hit a threshold yet
     }
@@ -47334,7 +47405,9 @@ function memImpScale(vals){
   if(!off.length)return 0;
   if(off.some(n=>n>10))return 100;
   if(off.some(n=>n>5))return 10;
-  return (off.length>=2&&off.every(n=>Math.round(n)===n))?5:0;
+  // v147.2 — an exact 1 beside them counts toward "several whole numbers" ({4, 1} is a 0–5 answer)
+  const whole=(vals||[]).map(v=>(typeof v==="number")?v:parseFloat(String(v==null?"":v))).filter(n=>isFinite(n)&&n>=1);
+  return (whole.length>=2&&whole.every(n=>Math.round(n)===n))?5:0;   // (off is non-empty here: {1, 1} is on contract)
 }
 function memImpNorm(x,dflt,scale){
   const str=String(x==null?"":x).trim();
@@ -47343,13 +47416,16 @@ function memImpNorm(x,dflt,scale){
   let n=(typeof x==="number")?x:parseFloat(str.replace("%",""));
   if(!isFinite(n))return dflt;
   if(typeof x!=="number"&&/%$/.test(str))n=n/100;
+  /* (!) v147.2 — within a detected scale every whole number from 1 up is ON that scale: {4, 1} on 0–5
+     is 0.8 and 0.2. The "n>1" rules below left an exact 1 as 1.0 — the top score, above the 4. */
+  else if(scale&&n>=1&&n<=scale&&Math.round(n)===n)n=n/scale;
   else if(n>1&&scale===5&&n<=5)n=n/5;
   else if(n>1&&n<=10)n=n/10; else if(n>10&&n<=100)n=n/100;
   return Math.max(0,Math.min(1,n));
 }
 async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, opts){
   if(!state.mem||!state.key) return;
-  /* v146.1 — opts.doneTo {charId: last message index already committed for them}: the retry of a
+  /* v146.1 — opts.doneTo {charId: last message (v147.2: its mid; an index in older saves) already committed for them}: the retry of a
      partly failed arc. (!) The retry re-sent the whole grown span to everyone, and a character whose
      memory had landed had the new version dropped as a duplicate (≥50% shared source lines) — so
      they never remembered anything said after the failed close. Now they get only what came after. */
@@ -47391,11 +47467,21 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
     // Per-character arrival cut WITHIN the arc: a late arrival only remembers from when they entered.
     let aStart=0;
     for(let i=span.length-1;i>0;i--){ const m=span[i]; if(m&&m.presenceNote&&noteMarksArrival(m,p)){ aStart=i; break; } }
+    /* (!) v147.2 — doneTo holds the MID of the last line already committed for them (an index, in
+       older saves). An index shifted when the player deleted an earlier message, and the retry then
+       skipped (or repeated) lines. The mid is found again wherever it now sits; if that line itself
+       was deleted, the lines their memories already cover (srcMids) are what counts as done. */
+    let _cut=-1, _covered=null;
+    { const dv=doneTo&&doneTo[p.id];
+      if(typeof dv==="number")_cut=dv;
+      else if(typeof dv==="string"&&dv){ const i=(chat.messages||[]).findIndex(m=>m&&m.mid===dv);
+        if(i>=0)_cut=i; else { _covered=new Set(); memoriesOf(p.id).forEach(m=>(m.srcMids||[]).forEach(s=>_covered.add(s))); } } }
     const witnessed=span.filter((m,idx)=>{
       if(m.role==='system'||m.sysError)return false;
       if(m.narratorEvent||m.dayMarker||m.presenceNote)return false;
       if(idx<aStart)return false;
-      if(doneTo&&typeof doneTo[p.id]==="number"&&startIdx+idx<=doneTo[p.id])return false;
+      if(_cut>=0&&startIdx+idx<=_cut)return false;
+      if(_covered&&m.mid&&_covered.has(m.mid))return false;
       if(Array.isArray(m.present))return witnessedBy(m,p);
       return false;
     });
@@ -47403,7 +47489,21 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
     const heard=witnessed.map(m=>({m,line:memHeardLine(m,p,cast[0]&&cast[0].name)})).filter(x=>x.line);
     if(heard.length<2) continue;   // too little for this character to form a memory of
     try{
-      const isBystander=(cast.length>0)&&!heard.some(x=>x.m.role!=='user'&&x.m.speakerId===p.id);
+      /* (!) v147.2 — A SILENT LISTENER HEARD IT. Everyone who did not speak used to get the bystander
+         gist — "across the room, did NOT hear this" — but since v146.1 a dialogue line's `present` is
+         who could HEAR it (earshot), so a quiet character in the same area was told they had heard
+         nothing of a confession made at their table. They now get a real memory of what reached them
+         (memBuild over their own memHeardText view), as a listener. The gist is kept for the one case
+         left where `present` is wider than earshot: the player's own lines over the same stretch were
+         stamped by earshot WITHOUT them (they were at the place, in another area) — e.g. a line
+         stamped location-wide by an arrival. */
+      const _spoke=heard.some(x=>x.m.role!=='user'&&x.m.speakerId===p.id);
+      const _outOfEarshot=!_spoke&&(()=>{
+        const ul=span.filter((m,idx)=>idx>=aStart&&m&&m.role==='user'&&!m.whisperTo&&!m.textMsg&&Array.isArray(m.present)&&m.present.length);
+        return ul.length>0&&!ul.some(m=>witnessedBy(m,p));
+      })();
+      const isBystander=(cast.length>0)&&_outOfEarshot;
+      const isListener=!_spoke&&!isBystander;
       /* Who the arc was between, read off the span itself. The builder is ASKED for "people" and
          usually gives them, but when it doesn't the memory used to be stored with an empty people
          row — visibly blank in the editor, and invisible to all three rankers that raise a memory
@@ -47423,6 +47523,9 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
         sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
           (cast.length>1?`\n\nIMPORTANT: Write this memory strictly from ${p.name}'s own perspective and personal experience. Only record what ${p.name} personally witnessed.`:"");
         userMsg=`${memWhenWhereLine(chat,day,period)}\n\nComplete event ${p.name} witnessed (with ${state.user}):\n\n${convo}`;
+        // v147.2 — a listener: within earshot, heard every line below, said nothing. "charge" is what the
+        // End-Day gossip pass reads off an overheard exchange (it used to come only from the gist).
+        if(isListener)userMsg+=`\n\n${p.name} did not take part: ${p.name} was within earshot, heard every line above and said nothing. Write it as what ${p.name} overheard. Also add "charge" to the JSON (0.0 to 1.0): how much of what ${p.name} overheard is the kind of thing people would talk about.`;
         max=fnTok("mem",560);
       }
       /* v70.1 — `who` for the same reason. This path fills `data`, not `convo`, so the separator
@@ -47445,11 +47548,11 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
       doneIds.push(p.id);                // a clean answer settles this character's part of the span
       if(!j.content)continue;
       // v144.1 — normalised to 0..1 (a 0–10 answer used to be stored as 7 and outrank everything).
-      const _impRaw=j.importance_score!=null?j.importance_score:j.importance, _sc=memImpScale([_impRaw,isBystander?j.charge:null]);
+      const _impRaw=j.importance_score!=null?j.importance_score:j.importance, _sc=memImpScale([_impRaw,(isBystander||isListener)?j.charge:null]);
       const importance=memImpNorm(_impRaw,(isBystander?0.3:0.5),_sc);
       // STORABLE-MEMORY FLOOR: drop arcs the builder judged trivial. Bystander gists with a real
       // gossip charge are exempt from the floor (the living world still needs the charged glimpse).
-      const charge=isBystander?memImpNorm(j.charge,0,_sc):0;
+      const charge=(isBystander||isListener)?memImpNorm(j.charge,0,_sc):0;
       if(importance < (state.memMinImp||0) && charge < 0.5) continue;
       const srcMids=heard.map(x=>x.m.mid).filter(Boolean);
       const mem={
@@ -47464,7 +47567,9 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
         tags:Array.isArray(j.tags)?j.tags.map(t=>String(t).toLowerCase()):[],
         // v144.1 — through the enum: a builder answering "LONGTERM" or "DIARY" moved the memory into
         // another tier (out of recall, into the condenser's untouchable set).
-        type:isBystander?"OBSERVATION":(_memType(j.type)||"EXPERIENCE"),
+        // v147.2 — a listener's memory is an OBSERVATION too (they took no part), so the End-Day gossip
+        // pass still reads a charged overheard exchange — but a real one: not observerOnly, no gist.
+        type:(isBystander||isListener)?"OBSERVATION":(_memType(j.type)||"EXPERIENCE"),
         ownerId:p.id, character:p.name, date:Date.now(), gameDay:day, gamePeriod:period, source:"auto",
         universeId:(chat&&chat.universeId)||state.curUniverse||null, chatId:(chat&&chat.id)||state.curChat||null
       };
@@ -47473,6 +47578,7 @@ async function commitMemoryArc(chat, startIdx, endIdx, dayStamp, periodStamp, op
          lines are still in the character's transcript window. */
       if(srcMids.length)mem.srcMids=srcMids;
       if(isBystander){ if(j.gist)mem.gist=String(j.gist).trim(); mem.charge=charge; mem.observerOnly=true; }
+      else if(isListener){ mem.charge=charge; mem.listener=true; }
       /* v73.1 — the exact-text guard only ever caught a literal repeat. A second close of the
          same arc produces a near-duplicate, which is what actually happens. */
       const _dup=memNearDuplicate(p.id,mem.content,day,period,mem.people,srcMids);
@@ -47898,7 +48004,9 @@ async function _maybeBuildMemoryLocked(chat,q){
   const close=async(from,to,next)=>{
     const r=await commitMemoryArc(chat, from, to, stampDay, stampPeriod, {doneTo:ev.doneTo});
     if(r&&r.failed&&(ev.fails||0)<MEM_ARC_MAX_FAILS){
-      const dt=Object.assign({},ev.doneTo||{}); (r.doneIds||[]).forEach(id=>{ dt[id]=to; });
+      // v147.2 — by mid, not index: a deleted earlier message no longer shifts what counts as done
+      const _toMid=(chat.messages[to]&&chat.messages[to].mid)||null;
+      const dt=Object.assign({},ev.doneTo||{}); (r.doneIds||[]).forEach(id=>{ dt[id]=_toMid||to; });
       ev.doneTo=dt; ev.fails=(ev.fails||0)+1; ev.open=true; chat.memEvent=ev; markChatDirty(chat);
       try{ console.warn("[memory] arc build failed — kept open to retry on the next close ("+ev.fails+"/"+MEM_ARC_MAX_FAILS+")"); }catch(_){}
       return;
@@ -48193,7 +48301,7 @@ async function condenseAllNow(){
 async function genQuery(userText,chat,ownerId){
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
   const recent=chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-4)
-    .map(m=>ownerId?memHeardLine(m,p,p.name):`${m.role==='user'?state.user:(m.speaker||p.name)}: ${m.content}`).filter(Boolean).join("\n");
+    .map(m=>ownerId?memHeardLine(m,p,p.name):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean).join("\n");
   const out=await chatCompletion([
     /* (!) v30.5 — THE QUERY MUST BE IN THE LANGUAGE THE MEMORIES ARE IN, and since v30.3 that is
        ENGLISH, not the story language. This line used to say "write the query in {storyLang} — the
@@ -48205,9 +48313,20 @@ async function genQuery(userText,chat,ownerId){
        Proper nouns are the exception that keeps the fallback half working — engineLangDirective
        never translates names or places, so the player's own words still match those. */
     {role:"system",content:up("queryGen")+"\n\n"+blkTpl("query_lang")},
-    {role:"user",content:`Recent conversation:\n${recent}\n\n${state.user}'s newest message:\n${userText}`}
+    {role:"user",content:`Recent conversation:\n${recent}\n\n${chatUserName(chat)}'s newest message:\n${userText}`}
   ],state.mcModel||state.memModel||state.model,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",120),dbg:"Memory query generator"});
   return (out||"").replace(/```/g,"").trim();
+}
+/* v147.2 — a keyword line without the given names (whole words, Turkish-aware, with a suffix after an
+   apostrophe: "Emre'nin"), and each full name's first word as well. Returns the trimmed rest. */
+function _memStripNames(text,names){
+  let t=String(text==null?"":text);
+  const parts=new Set();
+  (names||[]).forEach(n=>{ const s=String(n||"").trim(); if(!s)return; parts.add(s); const f=s.split(/\s+/)[0]; if(f&&f.length>=2)parts.add(f); });
+  [...parts].sort((a,b)=>b.length-a.length).forEach(n=>{
+    const re=new RegExp("(?<![\\p{L}\\p{N}])"+n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"(?:['’]\\p{L}+)?(?![\\p{L}\\p{N}])","giu");
+    t=t.replace(re," "); });
+  return t.replace(/\s+([,.;:!?])/g,"$1").replace(/(^|\s)[,.;:]+(?=\s|$)/g," ").replace(/\s+/g," ").trim();
 }
 
 /* Tokenize text into searchable words. Unicode-aware (\p{L}\p{N}) so Turkish letters (ç ğ ı İ ö ş ü)
@@ -48600,7 +48719,7 @@ async function retrieveMemories(userText,chat,ownerId){
      this character's window; an older memory without them keeps the period rule. */
   const _win=memTranscriptMids(chat,ownerId);
   const _isNow=m=>memIsNow(m,_nowDay,_nowPeriod,_win);
-  const ownAll = (ownerId ? visibleMemories().filter(m=>m.ownerId===ownerId) : visibleMemories())
+  const ownAll = (ownerId ? visibleMemories(chat).filter(m=>m.ownerId===ownerId) : visibleMemories(chat))
                  .filter(m=>!_isNow(m));
   // WORKING tier = the character's raw arc-tracker memories, searched semantically over the WHOLE bank
   // (the "previous system" — not restricted to today). LONG-TERM tier = their diaries + condensed
@@ -48608,7 +48727,7 @@ async function retrieveMemories(userText,chat,ownerId){
   // v28.9 — a LIVE ledger rumor is injected by the "rumors" block instead, which knows whether
   // this character owns the stake or merely overheard it. Injecting it here too would put the
   // question back in the payload stripped of that framing, which is the whole bug.
-  const _liveRumor=new Set(liveGossip().map(g=>g.id));
+  const _liveRumor=new Set(liveGossip((chat&&chat.universeId)||null).map(g=>g.id));   // v147.2 — the chat's universe
   const recentPool = ownAll.filter(m=>m.type!=="DIARY" && m.type!=="LONGTERM" && m.type!=="CONSOLIDATED"
                                    && !(m.gossipId && _liveRumor.has(m.gossipId)));
   const diaryPool = ownAll.filter(m=>m.type==="DIARY");                                  // own tier
@@ -48627,7 +48746,12 @@ async function retrieveMemories(userText,chat,ownerId){
   let query=inlineQuery;
   let cleanQuery="";                                    // the generated keyword line, on its own
   if(state.key){
-    try{ const q=await genQuery(userText||"",chat,ownerId); if(q&&q.trim()){ cleanQuery=q.trim(); query=cleanQuery+" "+inlineQuery; } }catch(e){/* fall back to inline */}
+    /* (!) v147.2 — without the player's and the owner's own names. The query writer puts them in
+       nearly every line ("Emre asks Ayla about…"), and they are in nearly every memory too, so they
+       only pulled whatever named them most toward the top — about three on-topic hits lost a turn.
+       A line that was nothing but the names falls back to the inline text. */
+    try{ const q=await genQuery(userText||"",chat,ownerId); const qs=_memStripNames(q,[chatUserName(chat),_ownerP&&_ownerP.name]);
+      if(qs){ cleanQuery=qs; query=cleanQuery+" "+inlineQuery; } }catch(e){/* fall back to inline */}
   }
 
   /* (!) v43.7 — WHAT GETS EMBEDDED IS THE KEYWORDS, NOT THE SCENE. This embedded `query`, which is
@@ -48668,13 +48792,14 @@ async function retrieveMemories(userText,chat,ownerId){
      writes ("Emre asks Ayla about…"), which switched the rule above back on for almost every turn. */
   const presentNames=[];
   try{ (presentCast(chat)||[]).forEach(p=>{ if(p&&p.name&&p.id!==ownerId)presentNames.push(p.name); }); }catch(_){}
-  const _aboutUser=!!(state.user&&nameInText(String(userText||"").replace(/^[^:\n]{1,40}:\s*/gm,""),state.user));   // speaker labels ("Emre: …") are not a mention
-  if(state.user&&_aboutUser)presentNames.push(state.user);
-  const _isUserName=n=>!!(state.user&&sameName(n,state.user,true));
+  const _un=chatUserName(chat);   // v147.2 — this chat's player, not the open story's
+  const _aboutUser=!!(_un&&nameInText(String(userText||"").replace(/^[^:\n]{1,40}:\s*/gm,""),_un));   // speaker labels ("Emre: …") are not a mention
+  if(_un&&_aboutUser)presentNames.push(_un);
+  const _isUserName=n=>!!(_un&&sameName(n,_un,true));
   // Current mood → the emotion enum(s) that count as "congruent", from the responding character's
   // dominant fast axis toward the player. Null when there's no strong momentary charge.
   let moodSet=null;
-  try{ const o=ownerId?relObj(chat,ownerId,"__user__"):null;
+  try{ const o=ownerId?relPeek(chat,ownerId,"__user__"):null;
     if(o&&o.st){ const axes=[["agitation",o.st.agitation||0],["fear",o.st.fear||0],["desire",o.st.desire||0],["comfort",o.st.comfort||0]]
         .sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
       const [k,v]=axes[0];
@@ -53010,36 +53135,49 @@ function buildCallInstructions(callee, chat){
 }
 
 /* ---- commit: call transcript → callee memory + relationship pass ---- */
+/* (!) v147.2 — THE CALL IS COMMITTED FROM A VIEW, NEVER BY SWAPPING THE CHAT'S OWN ARRAYS. This used to
+   replace chat.messages (and presentIds, and location) with a copy carrying the call for the length
+   of two model calls, then put the old array back: a message the player sent in that window went
+   into the copy and was thrown away with it, and a save in that window wrote the call transcript
+   into the story. _chatCallView is the chat with those three fields overridden for the readers only;
+   every other read and every write goes straight through to the chat itself (calendar entries,
+   promises, the relationship map, the tracker's own flags). The live array is never touched. */
+function _chatCallView(chat,over){
+  const own=Object.assign({},over);
+  return new Proxy(chat,{
+    get(t,k){ return Object.prototype.hasOwnProperty.call(own,k)?own[k]:Reflect.get(t,k); },
+    set(t,k,v){ if(Object.prototype.hasOwnProperty.call(own,k)){ own[k]=v; return true; } t[k]=v; return true; },
+    has(t,k){ return Object.prototype.hasOwnProperty.call(own,k)||(k in t); }
+  });
+}
 async function commitCallMemory(callee, transcript){
-  const chat=curChat();
+  let chat=curChat();
+  // v147.2 — the callee's own story, if the open one is another universe's
+  if(callee&&chat&&callee.universeId&&chat.universeId!==callee.universeId)chat=chatForUniverse(callee.universeId)||null;
   if(!chat||!callee||!Array.isArray(transcript)||transcript.length<2) return;
   if(!state.mem||!state.key) return;
   let arcPlace="";
-  try{ const loc=locById(chat.locationId); const sub=(typeof curSubId==='function')?subById(chat,curSubId(chat)):null; if(loc) arcPlace=sub?`${loc.name} — ${sub.name}`:loc.name; }catch(e){}
+  try{ const loc=chatLocById(chat,chat.locationId); const sub=loc?subById(loc,curSubId(chat)):null; if(loc) arcPlace=sub?`${loc.name} — ${sub.name}`:loc.name; }catch(e){}
   const span=transcript.map(t=> t.role==='user'
     ? { mid:newMid(), role:'user', content:t.content, present:[callee.id] }
     : { mid:newMid(), role:'assistant', speaker:callee.name, speakerId:callee.id, content:t.content, present:[callee.id] });
-  const startIdx=chat.messages.length;
-  const realMessages=chat.messages;
-  const realPresent=chat.presentIds?chat.presentIds.slice():[];
+  const base=(chat.messages||[]).slice();
+  const startIdx=base.length;
+  const pres=Array.isArray(chat.presentIds)?chat.presentIds.slice():[];
+  if(!pres.includes(callee.id))pres.push(callee.id);
+  const over={messages:base.concat(span),presentIds:pres};
+  if(arcPlace)over.location=arcPlace;
+  const view=_chatCallView(chat,over);
+  const day=chat.gameDay||1;
   const beforeIds=new Set(state.memory.map(m=>m.id));
-  try{
-    chat.messages=realMessages.concat(span);
-    if(!chat.presentIds) chat.presentIds=[];
-    if(!chat.presentIds.includes(callee.id)) chat.presentIds.push(callee.id);
-    const savedLoc=chat.location; if(arcPlace) chat.location=arcPlace;
-    await commitMemoryArc(chat, startIdx, chat.messages.length-1, curGameDay());
-    // Calendar pass over the call: plans made on the call ("let's meet at 8") become real
-    // calendar entries, exactly as in a text scene. runCalendarEngine reads recentExchangeMsgs
-    // from chat.messages, so it must run while the transcript span is still spliced on.
-    try{ await runFutureTracker(chat); }catch(e){}   // v130.1 — plans, tasks and promises made on the call
-    chat.location=savedLoc;
-  } finally {
-    chat.messages=realMessages; chat.presentIds=realPresent; markChatDirty(chat);
-  }
+  await commitMemoryArc(view, startIdx, startIdx+span.length-1, day);
+  // Calendar pass over the call: plans made on the call ("let's meet at 8") become real
+  // calendar entries, exactly as in a text scene. The tracker reads the transcript, so it reads the view.
+  try{ await runFutureTracker(view); }catch(e){}   // v130.1 — plans, tasks and promises made on the call
+  markChatDirty(chat);
   try{
     const newMems=state.memory.filter(m=>!beforeIds.has(m.id)&&m.ownerId===callee.id);
-    if(newMems.length) await evalRelationship(chat, callee, "__user__", state.user, null, newMems, curGameDay());
+    if(newMems.length) await evalRelationship(chat, callee, "__user__", chatUserName(chat), null, newMems, day);
   }catch(e){}
   persistMemory(); persistChats();
 }

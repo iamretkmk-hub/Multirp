@@ -3249,7 +3249,7 @@ let _tabReadOnly=false;
    is the stale one it booted with, so it cannot simply start saving). The reload is flagged, and a
    flagged boot WAITS a moment for the lock instead of giving up when it is busy — so if several
    read-only tabs were queued, each hand-off drains in turn and exactly one of them ends as writer. */
-const _WL_HANDOFF="sm_writerHandoff", _WL_WAIT_MS=3000;
+const _WL_HANDOFF="sm_writerHandoff", _WL_WAIT_MS=3000, _WL_RECHECK_MS=1000;
 function acquireWriterLock(){
   return new Promise(resolve=>{
     let settled=false; const done=v=>{ if(!settled){ settled=true; resolve(v); } };
@@ -3288,17 +3288,31 @@ function acquireWriterLock(){
 let _wlPromoting=false;
 function _showTabReadOnly(){
   const b=document.getElementById('tabRoBar'); if(b)b.classList.add('show');
-  // Wait for the writer's lock; when it is ours, hand it straight back and reload to take over (above).
+  _wlAwaitWriter(b);
+}
+/* Wait for the writer's lock; when it is ours, hand it straight back and reload to take over (above).
+   (!) v147.2 — the lock is also free for a moment while the writer only RELOADS, and every read-only tab
+   reloaded with it. So a grant is checked: let it go, wait a second (a reloading writer takes it back
+   early in its boot), and ask again without queueing. Only a lock that is still free means the writer
+   has really gone; otherwise this tab stays read-only and waits again. */
+function _wlAwaitWriter(b){
   try{
     if(navigator.locks&&navigator.locks.request)
       navigator.locks.request("storymind-writer",()=>{
         if(_wlPromoting)return;
-        _wlPromoting=true;
-        const t=b&&b.querySelector('.updTxt');
-        if(t)t.textContent="The other StoryMind tab has closed — reloading this one so it can save…";
-        try{ sessionStorage.setItem(_WL_HANDOFF,"1"); }catch(_){}
-        setTimeout(()=>{ try{ location.reload(); }catch(_){} },150);
-        // returning releases the lock now; the reloaded page asks for it again (and waits for it)
+        setTimeout(()=>{
+          navigator.locks.request("storymind-writer",{ifAvailable:true},lock=>{
+            if(!lock){ _wlAwaitWriter(b); return; }   // the writer came back: stay read-only
+            if(_wlPromoting)return;
+            _wlPromoting=true;
+            const t=b&&b.querySelector('.updTxt');
+            if(t)t.textContent="The other StoryMind tab has closed — reloading this one so it can save…";
+            try{ sessionStorage.setItem(_WL_HANDOFF,"1"); }catch(_){}
+            setTimeout(()=>{ try{ location.reload(); }catch(_){} },150);
+            // returning releases the lock now; the reloaded page asks for it again (and waits for it)
+          }).catch(()=>{ _wlAwaitWriter(b); });
+        },_WL_RECHECK_MS);
+        // returning releases the lock at once, so a reloading writer can take it back
       }).catch(()=>{});
   }catch(e){}
 }
@@ -9509,6 +9523,23 @@ async function pruneGalleryMedia(){
     }
   }catch(e){}
 }
+/* v147.2 — the same sweep for PER-MESSAGE bytes (mimg:<mid> scene images, mvid:<mid> clips). Deleting one
+   message dropped its own, but a reset, a restarted scene or a deleted universe took whole chats and left
+   every one of their images in IndexedDB for good. Every message lives in state.chats, so anything keyed
+   to a mid no chat holds is an orphan. Only a session that read the chats (and may write) sweeps. */
+async function pruneMessageMedia(){
+  try{
+    if(!collectionsSafe||_storageRO)return 0;
+    const live=new Set();
+    for(const id in (state.chats||{})){ const c=state.chats[id]; ((c&&c.messages)||[]).forEach(m=>{ if(m&&m.mid)live.add(String(m.mid)); }); }
+    const keys=await mediaDB.kvKeys(); let n=0;
+    for(const k of keys){
+      if(typeof k!=="string"||!(k.startsWith("mimg:")||k.startsWith("mvid:")))continue;
+      if(!live.has(k.slice(5))){ await mediaDB.kvDelete(k); n++; }
+    }
+    return n;
+  }catch(e){ return 0; }
+}
 /* v27.5 — SAVING MEDIA TO THE DEVICE. `<a download>` on its own does not work here: the attribute
    is IGNORED for a cross-origin href, so a clip still sitting on the provider's CDN opened in a
    player (or navigated the app away) instead of saving, and a detached anchor is a no-op in some
@@ -11144,7 +11175,9 @@ async function fetchWithTimeout(url,init,o){
 async function _readUntil(reader,deadline){
   const tmo=()=>{ try{ reader.cancel(); }catch(_){} const e=new Error("timed out"); e.kind="timeout"; return e; };
   const left=deadline-Date.now(); if(left<=0) throw tmo();
-  let t; const to=new Promise((_,rej)=>{ t=setTimeout(()=>rej(tmo()),left); });
+  /* (!) v147.2 — reject FIRST, then cancel: cancelling settles the pending read() with {done:true} at once,
+     which won the race, so a stalled stream read as one that had simply ended. */
+  let t; const to=new Promise((_,rej)=>{ t=setTimeout(()=>{ const e=new Error("timed out"); e.kind="timeout"; rej(e); try{ reader.cancel(); }catch(_){} },left); });
   try{ return await Promise.race([reader.read(),to]); }finally{ clearTimeout(t); }
 }
 function _sameOrigin(a,b){ try{ return new URL(a).origin===new URL(b).origin; }catch(e){ return false; } }
@@ -15461,7 +15494,7 @@ async function travelTo(locId,companionIds,opts){
       ? `\nAlso going to the same place, each making their OWN way there (they are NOT on the road with ${state.user}, there is no shared journey and no conversation on the way — write them arriving or already there): ${who}`
       : `\nNobody else is going — ${state.user} makes this journey alone.`;
     const ctx=`Origin: ${fromName}\nDestination: ${dest.name} — ${dest.description||""}${goingLine}\nWorld: ${curWorldSetting()||""}\nTime now: Day ${chat.gameDay}, ${chatPeriod(chat)}${thereLine}${purposeLine}${meetLine}`;
-    narration=await chatCompletion(epSend("travelPrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.model,{dbg:"Travel narration"});
+    narration=await chatCompletion(epSend("travelPrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.model,{foreground:true,dbg:"Travel narration"});   // v147.2 — the player set out: never parked behind a paused provider
   }catch(e){}
   if(narration&&narration.trim()){
     chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,
@@ -18735,15 +18768,25 @@ function _latentNpcsHere(chat){
   return (state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&p.latent&&!p.removed
     && (p.boundLocId===chat.locationId || resIds.has(p.id)));
 }
+/* v147.2 — WHAT A HIDDEN CHARACTER WAS BEFORE IT WAS FOUND. A reveal un-hides the card, unbinds it from its
+   place and has the sketch written up; a universe reset puts the authored original back (wipeUniverseState).
+   Recorded once, at the first reveal — returns true when this call recorded it. */
+function _noteAuthoredLatent(p){
+  if(!p||!p.latent||p.authoredLatent)return false;
+  p.authoredLatent={boundLocId:p.boundLocId||null,personality:p.personality||"",backstory:p.backstory||"",
+    style:p.style||"",goals:p.goals||"",look:(p.look&&typeof p.look==="object")?JSON.parse(JSON.stringify(p.look)):(p.look||"")};
+  return true;
+}
 async function revealLatentNpc(chat,p){
   if(!chat||!p)return;
+  _noteAuthoredLatent(p);
   toast(`${p.name}…`);
   try{
     if(state.key && ((String(p.personality||"").length<40) || !lookProse(p.look))){
       const uni=universeById(chat.universeId);
       const sys=up("x_reveal_npc");
       const usr=`WORLD: ${uni?uni.name:""} — ${(uni&&uni.setting||"").slice(0,700)}\n\nSKETCH:\nName: ${p.name}\n${p.instructions?"Role/hook: "+p.instructions+"\n":""}${p.personality?"Notes: "+p.personality:""}`;
-      const out=await chatCompletion(epSend("x_reveal_npc",sys,{data:usr}),state.bioModel,{fn:"bio",temp:fnTemp("bio",0.8),max:fnTok("bio",700),frequency_penalty:0,presence_penalty:0,dbg:"Reveal NPC — "+p.name});
+      const out=await chatCompletion(epSend("x_reveal_npc",sys,{data:usr}),state.bioModel,{fn:"bio",temp:fnTemp("bio",0.8),max:fnTok("bio",700),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Reveal NPC — "+p.name});   // v147.2 — /seek
       const j=parseJSON(out);
       if(j&&typeof j==="object"){
         if(j.personality)p.personality=String(j.personality).slice(0,600);
@@ -21858,6 +21901,7 @@ async function deleteUniverse(){
   state.images=(state.images||[]).filter(keepImg);
   state.videos=(state.videos||[]).filter(keepVid);
   if(typeof pruneGalleryMedia==="function")pruneGalleryMedia();   // v25.11: drop their stored bytes too
+  try{ pruneMessageMedia(); }catch(e){}   // v147.2 — and the deleted chats' per-message images and clips
   // The universe itself.
   state.universes=state.universes.filter(u=>u.id!==delId);
   if(state.curUniverse===delId)state.curUniverse=state.universes[0]?state.universes[0].id:null;
@@ -21903,6 +21947,7 @@ function renderPersonas(){
 // Reveal from the character list: out of hiding, with no arrival staged (the player may not be in a scene).
 function revealPersonaUI(id){
   const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p||!p.latent)return;
+  _noteAuthoredLatent(p);   // v147.2 — a reset hides it again
   p.latent=false; p.boundLocId=null; persistPersonas(); renderPersonas();
   toast(`${p.name} is now known — in play`);
 }
@@ -24504,6 +24549,12 @@ function savePersona(){
     if(prev!==obj.locations.slice().sort().join(","))delete editingPersona.schedule;
   }
   _peRoutine="";
+  /* v147.2 — the player wrote into this card (its text, look or picture): a universe reset then keeps a
+     character made in play (a first-visit resident) instead of taking it back out. */
+  if(editingPersona&&!editingPersona.latent){ const E=editingPersona, sv=x=>String(x||"").trim();   // a hidden card being edited is still being authored
+    if(E.playerEdited||sv(E.personality)!==sv(obj.personality)||sv(E.backstory)!==sv(obj.backstory)
+       ||sv(lookProse(E.look))!==sv(lookProse(obj.look))||sv(E.image)!==sv(obj.image)
+       ||((E.refImages||[]).length!==(obj.refImages||[]).length)) obj.playerEdited=true; }
   // The maintained want-list was grown from the OLD foundation; if the author rewrote it, the list
   // is stale by definition. Drop it and let the curator re-seed from what they just wrote.
   if(editingPersona && String(editingPersona.goals||"")!==String(obj.goals||"")) delete editingPersona.goalsLive;
@@ -30417,10 +30468,35 @@ function startSceneFor(uid,silent){
     chat={id,universeId:uid,castIds:[],presentIds:[],memCounts:{},tempChars:[],activeEvent:null,
       title:(u&&u.name)||"Story",messages:[],created:Date.now(),gameDay:1,gmLastCheck:0};
     state.chats[id]=chat;
+    // v147.2 — the first chat after a universe reset starts at home (see _landFreshChat)
+    if(u&&u.landAtHome){ delete u.landAtHome; try{ _landFreshChat(chat); }catch(e){} persistUniverses(); }
   }
   state.curChat=chat.id;
   flushPersistChats();
   if(!silent){renderChat();updateChatHeader();}
+}
+/* v147.2 — A FRESH START BEGINS SOMEWHERE. After a universe reset Day 1 opened nowhere, with nobody present,
+   and the first lines were answered by no one. The player wakes at their home (Universe editor → "Your
+   home"; else the first place), the world is placed for the part of the day, whoever is there is present
+   at the entrance, and a first visit seeds the place as a travel landing does — without a travel beat,
+   so no narration call and no time passes. */
+function _landFreshChat(chat){
+  if(!chat)return false;
+  const u=chatUni(chat), locs=chatLocations(chat);
+  const home=(u&&u.playerHomeLocId&&chatLocById(chat,u.playerHomeLocId))||locs.find(l=>l&&l.id)||null;
+  if(!home)return false;
+  inChatWorld(chat,()=>{
+    chat.location=home.name; chat.locationId=home.id;
+    ensureSublocations(home); chat.subId=entranceSubId(home); chat.subSelf=false;
+    resolveWorldPositions(chat,true);
+    const here=charactersAtLocation(chat,home.id).filter(p=>!charBarredHere(chat,p));
+    chat.presentIds=here.map(p=>p.id);
+    chat.subPos={}; here.forEach(p=>{ chat.subPos[p.id]=chat.subId; });
+    if(here.length)notePresence(chat,here.map(p=>p.name),[]);
+  });
+  markChatDirty(chat);
+  try{ maybeSeedLocationNpcs(chat,home.id); }catch(e){}   // first-visit inhabitants — background, never awaited
+  return true;
 }
 // Enter (resume) a universe's chat. Default presence is EMPTY — nobody nearby.
 function enterUniverseChat(uid,silent){
@@ -30971,6 +31047,7 @@ async function restartScene(){
   for(const id in state.chats){ if(state.chats[id].universeId===uid)delete state.chats[id]; }
   state.curChat=null;
   startSceneFor(uid);
+  try{ pruneMessageMedia(); }catch(e){}   // v147.2 — the old chat's stored scene images and clips
   _forceBottomOnce=true; renderChat();updateChatHeader();
 }
 function updateChatHeader(){
@@ -34793,7 +34870,7 @@ async function apContinueNow(){
   await apBeat(chat);
 }
 /* ---- suggested replies ---- */
-async function fetchSuggestions(chat,mid){
+async function fetchSuggestions(chat,mid,fg){   // v147.2 — fg: the player tapped "New ideas"
   if(!chat||_sugBusy)return;
   _sugBusy=true; _sugFor=mid; _sugOpts=[];
   const my=++_sugSeq; renderAutoBar();
@@ -34805,7 +34882,7 @@ async function fetchSuggestions(chat,mid){
     const sys=fillTpl(up("x_reply_suggest"),{user:state.user})+"\n\n"+langDirective();
     const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())||state.mcModel||state.model;
     const out=await chatCompletion(epSend("x_reply_suggest",sys,Object.assign({player:_playerProfileBlock(),scene:_autoRpSceneLine(chat)},_playerKnows(chat),{convo})),
-      model,{fn:"narrate",temp:fnTemp("narrate",0.8),max:fnTok("narrate",300),dbg:"Suggested replies"});
+      model,{fn:"narrate",temp:fnTemp("narrate",0.8),max:fnTok("narrate",300),foreground:!!fg,dbg:"Suggested replies"});
     const j=parseJSON(out);
     opts=(j&&Array.isArray(j.options)?j.options:[])
       .map(x=>String(x==null?"":x).replace(/^["“'\s*_]+|["”'\s*_]+$/g,"").trim())
@@ -34828,7 +34905,7 @@ function rerollSuggestions(){
   const chat=curChat(); const tail=_sugTail(chat);
   if(!chat||!tail)return;
   _sugSeq++; _sugBusy=false;
-  fetchSuggestions(chat,tail.mid);
+  fetchSuggestions(chat,tail.mid,true);
 }
 /* The bar above the text box. Rebuilt only when what it shows changes, so a tap is never lost to a
    re-render; the countdown is a text update on a node that stays put. */
@@ -38300,7 +38377,7 @@ async function vbNarration(chat,gap){
     let text="";
     try{
       const out=await chatCompletion(epSend("x_video_book_narrator",sys,{scene:`Day ${gap.day}${gap.where?", "+gap.where:""}`,before:gap.before,lines,after}),
-        state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",400),dbg:"Video Book narrator"});
+        state.memModel||state.model,{fn:"mem",temp:fnTemp("mem",0.5),max:fnTok("mem",400),foreground:true,dbg:"Video Book narrator"});   // v147.2 — the Video Book the player opened
       text=_bookShort(String(out||"").replace(/["“”«»]/g,"").replace(/\s+/g," ").trim(),VB_NARR_MAX);
     }catch(e){ text=""; }
     if(text){ chat.vbookNarr=chat.vbookNarr||{}; chat.vbookNarr[gap.key]={sig:gap.sig,text,at:Date.now()};
@@ -39402,7 +39479,7 @@ async function _aiEditPrompt(cur,req,dbg){
   const out=await chatCompletion([
     {role:"system",content:up("x_prompt_reviser")},
     {role:"user",content:`CURRENT PROMPT:\n${cur}\n\nREQUESTED CHANGES:\n${req}`}
-  ],state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.5),max:fnTok("rewriter",260),dbg:dbg||"Prompt editor"});
+  ],state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.5),max:fnTok("rewriter",260),foreground:true,dbg:dbg||"Prompt editor"});   // v147.2 — the playground's edit buttons
   return out.trim().replace(/^["']|["']$/g,"");
 }
 async function pgAiEdit(){
@@ -40535,8 +40612,10 @@ function _sceneDockRefreshIfPlaying(sceneId){ if(_sceneDock&&_sceneDock.sceneId=
    window with a position too. Everything is stored in the same shape and clamped to the visible
    area on read, so a window dragged off-screen on a big phone cannot come back unreachable on a
    small one. Landscape ignores all of it — the CSS there pins the dock to the right column. */
+let _sdGeoMem=null;   // v147.2 — a read-only tab's window geometry lives in memory only
 function _sdGeo(){
   let g={};
+  if(_sdGeoMem)return Object.assign({},_sdGeoMem);
   try{ g=JSON.parse(localStorage.getItem("sm_sceneDockGeo")||"{}")||{}; }catch(_){ g={}; }
   // legacy: the old key stored the height alone
   if(g.h==null){ let v=0; try{ v=parseInt(localStorage.getItem("sm_sceneDockH")||"",10)||0; }catch(_){}
@@ -40547,7 +40626,7 @@ function _sdGeo(){
   if(g.v!==2){ delete g.w; delete g.h; delete g.left; g.v=2; _sdSave(g); }
   return g;
 }
-function _sdSave(g){ try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify(g)); }catch(_){}}
+function _sdSave(g){ if(_storageRO){ _sdGeoMem=Object.assign({},g); return; } try{ localStorage.setItem("sm_sceneDockGeo",JSON.stringify(g)); }catch(_){}}   // v147.2 — not from a read-only tab
 function _sceneDockH(){ const h=_sdGeo().h; return (h>=140&&h<=900)?h:300; }
 /* (!) v43.6 — THE WINDOW IS THE CLIP'S SHAPE. The player draws with object-fit:contain, so any
    window whose proportions are not the clip's shows the clip letterboxed inside it — which is what
@@ -40790,7 +40869,7 @@ async function _endDayRun(chat,day,endPeriod){
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?chatUserName(chat):(m.speaker||fallbackName)}: ${m.content}`).join("\n");
       const nsys=up("x_day_transition_narration")+"\n\n"+langDirective();
-      const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{temp:0.8,max:160,dbg:"Day transition narration"});
+      const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{temp:0.8,max:160,foreground:true,dbg:"Day transition narration"});   // v147.2 — the player is waiting on it
       if(nout&&nout.trim())narration=unquoteWrap(nout);
     }catch(e){/* keep default */}
   }
@@ -43988,7 +44067,7 @@ async function generateQuestArc(u,brief){
   let out;
   try{
     out=await chatCompletion(epSend("questGen",sys+"\n\n"+engineLangDirective(),{}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,dbg:"Quest arc — "+brief});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Quest arc — "+brief});   // v147.2 — the Quests screen's Create arc
   }catch(e){ _qlog("arc.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("arc.fail","reply didn't parse as JSON"); return null; }
   /* (!) v144.1 — ARC NAMES ARE KEYS. arcMeta[arc] was overwritten unconditionally, so a designer that
@@ -44234,7 +44313,7 @@ function _questAnnounce(chat,q){
    recent offstage world events. The model may instead conclude the arc (arcComplete) with a Turkish
    epilogue. The new quest's place + character are auto-created (latent) so it's playable at once. */
 const _qGenBusy=new Set();
-async function generateNextQuest(chat,uni,arc){
+async function generateNextQuest(chat,uni,arc,qo){   // v147.2 — qo.fg: the player asked for it (a button), not the day-end chain
   if(!uni||!arc||!state.key)return null;
   const gd=uni.gameData=(uni.gameData&&typeof uni.gameData==="object")?uni.gameData:{};
   gd.quests=Array.isArray(gd.quests)?gd.quests:[];
@@ -44274,7 +44353,7 @@ async function generateNextQuest(chat,uni,arc){
   let out;
   try{
     out=await chatCompletion(epSend("questNext",sys+"\n\n"+mixedLangDirective(["epilogue"]),{}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,dbg:"Quest next — "+arc});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,foreground:!!(qo&&qo.fg),dbg:"Quest next — "+arc});
   }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
   if(j.arcComplete===true){
@@ -44312,7 +44391,7 @@ async function generateNextQuest(chat,uni,arc){
    Order: a pre-authored locked quest in the arc (legacy multi-quest arcs) is simply activated and
    materialized; otherwise, if the arc isn't concluded and has no live quest, the next quest is
    DESIGNED from play. Concurrency-guarded per arc so double-triggers can't author twice. */
-async function maybeGenerateNextQuest(chat,uni,arc){
+async function maybeGenerateNextQuest(chat,uni,arc,qo){
   try{
     if(!uni||!arc)return null;
     const gd=uni.gameData||{}; const quests=Array.isArray(gd.quests)?gd.quests:[];
@@ -44329,7 +44408,7 @@ async function maybeGenerateNextQuest(chat,uni,arc){
         persistUniverses(); _questAnnounce(chat,next);
         return {quest:next};
       }
-      return await generateNextQuest(chat,uni,arc);
+      return await generateNextQuest(chat,uni,arc,qo);
     }finally{ _qGenBusy.delete(key); }
   }catch(e){ return null; }
 }
@@ -44622,7 +44701,7 @@ async function questTravel(qid){
   // the reveal has to come first — (!) v144.1: and it is rolled back if the trip does not happen
   // (a throw, or a travel that never reached the place), instead of leaving hidden people revealed.
   const revealedList=[];
-  meet.forEach(p=>{ if(p.latent){ revealedList.push({p,bound:p.boundLocId}); p.latent=false; p.boundLocId=null; } });
+  meet.forEach(p=>{ if(p.latent){ revealedList.push({p,bound:p.boundLocId,noted:_noteAuthoredLatent(p)}); p.latent=false; p.boundLocId=null; } });
   const revealed=revealedList.length;
   _qlog("travel",`"${q.title}" — play: ${meet.size} character(s) to ${q.where||q.location||"?"}${revealed?`, ${revealed} revealed`:""}`);
   _closeQuestsModal(); try{ _calClose(); }catch(e){}
@@ -44635,7 +44714,7 @@ async function questTravel(qid){
     arrived=chat.locationId===q.locationId;
   }catch(e){ arrived=false; }
   if(!arrived){
-    revealedList.forEach(({p,bound})=>{ p.latent=true; p.boundLocId=bound; });
+    revealedList.forEach(({p,bound,noted})=>{ p.latent=true; p.boundLocId=bound; if(noted)delete p.authoredLatent; });
     if(revealed)persistPersonas();
     _qlog("travel.fail",`"${q.title}" — the trip didn't happen${revealed?"; the reveal was rolled back":""}`);
     toast("Couldn't travel to the quest's place"); return;
@@ -44769,7 +44848,7 @@ async function questDeleteUI(qid){
      &&!(gd.arcMeta&&gd.arcMeta[q.arc]&&gd.arcMeta[q.arc].complete)
      &&!gd.quests.some(x=>x&&x.arc===q.arc&&!x.done&&x.startActive!==false)){
     const v=await uiChoose("The arc has no live quest now.",[{label:"Write what follows",value:"next"},{label:"End this arc",value:"end"}],{title:`"${q.arc}"`,icon:"compass"});
-    if(v==="next"){ try{ await maybeGenerateNextQuest(curChat(),u,q.arc); }catch(e){} }
+    if(v==="next"){ try{ await maybeGenerateNextQuest(curChat(),u,q.arc,{fg:true}); }catch(e){} }   // v147.2 — "Write what follows"
     else if(v==="end"){ questEndArc(u,q.arc,(curChat()&&curChat().gameDay)||1); toast("Arc ended: "+q.arc); }
     _refreshQuestViews();
   }
@@ -44832,7 +44911,7 @@ async function questDebugForceNext(idx){
   if(!u||!arc)return;
   _qlog("force",`manual chain run for arc "${arc}"`);
   toast("Running the quest chain…");
-  try{ await maybeGenerateNextQuest(chat,u,arc); }catch(e){ _qlog("force.error",String(e&&e.message||e)); }
+  try{ await maybeGenerateNextQuest(chat,u,arc,{fg:true}); }catch(e){ _qlog("force.error",String(e&&e.message||e)); }
   openQuestDebugModal(); _refreshQuestViews();
 }
 // Download the full quest-engine state + trail as JSON (same spirit as the Debug tab's Export).
@@ -45817,7 +45896,7 @@ async function runCharQuestSpawn(chat,day,uni,opts){
       let j=null;
       try{
         const out=await chatCompletion(epSend("charQuestGen",tpl+"\n\n"+engineLangDirective(),{}),
-          state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (spawn) · "+p.name});
+          state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,foreground:!!(opts&&opts.fg),dbg:"Char quest (spawn) · "+p.name});   // v147.2 — fg: "spawn now"
         j=parseJSON(out);
       }catch(err){}
       const qq=j&&j.quest;
@@ -45874,7 +45953,7 @@ async function charQuestSpawnNowUI(btn){
   if(!state.key){ toast("Add your API key first"); return; }
   if(btn){ btn.disabled=true; btn.textContent="looking…"; }
   let n=0;
-  try{ n=await runCharQuestSpawn(chat,chat.gameDay||1,universeById(chat.universeId)); }catch(e){}
+  try{ n=await runCharQuestSpawn(chat,chat.gameDay||1,universeById(chat.universeId),{fg:true}); }catch(e){}
   const u=universeById(chat.universeId);
   toast(n?"A new pursuit began":("No pursuit this time — "+((u&&u.cqLastSpawn&&u.cqLastSpawn.reason)||"nothing to start")));
   try{ openQuestsModal(); }catch(e){}
@@ -49402,7 +49481,8 @@ const DIARY_FONTS=[
   {id:"dancing",  name:"Script",   css:"'Dancing Script','Segoe Script',cursive", size:25},
   {id:"system",   name:"Plain",    css:"'Segoe Print','Bradley Hand','Comic Sans MS',cursive", size:18}
 ];
-function diaryFont(){ const id=localStorage.getItem('sm_diaryfont')||"caveat"; return DIARY_FONTS.find(f=>f.id===id)||DIARY_FONTS[0]; }
+let _diaryFontMem=null;   // v147.2 — a read-only tab keeps its choice in memory (it writes nothing)
+function diaryFont(){ let id=_diaryFontMem; if(!id){ try{ id=localStorage.getItem('sm_diaryfont'); }catch(_){} } id=id||"caveat"; return DIARY_FONTS.find(f=>f.id===id)||DIARY_FONTS[0]; }
 function cycleDiaryFont(){
   const cur=diaryFont(); const i=DIARY_FONTS.findIndex(f=>f.id===cur.id);
   setDiaryFont(DIARY_FONTS[(i+1)%DIARY_FONTS.length].id);
@@ -49448,7 +49528,7 @@ async function genDiaryPaper(){
   }catch(e){ toast(""+(e&&e.friendly||"Paper generation failed")); }
   finally{ if(btn){btn.disabled=false;btn.textContent="Generate paper";} }
 }
-function setDiaryFont(id){ localStorage.setItem('sm_diaryfont',id); if(_diaryReaderOwner!=null)openDiaryReader(_diaryReaderOwner,_diaryReaderDay); }
+function setDiaryFont(id){ _diaryFontMem=id; if(!_storageRO){ try{ localStorage.setItem('sm_diaryfont',id); }catch(_){} } if(_diaryReaderOwner!=null)openDiaryReader(_diaryReaderOwner,_diaryReaderDay); }
 let _diaryReaderOwner=null;
 function _diaryClose(){ if(typeof _stopDub==="function")_stopDub("diary-close"); const m=document.getElementById('diaryReaderModal'); if(m)m.remove(); _diaryReaderOwner=null; }
 function openDiaryReader(ownerId,day){
@@ -52107,7 +52187,7 @@ let _autoBkWarned=false;
    identical copies could push out the one from before the mistake. _dataRev counts collection saves
    and store writes; a snapshot is skipped when it has not moved since the last one (boot counts as
    "already snapshotted"). Resolves true when the current state is covered by a snapshot. */
-let _dataRev=0, _snapRev=null;
+let _dataRev=0, _snapRev=null, _snapWroteRev=null;   // v147.2 — _snapWroteRev: a snapshot really written at that revision
 /* (!) v146.1 — {force:true} before anything destructive. "Boot counts as snapshotted" is an assumption,
    not a snapshot: with the pagehide snapshot gone, the last session's final turns may be in no snapshot
    at all, and an import right after boot then took none — the undo it promised did not exist. */
@@ -52117,12 +52197,15 @@ async function doAutoBackup(o){
   if(!collectionsSafe) return false;
   const rev=_dataRev+"/"+_lsRev;
   if(_snapRev===rev&&!(o&&o.force)) return true;
+  /* v147.2 — …and a forced one is not taken twice for the same state: a snapshot WRITTEN at this revision
+     is still in the ring (only a newer write can trim it, and that needs a new revision). */
+  if(_snapWroteRev===rev) return true;
   try{
     const bundle=await buildBackup({noMedia:true});
     const slot="autobackup_"+Date.now();
     const wrote=await mediaDB.kvSet(slot,bundle);
     if(!wrote) throw new Error("the snapshot could not be written (storage full?)");
-    _snapRev=rev;
+    _snapRev=rev; _snapWroteRev=rev;
     // Trim old auto-backups beyond AUTO_KEEP.
     const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("autobackup_")===0).sort();
     while(keys.length>AUTO_KEEP){ const old=keys.shift(); await mediaDB.kvDelete(old); }
@@ -52284,10 +52367,11 @@ async function exportRoleplay(uidArg,opts){
     return true;
   }catch(e){ console.warn("exportRoleplay failed",e); toast("Export failed"); return false; }
 }
-async function importRoleplayFile(b){
+async function importRoleplayFile(b,io){
   if(!b||b.kind!=="roleplay") throw new Error("Not a roleplay export");
   sanitizeImportedMedia(b.universe); sanitizeImportedMedia(b.personas); sanitizeImportedMedia(b.chats);   // v144.1
   if(!(await uiConfirm("Its universe, characters, chats and memories are added. Existing data is kept; items with the same id are overwritten.",{title:"Import this roleplay?",icon:"download",ok:"Import"}))) return false;
+  if(io&&io.beforeApply&&!(await io.beforeApply())) return false;   // v147.2 — the safety snapshot, after the yes
   // Merge universe + personas (so the roleplay is playable), then chats + memories.
   if(b.universe){ const i=state.universes.findIndex(u=>u.id===b.universe.id); if(i>=0)state.universes[i]=b.universe; else state.universes.push(b.universe); persistUniverses(); }
   if(Array.isArray(b.personas)){ b.personas.forEach(p=>{ const i=state.personas.findIndex(x=>x.id===p.id); if(i>=0)state.personas[i]=p; else state.personas.push(p); }); persistPersonas(); }
@@ -52298,8 +52382,14 @@ async function importRoleplayFile(b){
      the restore is running in, which would then read as "this is the scene you are in" and be
      withheld from the character it belongs to. They go in exactly as they were saved. */
   if(Array.isArray(b.memory)){ const ids=new Set(state.memory.map(m=>m.id)); b.memory.forEach(m=>{ if(!ids.has(m.id))state.memory.push(m); }); persistMemory(); }
-  if(b.universe)state.curUniverse=b.universe.id;
-  if(b.curChat&&state.chats[b.curChat])state.curChat=b.curChat;
+  /* (!) v147.2 — the open universe is SAVED with it, and the open chat belongs to it. persistUniverses
+     above wrote K.curUniverse before it was changed here, so after the reload the imported chat was open
+     inside the OLD universe (its player name, and Settings → Reset universe aimed at the wrong world). */
+  if(b.universe){ state.curUniverse=b.universe.id; try{ applyUniverseProfile(state.curUniverse); }catch(e){} }
+  const _cc=b.curChat&&state.chats[b.curChat];
+  if(_cc&&(!b.universe||_cc.universeId===state.curUniverse))state.curChat=b.curChat;
+  else if(b.universe){ const c=chatForUniverse(state.curUniverse); state.curChat=c?c.id:null; }
+  persistUniverses();
   flushPersistChats();
   return true;
 }
@@ -52313,7 +52403,7 @@ async function exportUniverses(){
     toast("Universes exported");
   }catch(e){ console.warn("exportUniverses failed",e); toast("Export failed"); }
 }
-async function importUniversesFile(b){
+async function importUniversesFile(b,io){
   if(!b||b.kind!=="universes") throw new Error("Not a universes export");
   if(!Array.isArray(b.universes||[])||(b.personas!=null&&!Array.isArray(b.personas))) throw new Error("Damaged universes export");
   sanitizeImportedMedia(b.universes); sanitizeImportedMedia(b.personas);   // v144.1
@@ -52345,6 +52435,7 @@ async function importUniversesFile(b){
     }
     // blank/invalid → keep all (incoming unchanged); active falls back below
   }
+  if(io&&io.beforeApply&&!(await io.beforeApply())) return false;   // v147.2 — the safety snapshot, after the choices
   // Sanitize each incoming universe's prompt overrides: drop any that are NOT recognizably a current
   // tuned prompt, so a stale backup can't silently pin old behavior. We keep overrides that still
   // carry the current default's structural marker (those are valid per-world flavor); anything else
@@ -52436,9 +52527,10 @@ function exportPrompts(){
     toast("Prompts exported");
   }catch(e){ console.warn("exportPrompts failed",e); toast("Export failed"); }
 }
-async function importPromptsFile(b){
+async function importPromptsFile(b,io){
   if(!b||b.kind!=="prompts") throw new Error("Not a prompts export");
   if(!(await uiConfirm("It replaces your prompts and model/setting choices. Chats, characters and memories are untouched.",{title:"Import this prompt pack?",ok:"Import & replace",danger:true}))) return false;
+  if(io&&io.beforeApply&&!(await io.beforeApply())) return false;   // v147.2 — the safety snapshot, after the yes
   /* (!) v144.1 — ONLY WHAT exportPrompts WRITES. Any K key used to be accepted, so a shared "prompt
      pack" could set sm_key, sm_embedurl (every memory posted to someone else's server, with the
      OpenRouter key as the bearer) or any other setting. Prompts must be registry prompts, settings
@@ -52465,11 +52557,13 @@ async function importDispatch(file){
     const b=JSON.parse(await file.text());
     if(!b||b.app!=="StoryMind") throw new Error("Not a StoryMind file");
     let ok=false;
-    // v146.1 — these overwrite items with the same id (a universes REPLACE drops the rest): snapshot first.
-    if(!(await doAutoBackup({force:true}))&&!(await uiConfirm("A safety snapshot of your current data couldn't be taken, so this can't be undone.",{title:"Import anyway?",ok:"Import anyway",danger:true}))) return;
-    if(_importMode==="roleplay")  ok=await importRoleplayFile(b);
-    else if(_importMode==="universes") ok=await importUniversesFile(b);
-    else if(_importMode==="prompts")   ok=await importPromptsFile(b);
+    /* v146.1 — these overwrite items with the same id (a universes REPLACE drops the rest): snapshot first.
+       (!) v147.2 — but only once the file is the right kind and the player has said yes: a cancelled or
+       wrong-file import took a real snapshot every time, and six of those pushed the useful ones out. */
+    const beforeApply=async()=>!!((await doAutoBackup({force:true}))||(await uiConfirm("A safety snapshot of your current data couldn't be taken, so this can't be undone.",{title:"Import anyway?",ok:"Import anyway",danger:true})));
+    if(_importMode==="roleplay")  ok=await importRoleplayFile(b,{beforeApply});
+    else if(_importMode==="universes") ok=await importUniversesFile(b,{beforeApply});
+    else if(_importMode==="prompts")   ok=await importPromptsFile(b,{beforeApply});
     if(ok){ toast("Imported — reloading"); setTimeout(()=>location.reload(),700); }
   }catch(e){ console.warn("import failed",e); toast("Import failed: "+(e.message||"bad file")); }
 }
@@ -52478,25 +52572,13 @@ async function confirmClear(w){
     images:["Delete all gallery images and videos?","Scenes built from videos are removed too."],
     videos:["Delete all gallery videos?","Scenes built from them are removed too."]}[w];
   if(!T||!(await uiConfirm(T[1],{title:T[0],ok:"Delete all",danger:true})))return;
-  if(w==='chats'){state.chats={};state.curChat=null;flushPersistChats();try{localStorage.removeItem(K.chats);}catch(e){}startSceneFor(state.curUniverse);renderChat();toast("Cleared");updateStorage();}
+  if(w==='chats'){state.chats={};state.curChat=null;flushPersistChats();try{pruneMessageMedia();}catch(e){}try{localStorage.removeItem(K.chats);}catch(e){}startSceneFor(state.curUniverse);renderChat();toast("Cleared");updateStorage();}
   if(w==='memory'){state.memory=[];persistMemory();try{localStorage.removeItem(K.memory);}catch(e){}renderMemory();toast("Cleared");updateStorage();}
   if(w==='images'){state.images=[];persistImages();state.videos=[];state.scenes=[];persistVideos();persistScenes();pruneGalleryMedia();renderGallery();toast("Cleared");updateStorage();}
   if(w==='videos'){state.videos=[];state.scenes=[];persistVideos();persistScenes();pruneGalleryMedia();renderGallery();toast("Cleared");}
 }
-/* v24.4 — FULL UNIVERSE RESET. The old "wipe memories" only dropped state.memory; every other
-   layer of evolved play state survived — generated relationship sheets, the per-chat feeling axes,
-   live intents, calendar meetings, tracker values, quests/arcs, character quests, the universe
-   chronicle — so a "fresh start" still remembered everything that mattered. This resets one
-   universe to its AUTHORED initial state.
-   WIPED: memories & diaries (gossip, suspicions and bystander gists live there too), generated
-     relationship sheets (p.relationships — rebuilt on demand from the cards), relationship axes +
-     short-term feelings (chat.rel), live intents/undercurrents, calendar meetings, tracker values,
-     memory-arc counters, player quests + arc premises, character quests, background tasks, the
-     universe chronicle + eras, and never-revealed latent NPCs that quests minted.
-   KEPT: the world (setting/directing/genre pack/guide/rules), the cast's authored cards —
-     personality, goals, backstory, socialGraph, interject, routine, schedules — locations,
-     per-universe prompts, the state-zero origin doc (that IS the initial state), and chat
-     transcripts (delete chats separately for a truly blank page). */
+/* v24.4 — FULL UNIVERSE RESET: one universe back to its AUTHORED initial state. (What it wipes and keeps is
+   below; v147.2 — the v24.4 list here said chat transcripts were kept, which stopped being true in v146.1.) */
 /* v146.1 — A RESET IS A FRESH START, AND IT FORGETS NOTHING. The old reset cleared a hand-kept list of
    fields and kept the chat transcripts, so everything added since that list was written survived it:
    promises, the rumour ledger, day-end and placement markers, drives, text/quest-ask gates, the active
@@ -52506,7 +52588,14 @@ async function confirmClear(w){
    memories and diaries, rumours, generated relationships and facts, characters created in play (never
    met / first-visit / quest figures), quests, character quests and the chronicle. What was AUTHORED
    stays: the world, its places and schedules, the cast cards (and their written social graph), prompts,
-   the state-zero briefing, images and scenes. The caller offers an export first (_confirmUniverseReset). */
+   the state-zero briefing, images and scenes. The caller offers an export first (_confirmUniverseReset).
+   v147.2 — and the start really is the start: an authored hidden character the player found is hidden
+   again, as written (p.authoredLatent, recorded at the reveal); a character made in play that the player
+   wrote into or gave a picture (_playerTouched) stays; the deleted chats' stored images and clips go; and
+   Day 1 opens at the player's home with whoever is there (_landFreshChat). */
+function _playerTouched(p){
+  return !!(p&&(p.playerEdited||p.image||(Array.isArray(p.refImages)&&p.refImages.length)||p.mediaRef));
+}
 function wipeUniverseState(uniId){
   const u=universeById(uniId); if(!u)return null;
   const charIds=new Set(personasInUniverse(uniId).map(p=>p.id));
@@ -52539,11 +52628,26 @@ function wipeUniverseState(uniId){
     if(!p)return false;
     if(p.latent&&Array.isArray(p.questIds)&&p.questIds.length)return true;
     if(p.latent&&/^A figure connected to:/.test(String(p.personality||""))&&!String(p.backstory||"").trim())return true;
-    if(p.origin==="seed")return !String(p.backstory||"").trim();
+    if(p.origin==="seed")return !String(p.backstory||"").trim()&&!_playerTouched(p);   // v147.2 — unless the player made it theirs
     const r=residentOf(p.id);   // pre-v146.1 first-visit NPC: the seeder's shape, never edited
     return !!(r&&seededLocs.has(r.id)&&p.avatar==="🧍"&&!String(p.instructions||"").trim()&&!String(p.backstory||"").trim()&&!p.image);
   };
-  const dropIds=new Set(personasInUniverse(uniId).filter(madeInPlay).map(p=>p.id));
+  /* v147.2 — FOUND CHARACTERS GO BACK INTO HIDING. Judged as they were before the reveal: a play-made
+     figure (a quest's, the binder's) goes like any other unless the player made it theirs (then it stays,
+     as found); an authored one is hidden again at its place, with the card as written unless the player
+     has since rewritten it. */
+  const reHidden=[], dropRevealed=[];
+  personasInUniverse(uniId).forEach(p=>{
+    const al=p&&p.authoredLatent; if(!al||typeof al!=="object")return;
+    delete p.authoredLatent;
+    if(p.latent||p.removed)return;
+    const orig=Object.assign({},p,al,{latent:true});
+    if(madeInPlay(orig)){ if(!_playerTouched(p))dropRevealed.push(p.id); return; }
+    p.latent=true; p.boundLocId=al.boundLocId||null;
+    if(!p.playerEdited)["personality","backstory","style","goals","look"].forEach(k=>{ if(al[k]!==undefined)p[k]=al[k]; });
+    reHidden.push(p.id);
+  });
+  const dropIds=new Set(personasInUniverse(uniId).filter(madeInPlay).map(p=>p.id).concat(dropRevealed));
   if(dropIds.size){
     state.personas=state.personas.filter(p=>!(p&&dropIds.has(p.id)));
     if(dropIds.has(state.curPersona))state.curPersona=null;
@@ -52575,20 +52679,25 @@ function wipeUniverseState(uniId){
   }
   u.chronicle=[]; u.chronicleEras=[];
   delete u.cqLastSpawn; delete u.cqAsked;
+  u.landAtHome=true;   // v147.2 — the next chat of this universe opens at home (startSceneFor → _landFreshChat)
   persistUniverses();
   if(wasOpen||state.curUniverse===uniId){ try{ startSceneFor(uniId,true); }catch(e){} }
   persistChats();
   try{ flushPersistChats(); }catch(e){}
+  // v147.2 — the deleted chats' stored scene images and clips (the saved copy and snapshot were taken first)
+  try{ pruneMessageMedia(); }catch(e){}
   // Refresh whatever is showing this data.
-  try{ if(state.curUniverse===uniId){ renderChat(); updateChatHeader(); } }catch(e){}
+  try{ if(state.curUniverse===uniId){ renderChat(); updateChatHeader(); applyLocationBackground(); } }catch(e){}
+  // v147.2 — the character list (the cleared, kept and re-hidden cards) and the universe grid's counts
+  try{ if(state.curUniverse===uniId)renderPersonas(); }catch(e){}
+  try{ renderUniverses(); }catch(e){}
   try{ if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory(); }catch(e){}
   try{ const d=document.getElementById('screen-diary'); if(d&&d.classList.contains('active'))renderDiary(); }catch(e){}
   try{ _refreshQuestViews&&_refreshQuestViews(); }catch(e){}
   try{ if(editingUniverse&&editingUniverse.id===uniId)renderUeChronicle(u); }catch(e){}
   try{ updateStorage&&updateStorage(); }catch(e){}
-  return {mems:before-state.memory.length,chats:chatIds.size,npcs:dropIds.size,rumours:gBefore-state.gossip.length};
+  return {mems:before-state.memory.length,chats:chatIds.size,npcs:dropIds.size,rumours:gBefore-state.gossip.length,hidden:reHidden.length};
 }
-// v146.1 — says what a reset really does, and offers a restorable copy first (Import roleplay brings it back).
 // v146.1 — says what a reset really does, and offers a restorable copy first (Import roleplay brings it back).
 async function _confirmUniverseReset(uName,uid){
   /* (!) v147.1 — not while the story is still being written: a reply or a day end finishing after the
@@ -52596,7 +52705,7 @@ async function _confirmUniverseReset(uName,uid){
   const busy=Object.values(state.chats||{}).some(c=>c&&c.universeId===uid&&(chatBusy(c,"turn")||chatBusy(c,"endDay")||chatBusy(c,"dayEndBg")||chatBusy(c,"periodEngines")||chatBusy(c,"memBuild")));
   if(busy){ toast("The story is still being written (a reply or the day's end) — reset once it finishes"); return false; }
   if(_tabReadOnly){ toast("This tab is read-only (StoryMind is open in another tab) — nothing can be reset here"); return false; }
-  const how=await uiChoose(`WIPES: the chat and its transcript, all memories & diaries, promises, meetings, rumours, live schemes, generated relationships & feelings, tracker values, quests & story arcs, character quests, characters created during play, and the universe chronicle. The story starts again on Day 1.\n\nKEEPS: the world, its places and schedules, the cast's authored cards (incl. their written social graph), prompts, the state-zero briefing, images and scenes. Characters removed from play stay removed.`,[
+  const how=await uiChoose(`WIPES: the chat and its transcript, all memories & diaries, promises, meetings, rumours, live schemes, generated relationships & feelings, tracker values, quests & story arcs, character quests, characters created during play (unless you edited them or gave them a picture), and the universe chronicle. Hidden characters you found go back into hiding. The story starts again on Day 1, at your home.\n\nKEEPS: the world, its places and schedules, the cast's authored cards (incl. their written social graph), prompts, the state-zero briefing, images and scenes. Characters removed from play stay removed.`,[
       {label:"Save a copy first, then reset",value:"save"},
       {label:"Reset without saving",value:"reset"}],
     {title:`Reset "${uName}" to its initial state?`,icon:"refresh"});
@@ -52688,6 +52797,14 @@ function init2(){
   syncSettingsUI();loadModels(false);
   try{ foldHelp(document); }catch(e){}     // v111.1 — fold the static help once at boot
   _wireAudioUnlock();   // v20.7 — prime audio playback on first user gesture (TTS autoplay unlock)
+  /* (!) v147.2 — the open chat must belong to the open universe. An import saved them out of step (the
+     chat of one world open under another's player and name); the screen showed the CHAT's world
+     (curUniverseObj reads it first), so that is the one kept. */
+  try{ const _c=state.curChat&&state.chats[state.curChat];
+    if(_c&&_c.universeId&&_c.universeId!==state.curUniverse){
+      if(universeById(_c.universeId)){ state.curUniverse=_c.universeId; if(!_tabReadOnly)store.setRaw(K.curUniverse,state.curUniverse); }
+      else state.curChat=null;   // a chat of a world that no longer exists: open the universe's own
+    } }catch(e){}
   applyUniverseProfile(state.curUniverse);   // resolve per-universe player identity on load
   // Pull full image/video history from IndexedDB (large quota). If legacy localStorage
   // images were loaded by loadState, persistImages() below writes them into IDB once,
@@ -53069,6 +53186,7 @@ async function summBuildChapter(st, turns, names){
 }
 
 /* ---- user turn → OpenRouter stream → chunker → TTS ---- */
+let VC_IDLE_MS=20000;    // v147.2 — a live-call stream (reply or voice) that sends nothing for this long is dropped
 async function vcOnUserTurn(userText){
   if(vc.generating) return;     // overlapping turn — ignore (barge-in handles real interrupts)
   vcHistory.push({role:'user',content:userText});
@@ -53094,15 +53212,20 @@ async function vcOnUserTurn(userText){
     temperature:fnTemp("call",0.8), max_tokens:fnTok("call",300) };
   if(_cOR){ reqBody.reasoning=vcReasoning(); reqBody.provider={sort:"latency"}; }
   else { const _e=fnEffort("call"); if(fnReason("call")===true&&_e) reqBody.reasoning_effort=String(_e); }
+  /* (!) v147.2 — AN IDLE CEILING. The stream had none: a provider that accepted the request and then sent
+     nothing held the turn ("Thinking…") for the rest of the call. No bytes for VC_IDLE_MS → the turn is
+     abandoned with a word to the player (the headers wait on the same ceiling). */
+  let _hdrT=setTimeout(()=>{ dbg.error='idle'; try{ ctrl.abort(); }catch(_){} },VC_IDLE_MS);
   try{
     const res=await fetch(_capi.base+"/chat/completions",{method:'POST',
       headers:Object.assign({'Authorization':'Bearer '+_capi.key,'Content-Type':'application/json'},
         _cOR?{'HTTP-Referer':'https://storymind.app','X-Title':'StoryMind'}:{}),
       body:JSON.stringify(reqBody), signal:ctrl.signal});
+    clearTimeout(_hdrT);
     if(!res.ok){ vc.generating=false; dbg.error='HTTP '+res.status; return; }
     const reader=res.body.getReader(); const dec=new TextDecoder(); let buf='';
     while(true){
-      const {done,value}=await reader.read(); if(done) break;
+      const {done,value}=await _readUntil(reader,Date.now()+VC_IDLE_MS); if(done) break;
       if(myTurn!==vc.turnSeq){ try{reader.cancel();}catch(e){} break; }
       buf+=dec.decode(value,{stream:true});
       let nl; while((nl=buf.indexOf('\n'))>=0){
@@ -53113,8 +53236,12 @@ async function vcOnUserTurn(userText){
       }
     }
     chunker.flush();
-  }catch(e){ /* aborted or network */ }
+  }catch(e){ /* aborted or network */
+    if((e&&e.kind==="timeout")||dbg.error==='idle'){ dbg.error='idle';
+      if(myTurn===vc.turnSeq){ try{ chunker.flush(); }catch(_){} try{ vcStatus("The reply stalled — say it again?"); toast("The call's reply stalled (nothing came for "+Math.round(VC_IDLE_MS/1000)+" s) — say it again"); }catch(_){} } }
+  }
   finally{
+    clearTimeout(_hdrT);
     vc.generating=false;
     dbg.reply=acc.trim(); dbg.total=Math.round(performance.now()-dbg.t0);
     if(myTurn===vc.turnSeq && acc.trim()){ vcHistory.push({role:'assistant',content:acc.trim()}); vc.transcript.push({role:'assistant',content:acc.trim()});
@@ -53250,17 +53377,30 @@ async function vcSynth(text,turn){
   if(state.callTtsLang) body.language=state.callTtsLang;
   const ctrl=vc.orAbort||new AbortController(); vc.ttsAbort=ctrl;
   const _tts0=performance.now();
-  const res=await fetch(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctrl.signal});
+  /* (!) v147.2 — AN IDLE CEILING. A relay that stalled mid-clip held vcPumpTts's busy flag for the rest of
+     the call, and nothing else was ever spoken. Its own controller (tied to the turn's) so a stalled clip
+     is dropped without cancelling the reply that is still streaming. */
+  const own=new AbortController(); const _link=()=>{ try{ own.abort(); }catch(_){} };
+  try{ if(ctrl.signal.aborted)_link(); else ctrl.signal.addEventListener('abort',_link,{once:true}); }catch(_){}
+  let _stalled=false; const _hdrT=setTimeout(()=>{ _stalled=true; _link(); },VC_IDLE_MS);
+  const _stallNote=()=>{ if(!vc._ttsStallWarned){ vc._ttsStallWarned=true; try{ toast("The voice relay stalled — a line was skipped"); }catch(_){} } };
+  let res;
+  try{ res=await fetch(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:own.signal}); }
+  catch(e){ if(_stalled)_stallNote(); throw e; }
+  finally{ clearTimeout(_hdrT); }
   if(!res.ok){ if(vc.debug&&vc.debug.turns.length){ const lt=vc.debug.turns[vc.debug.turns.length-1]; const lc=lt.chunks&&lt.chunks[lt.chunks.length-1]; if(lc)lc.ttsError='HTTP '+res.status; } return; }
   // attach first-audio latency to the matching chunk in the debug log
   if(vc.debug&&vc.debug.turns.length){ const lt=vc.debug.turns[vc.debug.turns.length-1]; const lc=lt.chunks&&lt.chunks.find(c=>c.text===text||vcApplyPronounce(c.text)===text); if(lc)lc.ttsMs=Math.round(performance.now()-_tts0); }
   const reader=res.body.getReader(); const dec=new TextDecoder(); let buf='';
-  while(true){
-    const {done,value}=await reader.read(); if(done) break;
-    if(turn!==vc.turnSeq){ try{reader.cancel();}catch(e){} break; }
-    buf+=dec.decode(value,{stream:true});
-    let nl; while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(line) vcHandleAudio(line); }
-  }
+  try{
+    while(true){
+      const {done,value}=await _readUntil(reader,Date.now()+VC_IDLE_MS); if(done) break;
+      if(turn!==vc.turnSeq){ try{reader.cancel();}catch(e){} break; }
+      buf+=dec.decode(value,{stream:true});
+      let nl; while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(line) vcHandleAudio(line); }
+    }
+  }catch(e){ if(e&&e.kind==="timeout"){ _stallNote(); return; } throw e; }
+  finally{ try{ ctrl.signal.removeEventListener('abort',_link); }catch(_){} }
   if(buf.trim()) vcHandleAudio(buf.trim());
 }
 function vcHandleAudio(line){ let j; try{j=JSON.parse(line);}catch(e){return;} const r=j.result||j; if(r&&r.audioContent) vcEnqueuePcm(vcB64ToBuf(r.audioContent)); }

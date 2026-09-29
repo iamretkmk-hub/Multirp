@@ -71,12 +71,16 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       const c=curChat(); c.locationId="L_home"; c.subPos={o_oz:"s1"};
       const p=state.personas.find(x=>x.id==="o_oz");
       return currentOutfit(p,c).why==="home:Afternoon"?true:JSON.stringify(currentOutfit(p,c)); }));
-  ok("so does letting the hour turn", await pg.evaluate(()=>{
+  /* v148.4 — it used to expire when the hour turned too, and that was the bug: a scene that simply went
+     on changed everyone's clothes at the tick (a coat borrowed in the Afternoon was gone in the Evening).
+     What the scene put someone in is now HELD until something justifies a change. */
+  ok("letting the hour turn keeps it (it is held, not expired)", await pg.evaluate(()=>{
       const c=curChat(); c.locationId="L_sahil"; c.subPos={o_oz:"s3"}; c.period="Afternoon";
       const p=state.personas.find(x=>x.id==="o_oz");
       setWearingOverride(c,"o_oz","a borrowed coat");
       c.period="Evening";
-      return currentOutfit(p,c).why==="location"?true:JSON.stringify(currentOutfit(p,c)); }));
+      const f=currentOutfit(p,c); setWearingOverride(c,"o_oz","");
+      return f.text==="a borrowed coat"?true:JSON.stringify(f); }));
   ok("the tracker does not fire on an ordinary turn", await pg.evaluate(()=>{
       const c=curChat();
       c.messages=[{mid:"z1",role:"user",present:["o_oz"],content:'"Çayı söyledin mi canım?"'}];

@@ -2,8 +2,9 @@
    A wardrobe was a menu, and two readers chose from it independently on the same turn — the reply
    payload picked one outfit and the image writer picked another, which is how a character gets
    described in the emerald dress and drawn in the yoga pants. The choosing moves into a table:
-   one outfit per location, per time of day at their own home and at the player's house, plus the
-   four a place cannot express. currentOutfit() resolves exactly one and hands it to both.
+   one outfit per location, per time of day at their own home and at the player's house. (v148.6 — the
+   four generic activity outfits, swim / sport / sleep / intimate, are gone: a "Lakeside Running Trail"
+   dressed people in swimwear.) currentOutfit() resolves exactly one and hands it to both.
    Run: node tests/outfits.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
@@ -54,12 +55,18 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("at the player's house it is the player's-house table", (await put("L_user","s2","Afternoon")).text==="You wear the emerald wrap dress.");
   ok("anywhere else it is that location's outfit", (await put("L_sahil","s3","Afternoon")).text==="You wear a white linen sundress.");
 
-  console.log("\n[what the place alone cannot say]");
-  ok("the Sea gets the swimsuit, not Sahil's sundress", (await put("L_sahil","s_sea","Afternoon")).text==="You wear a red string bikini.");
-  ok("the gym gets sportswear, in Turkish too (Spor Salonu)", (await put("L_sahil","s_gym","Afternoon")).text==="You wear black yoga pants.");
-  ok("Night at her own home is sleepwear", (await put("L_home","s1","Night")).why==="activity:sleep",
-     JSON.stringify(await put("L_home","s1","Night")));
-  ok("but Night somewhere else is not", (await put("L_sahil","s3","Night")).text==="You wear a white linen sundress.");
+  /* v148.6 — CHANGED ON PURPOSE: these asserted the generic activity outfits (the Sea → bikini, Spor Salonu
+     → yoga pants, Night at home → activity:sleep). The user: "Everywhere has its own clothing state, no
+     general for swimming etc." The card's stored activity entries are still here and must never be read. */
+  console.log("\n[v148.6 — no generic activity outfit: every area of a place wears the place's own entry]");
+  ok("the Sea area wears Sahil's own outfit, not the stored bikini", (await put("L_sahil","s_sea","Afternoon")).text==="You wear a white linen sundress.",
+     JSON.stringify(await put("L_sahil","s_sea","Afternoon")));
+  ok("so does the gym area (Spor Salonu)", (await put("L_sahil","s_gym","Afternoon")).text==="You wear a white linen sundress.");
+  /* v148.6 — and with visitors in the house (the player, Nooutfit) the host is not put in her Night slot:
+     she keeps the evening clothes on (TEMPLATE-REVIEW N5). Household-only Night is in narration-clothing. */
+  ok("Night at her own home with visitors keeps her Evening clothes, not the nightdress", (await put("L_home","s_bed","Night")).why==="home:Evening"
+     && (await put("L_home","s_bed","Night")).text==="You wear a soft grey knit.", JSON.stringify(await put("L_home","s_bed","Night")));
+  ok("and Night somewhere else is that place's outfit", (await put("L_sahil","s3","Night")).text==="You wear a white linen sundress.");
 
   console.log("\n[the scene gets the last word, and it expires by itself]");
   ok("an override wins over the table", await pg.evaluate(()=>{
@@ -97,12 +104,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       const c=curChat(); c.locationId="L_sahil"; c.subPos={o_oz:"s_sea"}; c.period="Afternoon"; c.wearing={};
       const p=state.personas.find(x=>x.id==="o_oz");
       const t=charBioBlock(p,{self:true,chat:c});
-      return (t.indexOf("<wearing>")>-1 && t.indexOf("red string bikini")>-1 && t.indexOf("<wardrobe>")===-1)
+      // v148.6 — the place's own outfit at the Sea area (was the activity bikini)
+      return (t.indexOf("<wearing>")>-1 && t.indexOf("white linen sundress")>-1 && t.indexOf("bikini")===-1 && t.indexOf("<wardrobe>")===-1)
         ? true : t.split("\n").filter(l=>/wearing|wardrobe/.test(l)).join(" | "); }));
   ok("the image writer is handed the same one, as a fact", await pg.evaluate(()=>{
       const c=curChat(); const p=state.personas.find(x=>x.id==="o_oz");
       const w=_imgWardrobeBlock(p,c);
-      return (/WHAT THEY ARE WEARING/.test(w) && /red string bikini/.test(w) && !/OPTIONS/.test(w))?true:w; }));
+      return (/WHAT THEY ARE WEARING/.test(w) && /white linen sundress/.test(w) && !/bikini/.test(w) && !/OPTIONS/.test(w))?true:w; }));
   ok("and the dressing context is dropped — there is nothing left to choose", await pg.evaluate(()=>
       _imgOutfitDecided(state.personas.find(x=>x.id==="o_oz"))===true));
 
@@ -119,10 +127,12 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       && hasOutfits(state.personas.find(x=>x.id==="o_no"))===false));
 
   console.log("\n[the slots this universe asks for]");
-  ok("every location, both period tables, and the four activities", await pg.evaluate(()=>{
+  // v148.6 — no activity slots any more (was "and the four activities"); each location lists its areas
+  ok("every location (with its areas), both period tables, and no activity slots", await pg.evaluate(()=>{
       const s=outfitSlots(state.personas.find(x=>x.id==="o_oz"));
       return (s.locations.length===3 && s.home && s.home.id==="L_home" && s.userHome && s.userHome.id==="L_user"
-              && s.periods.length===5 && s.activities.length===4)?true:JSON.stringify(s); }));
+              && s.periods.length===5 && !("activities" in s)
+              && s.locations.find(l=>l.id==="L_sahil").areas.includes("Sea"))?true:JSON.stringify(s); }));
   ok("a full table reports nothing missing", await pg.evaluate(()=>{
       const m=missingOutfitSlots(state.personas.find(x=>x.id==="o_oz"));
       return m.length===0?true:m.join(", "); }));
@@ -135,29 +145,22 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       const a=up("x_outfits_generator"), t=up("x_wearing_tracker");
       return (a&&a.indexOf("SECOND PERSON")>-1 && t&&t.indexOf('"changed"')>-1)?true:"missing"; }));
 
-  /* v67.1 — THE ACTIVITY OUTFITS COULD NOT FIRE. _outfitAreaActivity was fed the SUB-AREA name
-     alone, and a sub-area is furniture: the gym is "Site Fitness Centre" and its areas are "Free
-     Weights Zone", "Cardio Floor", "Locker Rooms" — not one of which carries a cue. At a venue with
-     no sub-areas at all the area resolves to "Entrance", so swim, sport and sleep could not fire
-     anywhere in the world. The activity belongs to the PLACE; the area only refines it. */
-  console.log("\n[the activity outfit reads the venue, not just the area]");
-  ok("a gym's areas do not name the gym — the venue does", await pg.evaluate(()=>
-      _outfitAreaActivity("Free Weights Zone","Site Fitness Centre")==="sport" &&
-      _outfitAreaActivity("Cardio Floor","Site Fitness Centre")==="sport" ? true
-      : "weights="+_outfitAreaActivity("Free Weights Zone","Site Fitness Centre")));
-  ok("a venue with no sub-areas still resolves", await pg.evaluate(()=>
-      _outfitAreaActivity("Entrance","Site Olympic Pool")==="swim" &&
-      _outfitAreaActivity("Entrance","Beach Club")==="swim" ? true
-      : "pool="+_outfitAreaActivity("Entrance","Site Olympic Pool")));
-  ok("an explicit area still wins over the venue", await pg.evaluate(()=>
-      _outfitAreaActivity("Bedroom","Site Fitness Centre")==="sleep" ? true
-      : _outfitAreaActivity("Bedroom","Site Fitness Centre")));
-  ok("and ordinary venues still name no activity", await pg.evaluate(()=>{
-      const bad=["Site Restaurant","Site Shopping Center","Site Garden Park","Site Marina Pier",
-                 "Site School","Site Coffee House"].filter(n=>_outfitAreaActivity("Entrance",n));
-      return bad.length===0?true:"false positive on: "+bad.join(", "); }));
-  ok("the area alone still works when it is the one that names it", await pg.evaluate(()=>
-      _outfitAreaActivity("Swimming Pool","Grand Hotel")==="swim" ? true : "regressed"));
+  /* v67.1 made the activity outfits read the venue name too ("Site Olympic Pool", "Beach Club"). v148.6
+     removed them altogether — CHANGED ON PURPOSE: a pool venue with its own entry wears that entry, one
+     with none falls back to home / wardrobe, and nothing reads a place's name for a swimsuit. */
+  console.log("\n[v148.6 — a place's name never picks the clothes]");
+  ok("the activity matcher is gone", await pg.evaluate(()=>
+      typeof _outfitAreaActivity==="undefined" && typeof OUTFIT_ACTIVITIES==="undefined" ? true : "still defined"));
+  ok("a pool venue with its own entry wears it; with none, the wardrobe — never the stored swimsuit", await pg.evaluate(()=>{
+      const u=(state.universes||[])[0];
+      u.locations.push({id:"loc_pool",name:"Site Olympic Pool",sublocations:[{id:"sp1",name:"Entrance"},{id:"sp2",name:"Pool"}]});
+      const withE={id:"c_pw",name:"W",wardrobe:"jeans",outfits:{byLoc:{loc_pool:"You wear a navy racing swimsuit."},home:{},userHome:{},activity:{swim:"a red bikini"}}};
+      const without={id:"c_pn",name:"N",wardrobe:"jeans and a grey tee",outfits:{byLoc:{elsewhere:"x"},home:{},userHome:{},activity:{swim:"a red bikini"}}};
+      const chat={id:"cpool",universeId:u.id,locationId:"loc_pool",gameDay:1,messages:[],rel:{},subPos:{c_pw:"sp2",c_pn:"sp2"}};
+      const a=currentOutfit(withE,chat), b=currentOutfit(without,chat);
+      u.locations=u.locations.filter(l=>l.id!=="loc_pool");
+      return (a.text==="You wear a navy racing swimsuit."&&a.why==="location"&&b.text==="jeans and a grey tee"&&b.why==="wardrobe")
+        ? true : JSON.stringify({a,b}); }));
   /* The sub-location was the SUSPECT and is innocent: byLoc keys on the parent venue, so standing
      in an area of it resolves exactly as standing in it does. Pinned so it stays that way. */
   ok("a sub-area does not break the by-location outfit", await pg.evaluate(()=>{

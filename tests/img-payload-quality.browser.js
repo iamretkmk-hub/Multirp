@@ -225,7 +225,7 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
     // the wearing tracker's change outlives the hour
     c.period="Evening"; setWearingOverride(c,"p_berk","a white t-shirt, the polo off"); c.period="Night";
     r.override=currentOutfit(P("p_berk"),c).text;
-    // a new day, going home, a place with its own activity outfit
+    // a new day, going home, and (v148.6) an area that used to trigger an activity outfit
     c.gameDay=3; c.period="Morning"; r.newDay=currentOutfit(P("p_berk"),c).text;
     c.locationId="L_sami"; c.subId="s1"; c.subPos={p_sami:"s1"}; c.presentIds=["p_sami"]; c.period="Evening";
     r.home=currentOutfit(P("p_sami"),c).text;
@@ -234,13 +234,18 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
     c.outfitHeld={}; c.locationId="L_cafe"; c.presentIds=[]; currentOutfit(P("p_burcu"),c); r.absentHeld=!!c.outfitHeld.p_burcu;
     return r;
   });
-  ok("walking together from the café to the plant, Sami arrives in what he left in", /cream cashmere/.test(O.cafe)&&O.walked===O.cafe, JSON.stringify(O));
+  /* v148.6 — CHANGED ON PURPOSE: v148.4 carried the held outfit along on the walk, so Sami wore the café's
+     cashmere and shorts on the plant floor (TEMPLATE-REVIEW N1). Every place has its own clothes now: a
+     change of location drops the holds and he wears the plant's coveralls. */
+  ok("walking together from the café to the plant, Sami is dressed for the plant", /cream cashmere/.test(O.cafe)&&/navy coveralls/.test(O.walked), JSON.stringify(O));
   ok("and whoever stayed behind is dressed afresh next time", O.berkerDropped===true, JSON.stringify(O));
   ok("a guest still at the player's house when Evening turns to Night keeps the evening clothes (the reported boxer briefs)",
      /dark green silk shirt/.test(O.evening)&&O.night===O.evening&&!/boxer/.test(O.night), JSON.stringify(O));
   ok("and a guest who only arrives at Night gets the evening slot, not the sleepover one", /dark green silk shirt/.test(O.arriveNight), O.arriveNight);
   ok("a change the wearing tracker recorded outlives the hour", /polo off/.test(O.override), O.override);
-  ok("a new day, going home and the pool each justify a change", !/polo off/.test(O.newDay)&&/grey tracksuit/.test(O.home)&&/red swim shorts/.test(O.pool), JSON.stringify(O));
+  /* v148.6 — CHANGED ON PURPOSE: the pool no longer switches him into the generic "swim" outfit (those are
+     gone); the Pool area of his own house is still his house, so he keeps its Evening outfit. */
+  ok("a new day and going home each justify a change; the pool area of his house does not swap in swimwear", !/polo off/.test(O.newDay)&&/grey tracksuit/.test(O.home)&&/grey tracksuit/.test(O.pool)&&!/swim shorts/.test(O.pool), JSON.stringify(O));
   ok("an absent character read from the editor gets no hold", O.absentHeld===false, JSON.stringify(O));
   ok("an exit drops the hold", await pg.evaluate(()=>{ const c=curChat(); c.presentIds=["p_sami","p_berk"]; c.outfitHeld={p_berk:{text:"x",why:"location",day:1,loc:"L_cafe"}}; applyPresence(c,[],["Berker Özüçak"]); return !c.outfitHeld.p_berk; }));
 

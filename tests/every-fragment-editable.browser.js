@@ -130,7 +130,8 @@ const {chromium}=require('playwright');
       ptEditPiece("drives");
       const n=document.querySelectorAll('#ptFrag_drives textarea[data-btpl]').length;
       ptEditPiece("drives");
-      return n===4?true:("opened "+n+" of 4"); }));
+      // (!) v148.6 — six now: drive_empty (what an empty side says) and limits_header (the spoken limits) joined the four
+      return n===6?true:("opened "+n+" of 6"); }));
   ok("the customized count still shows", await pg.evaluate(()=>{
       state.blockTpls=state.blockTpls||{}; state.blockTpls.task="mine";
       renderPayloadEditor('solo');

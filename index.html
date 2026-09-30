@@ -1397,7 +1397,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.9</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v149.0</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -8957,6 +8957,22 @@ function loadState(){
      and write their memories in the bank's one language. Every earlier shipped default carries the
      opening fingerprint and lacks the new marker; a hand-written prompt lacks the fingerprint. */
   _refreshPipe("charQuestGen","You give ONE character of a living roleplay world a personal QUEST","ALREADY IN PLAY",DEFAULT_CHARQUEST_GEN);
+  /* v149.0 — the player is the target only of a pursuit they are part of (a work plan the player never heard of
+     became "keep it to yourself" asked of them), and the designer says whether the player knows the matter. In
+     place: the rule after the target line, the field after the gate — the player's own edits kept. */
+  {const T_ANCH='or "USER" only if it genuinely needs {{user}}.';
+   const T_RULE=(DEFAULT_CHARQUEST_GEN.match(/\n  · \{\{user\}\} is the target only when[^\n]*/)||[""])[0];
+   const G_ANCH='"gate":{"type":"user_alone|with_char|at_location|any","charName":"","locationName":""},';
+   const G_FLD=(DEFAULT_CHARQUEST_GEN.match(/"user_knows":"[^"]*",/)||[""])[0];
+   const fix=t=>{ if(typeof t!=="string"||!T_RULE||t.indexOf("is the target only when the pursuit truly runs through them")>=0||t.indexOf("personal QUEST")<0)return null;
+     let o=t.indexOf(T_ANCH)>=0?t.replace(T_ANCH,()=>T_ANCH+T_RULE):t.replace(/\s*$/,"")+"\n"+T_RULE.replace(/^\n  · /,"\n- ");
+     if(G_FLD&&o.indexOf(G_ANCH)>=0&&o.indexOf('"user_knows"')<0)o=o.replace(G_ANCH,()=>G_ANCH+G_FLD);
+     return o; };
+   try{ const v=fix(state.charQuestGen); if(v!=null){ state.charQuestGen=v; store.setRaw(K.charQuestGen,v); } }catch(e){}
+   let dirty=false;
+   (state.universes||[]).forEach(u=>{ try{ if(u&&u.prompts){ const v=fix(u.prompts.charQuestGen); if(v!=null){ u.prompts.charQuestGen=v; dirty=true; } } }catch(e){} });
+   if(dirty&&typeof persistUniverses==="function"){ try{ persistUniverses(); }catch(e){} }
+  }
   _refreshPipe("charQuestStep","You advance ONE character's personal quest OFFSTAGE","DONE WHEN:",DEFAULT_CHARQUEST_STEP);
   _refreshPipe("offstageEvent","You direct the OFFSTAGE life of a roleplay world","a fixed machine value",DEFAULT_OFFSTAGE_EVT);
   _refreshPipe("calExec","You resolve a scheduled event of a roleplay world","a fixed machine value",DEFAULT_CAL_EXEC);
@@ -14437,6 +14453,13 @@ Return ONLY JSON:
 }
 If acted is false, return {"acted":false} and nothing else.`;
 
+/* v149.0 — was the player part of this memory: named among its people, or a phone thread (those are with the player). */
+function _memWithUser(m,uname){
+  if(!m)return false;
+  if(m.source==="text"||(Array.isArray(m.tags)&&m.tags.includes("text")))return true;
+  const u=String(uname||"").trim().toLowerCase(); if(!u)return false;
+  return (Array.isArray(m.people)?m.people:[]).some(x=>{ const n=String(x||"").trim().toLowerCase(); return n===u||n.split(/\s+/)[0]===u.split(/\s+/)[0]; });
+}
 /* v23.2 — CHARACTER QUESTS: quests OWNED by characters, the character-side mirror of the player's
    quest chain. Born at day end from a character's goals/ambitions + live undercurrents (charQuestGen,
    biased toward NO quest). A char→char quest advances offstage (charQuestStep) and every move lands
@@ -14469,6 +14492,7 @@ chasing this is a reason to return {"quest": false}, not a reason to join in:
 DECIDE: does {{char}} now commit to a concrete personal pursuit? If yes, design it:
 - The quest is SPECIFIC and resolvable in days, not a life goal restated ("win the harbor contract by outbidding Demir", not "become rich").
 - "target": the ONE person the pursuit chiefly runs through — another character's EXACT name from the list above, or "USER" only if it genuinely needs {{user}}.
+  · {{user}} is the target only when the pursuit truly runs through them — something only {{user}} can give, in a matter {{user}} is part of. Each line under Recently says whether {{user}} was part of it. A pursuit grown from things {{user}} was not part of — their work, their family, a plan they have told no one — runs through someone else or no one. Being drawn to {{user}}, or having just seen them, is not a reason to make them the target. Never ask {{user}} to keep quiet about something they were never told.
 - If target is "USER", also write:
   · "ask" — the concrete thing they want from {{user}} (come somewhere with them, help do or obtain something, back them publicly, lend something, keep a secret...), written in the second person from the holder's side.
   · "approach" — how they would raise it: "text" (a phone message), "in_person" (find them face to face), or "either".
@@ -14477,7 +14501,7 @@ DECIDE: does {{char}} now commit to a concrete personal pursuit? If yes, design 
 Return ONLY JSON:
 {"quest": false}
 or
-{"quest": {"title":"<max 8 words, in the world's own language>","desc":"<2-3 sentences IN THE SECOND PERSON, addressed to {{char}} as \"you\": what you are trying to accomplish and why NOW. This is printed on {{char}}'s own card under YOUR OWN PURSUIT, which is written to them as \"you\" — never \"{{char}} must\", never \"she needs to\". Other people in it stay in the third person.>","motive":"<1 sentence, also second person, tying it to your goals or to something brewing in you>","target":"<exact character name, or USER>","ask":"<if target is USER: what you want from {{user}}, SECOND PERSON from your side — \"for him to keep it to himself and stop coming to the house, because you are starting treatment\". It is printed on your own card, so never \"never contact me again\" and never \"{{char}} wants\". Empty if the target is not {{user}}.>","approach":"text|in_person|either","gate":{"type":"user_alone|with_char|at_location|any","charName":"","locationName":""},"done_when":"<ONE English sentence naming the observable thing that would mean this pursuit is finished — a state of the world someone could point at, not a feeling. \"Hugo has agreed to sell the boat.\" not \"Hugo feels better about it.\" This is checked against what actually happens, so it must be checkable.>"}}`;
+{"quest": {"title":"<max 8 words, in the world's own language>","desc":"<2-3 sentences IN THE SECOND PERSON, addressed to {{char}} as \"you\": what you are trying to accomplish and why NOW. This is printed on {{char}}'s own card under YOUR OWN PURSUIT, which is written to them as \"you\" — never \"{{char}} must\", never \"she needs to\". Other people in it stay in the third person.>","motive":"<1 sentence, also second person, tying it to your goals or to something brewing in you>","target":"<exact character name, or USER>","ask":"<if target is USER: what you want from {{user}}, SECOND PERSON from your side — \"for him to keep it to himself and stop coming to the house, because you are starting treatment\". It is printed on your own card, so never \"never contact me again\" and never \"{{char}} wants\". Empty if the target is not {{user}}.>","approach":"text|in_person|either","gate":{"type":"user_alone|with_char|at_location|any","charName":"","locationName":""},"user_knows":"<true or false: does {{user}} already know about this matter? true only when a line marked as with {{user}} shows it>","done_when":"<ONE English sentence naming the observable thing that would mean this pursuit is finished — a state of the world someone could point at, not a feeling. \"Hugo has agreed to sell the boat.\" not \"Hugo feels better about it.\" This is checked against what actually happens, so it must be checkable.>"}}`;
 
 const DEFAULT_CHARQUEST_STEP=`You advance ONE character's personal quest OFFSTAGE, away from the player ({{user}}). Decide whether — as this day closes — the holder made a real move on it, and if so narrate what happened. Most days a pursuit rests: return moved:false unless the material below supports a move.
 
@@ -34547,6 +34571,17 @@ function textMeetNote(chat,mk){
   const when=rel?(per?`${rel} (${per})`:rel):"since then";
   return fillTpl(blkTpl("text_met_in_person"),{user:state.user,when,where:mk.location?` at ${mk.location}`:""});
 }
+/* (!) v149.0 — WHICH PART OF THE DAY. "Last saw Emre in person yesterday at Palmera" left the hour to the model,
+   and it wrote "thanks for last night" about an afternoon at the beach. The part of the day goes with it. */
+function _seenWhen(li){
+  if(!li)return "some time back";
+  const w=relGapWhen(li.gap,false), per=String(li.period||"").toLowerCase();
+  if(!w)return per?`some time back (in the ${per})`:"some time back";
+  if(!per)return w;
+  if(li.gap===0)return `${w}, in the ${per}`;
+  if(li.gap===1)return `yesterday ${per==="midday"?"around midday":per==="night"?"at night":per}`;
+  return `${w}, in the ${per}`;
+}
 // When did this character last share an in-person scene with the player? → {day,period,location,gap}
 // (gap = in-game days since; 0 = earlier today) or null if they never have (or old msgs lack a stamp).
 function _lastInPersonInfo(chat,p){
@@ -35238,7 +35273,7 @@ async function maybeProactiveText(chat,opts){
     const scene=(()=>{ try{ return recentSceneMsgsFor(chat,p,10).map(m=>`${m.name}: ${String(m.content).slice(0,400)}`).join("\n"); }catch(_){ return ""; } })();
     const li=(()=>{ try{ return _lastInPersonInfo(chat,p); }catch(_){ return null; } })();
     // v92.1 — one ladder for every "how long ago" in the app, so nothing disagrees with anything.
-    const seenLine=li?`You last saw ${chatUserName(chat)} in person ${relGapWhen(li.gap,false)||"some time back"}${li.location?` at ${li.location}`:""}.`:"";
+    const seenLine=li?`You last saw ${chatUserName(chat)} in person ${_seenWhen(li)}${li.location?` at ${li.location}`:""}.`:"";
     // v28.6 — the character writing this text is the same one who speaks in the scene, so give the
     // composer the real reply payload as its context instead of a hand-rolled subset of it. The judge
     // prompt (does she text at all, and what does she type) rides on top and still returns its JSON.
@@ -48745,8 +48780,12 @@ async function runCharQuestSpawn(chat,day,uni,opts){
       uni.cqAsked[p.id]=askedKey;
       const myIntents=((chat.intents||[]).filter(i=>i&&i.holderId===p.id&&i.status!=="spent")).slice(-3)
         .map(i=>`- a ${i.valence||""} ${i.kind} toward ${i.targetName}: ${String(i.aim||i.trigger||"").slice(0,140)} (${i.status})`).join("\n")||"- (nothing notable brewing)";
+      /* (!) v149.0 — WAS THE PLAYER PART OF IT. A dentist's plan for evening shifts, which the player never heard of,
+         came back as a pursuit through the player ("keep it to yourself"), because the only name near it in her
+         recent memories was his — from a different afternoon. Each line now says whether the player was in it. */
+      const _un=chatUserName(chat)||"the player";
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&day-(m.gameDay||0)<=3)
-        .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
+        .slice(-5).map(m=>"- "+memPayloadText(m.content,400)+(_memWithUser(m,_un)?` (with ${_un})`:` (${_un} was not part of this)`)).join("\n")||"- (nothing notable recently)";
       const ties=[]; const seen=new Set();
       for(const o of _rankTieCands(chat,p,roster.filter(x=>x.id!==p.id))){ if(o.id===p.id||seen.has(o.id))continue; seen.add(o.id);   // v148.4 — closest first
         const t=_pulseTie(chat,p,o); if(t&&t.replace(/[;\s]/g,"").length)ties.push(`${o.name}: ${t}`);
@@ -48784,6 +48823,11 @@ async function runCharQuestSpawn(chat,day,uni,opts){
         if(tp&&tp.id!==p.id){ targetId=tp.id; targetName=tp.name; }
       }
       if(!targetId&&!solitary){ _qlog("cq.spawn.skip",`${p.name} — target "${tRaw}" didn't resolve`); _cqSpawnNote(uni,day,`${p.name}'s pursuit named "${tRaw}", who is not in this world`); continue; }
+      /* v149.0 — the player cannot keep a secret they were never told: a pursuit through the player whose matter the
+         player does not know, and whose whole ask is silence about it, is not born. */
+      const _uk=(qq.user_knows===true||/^true$/i.test(String(qq.user_knows)))?true:((qq.user_knows===false||/^false$/i.test(String(qq.user_knows)))?false:null);
+      if(targetId==="__user__"&&_uk===false&&/\b(keep[^.]{0,80}?(?:to (?:him|her|your|them)sel(?:f|ves)|quiet|between (?:us|the two of you|you two)|(?:a )?secret|under wraps|private)|tell no ?one|not (?:to )?tell anyone|say nothing|stay quiet|keep (?:his|her|your|their) mouth shut)\b/i.test(String(qq.ask||""))){
+        _qlog("cq.spawn.skip",`${p.name} — "${qq.title}" asked ${targetName} to keep quiet about something they don't know`); _cqSpawnNote(uni,day,`${p.name}'s pursuit asked the player to keep a secret they were never told`); continue; }
       /* (!) v147.2 — NO TWIN PURSUITS. Two spawns for one holder with the same answer (a retried stretch, a
          second pass while the first was in its call) gave two identical live pursuits, each stepping and
          planting its own identical memory. Re-read the live list after the call: the same holder already
@@ -48808,6 +48852,7 @@ async function runCharQuestSpawn(chat,day,uni,opts){
            narration against this instead of judging freehand, and a quest that closes becomes a
            settled event, which is what liveGoalsLines already reads to drop the matching goal. */
         doneWhen:String(qq.done_when||"").slice(0,200),
+        userKnows:targetId==="__user__"?_uk:null,   // v149.0 — the text writer is told when the matter is news to the player
         status:"active", createdDay:day, createdPeriod:period||chatPeriod(chat), completedDay:null, result:"",
         progress:[], delivered:false, deliveredDay:null, awaitingUser:false, lastNudgeDay:null, nudges:0
       };
@@ -49044,7 +49089,7 @@ async function maybeCharQuestText(chat){
       // Continuity: if they saw the player in person recently, the text should read like it comes from
       // the same life ("about what I mentioned…", "good seeing you earlier"), not from a stranger.
       const seenLine=(()=>{ try{ const li=_lastInPersonInfo(chat,holder);
-        return li?`${holder.name} last saw ${chatUserName(chat)} in person ${relGapWhen(li.gap,false)||"some time back"}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
+        return li?`${holder.name} last saw ${chatUserName(chat)} in person ${_seenWhen(li)}${li.location?` at ${li.location}`:""} — the text should feel continuous with that.`:""; }catch(_){ return ""; } })();
       /* v70.3 — WHAT HAS ALREADY BEEN SAID ABOUT THIS. The follow-up rule ("a considered follow-up
          that moves the matter forward, NOT a nag") was being asked of a model that could see only a
          COUNT — "they have raised it before (2x)" — and not one word of what those two messages
@@ -49064,7 +49109,7 @@ async function maybeCharQuestText(chat){
       const usr=`# ${holder.name}\n${charBioBlock(holder,{self:false})}\n\n# Their own pursuit\n"${q.title}" — ${String(q.desc||"").slice(0,300)}\nWhat they want from ${chatUserName(chat)}: ${q.ask||"(their help)"}\n${(q.progress||[]).slice(-3).map(pp=>`- day ${pp.day}: ${pp.text}`).join("\n")}\n`
         +(priorAsks?`\n# What you have already sent them about this — do not say any of it again\n${priorAsks}\n`:"")
         +(threadLines?`\n# Your recent texts with ${chatUserName(chat)} (theirs and yours — read whether they answered)\n${threadLines}\n`:"")
-        +`\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${chatUserName(chat)}.`}\n${seenLine?seenLine+"\n":""}Write the text message. Return the JSON.`;
+        +`\n# Now\nDay ${today}, ${chatPeriod(chat)}. ${q.delivered?`They have raised it before (${q.nudges||0}x) — this is a considered follow-up that moves the matter forward, NOT a nag.`:`This is the FIRST time they bring it to ${chatUserName(chat)}.`}\n${seenLine?seenLine+"\n":""}${q.userKnows===false?`${chatUserName(chat)} knows nothing about this matter yet — ${holder.name} has never told them. The text says what it is about before it asks for anything, and never writes as if ${chatUserName(chat)} already knows or was there.\n`:""}Write the text message. Return the JSON.`;
       let j=null;
       try{
         const out=await chatCompletion(epSend("charQuestText",sys,{data:usr}),

@@ -27,46 +27,17 @@ const http=require('http'),fs=require('fs'),path=require('path');
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
 
-  // a reply in the shape the id/superego format actually produces: narration, speech, thought,
-  // narration again — four spans, which the old checker treated as a fault every single time.
-  const RICH='*She sets the glass down.* "Gec kaldin." _Yine ayni bahane._ '
-            +'*Her fingers stay on the rim, not looking up.* "Otur bari." '
-            +'*She pushes the other chair out with her foot.*';
-
-  console.log("\n[the narration retry is off unless you ask for it]");
-  ok("it ships off", await pg.evaluate(()=>state.narrRetryOn===false));
-  ok("a rich reply is left alone while it is off", await pg.evaluate((t)=>
-      overNarrated(t)===null, RICH));
-  ok("turning it on makes that same reply trip it", await pg.evaluate((t)=>{
-      state.narrRetryOn=true; state.narrMaxSpans=3;
-      return overNarrated(t)!==null; }, RICH));
-  ok("raising the ceiling above the format's shape stops it again", await pg.evaluate((t)=>{
-      state.narrMaxSpans=6; return overNarrated(t)===null; }, RICH));
-  ok("stacked narration that outweighs the speech still trips at the default ceiling", await pg.evaluate(()=>{
-      state.narrRetryOn=true; state.narrMaxSpans=3;
-      const heavy='*He crosses the room and stops at the window, watching the street go dark below.* '
-                 +'"Peki." *The glass in his hand is still full and he has not looked at her once.*';
-      return overNarrated(heavy)!==null; }));
-  ok("the repeat detector is untouched by all of this", await pg.evaluate(()=>{
-      state.narrRetryOn=false;
-      const line='"Gec kaldin yine, hep ayni sey oluyor bu."';
-      return repeatKind(line,line)!==""; }));
-
-  console.log("\n[and it is a setting you can see]");
-  ok("the switch is in Settings", await pg.evaluate(()=>!!document.getElementById('setNarrRetryOn')));
-  ok("so is the ceiling", await pg.evaluate(()=>!!document.getElementById('setNarrMaxSpans')));
-  ok("Settings shows what is in state", await pg.evaluate(()=>{
-      state.narrRetryOn=true; state.narrMaxSpans=5; syncSettingsUI();
-      return document.getElementById('setNarrRetryOn').checked===true
-          && +document.getElementById('setNarrMaxSpans').value===5; }));
-  ok("and saving reads it back (nothing orphaned)", await pg.evaluate(()=>{
-      document.getElementById('setNarrRetryOn').checked=false;
-      document.getElementById('setNarrMaxSpans').value=4;
-      saveSettings();
-      return state.narrRetryOn===false && state.narrMaxSpans===4
-        ? true : "state is "+state.narrRetryOn+"/"+state.narrMaxSpans; }));
-  ok("it survives a reload", await pg.evaluate(()=>
-      store.get(K.narrRetryOn,null)===false && store.get(K.narrMaxSpans,0)===4));
+  console.log("\n[there is no automatic narration retry (v148.7)]");
+  ok("the checker and its helpers are gone", await pg.evaluate(()=>
+      typeof overNarrated==='undefined' && typeof repeatKind==='undefined'
+      && typeof retryAsRewrite==='undefined' && typeof retryOutputUsable==='undefined'));
+  ok("and so is the setting", await pg.evaluate(()=>
+      !document.getElementById('setNarrRetryOn') && !document.getElementById('setNarrMaxSpans')));
+  ok("saving Settings still works without it", await pg.evaluate(()=>{
+      try{ saveSettings(); return true; }catch(e){ return e.message; } }));
+  ok("the manual Retry button is still there", (()=>{
+      const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
+      return /function retryLastReply|retryMsg|onclick="[^"]*[Rr]etry/.test(src) ? true : "no manual retry found"; })());
 
   console.log("\n[the update check reads far enough to find the stamp]");
   ok("the build stamp really is past the old 64KB window", await pg.evaluate(async()=>{

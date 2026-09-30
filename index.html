@@ -1397,7 +1397,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v148.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1439,7 +1439,7 @@
           <div class="ovr" style="margin:6px 0"><div data-ovr="rp" data-kind="prov"></div></div>
           <div style="margin-top:8px"><label><svg class="ic"><use href="#i-refresh"/></svg> Model rotation <span class="desc" style="display:inline">(optional — comma-separated; each reply uses the next one)</span></label>
             <input type="text" id="setRpRotation" placeholder="e.g. deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash, anthropic/claude-3.5-sonnet"></div>
-          <div class="desc">Leave blank to always use the single Model above. With a list, each roleplay reply rotates to the next model and cycles back to the start — handy for mixing an expensive model with cheaper ones. The refusal fallback still applies to whichever model rotation picked.</div>
+          <div class="desc">Leave blank to always use the single Model above. With a list, each roleplay reply rotates to the next model and cycles back to the start — handy for mixing an expensive model with cheaper ones.</div>
           <div><label>Creativity (temperature): <span id="tempVal">0.85</span></label><input type="range" id="setTemp" min="0" max="1" step="0.05" value="0.85"></div>
           <div><label>Max tokens: <span id="tokVal">1200</span></label><input type="range" id="setTokens" min="500" max="4000" step="100" value="1200"></div>
           <div class="desc">This is the base creativity &amp; length. Other functions fall back to these when set to Auto. <b>Using a reasoning model</b> (e.g. deepseek-v4-pro)? Keep this at 1200+ — reasoning models spend hidden tokens thinking before they answer, and a low limit can make them return nothing.</div>
@@ -1473,11 +1473,6 @@
             <div class="kvline" style="margin-top:10px;padding:0"><label style="margin:0"><svg class="ic"><use href="#i-bulb"/></svg> Relax Gemini safety filter <span class="desc" style="display:inline">(sends BLOCK_NONE on google/gemini-* so Google's filter stops blocking scenes; no effect on other models)</span></label>
               <label class="switchLbl"><input type="checkbox" id="setGeminiUnsafe"><span class="sl"></span></label></div>
           </div>
-        </div>
-        <div class="card">
-          <h3><svg class="ic"><use href="#i-shield"/></svg> Refusal fallback</h3>
-          <div class="desc">When a roleplay reply comes back as a refusal, this model retries the same turn once. Previously hidden — it silently used the Director model.</div>
-          <div><label>Model <span class="desc" style="display:inline">(blank = auto: the Multi-Character Director model)</span></label><input type="text" id="setFallbackModel" list="modelList" placeholder="(auto — director model)"></div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-feather"/></svg> Auto-RP Player Narrator</h3>
@@ -1929,10 +1924,6 @@
           <div style="height:1px;background:var(--border);margin:10px 0"></div>
           <div><label>Messages of history sent per reply</label><input type="number" id="setHistTurns" min="2" max="200" step="1" value="20"></div>
           <div class="desc">How many of the most recent messages go into each roleplay request. Lower = cheaper &amp; faster, but the AI remembers less of the immediate scene (older facts are still covered by Memory). Default 20 — note that this counts MESSAGES, so in a scene with two characters twenty of them is only six or seven exchanges. Debug shows what share of each payload was the scene rather than instructions; if that number is low, this is the knob.</div>
-          <div class="kvline"><span>Re-ask when a reply is mostly narration</span>
-            <label class="switchLbl"><input type="checkbox" id="setNarrRetryOn"><span class="sl"></span></label></div>
-          <div><label>…at this many *narrated spans* or more</label><input type="number" id="setNarrMaxSpans" min="1" max="12" step="1" value="3"></div>
-          <div class="desc"><b>Costs a second model call on every reply that trips it.</b> This is a <b>stack</b> guard, not a counter: at 3 it fires on three narrated passages always, and on two only when the description has run away with the turn — more words of stage direction than of speech, and at least 25 of them. Your Response Format Rules ask for one beat, and that is what shapes the writing; this catches the replies that ignore it badly, and leaves a balanced two-beat turn alone. Setting it to <b>2</b> turns off that judgement and re-asks on every second span, which on a normal turn means paying twice for a tighter, flatter reply — a real trace had it rewriting the best line in the scene. The switch is off by default. The repeat detector (a character re-saying a line) is separate and always on; it fires rarely. Debug logs every time this one spends a call.</div>
           <div><label>How much of the relationship sheet each reply carries</label>
             <select id="setRelScope">
               <option value="present">Summary + who is here (default)</option>
@@ -11405,7 +11396,9 @@ async function chatCompletion(messages,model,opts={}){
   // from a plain empty response because the remedy is stronger — see the retry body below.
   const _reasonOnly=!out.trim() && !!(()=>{const m=d&&d.choices&&d.choices[0]&&d.choices[0].message;
     return m&&String(m.reasoning_content||m.reasoning||"").trim();})();
-  if(!out.trim() && !opts._emptyRetry){
+  /* v148.7 — not for a character's reply (opts.rp): no automatic retries there; an empty reply gets the notice
+     and the player's own Retry. */
+  if(!out.trim() && !opts._emptyRetry && !opts.rp){
     const fin=d&&d.choices&&d.choices[0]&&d.choices[0].finish_reason;
     const bumped=Math.max(1600, (body.max_tokens||0)*3);
     // When the model spent the whole budget thinking, more headroom alone can just buy it a
@@ -26701,192 +26694,9 @@ function _overlap(wa,wb){
   return smaller?inter/smaller:0;
 }
 function narrationSimilarity(a,b){ return _overlap(_narrWords(a),_narrWords(b)); }
-/* (!) THE OPENING IS ITS OWN FAILURE MODE, AND THE OVERLAP TESTS ARE BLIND TO IT. Three turns of one
-   live scene each began with the identical words "Sırtım koltuğa iyice gömülürken…" and then went
-   somewhere different — and narrationSimilarity scored those pairs at 0.37, nowhere near its 0.70
-   trigger, because it weighs the whole span and the spans diverge after the shared run-up. Yet a
-   repeated opening is the most VISIBLE repetition there is: it is the first thing on screen every
-   time. So the opening is compared on its own — the first five content words of the first narration
-   span, stemmed and matched POSITIONALLY, because a formula is a fixed order, not a bag of words.
-   Four of five in the same places is a formula; three is a coincidence. */
-function _openWords(s){
-  const m=String(s||"").match(/\*[^*]*\*/);
-  const t=m?m[0]:String(s||"").slice(0,120);
-  return t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/)
-          .filter(w=>w.length>2).slice(0,5).map(w=>w.slice(0,5));
-}
-function openingEcho(a,b){
-  const A=_openWords(a), B=_openWords(b);
-  if(A.length<4||B.length<4)return 0;
-  const n=Math.min(A.length,B.length);
-  let same=0; for(let i=0;i<n;i++) if(A[i]===B[i])same++;
-  return same/n;
-}
-/* ============ NARRATION VOLUME ============
-   The FORMATTING RULES say it plainly — "at most one *narrated span* per reply", "never open with
-   scene-setting before the character speaks", "more narration than dialogue -> cut the narration" —
-   and a live reply came back with FOUR narration paragraphs around three lines of speech, opening
-   on a four-sentence one. The rule was not unclear; it was outvoted. It is stated once, in block 3
-   of 30, ~20,000 characters before generation, while the LAST thing the model reads (the rails) had
-   nothing to say about form at all and ended on "End on something you DO" — which is precisely the
-   closing stage direction that came back. Five other blocks ask for physical behaviour by then
-   (feelings_now's "what your hands are doing", the momentary-impact line, already_said's "your body
-   has moved on", RESPONSE GUIDANCE's "do something").
-   So: rail_form puts the contract in the last slot before generation, and this measures the result.
-   Deliberately conservative — a false positive rewrites a reply that was fine — so it fires only on
-   an unarguable wall: three or more spans, or two spans that between them run to a paragraph and
-   outweigh the speech. Heat and text replies are exempt; they have their own form rails. */
-function narrationLoad(text){
-  const t=String(text||"");
-  const spans=t.match(/\*[^*]*\*/g)||[];
-  const words=x=>String(x).replace(/[^\p{L}\p{N}\s]/gu," ").split(/\s+/).filter(Boolean).length;
-  const narr=words(spans.join(" "));
-  const said=words((t.match(/"[^"]*"/g)||[]).join(" "));
-  return {spans:spans.length, narr, said};
-}
-/* v36.9 — WHY THIS IS OFF BY DEFAULT NOW.
-   This check enforces a rule that lives in an EDITABLE prompt (Response Format Rules). The shipped
-   default says "at most one narrated span per reply", and the numbers below were tuned against that
-   text. Rewrite the format — as the id/superego structure does, where narration carries the id and
-   a turn legitimately runs narration, speech and thought together — and three *spans* becomes the
-   normal shape of a good reply. The checker did not move with the prompt, so it fired on nearly
-   every turn and every roleplay reply cost TWO model calls: the reply, then "Roleplay reply
-   (narration retry)".
-   A hidden second call on every turn is the expensive kind of wrong, so the ceiling is a setting
-   now (Settings → Roleplay), default off. The REPEAT retry above is untouched: it fires rarely and
-   catches a real fault. When this is on, every firing is written to the debug log, so the cost is
-   visible rather than inferred from a bill. */
-function narrRetryOn(){ return state.narrRetryOn===true; }
-function overNarrated(text){
-  if(!narrRetryOn())return null;
-  const L=narrationLoad(text);
-  const cap=Math.max(1,+state.narrMaxSpans||3);
-  if(L.spans>=cap)return L;                                 // three spans is a pile-up at any balance
-  /* Two spans fire as soon as the description OUTWEIGHS the speech. The first cut of this needed 60+
-     narration words as well, which was too generous by half: a live reply came back at two spans,
-     35 words of narration against 17 spoken — more than two thirds stage direction, breaking the
-     format's own "at most one narrated span" — and sailed straight through. The 25-word floor is
-     what keeps a small exchange ("*He steps closer.* \"Don't.\" *She doesn't move.*") out of it. */
-  if(L.spans>=2 && cap>2 && L.narr>L.said && L.narr>=25)return L;
-  return null;
-}
-/* Names the offence with its own numbers and tells the model to KEEP the dialogue — the lesson from
-   repeatRetryNote: told only "that was wrong", a model rewrites the half it got right. */
-function overNarratedNote(L){
-  return "That reply is "+L.spans+" separate *narration* passages ("+L.narr+" words of description against "
-    +L.said+" words of speech). The formatting rules allow ONE short narrated beat in a whole turn, and this "
-    +"character's turn is carried by what they SAY.\n\nWrite it again. Keep the spoken lines — they were the "
-    +"right lines. Keep at most the FIRST narrated beat and cut it down to a few words: one gesture, one "
-    +"movement, nothing about the room, the light, or the air. Every other passage either becomes something "
-    +"the character says out loud, or it goes. Do not open with scene-setting, and do not close on a "
-    +"paragraph of stage direction.";
-}
-/* "" when the reply is new, otherwise which half of it is a repeat. Narration sits a little
-   lower because stage directions are short and a shared verb or two is normal. */
-/* (!) v148.6 — A RECURRING PROP IS NOT A LOOP. The overlap is measured against the SHORTER span, so a
-   four-word beat — "*Çayımdan bir yudum alıyorum.*" (I sip my tea) — scored 1.0 against an earlier, longer
-   "*Çayımdan bir yudum daha alıyorum, gözüm yolda.*" and cost a retry, on a turn whose words were all new.
-   A person holding a cup sips from it more than once. A real loop re-uses the whole stage direction, so the
-   narration half now also needs five shared content words; the verbatim repeat ("…yudum alıyorum, gözüm
-   yolda" against "…yudum daha alıyorum, gözüm yolda": six) still fires. */
-function _narrShared(a,b){
-  const sb=new Set(_narrWords(b).map(w=>w.slice(0,5)));
-  return new Set(_narrWords(a).map(w=>w.slice(0,5)).filter(w=>sb.has(w))).size;
-}
-function repeatKind(a,b){
-  if(replySimilarity(a,b)>=0.72) return "line";
-  if(narrationSimilarity(a,b)>=0.70 && _narrShared(a,b)>=5) return "narration";
-  if(openingEcho(a,b)>=0.8) return "opening";
-  return "";
-}
-/* The nudge sent back to the model when a reply came out as a repeat. Naming WHICH half repeated
-   matters: told "you repeated yourself" after a fresh line with a recycled stage direction, the
-   model rewrites the dialogue it just got right and recycles the narration again. */
-function repeatRetryNote(kind,hit){
-  const q="\n\n\u201C"+String(hit||"").slice(0,400)+"\u201D\n\n";
-  if(kind==="opening")
-    return "You have opened a turn with these exact words before, earlier in this scene:"+q
-      +"Same first move, same first image, same run-up. A person does not begin three turns the same "
-      +"way — that is a tic, and it is the first thing on screen every time, so it is the first thing "
-      +"that reads as broken. Write the turn again and START somewhere else entirely: open on speech "
-      +"with no run-up at all, or on a different part of your body doing a different thing, or on "
-      +"something you notice rather than something you do. Keep whatever the turn was going to SAY.";
-  if(kind==="narration")
-    return "Your stage directions in that reply are the same ones you already used earlier in this scene:"+q
-      +"Same body, same gesture, same description of your own voice. Bodies do not loop. Whatever you were doing, you are already done doing it \u2014 be somewhere else in the room, or doing something else with your hands, or simply still. Write the turn again with COMPLETELY different action and completely different description of yourself. Do not open the same way twice.";
-  return "That reply repeats something you already said earlier in this scene:"+q
-    +"You have already said it. Saying it again, in any wording, is not available to you. Write a DIFFERENT turn that moves off that line entirely: drop what you were pressing for, or say the thing you were circling outright, or react to being stonewalled, or turn to something else and carry it with you. Do not restate, do not rephrase, do not ask again.";
-}
-/* (!) v148.6 — THE RETRY IS A REQUEST TO REWRITE. It used to be the original payload + the rejected reply as
-   the model's own [assistant] turn + a trailing [system] note. After its own turn and a system line, a model
-   is being asked to go on, and gemma-4-31b went on by answering the note: its "reply" was the instruction
-   list ("Do not re-narrate the same body…"). Here the rejected text is quoted as a DRAFT inside a bracketed
-   director's note, and the note is the last USER message (folded into the payload's own closing user block
-   when there is one, so no two instruction blocks sit side by side). The model's last turn is therefore
-   never the draft, and the last thing it reads is a plain request: write the turn again, as the story. */
-function retryAsRewrite(messages,draft,note,name){
-  const msgs=(messages||[]).slice();
-  const who=String(name||"your character");
-  const body="[Director's note — not part of the story. Do not answer this note, quote it, or mention it.]\n"
-    +"This is the draft of "+who+"'s turn that was just written:\n\n«"+String(draft||"").trim()+"»\n\n"
-    +String(note||"").replace(/\bthat reply\b/g,"that draft").replace(/\bThat reply\b/g,"That draft")+"\n\n"
-    +"Now write "+who+"'s turn again, from its first word, as the story itself: only "+who+"'s own words, actions and thoughts, "
-    +"in the story's language and format. No commentary, no list of rules, nothing about this note or the draft.";
-  const last=msgs[msgs.length-1];
-  // the payload's own closing instruction block (a template's [user] … [user end]) — never a transcript line
-  if(last&&last.role==="user"&&!last.name&&typeof last.content==="string")
-    msgs[msgs.length-1]=Object.assign({},last,{content:last.content+"\n\n"+body});
-  else msgs.push({role:"user",content:body});
-  return msgs;
-}
-/* (!) v148.6 — AND WHAT COMES BACK IS CHECKED BEFORE IT REPLACES ANYTHING. A retry only ever competes with a
-   reply that already exists, so the bar is "clearly a turn of the story": an instruction echo (opens on "Do
-   not"/"Make your reply"/"Write the turn", talks about stage directions or re-narrating, is a column of
-   imperatives), a refusal, an empty or stub answer, or English in a story that is not in English all lose,
-   and the first reply stays. `orig` is the reply it would replace ("" for the refusal fallback, which has
-   nothing to fall back to but the refusal notice). Bare-start check only: a spoken "Don't…" in quotes or a
-   *narrated* beat is story, not an instruction. */
-const _RETRY_META_OPEN=/^\s*(?:do not|don['’]t|never (?:re-?narrate|repeat|open|say|use|mention)|make (?:your|the|this) (?:reply|turn)|write (?:the|your|it|a|this)\b|rewrite\b|your (?:reply|turn|draft|last reply|stage directions)|here(?:['’]s| is) (?:the|my|a|your)\b|sure[,.!]|okay[,.!]|ok[,.!]|note:|\[?director)/i;
+/* v148.7 — instruction-echo vocabulary. A reply that talks about stage directions, re-narrating or a director's note
+   is the model answering the payload rather than playing the turn; it is not posted (the notice keeps Retry). */
 const _RETRY_META_TERMS=/stage directions?|re-?narrat|director['’]s note|write the turn|one turn, as |do not (?:mention|repeat|use) the (?:word|phrase)|(?:your|this|the) draft (?:above|below|of this turn)|bodies do not loop|same body, same gesture/i;
-const _EN_STOP=new Set(("the you your do not don't and to of a is it that same again this in with reply turn write make one as "
-  +"stop word phrase mention narrate be are was what or any").split(" "));
-function _englishShare(s){
-  const w=String(s||"").toLowerCase().replace(/[’]/g,"'").split(/[^\p{L}']+/u).filter(Boolean);
-  if(!w.length)return 0;
-  return w.filter(x=>_EN_STOP.has(x)).length/w.length;
-}
-function retryOutputUsable(out,orig){
-  const t=String(out||"").trim(), o=String(orig||"").trim();
-  if(!t)return false;
-  try{ if(looksLikeRefusal(t))return false; }catch(_){}
-  if(t.length<Math.min(40,Math.floor(o.length*0.35)))return false;          // a stub is not a turn
-  if(_RETRY_META_OPEN.test(t)||_RETRY_META_TERMS.test(t))return false;
-  const lines=t.split(/\n+/).map(s=>s.trim()).filter(Boolean);
-  const imp=lines.filter(s=>/^(?:do not|don['’]t|never|make|write|keep|start|open|cut|drop|avoid)\b/i.test(s)).length;
-  if(lines.length&&imp/lines.length>=0.5)return false;                       // a column of imperatives
-  // English where the story is not: the reply it would replace is the evidence of the story's language
-  if(o.split(/\s+/).length>=8&&_englishShare(o)<0.08&&_englishShare(t)>=0.2)return false;
-  return true;
-}
-/* (!) v148.6 — THE ONE FIX THE APP CAN MAKE ITSELF. When the retry is discarded after a narration or opening
-   repeat, the stage direction that echoes the earlier one is taken out of the first reply — provided speech
-   or a thought is left standing. "" when nothing was dropped (the reply is then kept exactly as written). */
-function dropEchoedNarration(reply,hit){
-  const src=String(reply||"");
-  const spans=src.match(/\*[^*\n]+\*/g)||[];
-  const hs=(String(hit||"").match(/\*[^*\n]+\*/g)||[]).map(s=>new Set(_narrWords(s).map(w=>w.slice(0,5))));
-  if(!spans.length||!hs.length)return "";
-  let out=src, n=0;
-  spans.forEach(sp=>{
-    const w=new Set(_narrWords(sp).map(x=>x.slice(0,5))); if(w.size<3)return;
-    const echo=hs.some(H=>{ let i=0; w.forEach(x=>{ if(H.has(x))i++; }); return i>=3&&i/w.size>=0.75; });
-    if(echo){ out=out.replace(sp," "); n++; }
-  });
-  if(!n)return "";
-  out=out.replace(/[ \t]{2,}/g," ").replace(/[ \t]+\n/g,"\n").replace(/\n[ \t]+/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
-  if(!/"[^"]{2,}"|“[^”]{2,}”|_[^_\n]{2,}_/.test(out)||out.replace(/\s/g,"").length<15)return "";
-  return out;
-}
 // This character's own most recent spoken lines in this scene, newest first.
 /* (!) v148.6 — IN THIS SCENE MEANS IN THIS SCENE. v148.4 gave the line pickers a floor (_lineWalkFloor: the start
    of this character's scene) and a stop at the day marker, but not this walk — so at the first turn of a
@@ -38090,56 +37900,13 @@ async function generateCharacterReply(chat,p,messages,opts){
      can come back as talk about the instructions. There is no earlier reply to keep here, so an unmistakable
      instruction echo reads as empty — the player gets the notice with Retry, never the echo as a line. */
   if(reply&&_RETRY_META_TERMS.test(reply)){ try{ _alog("reply.meta",p.name+": the reply talked about its instructions instead of playing the turn — not posted"); }catch(_){} reply=""; }
-  /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
-     character already said in this scene, the prompt lost — so ask once more with the repeat
-     quoted back and an explicit instruction to move off it. One retry only: a second identical
-     answer is the model's final word and is still better than an empty turn.
-     ONE retry, shared. A repeat is the worse fault, so it wins the budget when both apply;
-     over-narration takes it otherwise. Heat writes long by design and has its own form rails. */
-  try{
-    try{ noteRumorRaise(chat,p,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
-    const _mine=ownRecentLines(chat,p,3);
-    const _hit=_mine.find(x=>repeatKind(reply,x));
-    const _narr=(!_hit && !wasHeat)?overNarrated(reply):null;
-    if(_hit||_narr){
-      const _rk=_hit?repeatKind(reply,_hit):"";
-      const _note=_hit?repeatRetryNote(_rk,_hit):overNarratedNote(_narr);
-      try{ _alog("retry.spend",(_hit?"repeat":"narration")+" retry — this turn costs a second call"); }catch(_){}
-      /* (!) v148.6 — A REWRITE REQUEST, NOT A TURN TO CONTINUE. The retry used to append the rejected reply as
-         the model's OWN turn and then a trailing [system] note. gemma-4-31b read that as "the assistant has
-         spoken, now say something about the note" and answered with the instruction itself — "Do not re-narrate
-         the same body. Do not mention the word 'yudum' again…" — which then REPLACED a perfectly good reply.
-         The note now arrives as the last USER message, bracketed as a director's note with the draft quoted
-         inside it (see retryAsRewrite), and whatever comes back is checked before it may replace anything. */
-      const _again=await chatCompletion(
-        retryAsRewrite(messages,reply,_note,p.name),
-        model,Object.assign({},rpOpts,{dbg:rpOpts.dbg+" ("+(_hit?"repeat":"narration")+" retry)"}));
-      const _usable=retryOutputUsable(_again,reply);
-      if(_usable&&
-         (_hit?!_mine.some(x=>repeatKind(_again,x))
-              :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
-      else{
-        // v148.6 — never replace a real reply with worse: keep the first one, with the one fix the app can
-        // make itself (a stage direction that echoes an earlier one is dropped, when speech is left).
-        if(!_usable){ try{ _alog("retry.discarded",p.name+": the retry came back unusable (meta, empty, refusal or off-language) — the first reply is kept"); }catch(_){} }
-        if(_hit&&(_rk==="narration"||_rk==="opening")){ const _fx=dropEchoedNarration(reply,_hit); if(_fx)reply=_fx; }
-      }
-    }
-  }catch(e){ if(e&&e.stopped)throw e; }   // (!) v146.1 — Stop during the retry is a stop, not "keep the first answer"
-  /* REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
-     canned Chinese "无法" line). That isn't a token problem — bumping max_tokens won't fix it. Retry
-     ONCE on the fallback model; if it also refuses, or the only candidate IS the model that refused,
-     the caller says so honestly instead of rendering the refusal or blaming the token limit. */
-  let refused=looksLikeRefusal(reply);
-  if(refused){
-    const fb=(state.fallbackModel&&state.fallbackModel.trim())||((state.mcModel&&state.mcModel!==model)?state.mcModel:model);
-    if(fb!==model){
-      try{
-        const alt=await chatCompletion(messages,fb,Object.assign({},rpOpts,{dbg:rpOpts.dbg.replace(/^Roleplay reply/,"Roleplay reply (refusal fallback)")}));
-        if(alt&&alt.trim()&&!looksLikeRefusal(alt)&&retryOutputUsable(alt,"")){ reply=alt; refused=false; }   // v148.6 — checked like every retry
-      }catch(e){ if(e&&e.stopped)throw e; /* otherwise keep refused=true; honest message from the caller */ }
-    }
-  }
+  /* (!) v148.7 — NO AUTOMATIC RETRIES. The reply the model gives is the reply. The repeat / over-narration
+     re-ask (v28.8) and the refusal fallback to another model both sent a second call behind the player's back,
+     and on some models the second answer was worse than the first (an echo of the retry's own instructions
+     replaced a good line). Removed at the user's request; a refused, empty or unusable reply leaves the
+     notice with the manual Retry button, which is the player's own choice. */
+  try{ noteRumorRaise(chat,p,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
+  const refused=looksLikeRefusal(reply);
   if(refused) return {text:"",raw:reply,refused:true,model};
   // strip a leading "Name:" prefix if the model added one (regex-safe); v38.6 — a spoken line never
   // carries the transcript's "(text message)" tag; v62.1 — the channels are repaired before it is
@@ -55038,8 +54805,6 @@ function syncSettingsUI(){
   document.getElementById('setAutoCharOn').checked=state.autoCharOn;
   document.getElementById('setAutoCharDelay').value=state.autoCharDelay;
   document.getElementById('setStripNarr').checked=state.stripNarr;
-  document.getElementById('setNarrRetryOn').checked=!!state.narrRetryOn;
-  document.getElementById('setNarrMaxSpans').value=state.narrMaxSpans;
   document.getElementById('setCalDoneN').value=state.calDoneN;
   document.getElementById('setRelScope').value=state.relScope||"present";
   {const e=document.getElementById('setNarrPrivacy'); if(e)e.value=narrPrivacyMode();}
@@ -55259,8 +55024,6 @@ function saveSettings(notify){
   state.autoCharOn=document.getElementById('setAutoCharOn').checked;
   state.autoCharDelay=Math.max(1,+document.getElementById('setAutoCharDelay').value||5);
   state.stripNarr=document.getElementById('setStripNarr').checked;
-  state.narrRetryOn=document.getElementById('setNarrRetryOn').checked;
-  state.narrMaxSpans=Math.max(1,Math.min(12,+document.getElementById('setNarrMaxSpans').value||3));
   {const v=+document.getElementById('setCalDoneN').value; state.calDoneN=Math.max(0,Math.min(10,isNaN(v)?3:v));}
   {const v=document.getElementById('setRelScope').value; state.relScope=["present","brief","everyone"].indexOf(v)>=0?v:"present";}
   {const e=document.getElementById('setNarrPrivacy'); if(e)state.narrPrivacy=(['spoken','seen','off'].indexOf(e.value)>=0)?e.value:'seen';}   // v148.4 — the default is "seen"
@@ -55339,7 +55102,7 @@ function saveSettings(notify){
      exactly as before. */
   // (runs at the end of this function — see the prompt sweep below, after the hand-written lines)
   store.setRaw(K.bioModel,state.bioModel);store.setRaw(K.bioPrompt,state.bioPrompt);store.setRaw(K.batchBioPrompt,state.batchBioPrompt);store.setRaw(K.univPrompt,state.univPrompt);store.setRaw(K.directorAuthor,state.directorAuthor);store.setRaw(K.genrePackAuthor,state.genrePackAuthor);store.setRaw(K.ruleCompiler,state.ruleCompiler);store.setRaw(K.authorModel,state.authorModel||"");store.setRaw(K.promptTuner,state.promptTuner);store.set(K.autoCharOn,state.autoCharOn);store.setRaw(K.autoCharDelay,state.autoCharDelay);
-  store.set(K.stripNarr,state.stripNarr);store.set(K.narrRetryOn,state.narrRetryOn);store.set(K.narrMaxSpans,state.narrMaxSpans);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.relScope,state.relScope||"present");store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
+  store.set(K.stripNarr,state.stripNarr);store.set(K.calDoneN,state.calDoneN);store.setRaw(K.relScope,state.relScope||"present");store.setRaw(K.stripKeepFull,state.stripKeepFull);store.setRaw(K.histTurns,state.histTurns);store.set(K.narrPrivacy,state.narrPrivacy);
   store.set(K.relOn,state.relOn);store.setRaw(K.relPrompt,state.relPrompt);store.setRaw(K.relShortPrompt,state.relShortPrompt);store.setRaw(K.relGenPrompt,state.relGenPrompt);store.setRaw(K.socialGraphPrompt,state.socialGraphPrompt);store.setRaw(K.playerNarratePrompt,state.playerNarratePrompt);store.setRaw(K.playerNarrateModel,state.playerNarrateModel||"");store.set(K.trackOn,state.trackOn);store.setRaw(K.trackPrompt,state.trackPrompt);store.set(K.voiceCheckOn,state.voiceCheckOn);store.setRaw(K.voiceCheckPrompt,state.voiceCheckPrompt);store.set(K.recapOn,state.recapOn);
   store.setRaw(K.locModel,state.locModel);store.setRaw(K.travelTime,state.travelTime);store.setRaw(K.travelPrompt,state.travelPrompt);store.setRaw(K.charMovePrompt,state.charMovePrompt);store.setRaw(K.textReplyPrompt,state.textReplyPrompt);store.setRaw(K.textProactivePrompt,state.textProactivePrompt);store.set(K.textsOn,state.textsOn);store.set(K.calOn,state.calOn);store.setRaw(K.calPrompt,state.calPrompt);store.set(K.goalsCuratorOn,state.goalsCuratorOn);store.setRaw(K.goalsCurator,state.goalsCurator);store.setRaw(K.goalsMax,state.goalsMax);store.set(K.promiseOn,state.promiseOn);store.setRaw(K.promisePrompt,state.promisePrompt);store.setRaw(K.promisePurge,state.promisePurge);store.setRaw(K.calReconcile,state.calReconcile);store.setRaw(K.attendEstimate,state.attendanceEstimate);store.setRaw(K.attendPersuade,state.attendancePersuade);
   store.set(K.gmOn,state.gmOn);store.setRaw(K.gmEvery,state.gmEvery);store.setRaw(K.gmSensitivity,state.gmSensitivity);store.setRaw(K.gmModel,state.gmModel);

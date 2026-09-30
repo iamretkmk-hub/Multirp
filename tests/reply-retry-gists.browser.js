@@ -139,58 +139,21 @@ const USER_TEMPLATE=`[system]
     };
   },{USER_TEMPLATE,EARLIER,OLDER});
 
-  console.log("\n[1a — what a retry may replace: the two outputs from the log lose, a real turn wins]");
-  const u=await pg.evaluate(({FIRST,ECHO1,ECHO2,GOOD})=>({
-    e1:retryOutputUsable(ECHO1,FIRST), e2:retryOutputUsable(ECHO2,FIRST), good:retryOutputUsable(GOOD,FIRST),
-    empty:retryOutputUsable("",FIRST), stub:retryOutputUsable('"Evet."',FIRST),
-    english:retryOutputUsable('"Fine, it is going well." *I put the cup down and look at the path.* "And you, how is the quiet house?"',FIRST),
-    enStory:retryOutputUsable('"Fine, it is going well." *I put the cup down and look at the path.* "And you?"','"It is all right." *I sip my tea and watch the road.* "The kids are fine, and so is he."'),
-    quotedDont:retryOutputUsable('"Don\'t start with me." *I set the cup down on the bench between us.* "Not today."','"It is all right." *I sip my tea and watch the road.* "The kids are fine, and so is he."')
-  }),{FIRST,ECHO1,ECHO2,GOOD});
-  ok("the first instruction echo is not a turn", u.e1===false, JSON.stringify(u));
-  ok("nor the second (\"Make your reply one turn, as …, and stop\")", u.e2===false, JSON.stringify(u));
-  ok("empty and stub answers lose to a real reply", u.empty===false&&u.stub===false, JSON.stringify(u));
-  ok("English where the story is Turkish loses", u.english===false, JSON.stringify(u));
-  ok("a real Turkish rewrite wins", u.good===true, JSON.stringify(u));
-  ok("an English rewrite in an English story wins, and a spoken \"Don't…\" is story, not an instruction", u.enStory===true&&u.quotedDont===true, JSON.stringify(u));
-
-  console.log("\n[1c — the detector: a recurring prop is not a loop, a reproduced stage direction is]");
-  const d=await pg.evaluate(({EARLIER,FIRST})=>({
-    prop:repeatKind('"İyiler, iyiler. Nil bütün gün havuzda, Hakan da işte." *Çayımdan bir yudum alıyorum.* _Yine aynı soru._',EARLIER),
-    loop:repeatKind(FIRST,EARLIER),
-    line:repeatKind('"Gec kaldin yine, hep ayni sey oluyor bu."','"Gec kaldin yine, hep ayni sey oluyor bu."')}),{EARLIER,FIRST});
-  ok("\"*Çayımdan bir yudum alıyorum.*\" against an earlier tea sip does not trip the retry", d.prop==="", JSON.stringify(d));
-  ok("\"…yudum alıyorum, gözüm yolda\" against \"…yudum daha alıyorum, gözüm yolda\" still does", d.loop==="narration", JSON.stringify(d));
-  ok("and a repeated spoken line is still a line repeat", d.line==="line", JSON.stringify(d));
+  console.log("\n[1a — v148.7: there is no automatic retry to choose between outputs]");
+  ok("retryOutputUsable, retryAsRewrite and repeatKind are gone", await pg.evaluate(()=>
+      typeof retryOutputUsable==='undefined'&&typeof retryAsRewrite==='undefined'&&typeof repeatKind==='undefined'));
 
   for(const mode of ["template","layout"]){
-    console.log(`\n[1 — the repeat retry, ${mode==="template"?"through the player's own template":"through the default block layout"}]`);
+    console.log(`\n[1 — the first reply is the reply, ${mode==="template"?"through the player's own template":"through the default block layout"}]`);
     const r1=await pg.evaluate(({mode,FIRST,ECHO1})=>__turn(mode,[FIRST,ECHO1]),{mode,FIRST,ECHO1});
-    ok("the first reply tripped the retry (two roleplay calls)", r1.n===2, JSON.stringify({n:r1.n,posted:r1.posted}));
-    const rm=r1.retry||[]; const lastM=rm[rm.length-1]||{};
-    ok("the retry ends on a USER director's note, not an [assistant] draft plus a trailing [system]",
-       lastM.role==="user"&&/\[Director's note — not part of the story/.test(lastM.content||"")
-       &&!rm.some(m=>m.role==="assistant"&&String(m.content).trim()===FIRST.trim()), JSON.stringify(rm.slice(-2)).slice(0,600));
-    ok("the draft is quoted inside the note, and the note asks for the turn again as the story",
-       (lastM.content||"").indexOf("«"+FIRST+"»")>=0&&/write Duygu Akbaba's turn again/.test(lastM.content||"")&&/that draft/.test(lastM.content||""), (lastM.content||"").slice(-700));
-    if(mode==="template") ok("in template mode it is folded into the template's own closing [user] block (no two user blocks in a row)",
-       rm.length===(r1.first||[]).length&&/RESPOND|Respond|respond/.test(lastM.content||"")===/RESPOND|Respond|respond/.test(((r1.first||[])[r1.first.length-1]||{}).content||""),
-       JSON.stringify({retry:rm.length,first:(r1.first||[]).length}));
-    else ok("in the layout the note is one new user message after the payload", rm.length===(r1.first||[]).length+1, JSON.stringify({retry:rm.length,first:(r1.first||[]).length}));
-    ok("the instruction echo is discarded and the first reply is posted", r1.speaker==="Duygu Akbaba"&&!/Do not/.test(r1.posted)&&/Yolunda işte/.test(r1.posted)&&/çamaşırları/.test(r1.posted), r1.posted);
-    ok("with the echoed stage direction taken out (the one fix the app can make)", r1.posted.indexOf("yudum")<0&&r1.posted.indexOf("gözüm yolda")<0, r1.posted);
+    ok("a reply that echoes an earlier stage direction is posted as the model gave it — one roleplay call", r1.n===1&&r1.speaker==="Duygu Akbaba"&&/Yolunda işte/.test(r1.posted)&&!/Do not/.test(r1.posted), JSON.stringify({n:r1.n,posted:r1.posted}));
+    ok("no director's note was ever sent", !JSON.stringify(r1.first||[]).includes("Director's note — not part of the story"));
 
-    const r2=await pg.evaluate(({mode,FIRST,GOOD})=>__turn(mode,[FIRST,GOOD]),{mode,FIRST,GOOD});
-    ok("a good rewrite is used", r2.n===2&&r2.posted===GOOD, JSON.stringify(r2.posted));
-
-    const r3=await pg.evaluate(({mode,FIRST,ECHO2})=>__turn(mode,[FIRST,"",ECHO2]),{mode,FIRST,ECHO2});
-    ok("an empty retry whose rescue comes back as an echo keeps the first reply", /Yolunda işte/.test(r3.posted)&&!/Make your reply/.test(r3.posted), JSON.stringify(r3));
-
-    const r4=await pg.evaluate(({mode,ECHO2})=>__turn(mode,[ECHO2]),{mode,ECHO2});
-    ok("a first answer that is an instruction echo is never posted as a line (a Retry notice instead)", r4.sys===true&&!/Make your reply/.test(r4.posted), JSON.stringify(r4.posted));
+    const r4=await pg.evaluate(({mode,ECHO2})=>__turn(mode,[ECHO2,"SHOULD_NOT_BE_ASKED"]),{mode,ECHO2});
+    ok("a first answer that is an instruction echo is never posted as a line — a Retry notice, and no second call", r4.sys===true&&!/Make your reply/.test(r4.posted)&&r4.n===1, JSON.stringify({n:r4.n,posted:r4.posted}));
 
     console.log(`\n[2 — YOU ALREADY SAID THESE, ${mode}]`);
-    const sent=JSON.stringify(r2.first||[]);
+    const sent=JSON.stringify(r1.first||[]);
     const E=JSON.stringify(EARLIER).slice(1,-1), O=JSON.stringify(OLDER).slice(1,-1);
     ok("the last line goes in whole — past the old 140-character cut, to its closing quote", sent.indexOf(E)>=0, sent.slice(sent.indexOf("ALREADY SAID"),sent.indexOf("ALREADY SAID")+900));
     ok("and the line before it too", sent.indexOf(O)>=0);

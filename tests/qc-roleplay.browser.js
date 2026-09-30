@@ -163,9 +163,10 @@ const {chromium}=require('playwright');
   });
   ok("in-character lines are never refusals", ref.fp.length===0, JSON.stringify(ref.fp));
   ok("canned refusals still are, curly apostrophe included", ref.fn.length===0, JSON.stringify(ref.fn));
-  ok("the refusal fallback is compared with the model that actually answered", await pg.evaluate(()=>{
+  ok("a refused reply is not re-asked on another model (v148.7: no automatic retries)", await pg.evaluate(()=>{
       const s=String(generateCharacterReply);
-      return /state\.mcModel!==model/.test(s) && /fb!==model/.test(s) && !/state\.model\)/.test(s) ? true : "still compares with state.model"; }));
+      return !/mcModel!==model/.test(s) && !/fb!==model/.test(s) && !/retryAsRewrite/.test(s) && /refused:true/.test(s)
+        ? true : "generateCharacterReply still sends a second call"; }));
 
   console.log("\n[Scene Writer output]");
   const sc=await pg.evaluate(async()=>{

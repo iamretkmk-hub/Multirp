@@ -90,7 +90,10 @@ const {chromium}=require('playwright');
      identical (sig.a === sig.again, above) and for turns with no narration at all (below). */
   ok("a re-wording of the same beat also moves it, and that is the accepted cost",
      sig.a!==sig.b, "a re-wording left it frozen");
-  ok("talk alone carries no body term at all", sig.body==="" && sig.d===sig.e, sig.body);
+  /* (!) v148.6 — the body term is no longer part of psycheSig (the passages are written per line now, and
+     every new line moves the signature — sig.d !== sig.e is that, not the body). What is pinned is that
+     talk alone still carries no body term. */
+  ok("talk alone carries no body term at all", sig.body==="", sig.body);
 
   // ---------- C: the thought that repeats
   const th=await pg.evaluate(()=>{

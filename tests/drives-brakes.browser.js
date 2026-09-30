@@ -105,12 +105,18 @@ const {chromium}=require('playwright');
      missing heading. But the block's own heading promises a conflict and its closing note says an
      empty side is genuinely empty — so what reached the model was a single unopposed push inside a
      frame claiming to be a weighing. A nudge, not a deliberation. It waits for the other side. */
-  ok("one empty side holds the whole block back", await pg.evaluate(()=>{
+  /* (!) v148.6 — CHANGED ON PURPOSE. v62.1 held the whole block back when one side was empty; but the
+     writer's prompt calls an empty side "a correct and ordinary answer", so every civil turn lost the
+     block ("sometimes it renders, sometimes not"). The empty side now says so in words, under its own
+     heading — still two sides, never a lone push under a heading promising a conflict. */
+  ok("one empty side is stated as empty, and the block still ships with both headings", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       chat._psyche={p_d:{sig:"x",toward:"ONLY_TOWARD",against:""}};
       const B=buildTailBlocks({chat,selfP:D,selfId:D.id,selfName:D.name,targetName:"Emre",
         targetId:"p_e",multi:false,injected:{recent:[],diary:[],longterm:[]}});
-      return !B.drives ? true : String(B.drives).slice(0,160); }));
+      const s=String(B.drives||"");
+      return (/ONLY_TOWARD/.test(s) && /WHAT HOLDS YOU BACK\n/.test(s) && s.indexOf(blkTpl("drive_empty"))>0)
+        ? true : s.slice(0,300); }));
   ok("no number ever reaches the block", await pg.evaluate(()=>{
       const D=state.personas.find(x=>x.id==="p_d"); const chat=curChat();
       chat._psyche={p_d:{sig:"x",toward:"a want you cannot sit still under",against:"Hakan would know"}};
@@ -166,14 +172,17 @@ const {chromium}=require('playwright');
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return /const o=targetId\?rel(?:Obj|Peek)\(chat,p\.id,targetId\):null;/.test(src)
         ? true : "the writer does not read relObj/relPeek(chat,p.id,targetId)"; })());
-  ok("the signature moves when the feelings move", await pg.evaluate(()=>{
+  /* (!) v148.6 — CHANGED ON PURPOSE. The signature used to carry the relationship bands so that moved
+     feelings would re-write the passages; they are now written for every line the character answers
+     (psycheEnsure), and the signature is the scene plus that line — see psycheSig. */
+  ok("the signature moves when the line being answered moves", await pg.evaluate(()=>{
       const u=(state.universes||[])[0]; if(!u)return "no universe";
       const p={id:"c_sig",name:"S"};
-      const chat={id:"cs",universeId:u.id,gameDay:1,messages:[],rel:{}};
+      const chat={id:"cs",universeId:u.id,gameDay:1,messages:[{mid:"l1",role:"user",content:"one"}],rel:{}};
       const a=psycheSig(chat,p,"__user__");
-      const o=relObj(chat,"c_sig","__user__"); o.st.desire=60; o.trust=40;
+      chat.messages.push({mid:"l2",role:"user",content:"two"});
       const b=psycheSig(chat,p,"__user__");
-      return a!==b ? true : "the signature is blind to the relationship ("+a+")"; }));
+      return a!==b && /\|m:l2$/.test(b) ? true : "a="+a+" b="+b; }));
   ok("a signature read does not conjure a relationship record", await pg.evaluate(()=>{
       const u=(state.universes||[])[0];
       const chat={id:"cs2",universeId:u.id,gameDay:1,messages:[],rel:{}};

@@ -260,7 +260,7 @@ const {chromium}=require('playwright');
     markPlayerTurn(c);
     out.timers.clearedByTurn=(_rpStopped===false&&_rpStopEnd===null);
     sb.disabled=false; __stub.delay=0;
-    // Stop inside the repeat retry: the first answer repeats Ayla's own line, the retry is slow.
+    // v148.7 — a reply that repeats Ayla's own line is posted as is: no second call.
     c=__scene(["p_a"]); let n=0;
     __stub.reply=()=>'*I set the glass down.* "They closed the harbour today."';
     __stub.delay=()=>(++n===1)?0:2000;
@@ -277,7 +277,7 @@ const {chromium}=require('playwright');
   ok("so the player's next line is answered", /Answer to player/.test(st.ap.lines.join("|"))&&!st.ap.lines.some(l=>/AP line/.test(l)), JSON.stringify(st.ap));
   ok("a second Stop replaces the first one's timer; the turn's calls are refused meanwhile", st.timers.distinct&&st.timers.refusedWhileStopped&&st.timers.flag===true, JSON.stringify(st.timers));
   ok("a new player turn clears the stop at once", st.timers.clearedByTurn===true, JSON.stringify(st.timers));
-  ok("Stop inside the repeat retry reads as Stopped: the first answer is not posted", st.repeat.fetches===2&&st.repeat.lines.length===2&&/^SYS/.test(st.repeat.lines[1])&&st.repeat.toasts===1, JSON.stringify(st.repeat));
+  ok("a repeated line is posted as the model gave it — one call, no hidden retry", st.repeat.fetches===1&&st.repeat.lines.length===2&&!/^SYS/.test(st.repeat.lines[1])&&/They closed/.test(st.repeat.lines[1]), JSON.stringify(st.repeat));
 
   console.log("\n[Retry]");
   const rt=await pg.evaluate(async()=>{

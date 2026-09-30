@@ -95,7 +95,7 @@ const {chromium}=require('playwright');
       /* anchored on sendMessage's own comment — "if(present.length===0){" also matches the header
          renderer, which is a different function entirely. */
       const i=src.indexOf('// ----- Nobody nearby: the user is speaking to themselves');
-      const br=src.slice(i,i+1600);
+      const br=src.slice(i,i+3200);   // v148.7 — the alone branch now runs the presence tracker first
       return i>0 && /noteNobodyHere\(chat\)/.test(br) && /await postTurn\(chat(?:,[^)]*)?\)/.test(br)   /* v147.2 — postTurn(chat,_ptOpts): a whole-turn Retry passes analysisOnly */
         ? true : "postTurn is not called when alone"; })());
   ok("postTurn checks due meetings and then the Gamemaster", (()=>{

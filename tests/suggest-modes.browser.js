@@ -117,7 +117,7 @@ const {chromium}=require('playwright');
   console.log("\n[3. no repeats, and the tone reaches the narrator]");
   const R=await pg.evaluate(async()=>{ const a=await __ask(); const b=await __ask(); return {a,b}; });
   ok("each option comes back with its style, matched to the mode's names whatever the case", R.a.opts.length===3&&R.a.tones.map(t=>t&&t.name).join("|")==="FUNNY|FLIRT|SINCERE"&&/^subtle flirting, and the only style that flirts/.test(R.a.tones[1].desc), JSON.stringify([R.a.opts,R.a.tones]));
-  ok("the next set is told what was offered recently", /OFFERED RECENTLY \(do not offer these again\):\n- Joke that the bread smells like a bribe/.test(R.b.user), R.b.user.slice(-900));
+  ok("the next set is told what was already offered — last, right before the ask, as spent ideas", /ALREADY OFFERED \(spent: none of these ideas again, not even in other words\):\n- Joke that the bread smells like a bribe[\s\S]*\n\nWrite the three options/.test(R.b.user)&&R.b.user.indexOf("ALREADY OFFERED")>R.b.user.indexOf("THE LAST LINES"), R.b.user.slice(-900));
   ok("plain-string options still work, with no style guessed for them", await pg.evaluate(async()=>{ const s=window.__sug; window.__sug='{"options":["Ask what she meant","Pour two drinks","Head out"]}';
       const r=await __ask(); window.__sug=s; return r.opts.length===3&&r.tones.every(t=>t===null) ? true : JSON.stringify(r.tones); }));
   ok("the chips carry the style's name, so the three read apart", await pg.evaluate(async()=>{ state.suggestOn=true; await __ask(); _sugSig=""; renderAutoBar();
@@ -139,6 +139,8 @@ const {chromium}=require('playwright');
   const DS=await pg.evaluate(()=>__ask());
   ok("the writer is told to give a direction, not the line, and that only a flirting style flirts",
      /A DIRECTION, NOT THE LINE/.test(DS.sys)&&/3 to 10 words/.test(DS.sys)&&/Only a style that says it flirts may flirt/.test(DS.sys)&&!/HOW EACH OPTION IS WRITTEN/.test(DS.sys), DS.sys.slice(0,600));
+  ok("an idea used once in the scene, or already offered, is spent — not again, not in other words",
+     /AN IDEA IS SPENT/.test(DS.sys)&&/same idea in different words is a repeat/.test(DS.sys)&&/3\. SINCERE:[^\n]*it is spent: ask about her instead/.test(DS.sys), DS.sys.slice(0,900));
   ok("the woman's FUNNY and SINCERE styles forbid flirting and compliments on looks",
      /1\. FUNNY:[^\n]*No flirting, no compliment on her looks/.test(DS.sys)&&/3\. SINCERE:[^\n]*No flirting, no compliment on her looks/.test(DS.sys), DS.sys.slice(-900));
   const SC=await pg.evaluate(async()=>{

@@ -186,6 +186,9 @@ const USER_TEMPLATE=`[system]
     const r3=await pg.evaluate(({mode,FIRST,ECHO2})=>__turn(mode,[FIRST,"",ECHO2]),{mode,FIRST,ECHO2});
     ok("an empty retry whose rescue comes back as an echo keeps the first reply", /Yolunda işte/.test(r3.posted)&&!/Make your reply/.test(r3.posted), JSON.stringify(r3));
 
+    const r4=await pg.evaluate(({mode,ECHO2})=>__turn(mode,[ECHO2]),{mode,ECHO2});
+    ok("a first answer that is an instruction echo is never posted as a line (a Retry notice instead)", r4.sys===true&&!/Make your reply/.test(r4.posted), JSON.stringify(r4.posted));
+
     console.log(`\n[2 — YOU ALREADY SAID THESE, ${mode}]`);
     const sent=JSON.stringify(r2.first||[]);
     const E=JSON.stringify(EARLIER).slice(1,-1), O=JSON.stringify(OLDER).slice(1,-1);

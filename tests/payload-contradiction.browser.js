@@ -120,8 +120,12 @@ const {chromium}=require('playwright');
   ok("and every spoken layout calls the block that carries it", await pg.evaluate(()=>{
       const miss=["solo","multi","gm"].filter(k=>ptPreset(k).indexOf("{{call//final_guardrails//full}}")<0);
       return miss.length?miss.join(", "):true; }));
-  ok("the older quoted line is a gist, and says so rather than showing a shape",
-     await pg.evaluate(()=>/in gist/.test(blkTpl("already_said_shortened"))
+  /* v148.6 — INTENTIONALLY CHANGED. The "gist" was the verbatim line cut at 140 characters mid-quote, so the
+     label promised a summary and delivered a truncated copy. The line now goes in whole and the label says
+     "word for word" (tests/reply-retry-gists.browser.js). What still holds: it never calls itself a shape. */
+  ok("the quoted line says what it is (word for word, spent) rather than showing a shape",
+     await pg.evaluate(()=>/word for word/.test(blkTpl("already_said_shortened"))
+       && !/in gist/.test(blkTpl("already_said_shortened"))
        && !/shape/.test(blkTpl("already_said_shortened"))));
   /* v62.1 — and the NEWEST line too. The verbatim slot was the road every format error travelled:
      the character's own last reply, reproduced exactly, a few hundred characters from generation,
@@ -134,8 +138,9 @@ const {chromium}=require('playwright');
   ok("and the two paragraphs that used to argue with the example are gone", await pg.evaluate(()=>
       !("already_said_not_style" in BLOCK_TPL_DEFAULTS)
    && !/already_said_not_style/.test(String(buildTailBlocks))));
-  ok("the block no longer calls its own quotes word-for-word", await pg.evaluate(()=>
-      /in gist/.test(blkTpl("already_said_instr")) && !/word for word/.test(blkTpl("already_said_instr"))));
+  // v148.6 — INTENTIONALLY CHANGED: the quotes ARE word for word again (whole lines), so the block says so.
+  ok("the block calls its own quotes what they are — word for word", await pg.evaluate(()=>
+      !/in gist/.test(blkTpl("already_said_instr")) && /word for word/.test(blkTpl("already_said_instr"))));
 
   console.log("\n[the channel normalizer repairs a malformed turn before it is stored]");
   ok("underscores doing narration's job are re-delimited", await pg.evaluate(()=>{

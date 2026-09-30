@@ -3893,7 +3893,7 @@ You get:
 
 For each entry, compare it with what was FINALLY settled by the end of the stretch:
 - a detail that ended up different (the day, the time, the place, who comes, the wording, the condition) → "changes" with only those fields;
-- it was called off, carried out or broken before the stretch ended → "ended": "done", "cancelled" or "failed", and "result": one past-tense sentence;
+- it was called off, carried out or broken before the stretch ended → "ended": "done", "cancelled" or "failed", and "result": one past-tense sentence. CARRIED OUT means it actually happened in these lines. Agreeing to it is not carrying it out: a meeting set for a later day or time is never "done" here, and an open-ended word (keeping a secret, never doing something) is never "done" on the day it was given;
 - it was NEVER agreed — only asked for, suggested, wished, refused — or it is a small on-the-spot request ("make me a coffee") → "drop": true.
 Leave out every entry that is right as it stands.
 
@@ -9122,6 +9122,8 @@ function loadState(){
   // (end v147.2 QUESTS + GAMEMASTER)
   //
   //
+  // v148.5 — the reconcile learns that agreeing is not carrying out (see _ftRefuse)
+  _refreshPipe("x_future_reconcile","You check a roleplay's record of the future against the stretch","Agreeing to it is not carrying it out",X_ENGINE_PROMPTS.x_future_reconcile.def);
   // ---- v148.5 refresh: NARRATION LANGUAGE ----
   /* v148.5 — three shipped narrators (travel, a character's move, the Gamemaster's arrival) said "in Turkish"
      whatever the story's language. A stored copy still carrying the old sentence gets the new one in place;
@@ -18446,9 +18448,35 @@ function _ftEntry(chat,kind,id){
   }
   return null;
 }
-function _ftApplyFix(chat,E,fix){
+/* (!) v148.5 — "AGREED" IS NOT "CARRIED OUT". The period reconcile read "O zaman yarın akşam" → "Anlaştık"
+   and closed tomorrow evening's meeting as done (moving it to today on the way), and closed a promise to
+   keep a secret as kept in the same afternoon it was given. Two verdicts no line can support:
+     · a meeting whose slot is AFTER the stretch being judged cannot have been done or failed in it — the
+       whole fix is refused (its "changes" came from the same misreading); a real "cancelled" still counts;
+     · an open-ended word (a secret, a prohibition, a "never…/always…") is not kept by the end of an
+       afternoon — "done" is refused for it; a break ("failed") or a release still counts.
+   `at` — {day, period}: the stretch judged (the reconcile) or now (a single update). */
+function _ftRefuse(E,fix,at){
+  try{
+    const how=String(fix&&fix.ended||"").toLowerCase(), o=E&&E.obj;
+    if(!o||!how)return "";
+    if(E.kind==="meeting"&&(how==="done"||how==="failed")&&at&&o.day!=null){
+      const d=+o.day, ad=+at.day, pi=PERIODS.indexOf(o.period), api=PERIODS.indexOf(at.period);
+      if(d>ad||(d===ad&&pi>=0&&api>=0&&pi>api))return "meeting";
+    }
+    if(E.kind==="promise"&&how==="done"){
+      const t=String(o.promise||"")+" "+String(o.ask||"");
+      if(o.kind==="secret"||o.kind==="prohibition"||/\b(never|always|keep (?:it|this|that)?\s*(?:a )?secret|secret|won't tell|not tell|nobody|no one)\b|asla|hiç ?kimse|kimseye|sır|daima|her zaman/i.test(t))return "promise";
+    }
+  }catch(e){}
+  return "";
+}
+function _ftApplyFix(chat,E,fix,at){
   if(!E||!fix)return false;
   if(fix.drop===true){ E.drop(); return true; }
+  const _no=_ftRefuse(E,fix,at);
+  if(_no==="meeting"){ try{ _ftLog(chat,`refused: "${fix.ended}" for a meeting still ahead (day ${E.obj.day} ${E.obj.period||""})`); }catch(e){} return false; }
+  if(_no==="promise"){ fix=Object.assign({},fix,{ended:""}); try{ _ftLog(chat,`refused: "done" for an open-ended word`); }catch(e){} }
   let moved=false;
   const ch=(fix.changes&&typeof fix.changes==="object")?fix.changes:{};
   if(Object.keys(ch).length){ E.apply(ch); moved=true; }
@@ -18464,7 +18492,7 @@ async function runFutureUpdate(chat,kind,id,turns){
   const out=await chatCompletion(epSend("x_future_update",sys,{entry:E.show,fields:E.fields.map(f=>"- "+f).join("\n"),convo:_ftConvoText(chat,turns||ENGINE_RECENT_TURNS)}),
     state.memModel,{fn:"mem",temp:fnTemp("mem",0.1),max:fnTok("mem",300),dbg:"Future update · "+kind});
   const j=parseJSON(out); if(!j||typeof j!=="object")return false;
-  _ftApplyFix(chat,E,{changes:j.changes,ended:j.ended,result:j.result});
+  _ftApplyFix(chat,E,{changes:j.changes,ended:j.ended,result:j.result},{day:chat.gameDay||1,period:chatPeriod(chat)});
   markChatDirty(chat); persistChats(); persistUniverses();
   try{ _refreshQuestViews(); }catch(e){}
   return true;
@@ -18554,7 +18582,7 @@ async function runFutureReconcile(chat,day,period){
   let moved=0;
   (Array.isArray(j.fixes)?j.fixes:[]).forEach(f=>{
     const t=f&&touched.find(x=>x.id===String(f.id||"").replace(/^\[|\]$/g,""));
-    if(t&&_ftApplyFix(chat,t.E,f)){ moved++; _ftLog(chat,`reconcile ${t.E.kind} ${t.id}: ${f.drop?"dropped":"corrected"}`); }
+    if(t&&_ftApplyFix(chat,t.E,f,{day,period})){ moved++; _ftLog(chat,`reconcile ${t.E.kind} ${t.id}: ${f.drop?"dropped":"corrected"}`); }
   });
   // Anything agreed in the stretch that is on no record: its writer reads the stretch.
   const turns=Math.max(ENGINE_RECENT_TURNS,Math.min(FT_MAX_SPAN,n));

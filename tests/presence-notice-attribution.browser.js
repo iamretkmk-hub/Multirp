@@ -110,6 +110,28 @@ const {chromium}=require('playwright');
     u.locations=keep; return r; });
   ok("a meeting at the counterpart's place by FIRST name resolves to their own home", H[0]==="Small Özüçak's House"&&H[1]==="Small Özüçak's House"&&H[2]===null, JSON.stringify(H));
 
+  console.log("\n[7. the period check cannot close tomorrow's meeting as done, or a secret as kept]");
+  await setup();
+  const F=await pg.evaluate(()=>{ const c=curChat(); c.gameDay=1; c.period="Afternoon"; c.timeOfDay="Afternoon";
+    c.calendar=[{id:"cal_oz",kind:"meeting",title:"Özlem invites Emre for an evening",who:"Özlem Özüçak",day:2,period:"Evening",where:"Emre's House",done:false,withUser:true,executor:"Özlem Özüçak"},
+                {id:"cal_now",kind:"meeting",title:"Coffee at the bar",who:"Özlem Özüçak",day:1,period:"Midday",done:false,withUser:true,executor:"both"}];
+    c.promises=[{id:"pr_sec",holderId:"pa_oz",holderName:"Özlem Özüçak",toName:"Emre",promise:"you will keep this secret between us and never tell anyone",kind:"promise",status:"open",day:1}];
+    const at={day:1,period:"Afternoon"};
+    // the verdicts from the reported payload
+    const r1=_ftApplyFix(c,_ftEntry(c,"meeting","cal_oz"),{id:"cal_oz",changes:{day:1},ended:"done",result:"Emre accepted the invitation for tomorrow evening."},at);
+    const r2=_ftApplyFix(c,_ftEntry(c,"promise","pr_sec"),{id:"pr_sec",changes:{},ended:"done",result:"Emre promised to keep it secret."},at);
+    const m=c.calendar.find(e=>e.id==="cal_oz"), pr=c.promises.find(x=>x.id==="pr_sec");
+    const m1={day:m.day,done:!!m.done,outcome:m.outcome||null};   // right after the refused verdict
+    const r3=_ftApplyFix(c,_ftEntry(c,"meeting","cal_now"),{id:"cal_now",ended:"done",result:"They had the coffee."},at);
+    const n=c.calendar.find(e=>e.id==="cal_now");
+    const r4=_ftApplyFix(c,_ftEntry(c,"meeting","cal_oz"),{id:"cal_oz",ended:"cancelled",result:"Özlem called it off."},at);
+    return {r1,m:m1,r2,pr:pr.status,r3,now:!!n.done,r4,after:{done:!!m.done,outcome:m.outcome||null}}; });
+  ok("tomorrow evening's meeting is not closed as done, nor moved to today (the reported case)", F.r1===false&&F.m.day===2&&!F.m.done, JSON.stringify(F));
+  ok("a promise to keep a secret is not closed as kept the afternoon it was given", F.pr==="open", JSON.stringify(F));
+  ok("a meeting whose time has passed can still be closed as done, and a later one can still be cancelled", F.r3===true&&F.now===true&&F.r4===true&&F.after.done===true, JSON.stringify(F));
+  const FP=await pg.evaluate(()=>/Agreeing to it is not carrying it out/.test(X_ENGINE_PROMPTS.x_future_reconcile.def));
+  ok("the check's prompt says agreeing is not carrying out", FP===true, "");
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);
   await b.close(); process.exit(fail?1:0);

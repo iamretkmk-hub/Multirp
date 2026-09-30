@@ -129,7 +129,7 @@ const {chromium}=require('playwright');
     return {u:c?c.msgs[1].content:"",out};
   });
   ok("Auto-RP narrator: the round since the player's last line (four lines at least), as heard — no thought, no world news", /Recent lines:\nSami Özüçak: "Cash, Emre\."\nEmre: \(whispered to Sami Özüçak alone\)/.test(N.u)&&/What are you two whispering about/.test(N.u)&&!/never find out|Finally|bank/.test(N.u), N.u.slice(0,900));
-  ok("…and what the player remembers and the words they gave", /What you remember:\n- .*money in cash on Friday/.test(N.u)&&/Words given:[\s\S]*card trouble from Buket/.test(N.u), N.u.slice(0,900));
+  ok("…and what the player remembers about the people here — but not the ledger of words given (v149.2)", /What you remember:\n- .*money in cash on Friday/.test(N.u)&&!/Words given|card trouble from Buket/.test(N.u), N.u.slice(0,900));
   ok("…and a suggestion or Story move is labelled an intention, not typed words", /Emre's intention for this turn \(play it out as their turn — it is what they mean to do, not words they typed\):\ngive Sami the envelope/.test(N.u)&&!/just typed/.test(N.u), N.u.slice(-300));
 
   const R=await pg.evaluate(async()=>{
@@ -316,7 +316,8 @@ const {chromium}=require('playwright');
     const cur=X_ENGINE_PROMPTS.x_player_sheet.def;
     const old=cur.replace(/ONLY PUBLIC FACTS ARE GIVEN TO YOU:[^\n]*/,"The notes about each person are written from THEIR side and may contain their private thoughts: take only public facts from them and never repeat a private thought.");
     store.setRaw(K.x_player_sheet,old);
-    const oldSug=X_ENGINE_PROMPTS.x_reply_suggest.def.replace(/\n\nKEEPING IT PRIVATE[^\n]*/,"");
+    // v149.2 — a stored copy of the earlier default (it opened "You suggest what {{user}} could do next")
+    const oldSug="You suggest what {{user}} could do next in an ongoing roleplay, so the player can pick a direction instead of having to invent a turn.\n\nKEEPING IT PRIVATE. A line marked (whispered) reached only that person.\n\nReturn ONLY JSON: {\"options\":[\"...\",\"...\",\"...\"]}";
     store.setRaw(K.x_reply_suggest,oldSug);
     return old!==cur&&oldSug!==X_ENGINE_PROMPTS.x_reply_suggest.def;
   });

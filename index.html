@@ -6704,10 +6704,12 @@ Rules:
   Ask it as one question: after this movement, is {{user}} still standing next to them? If yes, it is not an exit, however clearly the words say "left", "went out" or "çıktık".
 - Only use the exact character names provided. Never invent names. Never move {{user}} (the player).
 - When in doubt, change nothing. Most turns have NO change.
+- A PROMISE TO COME. When a character goes off, or stays behind while {{user}} goes on, but SAYS they will come to {{user}} — "I'll bring us some tea", "go ahead, I'll catch up", "I'll come later", "back in a minute" — list them in "coming" with what they said, in a few words. Report it in the turn they say it, alongside their "move" or "exit" if they also go.
+- EXPECTED TO JOIN {{user}}. The roster may list people who said they would come, with how many turns ago. Bring them when the lines show them coming, or once the time the thing they went for takes has passed: a drink or something from the next room — one or two turns; "later", "soon", "in a bit" — a few turns; marked OVERDUE — now, unless the lines say they were held up or changed their mind. Someone elsewhere at this place → "move" them to {{user}}'s area; someone offstage → "enter". A promised arrival is never left hanging.
 
 Respond with ONLY strict JSON, no prose:
-{"exit":["Name", ...], "enter":["Name", ...], "move":{"Name":"Area"}}
-All are usually empty. Use "move" ONLY when an AREAS list is provided and a PRESENT character shifts to a different area of the SAME place (e.g. goes to the toilet, the bedroom, the lounge). "Area" must be one of the listed area names. Moving to another area is NOT an exit; only use "exit" when someone leaves the whole place.`;
+{"exit":["Name", ...], "enter":["Name", ...], "move":{"Name":"Area"}, "coming":{"Name":"what they said they would do"}}
+All are usually empty. Use "move" ONLY when an AREAS list is provided and a PRESENT character shifts to a different area of the SAME place (e.g. goes to the toilet, the bedroom, the lounge — or someone EXPECTED comes back to {{user}}'s area). "Area" must be one of the listed area names. Moving to another area is NOT an exit; only use "exit" when someone leaves the whole place.`;
 
 
 // ===== STYLES (v25 — fully USER-EDITABLE) =====================================================
@@ -8532,6 +8534,8 @@ function loadState(){
      player. That single mis-read emptied the scene and the player's next three turns went
      unanswered while the event kept narrating around him. */
   _refreshPipe("presencePrompt","You track who is physically present","LEAVING **WITH**",DEFAULT_PRESENCE_TRACKER);
+  // v148.7 — "I'll bring tea" / "I'll come later" is remembered and kept (EXPECTED TO JOIN)
+  _refreshPipe("presencePrompt","You track who is physically present","EXPECTED TO JOIN",DEFAULT_PRESENCE_TRACKER);
   _refreshPipe("sceneSetup","## YOUR INPUTS","NEVER invent a person",DEFAULT_SCENE_SETUP);
   _refreshPipe("relGenPrompt","You define {{char}}'s RELATIONSHIPS","AUTHORITATIVE source for who",DEFAULT_RELGEN);
   // v22.x — momentary "note" is now written in the SECOND PERSON ("you"/"your") and avoids technical
@@ -15306,6 +15310,9 @@ function syncPlayerSubArea(chat){
     // Company in the player's own area: nothing to heal, and their "leave me alone" choice is spent.
     if(present.some(p=>charSubId(c,p.id)===here)){ if(c.subSelf){ c.subSelf=false; markChatDirty&&markChatDirty(c); } return false; }
     if(c.subSelf)return false;                         // they walked off deliberately — leave them there
+    /* v148.7 — someone said they would come to the player ("I'll bring tea"): the player waits where they are,
+       they are not walked into the kitchen after them. */
+    if(Array.isArray(c.expected)&&c.expected.some(e=>e&&present.some(p=>p.id===e.id)))return false;
     const areas=new Set(present.map(p=>charSubId(c,p.id)));
     if(areas.size!==1)return false;                    // the cast is scattered — don't guess where the player is
     const dest=[...areas][0];
@@ -34256,7 +34263,16 @@ async function sendMessage(opts){
     /* (!) v144.1 — EARSHOT, not the location. Solo vs multi was chosen from presentCast (everyone at
        the place), so a character alone in another room of the house answered a line they could not
        hear. inSceneCast is who can actually hear the player; noteNobodyHere names the rest. */
-    const present=inSceneCast(chat);
+    let present=inSceneCast(chat);
+    /* (!) v148.7 — ALONE, THE PLAYER'S LINE IS THE ONLY LINE, SO IT RUNS THE PRESENCE TRACKER. This branch ran
+       postTurn only (the future tracker), so someone who had said "I'll come later" or gone for tea never came:
+       nothing that moves people ran until somebody else spoke, and nobody else could. If it brings someone in,
+       they are here now and the turn goes on as usual. */
+    if(present.length===0){
+      try{ await runPresenceTracker(chat); }catch(e){}
+      present=inSceneCast(chat);
+      if(present.length) appendNewBubbles();
+    }
     if(present.length===0){
       /* v37.2 — SAY SO. This branch used to store the line, run the directors and return, with
          nothing on screen to explain why nobody answered. A live log shows the cost: the presence
@@ -36363,6 +36379,8 @@ function noteNobodyHere(chat){
     } else {
       note=`\u2014 Nobody is here in the ${areaName}, so nothing you say is being heard.${gone?` Last movement: ${gone}.`:""} (World map \u203a Who is here, to bring someone back.) \u2014`;
     }
+    // v148.7 — and who said they would come, so the wait reads as a wait
+    try{ const ex=_pruneExpected(chat); if(ex.length) note=note.replace(/ \u2014$/,"")+` ${_nameList(ex.map(e=>e.name))} said they\u2019d come. \u2014`; }catch(_){}
     chat.messages.push({mid:newMid(),role:"assistant",speaker:"Narrator",presenceNote:true,sysError:true,
       uiNote:true,   // player-facing UI text; never goes to a model
       content:note,img:null,imgState:"idle",vidState:"idle",video:null});
@@ -36385,7 +36403,11 @@ async function runMultiCharTurn(chat,playerText,stimulus){
   document.getElementById('sendBtn').disabled=true;
   try{
     const _pchain={net:false};   // v144.1 — one uncued presence check per chain (see runPresenceTracker)
-    await runPresenceTracker(chat,{chain:_pchain});   // the player may have narrated someone leaving/arriving
+    /* (!) v148.7 — AFTER THE PLAYER'S LINE ONLY WHEN THE PLAYER IS ALONE. With company the tracker reads the
+       player's line together with the reply to it (after each responder, below): running it on the line alone
+       too was a second call that moved people before anyone had answered. Alone, nobody will answer, so this
+       is the only run — and the one that brings back someone who said they would come. */
+    if(inSceneCast(chat).length===0) await runPresenceTracker(chat,{chain:_pchain});
     let cast=inSceneCast(chat);   // only characters in the player's area (earshot) can respond
     if(cast.length===0){ // nobody in the player's area — they're effectively talking to themselves
       // Don't silently swallow the turn. If there ARE people at this location but in OTHER areas,
@@ -38265,6 +38287,30 @@ async function runWearingTracker(chat){
   }catch(e){ return null; }
 }
 
+/* (!) v148.7 — A PROMISE TO COME IS KEPT. "Çay getireyim" took the character to the kitchen and nothing ever
+   brought them back; "go ahead, I'll come later" left them behind for good. The presence tracker reads only
+   the last few lines, so by the time the tea would be ready the promise had scrolled out of its view. It
+   now reports a promise ("coming") and the chat keeps it: every later run is told who is EXPECTED TO JOIN
+   the player and how many turns ago they said it, and brings them when it is due. Kept 12 player turns;
+   dropped the moment they share the player's area. A character still at this place who is 6 turns
+   overdue is walked back in code — the one case the app can settle without guessing. */
+const EXPECT_OVERDUE=4, EXPECT_FORCE=6, EXPECT_DROP=12;
+function _playerTurns(chat){ return ((chat&&chat.messages)||[]).filter(m=>m&&m.role==="user").length; }
+function _pruneExpected(chat){
+  if(!chat||!Array.isArray(chat.expected)||!chat.expected.length) return [];
+  const now=_playerTurns(chat), here=new Set(inSceneIds(chat));
+  const keep=chat.expected.filter(e=>e&&e.id&&!here.has(e.id)&&(now-(e.turn||0))<EXPECT_DROP);
+  if(keep.length!==chat.expected.length){ chat.expected=keep; try{ markChatDirty(chat); }catch(_){} }
+  return keep;
+}
+function _expectedBlock(chat,user){
+  const list=_pruneExpected(chat); if(!list.length) return "";
+  const now=_playerTurns(chat);
+  return `\n\nEXPECTED TO JOIN ${user} (they said they would come):\n`+list.map(e=>{
+    const ago=Math.max(0,now-(e.turn||0));
+    return `  ${e.name} — "${String(e.said||"said they would come").slice(0,140)}" (${ago===0?"this turn":ago===1?"1 turn ago":ago+" turns ago"})${ago>=EXPECT_OVERDUE?" — OVERDUE":""}`;
+  }).join("\n");
+}
 async function runPresenceTracker(chat,opts){
   const result={entered:[],exited:[],lastBeat:null};
   if(state.presenceOff)return result;
@@ -38318,11 +38364,36 @@ async function runPresenceTracker(chat,opts){
         `If someone PRESENT moves to a DIFFERENT area of this same place (e.g. steps out to the toilet, goes to the bedroom, heads to the lounge), report it in "move" — NOT as an exit. Only use "exit" when they leave the whole place.`;
     }
     // v146.1 — built in this chat's world (its prompt override, its player, the exchange's labels)
-    const out=await chatCompletion(inChatWorld(chat,()=>epSend("presencePrompt",fillTpl(up("presencePrompt"),{user:_user}),{roster:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}`,exchange:castConvoText(chat,4)})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",110),dbg:"Presence tracker"});
-    const j=parseJSON(out);
+    const expBlock=_expectedBlock(chat,_user);
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("presencePrompt",fillTpl(up("presencePrompt"),{user:_user}),{roster:`Currently present: ${present.join(", ")||"(none)"}\nOffstage (could enter): ${offstage.join(", ")||"(none)"}\nAll cast: ${cast.map(c=>c.name).join(", ")}${subBlock}${expBlock}`,exchange:castConvoText(chat,4)})),state.mcModel,{fn:"mc",temp:fnTemp("mc",0),max:fnTok("mc",160),dbg:"Presence tracker"});
+    const j=parseJSON(out)||(Array.isArray(chat.expected)&&chat.expected.length?{}:null);
     if(!j)return result;
     const all=cast.concat(chat.tempChars||[]);
     const find=n=>all.find(c=>c.name.toLowerCase()===String(n).toLowerCase());
+    // v148.7 — a promise to come (see EXPECT_*): recorded before any move, so the player is not pulled after them
+    const _promised=new Set();
+    if(j.coming&&typeof j.coming==="object"&&!Array.isArray(j.coming)){
+      if(!Array.isArray(chat.expected))chat.expected=[];
+      for(const nm in j.coming){
+        const p=find(nm); if(!p||!p.id)continue;
+        const said=String(j.coming[nm]||"").replace(/\s+/g," ").trim().slice(0,160);
+        chat.expected=chat.expected.filter(e=>e&&e.id!==p.id);
+        chat.expected.push({id:p.id,name:p.name,said,turn:_playerTurns(chat)});
+        _promised.add(p.id);
+      }
+      if(_promised.size){ try{ markChatDirty(chat); }catch(_){} }
+    }
+    // v148.7 — the backstop: someone still at this place, EXPECT_FORCE turns past their promise, walks back in
+    if(hereLoc&&playerArea&&Array.isArray(chat.expected)){
+      const _now=_playerTurns(chat), _here=curSubId(chat);
+      chat.expected.forEach(e=>{
+        if(!e||_promised.has(e.id)||(_now-(e.turn||0))<EXPECT_FORCE)return;
+        const p=find(e.name); if(!p||!present.some(o=>o.toLowerCase()===p.name.toLowerCase()))return;
+        if(charSubId(chat,p.id)===_here)return;
+        if(!j.move||typeof j.move!=="object"||Array.isArray(j.move))j.move={};
+        if(!Object.keys(j.move).some(k=>k.toLowerCase()===p.name.toLowerCase()))j.move[p.name]=playerArea;
+      });
+    }
     // SUB-AREA MOVES: a present character changed area within this same location. Update their
     // sub-area (changing earshot) and drop a quiet note. Does NOT remove them from the location,
     // so they remain a regular for gossip and can drift back later.
@@ -38363,6 +38434,7 @@ async function runPresenceTracker(chat,opts){
         if(syncPlayerSubArea(chat)){ appendNewBubbles(); updateChatHeader(); }
       }
     }
+    _pruneExpected(chat);   // v148.7 — whoever just came back to the player's area has kept their word
     // The Scene Writer owns the entrance of an active event's approaching participant.
     // Don't let the presence tracker pull that same character in independently — that
     // causes the character to speak twice (once here, once via the reaction loop).
@@ -38425,6 +38497,7 @@ async function runPresenceTracker(chat,opts){
         if(chat.locationId){ if(!chat.subPos)chat.subPos={}; chat.subPos[p.id]=curSubId(chat); } // join the player's area
         result.entered.push(p);   // present now, but SILENT — not a "beat", so don't set lastBeat
       }
+      _pruneExpected(chat);
       persistChats();appendNewBubbles();updateChatHeader();
     }
   }catch(e){console.warn("[presence] presence tracker failed — presence unchanged this turn:",e&&e.message||e);}

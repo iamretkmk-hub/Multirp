@@ -5798,7 +5798,7 @@ A MEETING requires ALL THREE of these, or you emit NOTHING for it:
    - {{user}} said they will go to a character → "executor" is "{{user}}".
    - NEITHER OF THEM HOSTS — they agreed on a place that is nobody's home and each goes to it: a café, a restaurant, a bar, the beach, a park, the gym, a cinema, a shop, a street corner, a hotel lobby, anywhere out in the world → "executor" is the exact word "both". Write it in lower case, exactly like that, and never as a name. Use this whenever the agreed place is not somebody's home or room, even when one of them proposed it, offered to book it, or said they would be there first — offering to arrange it is not hosting it. "where" must then carry that place.
    - TWO CHARACTERS agreed to meet each other ({{user}} not involved) → "executor" is whichever character travels or hosts (either name if unclear); the meeting is at the named place or one of their homes. Do NOT use "both" for these.
-   HOW TO TELL THEM APART: ask whose door is being knocked on. "Come over tonight" / "I'll drop by your place" is somebody's home, so it is a name or "{{user}}". "Let's have dinner at Sedef tomorrow" / "meet me at the pier at seven" is nobody's home, so it is "both". If a place is named AND it is a home ("my place", "your room", "the family house"), it is not "both".
+   HOW TO TELL THEM APART: ask whose door is being knocked on. "Come over tonight" / "I'll drop by your place" is somebody's home, so it is a name or "{{user}}". "Let's have dinner at the Blue Anchor restaurant tomorrow" / "meet me at the pier at seven" is nobody's home, so it is "both". If a place is named AND it is a home ("my place", "your room", "the family house"), it is not "both".
 
 CERTAINTY — did the COUNTERPART (the other party, NOT whoever proposed it) actually AGREE?
 - "certain": ONLY when the counterpart gave a clear, explicit yes in THIS exchange ("Yes, I'll be there", "See you tomorrow", "Deal"). Their OWN words must confirm it. A confident proposal by one side is NOT agreement.
@@ -9131,7 +9131,9 @@ function loadState(){
      ["travelPrompt","third person. No JSON, no labels, no dialogue, in Turkish.","third person. No JSON, no labels, no dialogue."],
      ["charMovePrompt","- Write in perfect, natural Turkish. Do NOT translate word-for-word from English — capture the intent and write it as it should read in Turkish.","- Write in the story's language (the language instruction below says which), perfect and natural. Do NOT translate word-for-word from English — capture the intent and write it as a native speaker would."],
      ["charMovePrompt","third person, in Turkish. No JSON,","third person. No JSON,"],
-     ["gmAuthor","**in Turkish, third person, MAXIMUM 1-2 short sentences, NAMING the arriving character**. No quotes, no labels, no JSON, no English.","**in the story's language, third person, MAXIMUM 1-2 short sentences, NAMING the arriving character**. No quotes, no labels, no JSON."]];
+     ["gmAuthor","**in Turkish, third person, MAXIMUM 1-2 short sentences, NAMING the arriving character**. No quotes, no labels, no JSON, no English.","**in the story's language, third person, MAXIMUM 1-2 short sentences, NAMING the arriving character**. No quotes, no labels, no JSON."],
+     // v148.5 — "Sedef" is a common Turkish woman's name: the model filed a meeting with a "Sedef" nobody had met
+     ["calPrompt","\"Let's have dinner at Sedef tomorrow\"","\"Let's have dinner at the Blue Anchor restaurant tomorrow\""]];
    const sw=(t,o,n)=>(typeof t==="string"&&t.indexOf(o)>=0)?t.split(o).join(n):null;
    let uch=false;
    SW.forEach(([k,o,n])=>{
@@ -15322,12 +15324,20 @@ function locByName(name,locs){
   if(hit)return hit;
   // Word-level: match on shared significant words (drop common filler so "the cafe" finds
   // "Cafe Derya"). Pick the location sharing the most words with the query.
-  const stop=new Set(["the","a","an","at","in","on","of","to","my","her","his","their","place","spot"]);
-  const qWords=q.split(/[^a-z0-9]+/).filter(w=>w&&!stop.has(w));
+  /* (!) v148.5 — WORDS, NOT ASCII RUNS. The split was on [^a-z0-9], so "Özlem's place" became "zlem", "s",
+     "place" — and the stray "s" of every English possessive matched the first place with an apostrophe in
+     its name ("Akbaba's House"), which is where a meeting "at Özlem's" was filed. Letters of any script
+     now make a word; possessive endings ('s, 'in/'ın/'un/'ün, 'nin…) and 1–2 letter fragments never count,
+     and neither do the words that only say "a home" (house, ev, evi…), which every home shares. */
+  const stop=new Set(["the","a","an","at","in","on","of","to","my","her","his","their","your","our","place","spot",
+    "house","home","room","flat","apartment","ev","evi","evim","evin","oda","odası","yer","yeri","bir","ve"]);
+  const words=t=>String(t||"").toLowerCase().replace(/['’`](?:s|in|ın|un|ün|nin|nın|nun|nün|e|a|de|da|te|ta|den|dan)\b/gu," ")
+    .split(/[^\p{L}\p{N}]+/u).filter(w=>w&&w.length>=3&&!stop.has(w));
+  const qWords=words(q);
   if(!qWords.length)return null;
   let best=null,bestScore=0;
   for(const l of locs){
-    const lWords=new Set((l.name||"").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+    const lWords=new Set(words(l.name));
     const score=qWords.reduce((s,w)=>s+(lWords.has(w)?1:0),0);
     if(score>bestScore){ bestScore=score; best=l; }
   }
@@ -16522,9 +16532,12 @@ function _resolvePlanLoc(chat,where,executor,counterpart){
   const raw=String(where||"").trim(), low=raw.toLowerCase();
   const un=String(chatUserName(chat)||"").toLowerCase();
   const cn=(counterpart&&counterpart.name)?counterpart.name.toLowerCase():"";
-  const homeWord = low==="" || /\b(place|home|house|room|apartment|flat|ev|oda)\b/.test(low);
-  const firstPerson  = /\b(my|mine|benim|evim|odam)\b/.test(low) || (un&&low.includes(un));
-  const secondPerson = /\b(your|yours|senin|his|her|their)\b/.test(low) || (cn&&low.includes(cn));
+  /* v148.5 — the counterpart named by FIRST name ("Özlem's place", "Özlem'in evi") is their home too; only
+     the full name counted, and "Özlem's place" fell through to the name matcher (see locByName). */
+  const cf=cn?cn.split(/\s+/)[0]:"";
+  const homeWord = low==="" || /(^|[^\p{L}])(place|home|house|room|apartment|flat|ev|evi|oda|odası)([^\p{L}]|$)/u.test(low);
+  const firstPerson  = /(^|[^\p{L}])(my|mine|benim|evim|odam)([^\p{L}]|$)/u.test(low) || (un&&low.includes(un));
+  const secondPerson = /(^|[^\p{L}])(your|yours|senin|his|her|their)([^\p{L}]|$)/u.test(low) || (cn&&low.includes(cn)) || (cf&&cf.length>=3&&nameInText(low,cf)&&homeWord);
   if(firstPerson && !secondPerson){ const h=playerHomeLoc(chat); if(h)return h; }
   if(secondPerson && counterpart){ const h=homeLocOf(counterpart); if(h)return h; }
   const named=locByName(raw); if(named)return named;
@@ -37793,9 +37806,22 @@ async function runPresenceTracker(chat,opts){
   /* v144.1 — and the uncued safety net fires at most ONCE per player-turn chain (opts.chain is the
      chain's own flag): the call ran at the start and again after every responder. */
   const _chain=opts&&opts.chain;
-  if(!hasPresenceCue(chat)){
-    if(sinceLast<5 || (_chain&&_chain.net))return result;
-    if(_chain)_chain.net=true;
+  /* (!) v148.5 — AFTER EVERY RESPONSE. The call used to wait for a cue word (an English/Turkish list of
+     movement verbs and greetings), with a safety net every fifth turn. Anything the list did not know —
+     "Bamboo Bar'a geçelim", "hadi suya", "şezlonglara dönüyorum" — went unnoticed for up to five turns,
+     and the scene carried on with people standing where they no longer were. It now reads every response
+     it has not read yet (one small call); a line it has already read never runs it twice. The old cue
+     gate is kept behind state.presenceCueGate for anyone who wants the cheaper behaviour. */
+  if(state.presenceCueGate===true){
+    if(!hasPresenceCue(chat)){
+      if(sinceLast<5 || (_chain&&_chain.net))return result;
+      if(_chain)_chain.net=true;
+    }
+  }else{
+    const _ms=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError);
+    const _seen=chat._presenceSeenMid?_ms.findIndex(m=>m.mid===chat._presenceSeenMid):-1;
+    const _fresh=(_seen>=0?_ms.slice(_seen+1):_ms.slice(-2)).filter(m=>m&&m.content&&!m.questNote&&!m.calNote&&!m.uiNote&&!m.textMsg);
+    if(!_fresh.length)return result;   // nothing said since the last read
   }
   chat._presenceLastRun=totalTurns;
   const _markSeen=()=>{ const ms=(chat.messages||[]).filter(m=>m.role!=='system'&&!m.sysError); chat._presenceSeenMid=ms.length?ms[ms.length-1].mid:null; };

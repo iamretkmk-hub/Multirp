@@ -32,6 +32,7 @@ const {chromium}=require('playwright');
       {mid:"b2",role:"assistant",narratorEvent:true,questNote:true,present:[],content:"— Yeni görev: Deniz yarışı: kaybeden kıyıda ne isterse yapacak —"},
       {mid:"b3",role:"user",content:'"Göreceğiz bakalım kim kimi bırakmıyor," *diyerek aniden hızlanıyorum.*',present:["pa_oz"]},
       {mid:"b4",role:"assistant",speaker:"Özlem Özüçak",speakerId:"pa_oz",content:'*Hızla kulaç atıyorum.* "Hile yapmak yok!"',present:["pa_oz"]}];
+    c._presenceSeenMid=null;
     window.__calls=[];
     window.__reply=()=>"{}";
     window.chatCompletion=async(msgs,model,opts)=>{ const d=(opts&&opts.dbg)||""; window.__calls.push({dbg:d,text:JSON.stringify(msgs)}); return window.__reply(d,msgs); };
@@ -82,6 +83,32 @@ const {chromium}=require('playwright');
   await pg.reload(); await pg.waitForTimeout(2600);
   const R=await pg.evaluate(()=>({t:state.charMovePrompt||"",}));
   ok("a stored copy is repaired in place and keeps the player's own edit", !/Turkish/.test(R.t)&&/story's language/.test(R.t)&&/\(my own edit\)/.test(R.t), R.t.slice(-400));
+
+  console.log("\n[5. the presence tracker reads every new response, not only ones with a movement word]");
+  await setup();
+  const E=await pg.evaluate(async()=>{ const c=curChat(); window.__calls=[];
+    c.messages.push({mid:"e1",role:"assistant",speaker:"Özlem Özüçak",speakerId:"pa_oz",content:'*Havluyu omzuna atıp şezlonglara doğru yürüyor.* "Ben biraz güneşleneceğim."',present:["pa_oz"]});
+    c._presenceSeenMid="b4"; c._presenceLastRun=9999;   // just ran; no cue-word needed any more
+    await runPresenceTracker(c); const n1=window.__calls.filter(x=>/Presence tracker/.test(x.dbg)).length;
+    await runPresenceTracker(c); const n2=window.__calls.filter(x=>/Presence tracker/.test(x.dbg)).length;
+    return {n1,n2}; });
+  ok("a new line with no cue word from the list is still read", E.n1===1, JSON.stringify(E));
+  ok("the same line is never read twice", E.n2===1, JSON.stringify(E));
+
+  console.log("\n[6. meetings: no 'Sedef' in the tracker's example, places matched by words of any script]");
+  const M=await pg.evaluate(()=>{
+    const locs=[{id:"L1",name:"Akbaba's House",type:"home",residents:["x1"]},{id:"L2",name:"Small Özüçak's House",type:"home",residents:["pa_oz"]},{id:"L3",name:"Palmera Beach Club",type:"poi"}];
+    const r=[locByName("Özlem's place",locs),locByName("Sedef'in kabini",locs),locByName("palmera",locs),locByName("Özüçak evi",locs)].map(x=>x?x.name:null);
+    return {r,cal:/Sedef/.test(DEFAULT_CAL)}; });
+  ok("the meetings tracker's example no longer uses a person's name for a restaurant", M.cal===false, "");
+  ok("\"Özlem's place\" no longer lands at Akbaba's House; an unknown place stays unknown; a real name still matches",
+     M.r[0]!=="Akbaba's House"&&M.r[1]===null&&M.r[2]==="Palmera Beach Club"&&M.r[3]==="Small Özüçak's House", JSON.stringify(M.r));
+  const H=await pg.evaluate(()=>{ const u=universeById(curChat().universeId); const keep=u.locations;
+    u.locations=[{id:"L1",name:"Akbaba's House",type:"home",residents:["pa_ha"]},{id:"L2",name:"Small Özüçak's House",type:"home",residents:["pa_oz"]}];
+    const oz=state.personas.find(p=>p.id==="pa_oz"); const c=curChat();
+    const r=[_resolvePlanLoc(c,"Özlem's place","user",oz),_resolvePlanLoc(c,"Özlem'in evi","user",oz),_resolvePlanLoc(c,"Sedef'in kabini","both",oz)].map(x=>x?x.name:null);
+    u.locations=keep; return r; });
+  ok("a meeting at the counterpart's place by FIRST name resolves to their own home", H[0]==="Small Özüçak's House"&&H[1]==="Small Özüçak's House"&&H[2]===null, JSON.stringify(H));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);

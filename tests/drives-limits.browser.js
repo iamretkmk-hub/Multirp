@@ -180,7 +180,8 @@ const USER_TPL=`[system]
   ok("exposure: who could see or hear, and how exposed the area is", /WHO COULD SEE OR HEAR/.test(r3.inp)&&/A public place/.test(r3.inp)&&/semi-public|gossipy|very public/.test(r3.inp), r3.inp.slice(0,1800));
   ok("stakes: her own marriage and family are named", /your husband, Hakan[^\n]*a marriage is on the line/.test(r3.inp)&&/your daughter, Nil[^\n]*family/.test(r3.inp), r3.inp);
   ok("stakes: the other person's spouse is named as someone who would be hurt", /Ayca \(Emre's wife\)[^\n]*someone who would be hurt/.test(r3.inp), r3.inp);
-  ok("trust: the private readings are sent", /PRIVATE READINGS[\s\S]*trust: 35/.test(r3.inp), r3.inp.slice(-600));
+  // v149.1 — the readings are what they change in how she acts (trust 35: face value on ordinary things), right before the risk
+  ok("trust: the reading is sent as behaviour, right before the risk", /STANDS WITH[\s\S]*at face value on ordinary things[\s\S]*WHO COULD SEE OR HEAR/.test(r3.inp)&&!/trust: 35/.test(r3.inp), r3.inp.slice(0,2400));
   ok("the prompt weighs stakes, exposure, trust and the current state, and demotes logistics",
      /WHAT IS AT STAKE — WEIGH IT, DO NOT LIST IT/.test(r3.sys)&&/STAKES/.test(r3.sys)&&/EXPOSURE/.test(r3.sys)&&/TRUST/.test(r3.sys)&&/THE CURRENT STATE/.test(r3.sys)
      &&/Logistics — being sweaty, being late/.test(r3.sys), r3.sys.slice(0,400));

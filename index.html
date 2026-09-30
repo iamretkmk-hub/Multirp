@@ -26571,12 +26571,20 @@ function dropEchoedNarration(reply,hit){
   return out;
 }
 // This character's own most recent spoken lines in this scene, newest first.
-function ownRecentLines(chat,selfP,n){
+/* (!) v148.6 — IN THIS SCENE MEANS IN THIS SCENE. v148.4 gave the line pickers a floor (_lineWalkFloor: the start
+   of this character's scene) and a stop at the day marker, but not this walk — so at the first turn of a
+   barbecue "YOU ALREADY SAID THESE" quoted Sami's line from the previous night at the garden gate, a moment
+   not in his transcript, and the repeat check could send a retry against yesterday's gesture. One boundary
+   now for already_said, ownRecentThoughts, exchangeIsStalled and the repeat retry. `textMode` keeps a text
+   thread's whole walk, as the pickers do. */
+function ownRecentLines(chat,selfP,n,textMode){
   const out=[];
   try{
     const msgs=(chat&&chat.messages)||[];
-    for(let i=msgs.length-1;i>=0&&out.length<(n||3);i--){
+    const floor=_lineWalkFloor(chat,selfP,textMode);
+    for(let i=msgs.length-1;i>=floor&&out.length<(n||3);i--){
       const m=msgs[i];
+      if(m&&m.dayMarker&&selfP&&!textMode)break;       // yesterday's lines are not this scene's
       if(!m||m.role!=="assistant"||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
       if(!m.content||!String(m.content).trim())continue;
       if(!selfP||!((m.speakerId&&m.speakerId===selfP.id)||m.speaker===selfP.name))continue;
@@ -30711,7 +30719,7 @@ function buildTailBlocks(opts){
      the model cannot otherwise see. The anti-repeat window stays the same size either way. */
   {
     const _cont=!!selfContinueLine(chat,selfP,_tm);
-    const all=ownRecentLines(chat,selfP,_cont?3:2);
+    const all=ownRecentLines(chat,selfP,_cont?3:2,_tm);   // v148.6 — this scene's lines (a text thread keeps its own)
     const mine=_cont?all.slice(1):all;
     if(mine.length){
       /* v38.1 — the two parentheticals used to be hard-coded English welded into the data line, so
@@ -31124,7 +31132,12 @@ function buildTailBlocks(opts){
     const _ll=_answering;
     if(_ll && _ll.name!==selfName && _ll.toId && _ll.toId!==selfId){
       const _to=(_ll.toId==="__user__")?(state.user||""):(_ll.toName||"");
-      if(_to && _to!==selfName){
+      /* (!) v148.6 — A LINE THAT CALLS YOU BY NAME IS YOURS. toId is who the router queued the speaker to answer
+         (answerTo:"__user__" pins every responder to the player), not who the words were aimed at: Sami's
+         "Burak! Gel otur, çay söyleyelim…" carried toId = the player, and Burak, arriving, was told Sami had
+         "said that to Emre, not to you. Do NOT answer it". A vocative — the name opening the spoken line or set
+         off by a comma or a call mark — overrides the stamp. */
+      if(_to && _to!==selfName && !_callsByName(_ll.text,selfName)){
         _rg.guidance_not_yours=fillTpl(blkTpl("guidance_not_yours"),{speaker:_ll.name,addressee:_to,self:selfName});
         g+=`\n\n${_rg.guidance_not_yours}`;
       }
@@ -31715,6 +31728,21 @@ function _nmRe(name){
 }
 // Does `text` mention `name` as a whole word?
 function nameInText(text,name){ const re=_nmRe(name); return !!re && re.test(_nmFold(text)); }
+/* (!) v148.6 — does a line CALL this person (a vocative), not merely mention them? The name — full, or the
+   first name — opening a spoken part or a sentence, or set off by a comma / "!" / "?", as in "Burak! Gel otur"
+   or "Gel otur, Burak." Narration (*…*) is left out: a stage direction naming you is not you being called. */
+function _callsByName(text,name){
+  try{
+    const said=_nmFold(String(text||"").replace(/\*[^*]*\*/g," "));
+    const full=_nmFold(name); if(!full)return false;
+    const cands=[full].concat(full.split(" ")[0]&&full.split(" ")[0]!==full?[full.split(" ")[0]]:[]).filter(n=>n.length>=2);
+    return cands.some(n=>{
+      const e=n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"), B="(?![\\p{L}\\p{N}])";
+      return new RegExp("(^|[\"“«\\n!?.]\\s*)"+e+B+"\\s*[,!?]","u").test(said)
+          || new RegExp(",\\s*"+e+B+"\\s*[.!?]?\\s*[\"”»]?\\s*($|\\s)","u").test(said);
+    });
+  }catch(e){ return false; }
+}
 // Is `a` the same name as `b`? Exact after folding; a lone first name matches a full name's first word
 // only when `allowFirst` (the caller decides whether that is safe).
 function sameName(a,b,allowFirst){
@@ -37715,7 +37743,18 @@ async function playCharacterTurn(chat,p,addressed,opts){
        guidance and the quoted line all name one person — the contradiction that let a second
        responder answer a question meant for the player. */
     const _whisperBack=!!opts.whisperBack;
-    const _pin=opts.answerTo||null;
+    let _pin=opts.answerTo||null;
+    /* (!) v148.6 — AN ARRIVAL ANSWERS WHAT WAS SAID TO THEM. The newest line in the room is not necessarily theirs:
+       the player greeted Burak at the door ("Burak! Hayırdır, nöbetten önce mi geldin?"), Sami spoke after him,
+       and Burak's entrance was aimed at Sami. On an arrival's first turn the player's line wins when it calls
+       them by name, or when nothing newer does; a bystander's line that calls them keeps its speaker. */
+    if(!_pin&&addressed==="arriving"){
+      try{ inChatWorld(chat,()=>{
+        const _pl=lastPlayerLine(chat,p), _ll=lastDialogueLine(chat,p);
+        const _llCalls=!!(_ll&&_ll.name!==_who&&_callsByName(_ll.text,p.name));
+        if(_pl&&(_callsByName(_pl.text,p.name)||!_llCalls))_pin="__user__";
+      }); }catch(e){}
+    }
     /* v146.1 — the payload is assembled in THIS chat's world (inChatWorld): the builders read the open
        story's setting, places, prompts and player, which were another story's once the player switched. */
     let messages=inChatWorld(chat,()=>{
@@ -49933,6 +49972,11 @@ async function runSceneWriter(chat){
       applyPresence(chat,[ev.participant.name],[]);   // now physically present
       // ensure the id is actually in presentIds (temp chars aren't in castIds)
       if(!presentIds(chat).includes(id))chat.presentIds.push(id);
+      /* (!) v148.6 — BROUGHT IN MEANS BROUGHT IN. A summons leaves a character at the entrance (v19.71), and the
+         event's own narration then walks them to the player ("Burak masalara doğru yürürken…"). Left at the gate,
+         their payload said "you are at Main Security Gate … you cannot hear the other areas" while handing them
+         the canteen's lines to answer. The event brings them into the player's area, so that is where they are. */
+      try{ if(chat.locationId){ chat.subPos=chat.subPos||{}; chat.subPos[id]=curSubId(chat); } }catch(_){}
       notePresence(chat,[ev.participant.name],[]);
       _stampApproachHeard(chat,ev,id);   // v148.4 — what was said to them at the door reached them
       persistChats();appendNewBubbles();updateChatHeader();
@@ -49956,6 +50000,7 @@ async function runSceneWriter(chat){
         if(card && !_barred){
           if(!chat.presentIds)chat.presentIds=[];
           if(!chat.presentIds.includes(card.id))chat.presentIds.push(card.id);
+          try{ if(chat.locationId){ chat.subPos=chat.subPos||{}; chat.subPos[card.id]=curSubId(chat); } }catch(_){}   // v148.6 — into the player's area (see above)
           notePresence(chat,[card.name],[]);
           persistChats();appendNewBubbles();updateChatHeader();
           broughtIn=resolveChar(card.id,chat)||card;

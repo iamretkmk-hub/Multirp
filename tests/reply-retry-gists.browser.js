@@ -219,6 +219,79 @@ const USER_TEMPLATE=`[system]
   }).catch(e=>"ERR "+e.message);
   ok("with feelings in the layout the player's paragraph still prints (the \"present\" scope too)", dl.indexOf("PLAYER_PARA")>=0, dl);
 
+  console.log("\n[4 — YOU ALREADY SAID THESE and the repeat check stay inside this scene and this day]");
+  const YESTERDAY='*Omuzlarım gevşiyor.* "Tamam, tamam. Sağ ol, yarın akşam sekizde buradayım, söz."';
+  for(const mode of ["template","layout"]){
+    const n3=await pg.evaluate(async({mode,YESTERDAY})=>{
+      const c=__setup(mode); const D=state.personas.find(x=>x.id==="p_d");
+      c.messages=[
+        {mid:"y0",role:"user",content:'"Yarın gel o zaman."',present:["p_d"]},
+        {mid:"y1",role:"assistant",speaker:"Duygu Akbaba",speakerId:"p_d",content:YESTERDAY,present:["p_d"],toId:"__user__",toName:"Emre"},
+        {mid:"dm",role:"assistant",speaker:"Narrator",dayMarker:true,dayFrom:1,dayTo:2,content:"— Day 2 —"}];
+      const mine=ownRecentLines(c,D,3);
+      __stub.replies=[YESTERDAY,'"Günaydın." *Bardağı uzatıyorum.* "Çay?"'];
+      await sendMessage({chat:c,text:'"Günaydın, Duygu."'}); await __settle();
+      const rp=__fetches.filter(f=>Array.isArray(f.messages));
+      return {mine, n:rp.length, sent:JSON.stringify(rp[0]?rp[0].messages:[]), posted:String(c.messages[c.messages.length-1].content||"")};
+    },{mode,YESTERDAY});
+    ok(`${mode}: yesterday's line is not one of "your last lines" today`, n3.mine.length===0&&(n3.sent.indexOf("ALREADY SAID")<0||n3.sent.slice(n3.sent.indexOf("ALREADY SAID"),n3.sent.indexOf("ALREADY SAID")+1500).indexOf("sekizde")<0), JSON.stringify(n3.mine));
+    ok(`${mode}: and a reply that happens to echo it is not sent back for a retry`, n3.n===1, JSON.stringify({n:n3.n,posted:n3.posted}));
+  }
+
+  console.log("\n[5 — an arrival: where they stand, what they hear and whom they answer agree]");
+  const ar=await pg.evaluate(async()=>{
+    const out={};
+    out.calls={v1:_callsByName('*Hemen araya giriyor.* "Burak! Gel otur, çay söyleyelim."',"Burak Atan"),
+               v2:_callsByName('"Gel otur, Burak."',"Burak Atan"),
+               mention:_callsByName('"Burak\'ın hanımı bizi bugün epey eğlendirdi."',"Burak Atan"),
+               narr:_callsByName('*Burak\'a bakıyor.* "Otur."',"Burak Atan")};
+    // the canteen: Emre and Sami at the tables, Burak at the gate until the event brings him in
+    const base=state.universes[0];
+    state.universes=[Object.assign(JSON.parse(JSON.stringify(base)),{id:"u2",name:"u2",userName:"Emre",setting:"a steel plant",gameData:{},rules:[],trackers:[],prompts:{},
+      locations:[{id:"l_is",name:"Isdemir",description:"plant",residents:[],sublocations:[{id:"s_gate",name:"Main Security Gate"},{id:"s_can",name:"Worker Canteen"}]}]})];
+    const mk=(id,n)=>({id,name:n,universeId:"u2",personality:"x",instructions:"x",backstory:"x",style:"x",goals:"x",look:{},relationships:{}});
+    state.personas=[mk("p_s","Sami Özüçak"),mk("p_b","Burak Atan")];
+    state.payloadTplOn=true; state.payloadTemplates={solo:__USER_TEMPLATE,multi:__USER_TEMPLATE};
+    state.chats={c1:{id:"c1",universeId:"u2",castIds:[],presentIds:["p_s"],memCounts:{},tempChars:[],activeEvent:null,gameDay:1,period:"Afternoon",
+      locationId:"l_is",location:"Isdemir",subId:"s_can",subPos:{p_s:"s_can"},calendar:[],promises:[],rel:{},messages:[]}};
+    state.curUniverse="u2"; state.curChat="c1"; applyUniverseProfile("u2");
+    const c=state.chats.c1;
+    c.messages.push({mid:"a0",role:"assistant",speaker:"Sami Özüçak",speakerId:"p_s",present:["p_s"],content:'"Çay söyleyelim mi?"',toId:"__user__",toName:"Emre"});
+    const ev={kind:"confrontation",accuserId:"p_b",_startMsg:1,resolved:false,participant:{name:"Burak Atan",charId:"p_b",approaching:true}};
+    c.activeEvent=ev;
+    c.messages.push({mid:"a1",role:"assistant",speaker:"Narrator",narratorEvent:true,sceneBeat:true,present:["p_s"],content:"*Yemekhanenin kapısında Burak Atan beliriyor.*"});
+    c.messages.push({mid:"a2",role:"user",present:["p_s"],content:'*Gözlüğümü düzeltip* "Burak! Hayırdır, nöbetten önce mi geldin?"'});
+    c.messages.push({mid:"a3",role:"assistant",speaker:"Sami Özüçak",speakerId:"p_s",present:["p_s"],toId:"__user__",toName:"Emre",
+      content:'*Hemen araya giriyor.* "Burak! Gel otur, çay söyleyelim. Senin hanım bizi bugün epey eğlendirdi."'});
+    // the scene writer brings him in
+    window.chatCompletion=(function(prev){ return async(messages,model,opts)=>{
+      if(opts&&/^Scene writer/.test(opts.dbg||"")) return JSON.stringify({narration:"*Burak masalara doğru yürüyor.*",bring_in:"Burak Atan",resolved:false});
+      return prev(messages,model,opts); }; })(window.chatCompletion);
+    state.sceneOn=true;
+    let brought=null; try{ brought=await runSceneWriter(c); }catch(e){ out.swErr=String(e&&e.message||e); }
+    out.brought=brought&&brought.id; out.sub=c.subPos.p_b; out.playerSub=c.subId;
+    __fetches=[]; __stub.replies=['"Selam Emre. Vardiya planına baktım, erken geldim."'];
+    await playCharacterTurn(c,state.personas.find(x=>x.id==="p_b"),"arriving");
+    const rp=__fetches.filter(f=>Array.isArray(f.messages));
+    out.sent=JSON.stringify(rp[0]?rp[0].messages:[]);
+    out.toId=(c.messages[c.messages.length-1]||{}).toId;
+    // Sami's vocative alone (the player said nothing to Burak): he answers Sami, and no "not yours" note
+    const c2={...c};
+    const Bu=state.personas.find(x=>x.id==="p_b");
+    c.messages=c.messages.filter(m=>m.speakerId!=="p_b");
+    c.messages.find(m=>m.mid==="a2").content='"Sami, çayı sen söyle."';   // the player no longer speaks to Burak
+    const T=buildTailBlocks({chat:c,selfP:Bu,selfId:"p_b",selfName:"Burak Atan",targetName:"Sami Özüçak",targetId:"p_s",multi:true,injected:{recent:[],diary:[],longterm:[]}});
+    out.g2=String(T.response_guidance||""); out.ll2=String(T.last_line||"");
+    return out;
+  });
+  ok("a line that calls someone by name is told apart from one that only mentions them", ar.calls.v1&&ar.calls.v2&&!ar.calls.mention&&!ar.calls.narr, JSON.stringify(ar.calls));
+  ok("the event brings the arrival into the player's area, not the gate", ar.brought==="p_b"&&ar.sub===ar.playerSub&&ar.sub==="s_can", JSON.stringify({b:ar.brought,sub:ar.sub,p:ar.playerSub,err:ar.swErr}));
+  const S=ar.sent||"";
+  ok("so PRIVACY no longer says he cannot hear the room he is answering", S.indexOf("you are at Main Security Gate, apart from everyone else")<0&&/Worker Canteen/.test(S), S.slice(S.indexOf("PRIVACY"),S.indexOf("PRIVACY")+300));
+  ok("he answers the player's greeting to him, not Sami's line after it", /THIS IS THE LINE YOU ARE RESPONDING TO[^#]*nöbetten önce mi geldin/.test(S)&&ar.toId==="__user__", S.slice(S.indexOf("RESPONDING TO ⚠️"),S.indexOf("RESPONDING TO ⚠️")+300));
+  ok("and is never told a line that calls him by name was not for him", !/ADDRESSEE NOTE/.test(S), S.slice(S.indexOf("ADDRESSEE"),S.indexOf("ADDRESSEE")+200));
+  ok("with only Sami's \"Burak! Gel otur\" to answer, he answers Sami and gets no ADDRESSEE NOTE", /Gel otur/.test(ar.ll2)&&!/ADDRESSEE NOTE/.test(ar.g2), ar.g2);
+
   console.log("\n[2 — a stored copy of the old label is refreshed in place, the player's own edits kept]");
   await pg.evaluate(()=>{
     state.blockTpls=Object.assign({},state.blockTpls||{},{

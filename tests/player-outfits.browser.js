@@ -46,7 +46,9 @@ const {chromium}=require('playwright');
      JSON.stringify(await put("L_user","s2","Morning")));
   ok("same home, Evening", (await put("L_user","s2","Evening")).text==="You wear a dark green hoodie and joggers.");
   ok("at another place, that place's outfit", (await put("L_cafe","s4","Afternoon")).text==="You wear a navy bomber over a white tee and black jeans.");
-  ok("the Sea gets the swimwear", (await put("L_sahil","s_sea","Afternoon")).text==="You wear black swim shorts.");
+  // v148.6 — CHANGED ON PURPOSE: no generic swim outfit any more; the Sea area wears Sahil's own entry
+  ok("the Sea area wears the place's own outfit, not the stored swim shorts", (await put("L_sahil","s_sea","Afternoon")).text==="You wear khaki shorts and a linen shirt.",
+     JSON.stringify(await put("L_sahil","s_sea","Afternoon")));
   ok("the free-text note is the fallback where no slot fits", await pg.evaluate(()=>{
       const u=state.universes[0]; u.userWardrobe="black leather jacket, dark jeans";
       const c=curChat(); c.period="Afternoon"; c.locationId="L_user";
@@ -156,20 +158,23 @@ const {chromium}=require('playwright');
       editUniverse(state.universes[0].id);
       const rows=[...document.querySelectorAll('#ueUserOutfits input[data-outfit]')].map(i=>i.getAttribute('data-outfit'));
       const bomber=document.querySelector('#ueUserOutfits input[data-outfit="byLoc|L_cafe"]');
-      return (rows.includes("byLoc|L_cafe")&&rows.includes("home|Morning")&&rows.includes("activity|swim")
+      // v148.6 — no activity rows any more (was: rows.includes("activity|swim"))
+      return (rows.includes("byLoc|L_cafe")&&rows.includes("home|Morning")&&!rows.some(r=>/^activity/.test(r))
               &&bomber&&/navy bomber/.test(bomber.value)&&!rows.some(r=>/^userHome/.test(r))) ? true : rows.join(","); }));
   ok("no home chosen → no home rows", await pg.evaluate(()=>{
       const sel=document.getElementById('ueUserHome'); sel.value=""; sel.onchange();
       const has=!!document.querySelector('#ueUserOutfits input[data-outfit^="home|"]');
       sel.value="L_user"; sel.onchange(); return !has; }));
   ok("an edit and the free-text note are saved to the universe", await pg.evaluate(()=>{
-      const i=document.querySelector('#ueUserOutfits input[data-outfit="activity|sport"]');
+      const i=document.querySelector('#ueUserOutfits input[data-outfit="byLoc|L_sahil"]');   // v148.6 — was activity|sport
       i.value="You wear a grey track suit."; i.oninput();
       document.getElementById('ueUserWardrobe').value="leather jacket, dark jeans";
       saveUniverse();
       const u=state.universes[0];
-      return (u.userOutfits.activity.sport==="You wear a grey track suit."&&u.userWardrobe==="leather jacket, dark jeans"
+      // v148.6 — the old stored activity entry is kept (never deleted), just never read
+      return (u.userOutfits.byLoc.L_sahil==="You wear a grey track suit."&&u.userOutfits.activity.swim==="You wear black swim shorts."&&u.userWardrobe==="leather jacket, dark jeans"
               &&/navy bomber/.test(u.userOutfits.byLoc.L_cafe)) ? true : JSON.stringify({o:u.userOutfits,w:u.userWardrobe}); }));
+  // v148.6 — no activity slot is asked for or written; the stored one is kept as it was
   ok("Generate outfits fills only the empty slots, from the player's own details", await pg.evaluate(async()=>{
       editUniverse(state.universes[0].id);
       const cc=window.chatCompletion; let data="";
@@ -179,7 +184,7 @@ const {chromium}=require('playwright');
       try{ await generateUserOutfits(false); }finally{ window.chatCompletion=cc; }
       const o=_ueUserOutfits;
       return (o.byLoc.L_user==="You wear a flannel shirt."&&/navy bomber/.test(o.byLoc.L_cafe)&&o.home.Midday==="You wear a white tee."
-              &&o.activity.sleep==="You wear boxers."&&!o.userHome&&/the PLAYER's own character/.test(data)&&/ONLY THESE SLOTS ARE MISSING/.test(data))
+              &&!o.activity.sleep&&o.activity.swim==="You wear black swim shorts."&&!/activity/.test(data)&&!o.userHome&&/the PLAYER's own character/.test(data)&&/ONLY THESE SLOTS ARE MISSING/.test(data))
         ? true : JSON.stringify(o)+"\n"+data.slice(0,300); }));
   await pg.evaluate(()=>{ try{ closeModal('universeModal'); }catch(e){} });
 

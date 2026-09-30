@@ -57,7 +57,7 @@ const {chromium}=require('playwright');
   ok("Burcu, the target, does get the whisper, marked as one", /SECRETWHISPER/.test(burcu)&&/whispered to Burcu alone/.test(burcu), burcu.slice(0,400));
   ok("and her own thought", /THOUGHTBURCU/.test(burcu));
   // v148.4 — the listener line no longer claims "heard every line" (an aside is shown as one; see _memAsideCue)
-  ok("Cem (silent, in earshot) gets a listener memory build", cem.length>0&&/within earshot, heard the lines written out above/.test(cem), "no listener memBuild call");
+  ok("Cem (silent, in earshot) gets his own memory of the scene (v148.8: not an observation)", cem.length>0&&/in the same room, and heard the lines written out above/.test(cem), "no listener memBuild call");
   ok("the listener build sees neither the whisper nor the thought", cem.length>0&&!/SECRETWHISPER|THOUGHTBURCU/.test(cem), cem.slice(0,400));
   ok("a line said aloud still reaches Ayla", /figs/.test(ayla)&&/market/.test(ayla));
 

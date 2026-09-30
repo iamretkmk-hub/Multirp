@@ -135,6 +135,11 @@ Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention al
   (DIRECTION, NOT THE WORDS) writes the actual line in that style, and MOVE IT FORWARD keeps it from
   repeating the player. The narrator reads up to 20 lines and three memories about the people here —
   no longer the words given.
+- *An idea is spent (v149.4)*: a joke, reassurance, confession or compliment already used in this
+  scene, or already offered, may not come back in other words — in the writer, in SINCERE (which asks
+  about her instead of repeating the player's own confession) and in the narrator. The offered list
+  (`chat._sugPrev`, the last nine) now comes last in the message, right before the ask, as
+  ALREADY OFFERED, so a small model still has it in view after thirty long lines.
 - *This scene only (v149.3)*: both read `_playerSceneLines(…,{scene:true})`, which starts at the last
   travel beat or scene cut (`sceneCut`, now set on `runSceneCut`'s narration), or after the last day
   marker — the lines of the scene before a walk somewhere are not sent.

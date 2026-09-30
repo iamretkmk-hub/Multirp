@@ -3,7 +3,7 @@
    Covers: shipped prompts carry no real cast (and the stored copies are repaired without losing the
    player's edits); the arc cutter keeps a late arrival's first line, a re-arrival's earlier lines, a
    one-line remainder (carried or, at a close, written) and never splits a line from its reply; an aside
-   is not "heard every line"; listener memories stay out of the part-of-day reconcile; relationships are
+   is not "heard every line"; (v148.9) every fragment of a stretch goes into the part-of-day reconcile, labelled; relationships are
    seeded from the sheet's tie; a phone thread's closing exchange is remembered; the fast read stops at
    the last scene cut; gossip and diary payloads; the daily relationship read is batched per character.
    Run: NODE_PATH=/path/to/node_modules node tests/memory-payload-quality.browser.js */
@@ -218,27 +218,34 @@ const fs=require('fs'), path=require('path');
     const be=window.__calls.find(x=>/· Bert/.test(x.dbg));
     return {dbg:be&&be.dbg,leak:!!be&&/Not in front of Bert/.test(be.text)};
   });
-  ok("one who caught nothing but an aside only SAW it: the bystander gist, no words", W2.dbg==="Bystander gist · Bert"&&!W2.leak, JSON.stringify(W2));
+  /* (!) v148.9 — CHANGED ON PURPOSE: in the same room is never an observation. He gets his own memory of the scene,
+     still without the aside's words (it is marked as seen, not heard). */
+  ok("one who caught nothing but an aside is still in the scene: his own memory, the aside's words kept out", W2.dbg==="Memory (arc) · Bert"&&!W2.leak, JSON.stringify(W2));
   ok("_memAsideCue reads stage directions, not speech", await pg.evaluate(()=>
     !!_memAsideCue("*pulls her aside by the window* \"Listen.\"")&&!!_memAsideCue("*kulağına eğilip* \"Sus.\"")&&!_memAsideCue("*sets the cup down* \"Don't whisper, speak up.\"")));
 
   // ---------------------------------------------------------------------------------------------
-  console.log("\n[7. an overheard exchange stays out of the part-of-day reconcile; fragments show what they left]");
+  /* (!) v148.9 — CHANGED ON PURPOSE. v148.4 kept an overheard exchange out of the reconcile so its charge survived;
+     the day's one encounter then came back as a consolidated half and loose observations beside it. Every
+     fragment now goes in, labelled for how they took part, and the charge rides onto what they become. */
+  console.log("\n[7. the part-of-day reconcile takes every fragment, labelled; fragments show what they left]");
   await setup();
   const RC=await pg.evaluate(async()=>{
     const chat=curChat(); const base={ownerId:"p_be",character:"Bert",gameDay:2,gamePeriod:"Afternoon",universeId:chat.universeId,chatId:chat.id,importance:0.5,source:"auto"};
     state.memory=[Object.assign({id:"r1",content:"I served the tea and we talked about the boiler.",type:"EXPERIENCE",feelings:"I still don't trust that boiler."},base),
-                  Object.assign({id:"r2",content:"Sam and Deniz agreed something at the window without me.",type:"OBSERVATION",listener:true,charge:0.8},base),
+                  Object.assign({id:"r2",content:"Sam and Deniz agreed something at the window while I sat there.",type:"EXPERIENCE",listener:true,charge:0.8},base),
                   Object.assign({id:"r3",content:"I walked Deniz to the gate.",type:"EXPERIENCE"},base)];
     const frag=memsOfPeriod("p_be",2,"Afternoon",chat).map(m=>m.id);
-    window.__reply=()=>JSON.stringify({memories:[{content:"I served tea, talked boilers and walked Deniz out.",importance_score:0.5}]});
+    window.__reply=()=>JSON.stringify({memories:[{content:"I served tea, sat through Sam and Deniz's talk at the window and walked Deniz out.",importance_score:0.5}]});
     await reconcilePeriodFor(state.personas.find(p=>p.id==="p_be"),2,"Afternoon",chat);
     const c=window.__calls.find(x=>/Memory reconcile/.test(x.dbg));
-    const l=state.memory.find(m=>m.id==="r2");
-    return {frag,leftWith:!!c&&/left with: I still don't trust that boiler/.test(c.text),listenerKept:!!l&&l.charge===0.8&&l.type==="OBSERVATION"&&l.listener,noWindow:!!c&&!/at the window/.test(c.text)};
+    const left=state.memory.filter(m=>m.ownerId==="p_be");
+    return {frag,leftWith:!!c&&/left with: I still don't trust that boiler/.test(c.text),quietLabel:!!c&&/THEY WERE THERE BUT QUIET/.test(c.text),
+      n:left.length,charge:left[0]&&left[0].charge,listener:left[0]&&left[0].listener,type:left[0]&&left[0].type};
   });
-  ok("memsOfPeriod leaves the listener's OBSERVATION out", JSON.stringify(RC.frag)==='["r1","r3"]', JSON.stringify(RC));
-  ok("after the reconcile it still stands, with its charge, for the End-Day gossip", RC.listenerKept&&RC.noWindow, JSON.stringify(RC));
+  ok("memsOfPeriod takes the quiet part too", JSON.stringify(RC.frag)==='["r1","r2","r3"]', JSON.stringify(RC));
+  ok("it goes in labelled as heard, not said", RC.quietLabel===true, JSON.stringify(RC));
+  ok("one memory comes out, carrying the charge for the End-Day gossip", RC.n===1&&RC.charge===0.8&&RC.listener===true&&RC.type!=="OBSERVATION", JSON.stringify(RC));
   ok("each FRAGMENT carries what it left them with", RC.leftWith, JSON.stringify(RC));
 
   // ---------------------------------------------------------------------------------------------

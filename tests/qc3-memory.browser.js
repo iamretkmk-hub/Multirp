@@ -43,11 +43,12 @@ const {chromium}=require('playwright');
     const bu=window.__calls.find(c=>/Burcu/.test(c.dbg)), ce=window.__calls.find(c=>/Cem/.test(c.dbg));
     const m=state.memory.find(x=>x.ownerId==="p_bu")||{};
     // v148.4 — the listener line no longer claims "heard every line" (asides are marked; see _memAsideCue)
-    return {dbg:bu&&bu.dbg,listenerFrame:!!(bu&&/within earshot, heard the lines written out above/.test(bu.text)),notHeard:!!(bu&&/did NOT hear this/.test(bu.text)),
+    return {dbg:bu&&bu.dbg,listenerFrame:!!(bu&&/in the same room, and heard the lines written out above/.test(bu.text)),notHeard:!!(bu&&/did NOT hear this/.test(bu.text)),
       secret:!!(bu&&/took the money/.test(bu.text)),type:m.type,obsOnly:!!m.observerOnly,listener:!!m.listener,charge:m.charge,cem:!!ce};
   });
   ok("Burcu (silent, in earshot) goes through the memory builder, told she heard it", L.dbg==="Memory (arc) · Burcu"&&L.listenerFrame&&!L.notHeard&&L.secret, JSON.stringify(L));
-  ok("her memory is a real one (OBSERVATION, not observerOnly, listener, charge kept for gossip)", L.type==="OBSERVATION"&&!L.obsOnly&&L.listener&&L.charge===0.7, JSON.stringify(L));
+  // (!) v148.9 — CHANGED ON PURPOSE: in the same room is never an OBSERVATION; she files it like anyone there
+  ok("her memory is a real one (not an OBSERVATION, not observerOnly, listener, charge kept for gossip)", L.type!=="OBSERVATION"&&!L.obsOnly&&L.listener&&L.charge===0.7, JSON.stringify(L));
   ok("Cem (not stamped on the lines) gets nothing", L.cem===false, JSON.stringify(L));
   await setup();
   const G=await pg.evaluate(async()=>{

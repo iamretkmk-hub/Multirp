@@ -103,19 +103,19 @@ const {chromium}=require('playwright');
     ["memBuild",{data:"PLAIN"},{},"PLAIN"],
     /* the drives-and-brakes engine: eleven sections, each under its own heading. Both the
        everything-present and the sparse shape, because most turns are the sparse one. */
+    /* v149.1 — the readings are behaviour lines, and they sit right before the risk (here: after the scene) */
     ["psychePrompt",{character:"Ayse",personality:"Wry",goals:"Find the shop",backstory:"Left at 19",
-      with:"Kemal",ties:"TIES",promises:"PROM",trackers:"TRK",scene:"SCENE",exchange:"EX",axes:"desire: 60"},
-      {target:"Kemal"},
+      with:"Kemal",ties:"TIES",promises:"PROM",trackers:"TRK",scene:"SCENE",exchange:"EX",axes:"- Your eyes keep going back to Kemal."},
+      {target:"Kemal",self:"Ayse"},
       "THE CHARACTER: Ayse\n\nWHO THEY ARE: Wry\n\nWHAT THEY WANT OUT OF THEIR LIFE: Find the shop"
       +"\n\nWHERE THEY CAME FROM: Left at 19\n\nTHEY ARE WITH: Kemal"
       +"\n\nEVERY TIE THEY HAVE (the people a conscience is made of):\nTIES"
       +"\n\nTHE WORDS THAT BIND — what they have given, and what was given to them. Nobody else's:\nPROM"
       +"\n\nTRUE OF THEM RIGHT NOW:\nTRK"
       +"\n\nWHERE THEY ARE AND WHO CAN SEE:\nSCENE"
-      +"\n\nWHAT HAS JUST BEEN HAPPENING:\nEX"
-      +"\n\nPRIVATE READINGS toward Kemal — nobody sees these and they never appear in the story."
-      +" Positive means toward, negative means away. Roughly: under 25 is faint, 25-45 real, 45-70 strong,"
-      +" over 70 overwhelming.\ndesire: 60"],
+      +"\n\nHOW Ayse STANDS WITH Kemal — private, never stated in the story. Each line is what a reading changes in how Ayse acts;"
+      +" anything not listed is too faint to matter:\n- Your eyes keep going back to Kemal."
+      +"\n\nWHAT HAS JUST BEEN HAPPENING:\nEX"],
     ["psychePrompt",{character:"Ayse",personality:"",goals:"",backstory:"",with:"Kemal",
       ties:"",promises:"",trackers:"",scene:"",exchange:"",axes:""},{target:"Kemal"},
       "THE CHARACTER: Ayse\n\nTHEY ARE WITH: Kemal"]

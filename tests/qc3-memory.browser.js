@@ -47,7 +47,7 @@ const {chromium}=require('playwright');
       secret:!!(bu&&/took the money/.test(bu.text)),type:m.type,obsOnly:!!m.observerOnly,listener:!!m.listener,charge:m.charge,cem:!!ce};
   });
   ok("Burcu (silent, in earshot) goes through the memory builder, told she heard it", L.dbg==="Memory (arc) · Burcu"&&L.listenerFrame&&!L.notHeard&&L.secret, JSON.stringify(L));
-  // (!) v148.8 — CHANGED ON PURPOSE: in the same room is never an OBSERVATION; she files it like anyone there
+  // (!) v148.9 — CHANGED ON PURPOSE: in the same room is never an OBSERVATION; she files it like anyone there
   ok("her memory is a real one (not an OBSERVATION, not observerOnly, listener, charge kept for gossip)", L.type!=="OBSERVATION"&&!L.obsOnly&&L.listener&&L.charge===0.7, JSON.stringify(L));
   ok("Cem (not stamped on the lines) gets nothing", L.cem===false, JSON.stringify(L));
   await setup();

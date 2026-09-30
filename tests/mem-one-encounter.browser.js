@@ -1,4 +1,4 @@
-/* v148.8 — reported: "Two characters and I are in the same scene talking. The one who isn't responding creates an
+/* v148.9 — reported: "Two characters and I are in the same scene talking. The one who isn't responding creates an
    Observation memory. Then when the memory consolidator runs after the time of day changes, those observation
    memories stay as they are and only her own memories are consolidated. Characters in the same room shouldn't
    create observation memories, and all memories should be consolidated into one or two memories of that

@@ -3,7 +3,7 @@
    Covers: shipped prompts carry no real cast (and the stored copies are repaired without losing the
    player's edits); the arc cutter keeps a late arrival's first line, a re-arrival's earlier lines, a
    one-line remainder (carried or, at a close, written) and never splits a line from its reply; an aside
-   is not "heard every line"; (v148.8) every fragment of a stretch goes into the part-of-day reconcile, labelled; relationships are
+   is not "heard every line"; (v148.9) every fragment of a stretch goes into the part-of-day reconcile, labelled; relationships are
    seeded from the sheet's tie; a phone thread's closing exchange is remembered; the fast read stops at
    the last scene cut; gossip and diary payloads; the daily relationship read is batched per character.
    Run: NODE_PATH=/path/to/node_modules node tests/memory-payload-quality.browser.js */
@@ -218,14 +218,14 @@ const fs=require('fs'), path=require('path');
     const be=window.__calls.find(x=>/· Bert/.test(x.dbg));
     return {dbg:be&&be.dbg,leak:!!be&&/Not in front of Bert/.test(be.text)};
   });
-  /* (!) v148.8 — CHANGED ON PURPOSE: in the same room is never an observation. He gets his own memory of the scene,
+  /* (!) v148.9 — CHANGED ON PURPOSE: in the same room is never an observation. He gets his own memory of the scene,
      still without the aside's words (it is marked as seen, not heard). */
   ok("one who caught nothing but an aside is still in the scene: his own memory, the aside's words kept out", W2.dbg==="Memory (arc) · Bert"&&!W2.leak, JSON.stringify(W2));
   ok("_memAsideCue reads stage directions, not speech", await pg.evaluate(()=>
     !!_memAsideCue("*pulls her aside by the window* \"Listen.\"")&&!!_memAsideCue("*kulağına eğilip* \"Sus.\"")&&!_memAsideCue("*sets the cup down* \"Don't whisper, speak up.\"")));
 
   // ---------------------------------------------------------------------------------------------
-  /* (!) v148.8 — CHANGED ON PURPOSE. v148.4 kept an overheard exchange out of the reconcile so its charge survived;
+  /* (!) v148.9 — CHANGED ON PURPOSE. v148.4 kept an overheard exchange out of the reconcile so its charge survived;
      the day's one encounter then came back as a consolidated half and loose observations beside it. Every
      fragment now goes in, labelled for how they took part, and the charge rides onto what they become. */
   console.log("\n[7. the part-of-day reconcile takes every fragment, labelled; fragments show what they left]");

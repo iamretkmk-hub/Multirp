@@ -9085,6 +9085,22 @@ function loadState(){
     store.set("sm_narrpriv_v1484",true); } }catch(e){}
   // (end v148.4 ROLEPLAY CORE)
   //
+  // ---- v148.6 refresh: REPLY ----
+  /* v148.6 — YOU ALREADY SAID THESE carries the whole line now, not a 140-character cut labelled "in gist", so
+     the label and the block's opening sentence say "word for word". Block templates, so the v146.1 splice: a
+     stored copy still carrying the old sentence gets the new one in place, and the rest of its edits stay. */
+  {const AS=[
+     ["already_said_shortened","in gist — what it DID, so you do not do it again. Not how it was written)","word for word — said and spent. Do not say it, re-narrate it or do it again, in these words or any others)"],
+     ["already_said_instr","These are your OWN last lines in this scene, in gist.","These are your OWN last lines in this scene, word for word."]];
+   const upA=bag=>{ if(!bag||typeof bag!=="object")return false; let ch=false;
+     AS.forEach(([k,o,n])=>{ const v=bag[k]; if(typeof v==="string"&&v.indexOf(o)>=0&&v.indexOf(n)<0){ bag[k]=v.split(o).join(n); ch=true; } });
+     return ch; };
+   try{ if(upA(state.blockTpls)) store.set(K.blockTpls,state.blockTpls); }catch(e){}
+   try{ let any=false; (state.universes||[]).forEach(u=>{ if(u&&u.blockTpls&&upA(u.blockTpls))any=true; });
+        if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
+  }
+  // (end v148.6 REPLY)
+  //
   //
   /* v147.2 — third-audit prompt fixes. One slot per area. */
   // ---- v147.2 refresh: ROLEPLAY CORE ----
@@ -26495,9 +26511,19 @@ function overNarratedNote(L){
 }
 /* "" when the reply is new, otherwise which half of it is a repeat. Narration sits a little
    lower because stage directions are short and a shared verb or two is normal. */
+/* (!) v148.6 — A RECURRING PROP IS NOT A LOOP. The overlap is measured against the SHORTER span, so a
+   four-word beat — "*Çayımdan bir yudum alıyorum.*" (I sip my tea) — scored 1.0 against an earlier, longer
+   "*Çayımdan bir yudum daha alıyorum, gözüm yolda.*" and cost a retry, on a turn whose words were all new.
+   A person holding a cup sips from it more than once. A real loop re-uses the whole stage direction, so the
+   narration half now also needs five shared content words; the verbatim repeat ("…yudum alıyorum, gözüm
+   yolda" against "…yudum daha alıyorum, gözüm yolda": six) still fires. */
+function _narrShared(a,b){
+  const sb=new Set(_narrWords(b).map(w=>w.slice(0,5)));
+  return new Set(_narrWords(a).map(w=>w.slice(0,5)).filter(w=>sb.has(w))).size;
+}
 function repeatKind(a,b){
   if(replySimilarity(a,b)>=0.72) return "line";
-  if(narrationSimilarity(a,b)>=0.70) return "narration";
+  if(narrationSimilarity(a,b)>=0.70 && _narrShared(a,b)>=5) return "narration";
   if(openingEcho(a,b)>=0.8) return "opening";
   return "";
 }
@@ -26519,13 +26545,91 @@ function repeatRetryNote(kind,hit){
   return "That reply repeats something you already said earlier in this scene:"+q
     +"You have already said it. Saying it again, in any wording, is not available to you. Write a DIFFERENT turn that moves off that line entirely: drop what you were pressing for, or say the thing you were circling outright, or react to being stonewalled, or turn to something else and carry it with you. Do not restate, do not rephrase, do not ask again.";
 }
+/* (!) v148.6 — THE RETRY IS A REQUEST TO REWRITE. It used to be the original payload + the rejected reply as
+   the model's own [assistant] turn + a trailing [system] note. After its own turn and a system line, a model
+   is being asked to go on, and gemma-4-31b went on by answering the note: its "reply" was the instruction
+   list ("Do not re-narrate the same body…"). Here the rejected text is quoted as a DRAFT inside a bracketed
+   director's note, and the note is the last USER message (folded into the payload's own closing user block
+   when there is one, so no two instruction blocks sit side by side). The model's last turn is therefore
+   never the draft, and the last thing it reads is a plain request: write the turn again, as the story. */
+function retryAsRewrite(messages,draft,note,name){
+  const msgs=(messages||[]).slice();
+  const who=String(name||"your character");
+  const body="[Director's note — not part of the story. Do not answer this note, quote it, or mention it.]\n"
+    +"This is the draft of "+who+"'s turn that was just written:\n\n«"+String(draft||"").trim()+"»\n\n"
+    +String(note||"").replace(/\bthat reply\b/g,"that draft").replace(/\bThat reply\b/g,"That draft")+"\n\n"
+    +"Now write "+who+"'s turn again, from its first word, as the story itself: only "+who+"'s own words, actions and thoughts, "
+    +"in the story's language and format. No commentary, no list of rules, nothing about this note or the draft.";
+  const last=msgs[msgs.length-1];
+  // the payload's own closing instruction block (a template's [user] … [user end]) — never a transcript line
+  if(last&&last.role==="user"&&!last.name&&typeof last.content==="string")
+    msgs[msgs.length-1]=Object.assign({},last,{content:last.content+"\n\n"+body});
+  else msgs.push({role:"user",content:body});
+  return msgs;
+}
+/* (!) v148.6 — AND WHAT COMES BACK IS CHECKED BEFORE IT REPLACES ANYTHING. A retry only ever competes with a
+   reply that already exists, so the bar is "clearly a turn of the story": an instruction echo (opens on "Do
+   not"/"Make your reply"/"Write the turn", talks about stage directions or re-narrating, is a column of
+   imperatives), a refusal, an empty or stub answer, or English in a story that is not in English all lose,
+   and the first reply stays. `orig` is the reply it would replace ("" for the refusal fallback, which has
+   nothing to fall back to but the refusal notice). Bare-start check only: a spoken "Don't…" in quotes or a
+   *narrated* beat is story, not an instruction. */
+const _RETRY_META_OPEN=/^\s*(?:do not|don['’]t|never (?:re-?narrate|repeat|open|say|use|mention)|make (?:your|the|this) (?:reply|turn)|write (?:the|your|it|a|this)\b|rewrite\b|your (?:reply|turn|draft|last reply|stage directions)|here(?:['’]s| is) (?:the|my|a|your)\b|sure[,.!]|okay[,.!]|ok[,.!]|note:|\[?director)/i;
+const _RETRY_META_TERMS=/stage directions?|re-?narrat|director['’]s note|write the turn|one turn, as |do not (?:mention|repeat|use) the (?:word|phrase)|(?:your|this|the) draft (?:above|below|of this turn)|bodies do not loop|same body, same gesture/i;
+const _EN_STOP=new Set(("the you your do not don't and to of a is it that same again this in with reply turn write make one as "
+  +"stop word phrase mention narrate be are was what or any").split(" "));
+function _englishShare(s){
+  const w=String(s||"").toLowerCase().replace(/[’]/g,"'").split(/[^\p{L}']+/u).filter(Boolean);
+  if(!w.length)return 0;
+  return w.filter(x=>_EN_STOP.has(x)).length/w.length;
+}
+function retryOutputUsable(out,orig){
+  const t=String(out||"").trim(), o=String(orig||"").trim();
+  if(!t)return false;
+  try{ if(looksLikeRefusal(t))return false; }catch(_){}
+  if(t.length<Math.min(40,Math.floor(o.length*0.35)))return false;          // a stub is not a turn
+  if(_RETRY_META_OPEN.test(t)||_RETRY_META_TERMS.test(t))return false;
+  const lines=t.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  const imp=lines.filter(s=>/^(?:do not|don['’]t|never|make|write|keep|start|open|cut|drop|avoid)\b/i.test(s)).length;
+  if(lines.length&&imp/lines.length>=0.5)return false;                       // a column of imperatives
+  // English where the story is not: the reply it would replace is the evidence of the story's language
+  if(o.split(/\s+/).length>=8&&_englishShare(o)<0.08&&_englishShare(t)>=0.2)return false;
+  return true;
+}
+/* (!) v148.6 — THE ONE FIX THE APP CAN MAKE ITSELF. When the retry is discarded after a narration or opening
+   repeat, the stage direction that echoes the earlier one is taken out of the first reply — provided speech
+   or a thought is left standing. "" when nothing was dropped (the reply is then kept exactly as written). */
+function dropEchoedNarration(reply,hit){
+  const src=String(reply||"");
+  const spans=src.match(/\*[^*\n]+\*/g)||[];
+  const hs=(String(hit||"").match(/\*[^*\n]+\*/g)||[]).map(s=>new Set(_narrWords(s).map(w=>w.slice(0,5))));
+  if(!spans.length||!hs.length)return "";
+  let out=src, n=0;
+  spans.forEach(sp=>{
+    const w=new Set(_narrWords(sp).map(x=>x.slice(0,5))); if(w.size<3)return;
+    const echo=hs.some(H=>{ let i=0; w.forEach(x=>{ if(H.has(x))i++; }); return i>=3&&i/w.size>=0.75; });
+    if(echo){ out=out.replace(sp," "); n++; }
+  });
+  if(!n)return "";
+  out=out.replace(/[ \t]{2,}/g," ").replace(/[ \t]+\n/g,"\n").replace(/\n[ \t]+/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+  if(!/"[^"]{2,}"|“[^”]{2,}”|_[^_\n]{2,}_/.test(out)||out.replace(/\s/g,"").length<15)return "";
+  return out;
+}
 // This character's own most recent spoken lines in this scene, newest first.
-function ownRecentLines(chat,selfP,n){
+/* (!) v148.6 — IN THIS SCENE MEANS IN THIS SCENE. v148.4 gave the line pickers a floor (_lineWalkFloor: the start
+   of this character's scene) and a stop at the day marker, but not this walk — so at the first turn of a
+   barbecue "YOU ALREADY SAID THESE" quoted Sami's line from the previous night at the garden gate, a moment
+   not in his transcript, and the repeat check could send a retry against yesterday's gesture. One boundary
+   now for already_said, ownRecentThoughts, exchangeIsStalled and the repeat retry. `textMode` keeps a text
+   thread's whole walk, as the pickers do. */
+function ownRecentLines(chat,selfP,n,textMode){
   const out=[];
   try{
     const msgs=(chat&&chat.messages)||[];
-    for(let i=msgs.length-1;i>=0&&out.length<(n||3);i--){
+    const floor=_lineWalkFloor(chat,selfP,textMode);
+    for(let i=msgs.length-1;i>=floor&&out.length<(n||3);i--){
       const m=msgs[i];
+      if(m&&m.dayMarker&&selfP&&!textMode)break;       // yesterday's lines are not this scene's
       if(!m||m.role!=="assistant"||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
       if(!m.content||!String(m.content).trim())continue;
       if(!selfP||!((m.speakerId&&m.speakerId===selfP.id)||m.speaker===selfP.name))continue;
@@ -29655,7 +29759,7 @@ It is NOT your business and you do NOT raise it. Do not ask {{user}} about it, d
      on the most recent and most abundant evidence it has. Said once, beside the character's own
      last lines, which is where the pull comes from. */
   already_said_header:`# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️`,
-  already_said_instr:`These are your OWN last lines in this scene, in gist. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
+  already_said_instr:`These are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.
 Whatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.
 This applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.`,
   already_said_continues:`Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.`,
@@ -29676,8 +29780,11 @@ This applies to your ACTIONS exactly as much as to your words. If you already gr
      and the next, and no prose rule outweighed it — the two paragraphs that used to sit above this
      trying to (`already_said_not_style`) are gone with it, because a rule that never wins teaches
      that the rules here are advisory. The channel is repaired on write instead; see
-     normalizeChannels. */
-  already_said_shortened:`({{which}}, in gist — what it DID, so you do not do it again. Not how it was written) {{line}}`,
+     normalizeChannels.
+     (!) v148.6 — BUT THE GIST WAS NEVER ONE. Nothing summarised these lines: the "gist" was the verbatim line cut
+     at 140 characters, mid-quote. So the label promised one thing and the slot delivered a truncated copy of
+     the other. The line is passed WHOLE now (see _saidLineWhole) and the label says so: word for word, spent. */
+  already_said_shortened:`({{which}}, word for word — said and spent. Do not say it, re-narrate it or do it again, in these words or any others) {{line}}`,
   already_said_which_last:`your last line`,
   already_said_which_above:`the line before the one quoted above`,
   already_said_which_older:`and the one before that`,
@@ -30131,6 +30238,22 @@ function briefDesc(s,max){
   const sp=c.lastIndexOf(" "); if(sp>=max*0.5) c=c.slice(0,sp);
   return c.replace(/[\s,;:—-]+$/,"")+"…";
 }
+/* (!) v148.6 — a character's own line, WHOLE, for YOU ALREADY SAID THESE. Anything a reply can reasonably be
+   passes untouched; only a runaway (over `max`) is cut, and then at the last sentence end, with an open
+   "quote", *beat* or _thought_ closed so the line never stops mid-delivery. */
+function _saidLineWhole(s,max){
+  let t=String(s||"").trim(); if(!t)return "";
+  max=max||1600;
+  if(t.length<=max)return t;
+  const c=t.slice(0,max);
+  let at=-1; const re=/[.!?…]["”'’*_]*(?=\s|$)/g; let m;
+  while((m=re.exec(c)))at=m.index+m[0].length;
+  t=(at>=max*0.5?c.slice(0,at):c.slice(0,Math.max(c.lastIndexOf(" "),Math.floor(max*0.5)))).trim();
+  if(((t.match(/"/g)||[]).length%2))t+='"';
+  if(((t.match(/\*/g)||[]).length%2))t+="*";
+  if(((t.match(/(^|\s)_|_(?=\s|$)/g)||[]).length%2))t+="_";
+  return t;
+}
 /* HOW YOU FEEL TOWARD <target> — the considered view (settled, governs behaviour), the momentary
    charge (impulsive, colors this beat only), and the first-encounter notice when there is no
    relationship at all. Prose only, never numbers. Returned as {text, knowsTarget} because the
@@ -30226,6 +30349,19 @@ function replyNamePh(npc,targetName){
   return {char:nm,self:nm,user:state.user||"",target:targetName||state.user||""};
 }
 function _replyPh(p,opts,targetName){ return replyNamePh(p,targetName); }
+/* (!) v148.6 — does the `feelings` block reach the payload this is being built for? relationships drops the
+   target's paragraph on the promise that feelings states that stance (v62.1); a promise only a payload that
+   actually calls feelings can keep. Template mode reads the template; the block layout reads its order.
+   When the kind is not known, every spoken kind the builder could be serving must carry it. */
+function _feelingsReachPayload(chat,opts){
+  try{
+    const kinds=(opts&&opts.payloadKind)?[opts.payloadKind]
+      :(opts&&opts.textMode)?["text"]:(chat&&chat._heatBeat)?["heat"]:["solo","multi","gm"];
+    return kinds.every(k=>state.payloadTplOn
+      ? /\{\{\s*call\s*\/\/\s*(?:feelings|feel_lasting|feel_lasting_alt)\s*(?:\/\/[^}]*)?\}\}/i.test(String(ptTemplate(k)||""))   // the block, or the fragments that carry the settled stance
+      : payloadOrder(k).indexOf("feelings")>=0);
+  }catch(e){ return false; }
+}
 function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   opts=opts||{};
   const chat=opts.chat||curChat();
@@ -30319,7 +30455,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
    const _hasSummary=!!String((p&&p.socialGraph)||"").trim();
    const _scope=(_wantScope==="present"&&!_hasSummary)?"brief":_wantScope;
    // v62.1 — whoever the turn is aimed at has their stance stated once, in `feelings`.
-   const _stanceElsewhere=(_feelHasSettled&&targetId)?targetId:null;
+   /* (!) v148.6 — …BUT ONLY WHEN `feelings` IS ACTUALLY SENT. This assumed every payload carries the feelings
+      block. A player's own template that does not call it (the one that reported this calls
+      relationships//full and never feelings) lost the player's paragraph here and got it nowhere else:
+      "• [Emre — friend]" with no text, beside a paragraph for everyone else. See _feelingsReachPayload.
+      And never for the PLAYER: their entry is the card's own relationships.__user__ — the history of the tie
+      the whole reply is about, which the player wrote or approved — not the evaluated stance feelings
+      carries. It is always printed whole; the drop is kept only for another character being answered. */
+   const _stanceElsewhere=(_feelHasSettled&&targetId&&targetId!=="__user__"&&_feelingsReachPayload(chat,opts))?targetId:null;
    // v148.4 — a text: "[here now]" is who shares the TEXTER's place, not the player's scene (see relSheetBlockFull)
    const _here=(()=>{ if(!(opts&&opts.textMode)||!p)return {};
      try{ const pos=resolveWorldPositions(chat)||{}, own=pos[p.id];
@@ -30328,7 +30471,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
    const sheet=relSheetBlockFull(p,Object.assign({scope:_scope,stanceElsewhere:_stanceElsewhere,chat:chat,
      // v148.4 — in a scene, [here now] = earshot (earshotSplit); a text has no earshot, only where the texter is
      earIds:(opts&&opts.textMode)?null:(()=>{ try{ return earshotSplit(chat,p.id).here; }catch(e){ return null; } })(),
-     trimSummary:true},_here));                                                                          // v148.4 — ties once, not twice
+     /* v148.4 — ties once, not twice. (!) v148.6 — not on the "everyone" scope: that is the player asking for
+        the whole sheet, and there every tie has a paragraph, so the trim deleted the author's summary note
+        outright (every sentence in it names somebody). */
+     trimSummary:_scope!=="everyone"},_here));
    if(sheet)B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`;}
 
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
@@ -30638,7 +30784,7 @@ function buildTailBlocks(opts){
      the model cannot otherwise see. The anti-repeat window stays the same size either way. */
   {
     const _cont=!!selfContinueLine(chat,selfP,_tm);
-    const all=ownRecentLines(chat,selfP,_cont?3:2);
+    const all=ownRecentLines(chat,selfP,_cont?3:2,_tm);   // v148.6 — this scene's lines (a text thread keeps its own)
     const mine=_cont?all.slice(1):all;
     if(mine.length){
       /* v38.1 — the two parentheticals used to be hard-coded English welded into the data line, so
@@ -30650,8 +30796,14 @@ function buildTailBlocks(opts){
       const _which=i=>blkTpl(_cont
         ? (i===0?"already_said_which_above":"already_said_which_older")
         : (i===0?"already_said_which_last":"already_said_which_plain"));
+      /* (!) v148.6 — THE WHOLE LINE, NOT A LINE CUT OFF. The "gist" was never a gist: it was the verbatim line
+         sliced at 140 characters, so the block promised "what it DID … not how it was written" and then
+         showed how it was written, stopped mid-quote ('… "Sen yalnız başının çaresine bakıyorsun demek.' /
+         '… "Asran…'). A cut line is the worst of both: the exemplar is still there, and what the line did
+         is not. The line goes in whole (bounded generously, cut only at a sentence end with its quote or
+         *beat* closed — see _saidLineWhole) and the label says what it is: verbatim, and spent. */
       _as.already_said_lines=mine.map((x,i)=>fillTpl(blkTpl("already_said_shortened"),
-              {which:_which(i), line:briefDesc(stripDeliveryTags(x),140)})).join("\n\n");
+              {which:_which(i), line:_saidLineWhole(stripDeliveryTags(x))})).join("\n\n");
       if(exchangeIsStalled(chat,selfP)) _as.already_said_stalled=blkTpl("already_said_stalled");
       if(thoughtIsStuck(chat,selfP)) _as.already_said_thought_stuck=blkTpl("already_said_thought_stuck");
       let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
@@ -31045,7 +31197,12 @@ function buildTailBlocks(opts){
     const _ll=_answering;
     if(_ll && _ll.name!==selfName && _ll.toId && _ll.toId!==selfId){
       const _to=(_ll.toId==="__user__")?(state.user||""):(_ll.toName||"");
-      if(_to && _to!==selfName){
+      /* (!) v148.6 — A LINE THAT CALLS YOU BY NAME IS YOURS. toId is who the router queued the speaker to answer
+         (answerTo:"__user__" pins every responder to the player), not who the words were aimed at: Sami's
+         "Burak! Gel otur, çay söyleyelim…" carried toId = the player, and Burak, arriving, was told Sami had
+         "said that to Emre, not to you. Do NOT answer it". A vocative — the name opening the spoken line or set
+         off by a comma or a call mark — overrides the stamp. */
+      if(_to && _to!==selfName && !_callsByName(_ll.text,selfName)){
         _rg.guidance_not_yours=fillTpl(blkTpl("guidance_not_yours"),{speaker:_ll.name,addressee:_to,self:selfName});
         g+=`\n\n${_rg.guidance_not_yours}`;
       }
@@ -31636,6 +31793,21 @@ function _nmRe(name){
 }
 // Does `text` mention `name` as a whole word?
 function nameInText(text,name){ const re=_nmRe(name); return !!re && re.test(_nmFold(text)); }
+/* (!) v148.6 — does a line CALL this person (a vocative), not merely mention them? The name — full, or the
+   first name — opening a spoken part or a sentence, or set off by a comma / "!" / "?", as in "Burak! Gel otur"
+   or "Gel otur, Burak." Narration (*…*) is left out: a stage direction naming you is not you being called. */
+function _callsByName(text,name){
+  try{
+    const said=_nmFold(String(text||"").replace(/\*[^*]*\*/g," "));
+    const full=_nmFold(name); if(!full)return false;
+    const cands=[full].concat(full.split(" ")[0]&&full.split(" ")[0]!==full?[full.split(" ")[0]]:[]).filter(n=>n.length>=2);
+    return cands.some(n=>{
+      const e=n.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"), B="(?![\\p{L}\\p{N}])";
+      return new RegExp("(^|[\"“«\\n!?.]\\s*)"+e+B+"\\s*[,!?]","u").test(said)
+          || new RegExp(",\\s*"+e+B+"\\s*[.!?]?\\s*[\"”»]?\\s*($|\\s)","u").test(said);
+    });
+  }catch(e){ return false; }
+}
 // Is `a` the same name as `b`? Exact after folding; a lone first name matches a full name's first word
 // only when `allowFirst` (the caller decides whether that is safe).
 function sameName(a,b,allowFirst){
@@ -34016,7 +34188,7 @@ async function sendMessage(opts){
       }
       // v19 payload assembly: block content is produced exactly as before; block ORDER (and which
       // side of the dialogue each block sits on) comes from the user's "solo" payload layout.
-      const _tOpts={ chat, selfP:solo, targetName:_who, targetId:"__user__" };
+      const _tOpts={ chat, selfP:solo, targetName:_who, targetId:"__user__", payloadKind:replyKind(chat,"solo") };   // v148.6 — payloadKind: see _feelingsReachPayload
       // v146.1 — assembled in THIS chat's world (see inChatWorld), then the model is called
       let messages=inChatWorld(chat,()=>{
       const _hb=buildSystemPromptBlocks(injected,_tOpts);
@@ -37606,6 +37778,10 @@ async function generateCharacterReply(chat,p,messages,opts){
     rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
   }
   let reply=await chatCompletion(messages,model,rpOpts);
+  /* (!) v148.6 — the first answer can be an empty-response RESCUE (chatCompletion's own retry), and a rescue
+     can come back as talk about the instructions. There is no earlier reply to keep here, so an unmistakable
+     instruction echo reads as empty — the player gets the notice with Retry, never the echo as a line. */
+  if(reply&&_RETRY_META_TERMS.test(reply)){ try{ _alog("reply.meta",p.name+": the reply talked about its instructions instead of playing the turn — not posted"); }catch(_){} reply=""; }
   /* v28.8 — LAST LINE OF DEFENCE. If what came back substantially re-says something this
      character already said in this scene, the prompt lost — so ask once more with the repeat
      quoted back and an explicit instruction to move off it. One retry only: a second identical
@@ -37618,14 +37794,28 @@ async function generateCharacterReply(chat,p,messages,opts){
     const _hit=_mine.find(x=>repeatKind(reply,x));
     const _narr=(!_hit && !wasHeat)?overNarrated(reply):null;
     if(_hit||_narr){
-      const _note=_hit?repeatRetryNote(repeatKind(reply,_hit),_hit):overNarratedNote(_narr);
+      const _rk=_hit?repeatKind(reply,_hit):"";
+      const _note=_hit?repeatRetryNote(_rk,_hit):overNarratedNote(_narr);
       try{ _alog("retry.spend",(_hit?"repeat":"narration")+" retry — this turn costs a second call"); }catch(_){}
+      /* (!) v148.6 — A REWRITE REQUEST, NOT A TURN TO CONTINUE. The retry used to append the rejected reply as
+         the model's OWN turn and then a trailing [system] note. gemma-4-31b read that as "the assistant has
+         spoken, now say something about the note" and answered with the instruction itself — "Do not re-narrate
+         the same body. Do not mention the word 'yudum' again…" — which then REPLACED a perfectly good reply.
+         The note now arrives as the last USER message, bracketed as a director's note with the draft quoted
+         inside it (see retryAsRewrite), and whatever comes back is checked before it may replace anything. */
       const _again=await chatCompletion(
-        messages.concat([{role:"assistant",content:reply},{role:"system",content:_note}]),
+        retryAsRewrite(messages,reply,_note,p.name),
         model,Object.assign({},rpOpts,{dbg:rpOpts.dbg+" ("+(_hit?"repeat":"narration")+" retry)"}));
-      if(_again&&_again.trim()&&!looksLikeRefusal(_again)&&
+      const _usable=retryOutputUsable(_again,reply);
+      if(_usable&&
          (_hit?!_mine.some(x=>repeatKind(_again,x))
               :(!overNarrated(_again)&&!_mine.some(x=>repeatKind(_again,x))))) reply=_again;
+      else{
+        // v148.6 — never replace a real reply with worse: keep the first one, with the one fix the app can
+        // make itself (a stage direction that echoes an earlier one is dropped, when speech is left).
+        if(!_usable){ try{ _alog("retry.discarded",p.name+": the retry came back unusable (meta, empty, refusal or off-language) — the first reply is kept"); }catch(_){} }
+        if(_hit&&(_rk==="narration"||_rk==="opening")){ const _fx=dropEchoedNarration(reply,_hit); if(_fx)reply=_fx; }
+      }
     }
   }catch(e){ if(e&&e.stopped)throw e; }   // (!) v146.1 — Stop during the retry is a stop, not "keep the first answer"
   /* REFUSAL HANDLING. A non-empty reply can still be a content refusal (e.g. v4-pro returns a
@@ -37638,7 +37828,7 @@ async function generateCharacterReply(chat,p,messages,opts){
     if(fb!==model){
       try{
         const alt=await chatCompletion(messages,fb,Object.assign({},rpOpts,{dbg:rpOpts.dbg.replace(/^Roleplay reply/,"Roleplay reply (refusal fallback)")}));
-        if(alt&&alt.trim()&&!looksLikeRefusal(alt)){ reply=alt; refused=false; }
+        if(alt&&alt.trim()&&!looksLikeRefusal(alt)&&retryOutputUsable(alt,"")){ reply=alt; refused=false; }   // v148.6 — checked like every retry
       }catch(e){ if(e&&e.stopped)throw e; /* otherwise keep refused=true; honest message from the caller */ }
     }
   }
@@ -37710,7 +37900,18 @@ async function playCharacterTurn(chat,p,addressed,opts){
        guidance and the quoted line all name one person — the contradiction that let a second
        responder answer a question meant for the player. */
     const _whisperBack=!!opts.whisperBack;
-    const _pin=opts.answerTo||null;
+    let _pin=opts.answerTo||null;
+    /* (!) v148.6 — AN ARRIVAL ANSWERS WHAT WAS SAID TO THEM. The newest line in the room is not necessarily theirs:
+       the player greeted Burak at the door ("Burak! Hayırdır, nöbetten önce mi geldin?"), Sami spoke after him,
+       and Burak's entrance was aimed at Sami. On an arrival's first turn the player's line wins when it calls
+       them by name, or when nothing newer does; a bystander's line that calls them keeps its speaker. */
+    if(!_pin&&addressed==="arriving"){
+      try{ inChatWorld(chat,()=>{
+        const _pl=lastPlayerLine(chat,p), _ll=lastDialogueLine(chat,p);
+        const _llCalls=!!(_ll&&_ll.name!==_who&&_callsByName(_ll.text,p.name));
+        if(_pl&&(_callsByName(_pl.text,p.name)||!_llCalls))_pin="__user__";
+      }); }catch(e){}
+    }
     /* v146.1 — the payload is assembled in THIS chat's world (inChatWorld): the builders read the open
        story's setting, places, prompts and player, which were another story's once the player switched. */
     let messages=inChatWorld(chat,()=>{
@@ -37732,13 +37933,13 @@ async function playCharacterTurn(chat,p,addressed,opts){
     }
     // v19 payload assembly: block content per character; block ORDER from the "multi" payload layout.
     const _kind=replyKind(chat,"multi");
-    const _hb=buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId});
+    const _hb=buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId,payloadKind:_kind});   // v148.6 — payloadKind: see _feelingsReachPayload
     const _tb=buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected, answerTo:_pin });
     const _pl=buildPayload(_kind,_hb,_tb);
     const baseHist=castHistory(chat,p);
     const taggedHist=tagLastForTarget(baseHist);
     let msgs=ptBuildMessages(_kind,Object.assign({},_hb,_tb),taggedHist,{chat,npc:p,targetName},
-      ()=>Object.assign({},buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId}),
+      ()=>Object.assign({},buildCharPromptBlocks(p,others,injected,addressed,{chat,targetName,targetId,payloadKind:_kind}),
         buildTailBlocks({ chat, selfP:p, selfId:p.id, selfName:p.name, targetName, targetId, multi:true, injected, answerTo:_pin })));
     if(!msgs){
       msgs=[];
@@ -49935,6 +50136,11 @@ async function runSceneWriter(chat){
       applyPresence(chat,[ev.participant.name],[]);   // now physically present
       // ensure the id is actually in presentIds (temp chars aren't in castIds)
       if(!presentIds(chat).includes(id))chat.presentIds.push(id);
+      /* (!) v148.6 — BROUGHT IN MEANS BROUGHT IN. A summons leaves a character at the entrance (v19.71), and the
+         event's own narration then walks them to the player ("Burak masalara doğru yürürken…"). Left at the gate,
+         their payload said "you are at Main Security Gate … you cannot hear the other areas" while handing them
+         the canteen's lines to answer. The event brings them into the player's area, so that is where they are. */
+      try{ if(chat.locationId){ chat.subPos=chat.subPos||{}; chat.subPos[id]=curSubId(chat); } }catch(_){}
       notePresence(chat,[ev.participant.name],[]);
       _stampApproachHeard(chat,ev,id);   // v148.4 — what was said to them at the door reached them
       persistChats();appendNewBubbles();updateChatHeader();
@@ -49958,6 +50164,7 @@ async function runSceneWriter(chat){
         if(card && !_barred){
           if(!chat.presentIds)chat.presentIds=[];
           if(!chat.presentIds.includes(card.id))chat.presentIds.push(card.id);
+          try{ if(chat.locationId){ chat.subPos=chat.subPos||{}; chat.subPos[card.id]=curSubId(chat); } }catch(_){}   // v148.6 — into the player's area (see above)
           notePresence(chat,[card.name],[]);
           persistChats();appendNewBubbles();updateChatHeader();
           broughtIn=resolveChar(card.id,chat)||card;
@@ -50175,7 +50382,7 @@ async function playSingleReaction(chat,p,eventText){
     }catch(e){injected={recent:[],diary:[],longterm:[]};}}
     // v19 payload assembly: block content unchanged; block ORDER from the "gm" payload layout.
     // v144.1 — built for THIS character in THIS chat (selfP), not the open chat's first-present.
-    const _tOpts={ chat, selfP:p, targetName:_who, targetId:"__user__" };
+    const _tOpts={ chat, selfP:p, targetName:_who, targetId:"__user__", payloadKind:"gm" };   // v148.6 — payloadKind: see _feelingsReachPayload
     // v146.1 — assembled in THIS chat's world (see inChatWorld)
     const _msgs=inChatWorld(chat,()=>{
     const _hb=buildSystemPromptBlocks(injected,_tOpts);
@@ -54097,7 +54304,7 @@ function ptPreviewBlocks(kind){
   if(kind==="heat") chat._heatBeat={total:"3",n:"1",narrN:String(+chat.heatNarrN||1)};
   let hb,tb;
   try{
-    const opts={chat,targetName:state.user,targetId:"__user__",textMode:kind==="text"};
+    const opts={chat,targetName:state.user,targetId:"__user__",textMode:kind==="text",payloadKind:kind};   // v148.6 — the preview shows the kind being previewed
     hb=buildCharPromptBlocks(p,[],injected,state.user,opts);
     tb=buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,
       targetName:state.user,targetId:"__user__",multi:(kind==="multi"),injected,textMode:kind==="text"});

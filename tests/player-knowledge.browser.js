@@ -127,7 +127,7 @@ const {chromium}=require('playwright');
     _sugBusy=false; await fetchSuggestions(chat,"a3");
     const c=window.__calls.find(x=>/Suggested replies/.test(x.dbg)); return {t:c?c.text:"",seeded:window.__calls.some(x=>/^Your ties/.test(x.dbg))};
   });
-  ok("it carries WHO IS WHO and WHAT THE PLAYER REMEMBERS, with the player's own entries", /WHO IS WHO \(as the player knows it\)/.test(S.t)&&/WHAT THE PLAYER REMEMBERS/.test(S.t)&&/Berker works in accounting/.test(S.t)&&/visit the mill on Friday/.test(S.t), S.t.slice(0,1400));
+  ok("it carries WHO IS WHO and A FEW THINGS THE PLAYER REMEMBERS, with the player's own entries", /WHO IS WHO \(as the player knows it\)/.test(S.t)&&/A FEW THINGS THE PLAYER REMEMBERS/.test(S.t)&&/Berker works in accounting/.test(S.t)&&/visit the mill on Friday/.test(S.t), S.t.slice(0,1400));
   ok("and nothing from the characters' private view of the player", !/Chief Mechanical|looking at Burcu|looks at Buket/.test(S.t), S.t.slice(0,1400));
   ok("everyone here already has an entry: nothing to seed", S.seeded===false, JSON.stringify(S.seeded));
   const Seed=await pg.evaluate(async()=>{

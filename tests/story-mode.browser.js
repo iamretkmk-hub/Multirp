@@ -226,12 +226,14 @@ const {chromium}=require('playwright');
   ok("nor a character's private reckoning", kn.user.indexOf("PRIVATE")<0, kn.k.memories);
   ok("nor anybody's private motive", kn.user.indexOf("MOTIVE")<0, "motive leaked");
   ok("and the prompt tells it to stay on track with all of it", /STAY ON TRACK/.test(kn.sys), kn.sys.slice(-300));
-  ok("the suggestion writer is given the same", await pg.evaluate(async()=>{
+  // v149.2 — the suggestion writer reads the moment, not the player's past: no plans, words given or day ledger
+  ok("the suggestion writer is given the people here, but none of the plans, words given or secrets", await pg.evaluate(async()=>{
       const c=curChat(); c.storyMode=false; state.suggestOn=true; window.__calls=[];
       await fetchSuggestions(c,(_apTail(c)||{}).mid);
       const call=__calls.find(x=>x.dbg==="Suggested replies"); const u=call?call.messages[1].content:"";
       c.storyMode=true; state.suggestOn=false;
-      return (/Dinner with Berk/.test(u)&&/pay back the boat money/.test(u)&&/lost the boat money/.test(u)&&u.indexOf("SECRET")<0) ? true : u.slice(0,400); }));
+      return (/THE PEOPLE HERE:\n## Ayla/.test(u)&&!/Dinner with Berk|pay back the boat money|EARLIER TODAY|THE PLAYER'S PLANS|WORDS GIVEN/.test(u)
+        &&u.indexOf("SECRET")<0&&u.indexOf("MOTIVE")<0&&u.indexOf("PRIVATE")<0) ? true : u.slice(0,600); }));
 
   console.log("\n[settings and prompts]");
   ok("pace and run length save, clamped", await pg.evaluate(()=>{

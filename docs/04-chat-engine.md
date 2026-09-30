@@ -103,6 +103,35 @@ router model. The chips render in `#autoBar` above the composer and hide while t
 Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention always goes through
 `narratePlayerTurn`, even with Auto-RP off.
 
+**Suggested replies by mode (v149.2)** — the writer reads the moment, not the player's past.
+- *The three styles* come from one mode prompt appended to `x_reply_suggest`, picked in code by
+  `suggestMode(chat)` from who is in earshot. Gender is the card's tag (`woman`/`man`, also
+  female/male, kadın/erkek…; `personSex`), else the look's subject line.
+  | Who is in earshot | Prompt | Styles |
+  |---|---|---|
+  | one woman | `x_reply_suggest_woman` | charming and funny · subtle flirting that reads her last response · sincere, bond-building |
+  | one man | `x_reply_suggest_man` | straight talk with slang · gossip, drawing him out · planting a seed (manipulative) |
+  | two or more | `x_reply_suggest_group` | the room laughs · deniable flirting, with a jab at her husband when he is here · switch the target |
+  | one woman, intimate moment | `x_reply_suggest_heat` | soft and sensual · taking charge · dirty talk |
+  | a minor here, or no tag | `x_reply_suggest_neutral` | light and funny · curious · sincere; nothing flirtatious |
+  The intimate moment is a live heat run (`_heatLive`) or the last four lines reading as intimate
+  (`intimacyReads`), never with a minor in the scene. Only the picked prompt is sent. The group
+  prompt is told who the women, the men and the couples are (`_couplesAmong`, from the cards' tie
+  words; a private tie never counts).
+- *The payload* (`x_reply_suggest`): the player's bio; the scene (`_sugSceneBlock`: day, part of the
+  day, place, the player's area and its description, how private it is, who is in and out of
+  earshot); each person here in full (`_sugPeopleBlock`: their tie to the player, public facts, the
+  card's personality and background — never the card's private view of the player); who is who; at
+  most three of the player's memories that involve somebody here, without open threads; the options
+  offered recently (`chat._sugPrev`, transient); the last `SUG_LINES` (30) lines as the player lived
+  them; and the player's own last line when it is among the last ten. No calendar, promises, quests
+  or day ledger — Story mode still gets those through `_playerKnows`.
+- *The tone*: options come back as `{text, tone}` (plain strings still work). `sendSuggestion` hands
+  the tapped option's tone to `narratePlayerTurn` (`_apForceTone`), which adds `Tone: …` to the
+  intention; the narrator prompt's THE TONE THE PLAYER PICKED makes it write the turn in that
+  register, and MOVE IT FORWARD keeps it from repeating the player. The narrator reads up to 20
+  lines and three memories about the people here — no longer the words given.
+
 ## Story mode (v118.1, experimental)
 
 A separate per-chat switch (`chat.storyMode`, Roleplay options), exclusive with Autopilot. Where

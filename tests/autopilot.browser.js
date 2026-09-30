@@ -240,7 +240,7 @@ const {chromium}=require('playwright');
   });
   ok("the scene settling on a character's line asks for three ideas", sug.chips.filter(x=>/Ask what she meant|Pour two drinks|Head for the harbour/.test(x)).length===3, JSON.stringify(sug.chips));
   ok("with a way to keep going without choosing one", sug.chips.indexOf("Keep going")>-1, JSON.stringify(sug.chips));
-  ok("the writer is the registry prompt, filled with the player's name", /You suggest what Emre could do next/.test(sug.sys) && sug.sys.indexOf("{{")<0, sug.sys.slice(0,120));
+  ok("the writer is the registry prompt, filled with the player's name", /You write the three options Emre can tap next/.test(sug.sys) && /THE THREE STYLES THIS TIME/.test(sug.sys) && sug.sys.indexOf("{{")<0, sug.sys.slice(0,120));
   ok("and it is shown the last lines of the scene", /THE LAST LINES:\n[\s\S]*They closed the harbour today/.test(sug.user), sug.user.slice(0,300));
   ok("it is asked once per line, not every second", await pg.evaluate(()=>{
       window.__calls=[]; apTick(); apTick();

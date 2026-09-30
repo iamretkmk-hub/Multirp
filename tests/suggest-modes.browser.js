@@ -39,7 +39,7 @@ const {chromium}=require('playwright');
     chat.calendar=[{id:"c1",kind:"meeting",title:"Dinner with Kerem at the harbour",who:"Emre, Kerem Kaya",day:4,period:"Evening",certainty:"certain",done:false}];
     chat.promises=[]; recordPromise(chat,{holder:"Emre",to:"Kerem Kaya",promise:"you will lend Kerem the van on Sunday",kind:"promise",shows_as:"when cars come up"},3);
     window.__calls=[];
-    window.__sug='{"options":[{"text":"Tell her the bread smells like a bribe","tone":"easy and charming"},{"text":"Lean on the counter: you save the warm ones for me?","tone":"subtle flirting"},{"text":"Ask how she has really been lately","tone":"sincere"}]}';
+    window.__sug='{"options":[{"tone":"FUNNY","text":"Joke that the bread smells like a bribe"},{"tone":"flirt","text":"Ask if she saves the warm ones for him"},{"tone":"SINCERE","text":"Ask how she has really been lately"}]}';
     window.chatCompletion=async(msgs,model,opts)=>{ const d=(opts&&opts.dbg)||""; window.__calls.push({dbg:d,msgs});
       if(d==="Suggested replies")return window.__sug;
       if(d==="Auto-RP player narrator")return '*Emre leans on the counter.* "You save the warm ones for me?"';
@@ -57,7 +57,7 @@ const {chromium}=require('playwright');
     };
   });
   const say=(who,text)=>who==="Emre"?{role:"user",content:text}:{role:"assistant",speaker:who,speakerId:{"Ayla Kaya":"p_ay","Kerem Kaya":"p_ke","Lale Kaya":"p_la","Deniz Ak":"p_de"}[who],content:text,toId:"__user__"};
-  const STYLES={woman:"SUBTLE FLIRTING",man:"PLANTING A SEED",group:"THE ROOM LAUGHS",heat:"DIRTY TALK",neutral:"Nothing flirtatious or sexual"};
+  const STYLES={woman:"2. FLIRT: subtle flirting, and the only style that flirts",man:"3. SEED:",group:"3. SWITCH:",heat:"3. DIRTY:",neutral:"Nothing flirtatious or sexual"};
   const onlyStyle=(sys,want)=>Object.keys(STYLES).every(k=>(k===want)===(sys.indexOf(STYLES[k])>-1));
 
   // ---------------------------------------------------------------------------------------------
@@ -65,7 +65,7 @@ const {chromium}=require('playwright');
   const W=await pg.evaluate(async d=>{ __scene(["p_ay"],[d.a,d.b]); return __ask(); },{a:say("Emre",'"Evening, Ayla."'),b:say("Ayla Kaya",'"You again? We are closing."')});
   ok("one-on-one with a card tagged Woman → the woman styles, and only those", W.mode==="x_reply_suggest_woman"&&onlyStyle(W.sys,"woman"), W.mode+"\n"+W.sys.slice(-900));
   ok("…with her name filled in and no placeholder left", /one-on-one with Ayla Kaya, a woman/.test(W.sys)&&W.sys.indexOf("{{")<0, W.sys.slice(-900));
-  ok("…after the general rules, which read the moment", /^You write the three options Emre can tap next/.test(W.sys)&&/READ THE MOMENT FIRST/.test(W.sys), W.sys.slice(0,200));
+  ok("…after the general rules, which read the moment", /^You write the three options Emre can tap next/.test(W.sys)&&/READ THE MOMENT\./.test(W.sys), W.sys.slice(0,200));
 
   const M=await pg.evaluate(async d=>{ __scene(["p_ke"],[d.a]); return __ask(); },{a:say("Kerem Kaya",'"Long night ahead."')});
   ok("one-on-one with a man → the man styles, and only those", M.mode==="x_reply_suggest_man"&&onlyStyle(M.sys,"man")&&/one-on-one with Kerem Kaya, a man/.test(M.sys), M.mode+"\n"+M.sys.slice(-700));
@@ -116,10 +116,13 @@ const {chromium}=require('playwright');
   // ---------------------------------------------------------------------------------------------
   console.log("\n[3. no repeats, and the tone reaches the narrator]");
   const R=await pg.evaluate(async()=>{ const a=await __ask(); const b=await __ask(); return {a,b}; });
-  ok("each option comes back with its tone", R.a.opts.length===3&&R.a.tones.join("|")==="easy and charming|subtle flirting|sincere", JSON.stringify([R.a.opts,R.a.tones]));
-  ok("the next set is told what was offered recently", /OFFERED RECENTLY \(do not offer these again\):\n- Tell her the bread smells like a bribe/.test(R.b.user), R.b.user.slice(-900));
-  ok("plain-string options still work", await pg.evaluate(async()=>{ const s=window.__sug; window.__sug='{"options":["Ask what she meant","Pour two drinks","Head out"]}';
-      const r=await __ask(); window.__sug=s; return r.opts.length===3&&r.tones.join("")===""; }));
+  ok("each option comes back with its style, matched to the mode's names whatever the case", R.a.opts.length===3&&R.a.tones.map(t=>t&&t.name).join("|")==="FUNNY|FLIRT|SINCERE"&&/^subtle flirting, and the only style that flirts/.test(R.a.tones[1].desc), JSON.stringify([R.a.opts,R.a.tones]));
+  ok("the next set is told what was offered recently", /OFFERED RECENTLY \(do not offer these again\):\n- Joke that the bread smells like a bribe/.test(R.b.user), R.b.user.slice(-900));
+  ok("plain-string options still work, with no style guessed for them", await pg.evaluate(async()=>{ const s=window.__sug; window.__sug='{"options":["Ask what she meant","Pour two drinks","Head out"]}';
+      const r=await __ask(); window.__sug=s; return r.opts.length===3&&r.tones.every(t=>t===null) ? true : JSON.stringify(r.tones); }));
+  ok("the chips carry the style's name, so the three read apart", await pg.evaluate(async()=>{ state.suggestOn=true; await __ask(); _sugSig=""; renderAutoBar();
+      const tags=[...document.querySelectorAll('#autoBar .sugChip .sugTag')].map(x=>x.textContent);
+      return tags.join("|")==="FUNNY|FLIRT|SINCERE" ? true : JSON.stringify(tags); }));
   const T=await pg.evaluate(async()=>{
     const c=curChat(); state.suggestOn=true; await __ask(); window.__calls=[];
     sendSuggestion(1);
@@ -127,11 +130,33 @@ const {chromium}=require('playwright');
     const n=window.__calls.find(x=>x.dbg==="Auto-RP player narrator");
     return {u:n?n.msgs[1].content:"",s:n?n.msgs[0].content:"",left:_apForceTone};
   });
-  ok("tapping an option hands its tone to the Auto-RP narrator", /intention for this turn[^\n]*:\nLean on the counter: you save the warm ones for me\?\nTone: subtle flirting/.test(T.u)&&T.left==="", T.u.slice(-400));
-  ok("…whose prompt says to commit to that tone and not repeat the player", /THE TONE THE PLAYER PICKED/.test(T.s)&&/MOVE IT FORWARD/.test(T.s), T.s.slice(0,300));
+  ok("tapping an option hands the direction and its style in full to the Auto-RP narrator", /intention for this turn[^\n]*:\nAsk if she saves the warm ones for him\nTone: FLIRT: subtle flirting, and the only style that flirts/.test(T.u)&&T.left==="", T.u.slice(-500));
+  ok("…whose prompt says the direction is not the words: it writes them, in that style, without repeating the player", /DIRECTION, NOT THE WORDS/.test(T.s)&&/Write the words yourself/.test(T.s)&&/MOVE IT FORWARD/.test(T.s), T.s.slice(0,300));
   ok("…and it is no longer handed the ledger of words given", !/Words given|lend Kerem the van/.test(T.u), T.u.slice(0,600));
 
   // ---------------------------------------------------------------------------------------------
+  console.log("\n[3b. directions, not lines; this scene only]");
+  const DS=await pg.evaluate(()=>__ask());
+  ok("the writer is told to give a direction, not the line, and that only a flirting style flirts",
+     /A DIRECTION, NOT THE LINE/.test(DS.sys)&&/3 to 10 words/.test(DS.sys)&&/Only a style that says it flirts may flirt/.test(DS.sys)&&!/HOW EACH OPTION IS WRITTEN/.test(DS.sys), DS.sys.slice(0,600));
+  ok("the woman's FUNNY and SINCERE styles forbid flirting and compliments on looks",
+     /1\. FUNNY:[^\n]*No flirting, no compliment on her looks/.test(DS.sys)&&/3\. SINCERE:[^\n]*No flirting, no compliment on her looks/.test(DS.sys), DS.sys.slice(-900));
+  const SC=await pg.evaluate(async()=>{
+    __scene(["p_ay"],[{role:"user",content:'"Old beach line from Emre."'},{role:"assistant",speaker:"Kerem Kaya",speakerId:"p_ke",content:'"Old beach line from Kerem."'},
+      {role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,content:"Emre walks to the bakery."},
+      {role:"assistant",speaker:"Ayla Kaya",speakerId:"p_ay",content:'"Oh, you."',toId:"__user__"}]);
+    const a=await __ask();
+    const c=curChat(); c.messages.push({mid:"cut",role:"assistant",speaker:"Narrator",narratorEvent:true,sceneCut:true,content:"Later, at the counter."},
+      {mid:"cut2",role:"assistant",speaker:"Ayla Kaya",speakerId:"p_ay",content:'"Coffee?"',toId:"__user__"});
+    const b=await __ask();
+    window.__calls=[]; await narratePlayerTurn("Say yes",c,{intent:true});
+    const n=window.__calls.find(x=>x.dbg==="Auto-RP player narrator");
+    return {a:a.user,b:b.user,n:n?n.msgs[1].content:""};
+  });
+  ok("the last lines start at the travel beat: the scene before it is not sent", /THE LAST LINES:\nNarrator: Emre walks to the bakery\.\nAyla Kaya: "Oh, you\."/.test(SC.a)&&!/Old beach line/.test(SC.a), SC.a.slice(-500));
+  ok("…and at a scene cut", /THE LAST LINES:\nNarrator: Later, at the counter\.\nAyla Kaya: "Coffee\?"/.test(SC.b)&&!/Oh, you|walks to the bakery/.test(SC.b), SC.b.slice(-400));
+  ok("the narrator reads this scene only too", /Later, at the counter/.test(SC.n)&&!/Old beach line|walks to the bakery/.test(SC.n), SC.n.slice(0,500));
+
   console.log("\n[4. the prompts are editable]");
   ok("the five mode prompts are registry prompts on the Autopilot card", await pg.evaluate(()=>{
     const ks=["x_reply_suggest_woman","x_reply_suggest_man","x_reply_suggest_group","x_reply_suggest_heat","x_reply_suggest_neutral"];
@@ -141,7 +166,7 @@ const {chromium}=require('playwright');
   ok("an edited mode prompt is what is sent", await pg.evaluate(async()=>{
     state.x_reply_suggest_man="MY OWN MAN STYLES for {{focus}}"; __scene(["p_ke"],[{role:"assistant",speaker:"Kerem Kaya",speakerId:"p_ke",content:'"Hey."'}]);
     const r=await __ask(); state.x_reply_suggest_man=X_ENGINE_PROMPTS.x_reply_suggest_man.def;
-    return /MY OWN MAN STYLES for Kerem Kaya/.test(r.sys)&&!/PLANTING A SEED/.test(r.sys) ? true : r.sys.slice(-300); }));
+    return /MY OWN MAN STYLES for Kerem Kaya/.test(r.sys)&&!/3\. SEED:/.test(r.sys) ? true : r.sys.slice(-300); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);

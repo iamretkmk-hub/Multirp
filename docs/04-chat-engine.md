@@ -109,11 +109,11 @@ Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention al
   female/male, kadın/erkek…; `personSex`), else the look's subject line.
   | Who is in earshot | Prompt | Styles |
   |---|---|---|
-  | one woman | `x_reply_suggest_woman` | charming and funny · subtle flirting that reads her last response · sincere, bond-building |
-  | one man | `x_reply_suggest_man` | straight talk with slang · gossip, drawing him out · planting a seed (manipulative) |
-  | two or more | `x_reply_suggest_group` | the room laughs · deniable flirting, with a jab at her husband when he is here · switch the target |
-  | one woman, intimate moment | `x_reply_suggest_heat` | soft and sensual · taking charge · dirty talk |
-  | a minor here, or no tag | `x_reply_suggest_neutral` | light and funny · curious · sincere; nothing flirtatious |
+  | one woman | `x_reply_suggest_woman` | FUNNY (no flirting) · FLIRT (reads her last response) · SINCERE (about her, no flirting) |
+  | one man | `x_reply_suggest_man` | FRIENDLY (slang) · GOSSIP (drawing him out) · SEED (manipulative) |
+  | two or more | `x_reply_suggest_group` | FUNNY · FLIRT (deniable, with a jab at her husband when he is here) · SWITCH (the target) |
+  | one woman, intimate moment | `x_reply_suggest_heat` | SOFT · DOMINANT · DIRTY |
+  | a minor here, or no tag | `x_reply_suggest_neutral` | FUNNY · CURIOUS · SINCERE; nothing flirtatious |
   The intimate moment is a live heat run (`_heatLive`) or the last four lines reading as intimate
   (`intimacyReads`), never with a minor in the scene. Only the picked prompt is sent. The group
   prompt is told who the women, the men and the couples are (`_couplesAmong`, from the cards' tie
@@ -126,11 +126,18 @@ Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention al
   offered recently (`chat._sugPrev`, transient); the last `SUG_LINES` (30) lines as the player lived
   them; and the player's own last line when it is among the last ten. No calendar, promises, quests
   or day ledger — Story mode still gets those through `_playerKnows`.
-- *The tone*: options come back as `{text, tone}` (plain strings still work). `sendSuggestion` hands
-  the tapped option's tone to `narratePlayerTurn` (`_apForceTone`), which adds `Tone: …` to the
-  intention; the narrator prompt's THE TONE THE PLAYER PICKED makes it write the turn in that
-  register, and MOVE IT FORWARD keeps it from repeating the player. The narrator reads up to 20
-  lines and three memories about the people here — no longer the words given.
+- *Directions, not lines (v149.3)*: each option is a 3–10 word direction ("Joke that she is running
+  away from him"), never the words themselves, and each keeps strictly to its style — only FLIRT may
+  flirt. Options come back as `{tone, text}`, `tone` being the style's NAME from the mode prompt
+  (`_sugStylesOf` reads "1. FLIRT: …" lines); the chip shows it (`.sugTag`). An option that names no
+  style gets none (plain strings still work). `sendSuggestion` hands `NAME: description` to
+  `narratePlayerTurn` (`_apForceTone`), which adds `Tone: …` to the intention; the narrator prompt
+  (DIRECTION, NOT THE WORDS) writes the actual line in that style, and MOVE IT FORWARD keeps it from
+  repeating the player. The narrator reads up to 20 lines and three memories about the people here —
+  no longer the words given.
+- *This scene only (v149.3)*: both read `_playerSceneLines(…,{scene:true})`, which starts at the last
+  travel beat or scene cut (`sceneCut`, now set on `runSceneCut`'s narration), or after the last day
+  marker — the lines of the scene before a walk somewhere are not sent.
 
 ## Story mode (v118.1, experimental)
 

@@ -221,6 +221,28 @@ const {chromium}=require('playwright');
               && v.body.aspect_ratio===undefined && v.body.quality===undefined)
         ? true : JSON.stringify(v.body); })());
 
+  console.log("\n[seedream v5.0 flash]");
+  const FLASH="bytedance/seedream-v5.0-flash/edit";
+  const fs=await pg.evaluate(m=>({edit:atlasIsEditModel(m),s:atlasEditSpec(m),
+    listed:ATLAS_IMG_MODELS.some(o=>o.id===m)}),FLASH);
+  ok("seedream v5.0 flash is an image-EDIT model with 10 references, and is in the picker",
+     fs.edit===true&&fs.s.maxRefs===10&&fs.listed===true, JSON.stringify(fs));
+  {const v=await body(FLASH,{w:768,h:1024});
+   ok("flash posts its reference pictures", Array.isArray(v.body.images)&&v.body.images.length===2, JSON.stringify(v.body));
+   ok("flash gets a size from its own enum", fs.s.sizes.indexOf(v.body.size)>=0, v.body.size);
+   ok("flash gets output_format and background", v.body.output_format==="png"&&v.body.background==="opaque", JSON.stringify(v.body));
+   const junk=["negative_prompt","seed","num_images","n","prompt_extend","thinking","thinking_mode",
+               "prompt_optimization_mode","enable_base64_output","guidance_scale","aspect_ratio"];
+   const extra=junk.filter(k=>k in v.body);
+   ok("flash is sent none of the fields it would reject", extra.length===0, extra.join(", "));}
+  ok("the options panel shows format/background but hides thinking for flash", await pg.evaluate(m=>{
+      state.imgProvider="atlascloud"; syncAtlasImgOpts(m);
+      const w=document.getElementById('atlasImgOptsWrap').style.display;
+      const t=document.getElementById('atlasImgThinkWrap').style.display;
+      syncAtlasImgOpts("bytedance/seedream-v5.0-pro/edit");
+      const t2=document.getElementById('atlasImgThinkWrap').style.display;
+      return (w==="block"&&t==="none"&&t2==="block")?true:[w,t,t2].join("/"); },FLASH));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

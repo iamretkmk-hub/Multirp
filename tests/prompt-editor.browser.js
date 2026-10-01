@@ -84,7 +84,7 @@ const ROOT=path.resolve(__dirname,'..');
       o[k]={n:p.messages.length,sys:p.messages.filter(m=>m.role==="system").length,hist:p.messages.filter(m=>m.hist).length,speaker:p.speaker,unk:p.unknownCalls.length,first:p.messages[0].content.slice(0,200)}; }catch(e){ o[k]={err:e.message}; } } return o; });
     Object.keys(kinds).forEach(k=>{ const r=kinds[k];
       ok(k+" builds, with instructions and the dialogue", !r.err&&r.sys>=1&&r.hist>=3&&r.unk===0, JSON.stringify(r)); });
-    ok("the sample cast speaks", /Sami/.test(kinds.solo.speaker)&&/Sami/.test(kinds.solo.first), JSON.stringify(kinds.solo));
+    ok("the sample's solo scene is with the woman, Buket", /Buket/.test(kinds.solo.speaker), JSON.stringify(kinds.solo));
     const eng=await pg.evaluate(async()=>{ const p=await __PE.engCall('buildEngine',{key:'gmJudge'}); return p.messages.map(m=>m.content).join("\n"); });
     ok("an engine payload builds with the prompt filled for this story", /GAMEMASTER/.test(eng)&&/Emre/.test(eng), eng.slice(0,300));
 
@@ -153,6 +153,34 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.click('.chg [data-a="apply"]');
     const rv=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("frag:style_header")));
     ok("the reviewer's edit is applied to the named piece", /PE-REVIEWED/.test(rv)&&!/PE-TEST-MARKER/.test(rv), rv.slice(-120));
+
+    console.log("\n[9 — drift tests: ten scripted scenes, every turn through the real payload]");
+    const seen=[];
+    await ctx.unroute(/openrouter\.ai/);
+    await ctx.route(/openrouter\.ai/,async r=>{
+      const body=JSON.parse(r.request().postData()||"{}"); const msgs=body.messages||[];
+      const last=String((msgs.slice(-1)[0]||{}).content||"");
+      let content;
+      if(/instruction-following test/.test(last)){
+        const n=(last.match(/^TURN \d+$/gm)||[]).length;
+        content=JSON.stringify({turns:Array.from({length:n},(_,i)=>({verdict:i===2?"bent":"held",note:"t"+(i+1)})),drift_at:3,score:7,
+          summary:"Held, then gave ground on turn 3.",edits:[{item:"frag:style_header",find:"PE-REVIEWED",replace:"PE-DRIFT-FIX",why:"t"}]});
+      }else{ seen.push(msgs.map(m=>m.content).join("\n")); content='"Hatırlamıyorum abi." *Çakmağı çeviriyor.*'; }
+      await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{content}}]})});
+    });
+    await pg.click('#rtabs button[data-r="drift"]');
+    const nScenes=await pg.evaluate(()=>__PE.DRIFT_SCENES.length);
+    ok("there are ten scenes", nScenes===10, nScenes);
+    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
+    const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
+    ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply)), JSON.stringify(d.r&&d.r.turns));
+    ok("each turn was built from the real payload, with the earlier replies in the transcript",
+       seen.length===5&&/Antakya/.test(seen[0])&&/Selin/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum abi/g)||[]).length>=4, seen.map(x=>x.length).join(","));
+    ok("the scene's own place is in the payload", /Sami & Buket's flat/.test(seen[0]), seen[0].slice(0,300));
+    ok("every scene is played by a woman character", await pg.evaluate(()=>__PE.DRIFT_SCENES.every(sc=>sc.speaker==="p_buket")));
+    ok("the judge's verdicts and the drift turn are shown", /drifted at turn 3/.test(d.html)&&/7\/10/.test(d.html)&&/bent/.test(d.html), d.html.slice(0,400));
+    await pg.click('#dr_past .chg [data-a="apply"]');
+    ok("its edit applies to the named piece", await pg.evaluate(()=>/PE-DRIFT-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header")))));
 
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above

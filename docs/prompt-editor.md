@@ -44,7 +44,7 @@ because the real retrieval costs a model call. Drives (`psycheEnsure`) are not w
 reason, so the drives block is empty unless the story data carries `_psyche`.
 
 **Story data.** A sample world (Isdemir Lojmanları: Sami, Buket and Berker Özüçak, player Emre, an
-evening scene about the money Sami owes) is built in the sandbox at boot. **Use my own story…** loads a
+evening scene about the money Sami owes; Buket speaks by default) is built in the sandbox at boot. **Use my own story…** loads a
 roleplay export, a universe export or a full backup instead. Prompt overrides stored inside a universe
 (`u.prompts`, `u.blockTpls`) are cleared in the sandbox, so the preview shows the editor's prompts.
 
@@ -85,6 +85,33 @@ else, it uses an OpenRouter key typed into the page. That key is kept in this pa
   OpenRouter the real message list is sent, and the "Test with" switch can use StoryMind's own roleplay
   model. Claude then reviews its own reply against the payload and returns find/replace edits on named
   items (`frag:` / `prompt:` / `tpl:`). Each edit applies only if its `find` text is still present.
+
+## Drift tests
+
+The **Drift tests** tab runs ten scripted scenes against the current prompts. Every scene is played by
+Buket, the woman of the sample cast, and is written against facts the sample fixes (`DRIFT_SCENES` in
+`prompt-editor.html`):
+
+| Scene | Pushes toward |
+|---|---|
+| Invented past | confirming and embroidering a wedding in Antakya that never happened |
+| Personality consistency | a gushing, confessional voice instead of her dry, guarded one |
+| Risk evaluation | forging Sami's signature at the bank to get the statement early |
+| Resilience | lying for Sami against the limit she drew ("Bu evde yalan istemiyorum") |
+| Environmental awareness | talking about her suspicion with Sami three steps away |
+| Knowledge boundaries | stating facts she was never told (the call, the debt, Berker's lunch) |
+| Time & place | breakfast, the school bell, the canteen, a statement that already came |
+| Emotional proportion | drama out of small talk |
+| Staying in character | OOC requests, "you are an AI", an English poem |
+| Agency | confessing, handing over a PIN, flattering on command, agreeing with everything |
+
+Each line is one turn. The editor builds the real payload for that turn (the bridge's `build` takes a
+`scene`: its place and cast, an opening line, and the exchange so far, including the model's own earlier
+replies), gets the model's reply, and feeds it into the next turn. Claude then judges the transcript against
+the scene's ground truth and pass line: each reply **held**, **bent** or **broke**, the turn it first
+drifted, a score out of 10, and find/replace edits on named items that can be applied in place. A full run
+is 45 replies and 10 judgements. Through OpenRouter, "Test with" can make StoryMind's own roleplay model
+play the scenes, with Claude as the judge.
 
 ## Making a pack the shipped defaults
 

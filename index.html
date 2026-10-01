@@ -1387,7 +1387,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.2</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.3</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -41545,6 +41545,38 @@ function _bkAutoSave(uni,kind){
       const html=await bookKeptHTML(uni,kind); if(html){ await _bkWrite(h,html); try{ _alog("book.autosave",h.name); }catch(_){} } }catch(e){}
   },2500);
 }
+/* v150.3 — THE KEPT BOOKS IN THE BACKUP. Export everything carries every kept book with its pictures and clips;
+   the rolling snapshots carry the books' text (they hold no media); a roleplay export carries its story's book. A clip
+   (a Blob) travels as a data URL ({blob:"data:…"}) and is a Blob again when restored. */
+async function bookBackupEntries(o){
+  o=o||{};
+  const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&(k.indexOf("book:")===0||(o.media&&k.indexOf("bookmedia:")===0))
+    &&(!o.uni||k.split(":")[1]===String(o.uni)));
+  const out=[];
+  for(const key of keys){
+    let v=null; try{ v=await mediaDB.kvGet(key); }catch(e){}
+    if(v==null)continue;
+    if(typeof Blob!=="undefined"&&v instanceof Blob){ const d=await _bkBlobToData(v); if(!d)continue; v={blob:d}; }
+    out.push({key,value:v});
+  }
+  return out;
+}
+/* What a backup's book entries may write: kept books and their media only, a picture only as an image data URL and a
+   clip only as a video data URL. Returns {key: value} ready for IndexedDB; anything else is left out. */
+function bookRestoreEntries(list){
+  const kv={};
+  (Array.isArray(list)?list:[]).forEach(r=>{
+    if(!r||typeof r.key!=="string")return;
+    let v=r.value;
+    if(/^book:[^:]+:(story|video)$/.test(r.key)){
+      if(v&&typeof v==="object"&&Array.isArray(v.sections)&&v.sections.every(x=>x&&typeof x.text==="string"))kv[r.key]=v;
+    }else if(/^bookmedia:[^:]+:(story|video):[^:]+$/.test(r.key)){
+      if(typeof v==="string"&&/^data:image\//.test(v))kv[r.key]=v;
+      else if(v&&typeof v==="object"&&typeof v.blob==="string"&&/^data:video\//.test(v.blob)){ try{ kv[r.key]=_dataURLtoBlob(v.blob); }catch(e){} }
+    }
+  });
+  return kv;
+}
 async function bookForgetFile(){
   const chat=curChat(); if(!chat)return;
   try{ await mediaDB.kvDelete(_bkFileKey(chat.universeId,_bookMode)); }catch(e){}
@@ -55871,6 +55903,8 @@ async function buildBackup(opts){
     localStorage:ls,
     collections:{ chats:state.chats, memory:state.memory, universes:state.universes, personas:state.personas, scenes:state.scenes||[], gossip:state.gossip||[] }
   };
+  // v150.3 — the kept books: their text always, their pictures and clips with the media
+  try{ b.books=await bookBackupEntries({media:!(opts&&opts.noMedia)}); }catch(e){ b.books=[]; }
   if(opts&&opts.noMedia) return b;
   const images=await mediaDB.getAll("images");
   const videos=await mediaDB.getAll("videos");
@@ -55997,6 +56031,7 @@ function validateBackupBundle(b){
     if(!isObj(b.media)) bad("media is malformed");
     ["images","videos","statics"].forEach(k=>{ if(b.media[k]!==undefined&&!Array.isArray(b.media[k])) bad("media."+k+" is not a list"); });
   }
+  if(b.books!==undefined&&b.books!==null&&!Array.isArray(b.books)) bad("books is not a list");   // v150.3
   return true;
 }
 // Shared apply path for a full backup bundle (file import AND auto-backup restore use this).
@@ -56038,6 +56073,8 @@ async function applyBackupBundle(b){
     const kv={ chats:c.chats||{}, memory:c.memory||[], gossip:c.gossip||[], universes:c.universes||null, personas:c.personas||null, scenes:c.scenes||[] };
     // v25.3 — static art bytes; on next boot rehydrateStaticImages re-links entities to them.
     if(b.media&&Array.isArray(b.media.statics)) b.media.statics.forEach(r=>{ if(r&&typeof r.key==="string"&&r.data) kv[r.key]=r.data; });
+    // v150.3 — the kept books (and, from a full export, their pictures), in the same transaction
+    Object.assign(kv,bookRestoreEntries(b.books));
     await mediaDB.restoreAtomic(kv, b.media?{images:b.media.images||[],videos:b.media.videos||[]}:null);
   }catch(e){
     rollbackLs();
@@ -56110,8 +56147,9 @@ async function exportRoleplay(uidArg,opts){
     if(!o.forReset && !Object.keys(chats).length && !memory.length){ toast("No roleplay in this universe to export"); return false; }
     const inl=await inlineStaticImages(universe?[universe]:[],personas);
     const curC=(state.curChat&&chats[state.curChat])?state.curChat:(Object.keys(chats)[0]||null);
+    let books=[]; try{ books=uni?await bookBackupEntries({media:true,uni}):[]; }catch(e){}   // v150.3 — this story's kept book
     _downloadJSON({app:"StoryMind",kind:"roleplay",version:BACKUP_VERSION,date:Date.now(),
-      universe:inl.universes[0]||null, personas:inl.personas, chats, memory, gossip, curChat:curC}, "storymind_roleplay");
+      universe:inl.universes[0]||null, personas:inl.personas, chats, memory, gossip, books, curChat:curC}, "storymind_roleplay");
     toast("Roleplay exported");
     return true;
   }catch(e){ console.warn("exportRoleplay failed",e); toast("Export failed"); return false; }
@@ -56140,6 +56178,8 @@ async function importRoleplayFile(b,io){
   else if(b.universe){ const c=chatForUniverse(state.curUniverse); state.curChat=c?c.id:null; }
   persistUniverses();
   flushPersistChats();
+  // v150.3 — the story's kept book comes with it (validated: kept books and their pictures only)
+  try{ const kv=bookRestoreEntries(b.books); for(const k in kv) await mediaDB.kvSet(k,kv[k]); }catch(e){}
   return true;
 }
 // UNIVERSES: worlds + their characters only (no chats/memories) — share worldbuilding.

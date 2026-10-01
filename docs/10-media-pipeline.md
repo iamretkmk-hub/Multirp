@@ -109,6 +109,8 @@ until its bytes are copied (the copy can be refused by the host), and a chat's s
   (`bookfile:<uni>:<kind>`); every later Save rewrites that file, and `_bkAutoSave` rewrites it after each new passage
   while the tab holds write permission. Elsewhere Save hands over the whole book each time (share sheet or download).
   *Other file* forgets the chosen file.
+- **In the backup (v150.3)**: Export everything carries every kept book with its pictures and clips, the rolling
+  snapshots the books' text, and a roleplay export its story's book (see 11-settings-and-backup).
 
 ### The reader (`openBookPlayer`) and Save as video
 `bookPlayItems` plays exactly what the book holds: a card per scene, each paragraph of each passage on a dark page,

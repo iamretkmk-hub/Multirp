@@ -311,6 +311,31 @@ const {chromium}=require('playwright');
       const realShare=navigator.canShare; try{ navigator.canShare=()=>false; }catch(e){}
       _bookDay=1; openStoryBook(); await bookSaveBook(); HTMLAnchorElement.prototype.click=realClick; try{ navigator.canShare=realShare; }catch(e){} closeStoryBook();
       return (got.length===1&&/Story Book\.html$/.test(got[0])) ? true : JSON.stringify(got); }));
+  console.log("\n[the kept book in the backup]");
+  const BK=await pg.evaluate(async()=>{
+    const c=curChat(); await bookKeep(c,"story");
+    const full=await buildBackup({noKeys:true}), snap=await buildBackup({noMedia:true});
+    const fk=(full.books||[]).map(x=>x.key), sk=(snap.books||[]).map(x=>x.key);
+    // wipe the kept book, then restore it from the full bundle the way an import does (one transaction)
+    const before=await bookKept(c.universeId,"story");
+    for(const k of fk) await mediaDB.kvDelete(k);
+    const gone=(await bookKept(c.universeId,"story")).sections.length;
+    await mediaDB.restoreAtomic(bookRestoreEntries(JSON.parse(JSON.stringify(full.books))),null);
+    const back=await bookKept(c.universeId,"story"), pic=await mediaDB.kvGet(_bkMediaKey(c.universeId,"story","b1"));
+    let got=null; const real=window._downloadJSON; window._downloadJSON=o=>{ got=o; };
+    await exportRoleplay(c.universeId); window._downloadJSON=real;
+    const bad=bookRestoreEntries([{key:"settings",value:"x"},{key:"bookmedia:u:story:m",value:"javascript:alert(1)"},{key:"bookmedia:u:story:n",value:"https://x/y.png"},
+      {key:"book:u:story",value:{sections:[{text:1}]}},{key:"bookmedia:u:video:v",value:{blob:"data:video/mp4;base64,AAAA"}}]);
+    let rejected=false; try{ validateBackupBundle({app:"StoryMind",backupVersion:1,collections:{},books:"nope"}); }catch(e){ rejected=/books/.test(e.message); }
+    return {full:fk.some(k=>/^book:/.test(k))&&fk.some(k=>/^bookmedia:/.test(k)),snap:sk.length>0&&sk.every(k=>/^book:/.test(k)),
+      gone,back:back.sections.length===before.sections.length&&back.sections.length>0,pic:/^data:image\/png/.test(pic||""),
+      rp:!!(got&&Array.isArray(got.books)&&got.books.some(x=>/^bookmedia:/.test(x.key))),
+      bad:Object.keys(bad),blob:bad["bookmedia:u:video:v"] instanceof Blob,rejected};
+  });
+  ok("Export everything carries every kept book with its pictures; a snapshot carries the books' text", BK.full&&BK.snap, JSON.stringify(BK));
+  ok("restored from the backup, the book and its pictures come back", BK.gone===0&&BK.back&&BK.pic, JSON.stringify(BK));
+  ok("a roleplay export carries its story's book", BK.rp, JSON.stringify(BK));
+  ok("a backup can only write kept books and their pictures; a clip comes back as a file", JSON.stringify(BK.bad)==='["bookmedia:u:video:v"]'&&BK.blob&&BK.rejected, JSON.stringify(BK));
   ok("the Save button is in the book's bar", await pg.evaluate(()=>{ const b=document.querySelector('.bookBar #bookSaveBtn'); return !!(b&&/bookSaveBook/.test(b.getAttribute('onclick'))); }));
   ok("the menu opens it", await pg.evaluate(()=>{ closeStoryBook(); toggleChatMenu&&toggleChatMenu();
       const btn=[...document.querySelectorAll('button')].find(x=>/openStoryBook/.test(x.getAttribute('onclick')||"")); if(btn)btn.click();

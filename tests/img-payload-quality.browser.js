@@ -158,6 +158,10 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
 
   /* ---------------------------------------------------------------- 2. continuity */
   console.log("\n[2. the continuity reference cannot land on the wrong person]");
+  /* v150.5 — with an edit model the previous PICTURE is the continuity now (the scene chain, see
+     tests/img-scene-chain.browser.js). The written continuity reference is what is left for a frame
+     whose previous picture cannot be had, so the chain is switched off for this section. */
+  await pg.evaluate(()=>{ window.__chainPrev=window._imgChainPrev; window._imgChainPrev=()=>null; });
   await pg.evaluate(()=>{ window.__out="the man in IMAGE 1 leans back in his chair with his arms spread; the man in IMAGE 2 holds a small coffee cup; the woman in IMAGE 3 stands at the counter in a coral cardigan"; });
   const A=await draw(scene({period:"Evening"})+push([{role:"user",content:"*I pull out a chair.*"},{role:"assistant",speaker:"Sami Özüçak",speakerId:"p_sami",content:'*Leans back and spreads his arms.* "Başmühendis Bey!" _Emre geldi._'}]));
   ok("frame A: Sami is IMAGE 1, Berker IMAGE 2, Burcu IMAGE 3", /the man in IMAGE 1 = Sami Özüçak/.test(A.usr)&&/the man in IMAGE 2 = Berker Özüçak/.test(A.usr)&&/the woman in IMAGE 3 = Burcu Atan/.test(A.usr), A.usr.slice(0,600));
@@ -205,6 +209,7 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
   ok("thoughts are taken out of the exchange the router routes on", /Başmühendis Bey/.test(A.route)&&!/Emre geldi/.test(A.route), A.route.slice(-300));
 
   /* ---------------------------------------------------------------- 3 + 9. outfits */
+  await pg.evaluate(()=>{ window._imgChainPrev=window.__chainPrev; });
   console.log("\n[3. an outfit, once decided, stays until something justifies a change]");
   const O=await pg.evaluate(async()=>{
     const c=curChat(); const P=id=>state.personas.find(p=>p.id===id);

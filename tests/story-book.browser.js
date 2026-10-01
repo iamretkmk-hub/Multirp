@@ -83,7 +83,7 @@ const {chromium}=require('playwright');
   ok("opening a chapter writes every run it is missing — four passages, in order", W.n===4, JSON.stringify(W.n));
   ok("it is the registry prompt, third person, written around pictures", /author of a novel/.test(W.sys)&&/third person/.test(W.sys)&&/shows a picture/.test(W.sys)&&W.sys.indexOf("{{")<0, (W.sys||"").slice(0,300));
   ok("it gets the lines with speech, actions AND thoughts, the player marked",
-     /THE LINES THIS PASSAGE TELLS[^\n]*\nAyla: \*She sets the glass down\.\* _He looks tired\._ "They closed the harbour today\."\nEmre \(the player\): \*I lean in\.\* "Who closed it\?"\nBerk: "The governor did\."/.test(W.u0), W.u0);
+     /THE LINES THIS PASSAGE TELLS[^\n]*\nAyla: \*She sets the glass down\.\* \(unspoken thought: He looks tired\.\) "They closed the harbour today\."\nEmre \(the player\): \*I lean in\.\* "Who closed it\?"\nBerk: "The governor did\."/.test(W.u0), W.u0);
   ok("a sheet per person: looks, personality, how they talk, a background marked not for telling, their ties",
      /## Ayla\nFIRST TIME IN THE BOOK\nLooks: black curls, tall\nPersonality[^\n]*Warm but guarded with Emre\.\nHow they talk: Short, dry sentences\.\nBackground — to understand them, never to reveal[^\n]*Secretly owns the bar\./.test(W.u0)&&/With Berk: Berk is Ayla's brother\./.test(W.u0)&&/## Berk/.test(W.u0), W.u0);
   ok("it knows where the passage sits, and how long to make it", /WHERE THIS PASSAGE SITS:\nIt opens the book\. It ends on the moment of its last line: the picture that follows shows it\./.test(W.u0)&&/LENGTH:\nAbout \d+ words\./.test(W.u0), W.u0);
@@ -91,6 +91,13 @@ const {chromium}=require('playwright');
      /THE BOOK SO FAR \(its last pages\):\nPassage 1: the harbour lay still\./.test(W.u1)&&!/## Ayla\nFIRST TIME/.test(W.u1)&&/\[Berk leaves\.\]/.test(W.u1)&&/\[Time passes — it is now Night\.\]/.test(W.u1)&&/It closes this scene/.test(W.u1), W.u1);
   ok("the day's closing passage carries the night's narration", /\[The day ends\.\] The night closes over the town\./.test(W.u3)&&/It closes the day, and the chapter with it\./.test(W.u3), W.u3);
   ok("an opened chapter writes in the foreground, on the story's model", W.fg===true, JSON.stringify(W.model));
+  ok("a thought reaches the writer marked as material, and the prompt forbids putting it on the page",
+     /THOUGHTS ARE MATERIAL, NOT TEXT/.test(W.sys)&&/never copied onto the page: not quoted, not in italics/.test(W.sys)&&/\(unspoken thought: He looks tired\.\)/.test(W.u0)&&!/_He looks tired\._/.test(W.u0), (W.u0||"").slice(-700));
+  ok("the book so far is whole passages, newest last; only what does not fit is left out", await pg.evaluate(()=>{
+      const P=n=>String(n).repeat(2500), old=["o1","o2","o3"].map(x=>x+" "+"x".repeat(995)).join("\n\n");
+      const a=_bkSoFar(["first passage.","second passage."]), b=_bkSoFar([old,P(1),P(2)]);
+      const c=_bkSoFar(["a".repeat(1500)+"\n\n"+"b".repeat(1500)+"\n\nlast para of the old one.",P(1),P(2)]);
+      return (a==="first passage.\n\nsecond passage."&&b==="…\n\n"+P(1)+"\n\n"+P(2)&&/^…\n\nlast para of the old one\.\n\n1/.test(c)) ? true : JSON.stringify({a,b:b.slice(0,40),c:c.slice(0,60)}); }));
   ok("written once: opening again writes nothing", await pg.evaluate(async()=>{ __calls=[]; const n=await bookCatchUp(curChat(),"story",{day:1}); return n===0&&__calls.length===0 ? true : "wrote "+n; }));
 
   console.log("\n[the page]");
@@ -215,6 +222,22 @@ const {chromium}=require('playwright');
       await _bkJob(c,"story").p; const now=c.book.story.passages["a1"];
       return (ghost&&__calls.length===1&&now&&!now.stale&&now.text!==old) ? true : JSON.stringify({ghost,n:__calls.length,now}); }));
 
+  console.log("\n[thoughts copied onto the page]");
+  const TC=await pg.evaluate(async()=>{
+    const c=curChat(); const real=window.chatCompletion; const sent=[];
+    c.messages.push({mid:"th1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'*She sits.* _I should never have come back to this town._ "Hello."',present:["p_a"],status:{day:4,period:"Morning",location:"Square",trackers:[]},img:__pic("#123"),imgState:"done"});
+    window.chatCompletion=async(m,mo,o)=>{ sent.push(m); return sent.length===1?"Ayla sat. I should never have come back to this town, she thought. \"Hello.\""
+      :"Ayla sat, and the old town closed around her like a hand she had once escaped. \"Hello.\""; };
+    const n=await bookCatchUp(c,"story",{day:4}); window.chatCompletion=real;
+    const last=sent[1]?sent[1][sent[1].length-1].content:"";
+    return {n,calls:sent.length,last,prevDraft:sent[1]&&sent[1][sent[1].length-2].role,text:c.book.story.passages.th1&&c.book.story.passages.th1.text};
+  });
+  ok("a draft that copies a thought word for word goes back once, naming it", TC.calls===2&&TC.prevDraft==="assistant"&&/copies these unspoken thoughts onto the page word for word:\n- I should never have come back to this town\./.test(TC.last), JSON.stringify(TC));
+  ok("and the second draft is the one kept", TC.n===1&&/closed around her/.test(TC.text||""), JSON.stringify(TC));
+  ok("a passage that only echoes a word or two of a thought is not sent back", await pg.evaluate(()=>{
+      const lines=[{m:{content:"_I should never have come back to this town._"}}];
+      return (_bkCopiedThoughts("She wished she had never come back.",lines).length===0&&_bkCopiedThoughts("never have come back to this town",lines).length===1) ? true : "wrong"; }));
+
   console.log("\n[settings and saving]");
   ok("the writer's settings save", await pg.evaluate(()=>{
       toggleBookOpts(); const shown=!document.getElementById('bookOpts').hidden;
@@ -236,7 +259,7 @@ const {chromium}=require('playwright');
       const btn=[...document.querySelectorAll('button')].find(x=>/openStoryBook/.test(x.getAttribute('onclick')||"")); if(btn)btn.click();
       const r=document.getElementById('bookModal').classList.contains('show'); closeStoryBook(); return r ? true : "not opened"; }));
   ok("the writer is a registry prompt on the book card, and the comic editor is gone", await pg.evaluate(()=>
-      !!PROMPT_BY_KEY.x_book_writer&&!PROMPT_BY_KEY.x_book_editor&&!PROMPT_BY_KEY.x_video_book_narrator&&X_PROMPT_CARDS.some(c=>c.key==="story_book"&&c.keys.includes("x_book_writer"))
+      !!PROMPT_BY_KEY.x_book_writer&&!!PROMPT_BY_KEY.x_book_writer_redo&&!PROMPT_BY_KEY.x_book_editor&&!PROMPT_BY_KEY.x_video_book_narrator&&X_PROMPT_CARDS.some(c=>c.key==="story_book"&&c.keys.includes("x_book_writer"))
       &&typeof bookStructure==="undefined"&&typeof toggleBookLayout==="undefined"));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

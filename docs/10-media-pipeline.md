@@ -37,7 +37,8 @@ bubbles, the webtoon / comic-page layouts, Save page, the Video Book's speeches 
 ### The writer (`x_book_writer`, Settings › Prompts › Story Book & Video Book)
 One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's model), `fn:"narrate"`. `{{media}}` is
 "picture" or "video clip". The user message (`epDefine("x_book_writer")`):
-- **THE BOOK SO FAR** — the last `BOOK_PREV_CHARS` (2200) of prose before the run;
+- **THE BOOK SO FAR** (`_bkSoFar`, v150.1) — the passages before the run, whole and newest last, as many as fit
+  `BOOK_PREV_CHARS` (6000); only the oldest that does not fit is cut, at a paragraph, behind a "…";
 - **WHERE AND WHEN** — day, part of the day, place, and the place's description;
 - **THE PEOPLE** (`_bkPeople`) — speakers first, then whoever was present (max 8), each with: *FIRST TIME IN THE BOOK*
   when they were in no earlier passage's lines and are not named in its prose; looks (`normalizeLook`); the card's
@@ -45,16 +46,25 @@ One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's m
   what the lines have not shown*; what they are to the player (`playerTieLine`); how they stand with the player and
   with each other person here — the tie word and the slow relationship readings as behaviour (`relReadings`);
 - **THE PLAYER'S CHARACTER** (`_playerProfileBlock`);
-- **THE LINES** — speech, `*actions*` and `_thoughts_` as played, the player marked "(the player)", events in brackets:
+- **THE LINES** — speech and `*actions*` as played, each `_thought_` marked `(unspoken thought: …)` (`_bkThoughtsMarked`,
+  v150.1), the player marked "(the player)", events in brackets:
   `[Berk leaves.]`, `[Time passes — it is now Night.]`, `[A journey] …`, `[The day ends.] <narration>`;
 - **WHERE THIS PASSAGE SITS** — opens the book / a new day / a new scene / carries on; ends on the picture (or, in the
   Video Book, "its last N lines: the clip that follows shows them in motion, without words") / closes the scene /
   closes the day / the story goes on;
 - **LENGTH** — `BOOK_LEN[state.bookLen]` (short / medium / long): words per told line, clamped.
 The prompt: tell every line in order, retell rather than copy, keep quoted words faithful (trim, never change the
-meaning or add a promise or decision), thoughts may be shown and belong to who had them, improvise texture but not
-events, keep sheet secrets, introduce first appearances, set the scene when opening, end on the picture's moment,
-bring a closing to rest; plain prose, `*italics*` only. `_bkCleanOut` strips fences, a stray heading or JSON.
+meaning or add a promise or decision), improvise texture but not events, keep sheet secrets, introduce first
+appearances, set the scene when opening, continue the book so far without retelling it or reusing its images and
+phrases, end on the picture's moment, bring a closing to rest; plain prose, no markdown. `_bkCleanOut` strips fences,
+a stray heading or JSON.
+
+**Thoughts are material, not text (v150.1).** Reported: the characters' thoughts appeared in the book as they were
+typed. A thought is the writer's private knowledge of that character, to write their inner world from — what they
+want, fear, notice and hide, the gap between their words and their meaning — never quoted, italicised or paraphrased
+line by line. In code, `_bkCopiedThoughts` looks for any five consecutive words of a thought in the draft; a draft that
+has one goes back once with `x_book_writer_redo` naming the copied thoughts (the draft as the assistant turn before it),
+and the second draft is kept. Passages written before v150.1 keep their text until rewritten (↻).
 
 ### Stored, and the failsafes
 `chat.book[kind] = {passages:{<first mid>:{mids, sig, text, end, at, stale?}}, hidden:{<mid>:true}}`. A passage

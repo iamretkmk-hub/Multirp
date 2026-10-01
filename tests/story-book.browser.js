@@ -83,7 +83,7 @@ const {chromium}=require('playwright');
   ok("opening a chapter writes every run it is missing — four passages, in order", W.n===4, JSON.stringify(W.n));
   ok("it is the registry prompt, third person, written around pictures", /author of a novel/.test(W.sys)&&/third person/.test(W.sys)&&/shows a picture/.test(W.sys)&&W.sys.indexOf("{{")<0, (W.sys||"").slice(0,300));
   ok("it gets the lines with speech, actions AND thoughts, the player marked",
-     /THE LINES THIS PASSAGE TELLS[^\n]*\nAyla: \*She sets the glass down\.\* _He looks tired\._ "They closed the harbour today\."\nEmre \(the player\): \*I lean in\.\* "Who closed it\?"\nBerk: "The governor did\."/.test(W.u0), W.u0);
+     /THE LINES THIS PASSAGE TELLS[^\n]*\nAyla: \*She sets the glass down\.\* \(unspoken thought: He looks tired\.\) "They closed the harbour today\."\nEmre \(the player\): \*I lean in\.\* "Who closed it\?"\nBerk: "The governor did\."/.test(W.u0), W.u0);
   ok("a sheet per person: looks, personality, how they talk, a background marked not for telling, their ties",
      /## Ayla\nFIRST TIME IN THE BOOK\nLooks: black curls, tall\nPersonality[^\n]*Warm but guarded with Emre\.\nHow they talk: Short, dry sentences\.\nBackground — to understand them, never to reveal[^\n]*Secretly owns the bar\./.test(W.u0)&&/With Berk: Berk is Ayla's brother\./.test(W.u0)&&/## Berk/.test(W.u0), W.u0);
   ok("it knows where the passage sits, and how long to make it", /WHERE THIS PASSAGE SITS:\nIt opens the book\. It ends on the moment of its last line: the picture that follows shows it\./.test(W.u0)&&/LENGTH:\nAbout \d+ words\./.test(W.u0), W.u0);
@@ -91,6 +91,13 @@ const {chromium}=require('playwright');
      /THE BOOK SO FAR \(its last pages\):\nPassage 1: the harbour lay still\./.test(W.u1)&&!/## Ayla\nFIRST TIME/.test(W.u1)&&/\[Berk leaves\.\]/.test(W.u1)&&/\[Time passes — it is now Night\.\]/.test(W.u1)&&/It closes this scene/.test(W.u1), W.u1);
   ok("the day's closing passage carries the night's narration", /\[The day ends\.\] The night closes over the town\./.test(W.u3)&&/It closes the day, and the chapter with it\./.test(W.u3), W.u3);
   ok("an opened chapter writes in the foreground, on the story's model", W.fg===true, JSON.stringify(W.model));
+  ok("a thought reaches the writer marked as material, and the prompt forbids putting it on the page",
+     /THOUGHTS ARE MATERIAL, NOT TEXT/.test(W.sys)&&/never copied onto the page: not quoted, not in italics/.test(W.sys)&&/\(unspoken thought: He looks tired\.\)/.test(W.u0)&&!/_He looks tired\._/.test(W.u0), (W.u0||"").slice(-700));
+  ok("the book so far is whole passages, newest last; only what does not fit is left out", await pg.evaluate(()=>{
+      const P=n=>String(n).repeat(2500), old=["o1","o2","o3"].map(x=>x+" "+"x".repeat(995)).join("\n\n");
+      const a=_bkSoFar(["first passage.","second passage."]), b=_bkSoFar([old,P(1),P(2)]);
+      const c=_bkSoFar(["a".repeat(1500)+"\n\n"+"b".repeat(1500)+"\n\nlast para of the old one.",P(1),P(2)]);
+      return (a==="first passage.\n\nsecond passage."&&b==="…\n\n"+P(1)+"\n\n"+P(2)&&/^…\n\nlast para of the old one\.\n\n1/.test(c)) ? true : JSON.stringify({a,b:b.slice(0,40),c:c.slice(0,60)}); }));
   ok("written once: opening again writes nothing", await pg.evaluate(async()=>{ __calls=[]; const n=await bookCatchUp(curChat(),"story",{day:1}); return n===0&&__calls.length===0 ? true : "wrote "+n; }));
 
   console.log("\n[the page]");
@@ -128,6 +135,7 @@ const {chromium}=require('playwright');
   ok("put back, it returns where it was", H.back===2, JSON.stringify(H));
   ok("a picture whose bytes are gone is passed over, its text kept", await pg.evaluate(async()=>{
       const m=curChat().messages.find(x=>x.mid==="a3"); const keep=m.img; m.img=null; m.imgStored=true;
+      await new Promise(r=>setTimeout(r,300)); await mediaDB.kvDelete(_bkMediaKey(curChat().universeId,"story","a3"));   // and no kept copy either (see the kept book below)
       document.getElementById('bookBody').innerHTML=""; renderBook(); await new Promise(r=>setTimeout(r,400));   // as after a reload
       const gone=document.querySelector('#bookBody figure.nvFig[data-mid="a3"]'), r=(gone&&gone.classList.contains('gone')&&document.querySelectorAll('#bookBody .nvPass').length===4);
       m.img=keep; delete m.imgStored; document.getElementById('bookBody').innerHTML=""; renderBook();
@@ -215,6 +223,22 @@ const {chromium}=require('playwright');
       await _bkJob(c,"story").p; const now=c.book.story.passages["a1"];
       return (ghost&&__calls.length===1&&now&&!now.stale&&now.text!==old) ? true : JSON.stringify({ghost,n:__calls.length,now}); }));
 
+  console.log("\n[thoughts copied onto the page]");
+  const TC=await pg.evaluate(async()=>{
+    const c=curChat(); const real=window.chatCompletion; const sent=[];
+    c.messages.push({mid:"th1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'*She sits.* _I should never have come back to this town._ "Hello."',present:["p_a"],status:{day:4,period:"Morning",location:"Square",trackers:[]},img:__pic("#123"),imgState:"done"});
+    window.chatCompletion=async(m,mo,o)=>{ sent.push(m); return sent.length===1?"Ayla sat. I should never have come back to this town, she thought. \"Hello.\""
+      :"Ayla sat, and the old town closed around her like a hand she had once escaped. \"Hello.\""; };
+    const n=await bookCatchUp(c,"story",{day:4}); window.chatCompletion=real;
+    const last=sent[1]?sent[1][sent[1].length-1].content:"";
+    return {n,calls:sent.length,last,prevDraft:sent[1]&&sent[1][sent[1].length-2].role,text:c.book.story.passages.th1&&c.book.story.passages.th1.text};
+  });
+  ok("a draft that copies a thought word for word goes back once, naming it", TC.calls===2&&TC.prevDraft==="assistant"&&/copies these unspoken thoughts onto the page word for word:\n- I should never have come back to this town\./.test(TC.last), JSON.stringify(TC));
+  ok("and the second draft is the one kept", TC.n===1&&/closed around her/.test(TC.text||""), JSON.stringify(TC));
+  ok("a passage that only echoes a word or two of a thought is not sent back", await pg.evaluate(()=>{
+      const lines=[{m:{content:"_I should never have come back to this town._"}}];
+      return (_bkCopiedThoughts("She wished she had never come back.",lines).length===0&&_bkCopiedThoughts("never have come back to this town",lines).length===1) ? true : "wrong"; }));
+
   console.log("\n[settings and saving]");
   ok("the writer's settings save", await pg.evaluate(()=>{
       toggleBookOpts(); const shown=!document.getElementById('bookOpts').hidden;
@@ -229,14 +253,95 @@ const {chromium}=require('playwright');
       bookRewrite("a1"); await _bkJob(curChat(),"story").p; window.chatCompletion=real; state.bookModel=""; state.bookLen="medium";
       const u=__calls[0].messages[1].content; const w=+(/About (\d+) words/.exec(u)||[])[1];
       return (model==="my/model"&&w>=120) ? true : JSON.stringify({model,w}); }));
-  ok("Save chapter is one HTML file with the prose and the pictures in it", await pg.evaluate(async()=>{
-      const h=await bookChapterHTML(curChat(),"story",1);
-      return (/^<!doctype html>/.test(h)&&/<h1><small>Chapter<\/small>Day 1<\/h1>/.test(h)&&/the harbour lay still/.test(h)&&/<img src="data:image\/png/.test(h)&&!/bkBub/.test(h)) ? true : h.slice(0,300); }));
+
+  console.log("\n[the kept book: one per story, with its own pictures]");
+  const KB=await pg.evaluate(async()=>{
+    const c=curChat(); await bookKeep(c,"story");
+    const kept=await bookKept(c.universeId,"story"), live=Object.keys(c.book.story.passages).length;
+    const pic=await mediaDB.kvGet(_bkMediaKey(c.universeId,"story","b1"));
+    return {n:kept.sections.length,live,pic:/^data:image\/png/.test(pic||""),chats:[...new Set(kept.sections.map(x=>x.chat))].length,
+      first:kept.sections[0]&&{day:kept.sections[0].day,where:kept.sections[0].where,media:kept.sections[0].media}};
+  });
+  ok("every written passage is bound into the kept book, in order", KB.n===KB.live&&KB.chats===1&&KB.first.day===1&&/Harbour Bar/.test(KB.first.where), JSON.stringify(KB));
+  ok("with its own copy of each picture, taken while the chat still has it", KB.pic===true, JSON.stringify(KB));
+  ok("a picture the chat has lost still shows in the book and is still in the saved book", await pg.evaluate(async()=>{
+      const c=curChat(), m=c.messages.find(x=>x.mid==="b1"), keep=m.img;
+      m.img=null; m.imgSrc="https://expired.example/b1.png"; m.imgStored=true; await mediaDB.kvDelete("mimg:b1");
+      _bookDay=1; openStoryBook(); document.getElementById('bookBody').innerHTML=""; renderBook(); await new Promise(r=>setTimeout(r,500));
+      const img=document.querySelector('#bookBody figure.nvFig[data-mid="b1"] img'), shown=!!(img&&/^data:image\/png/.test(img.src)&&!img.closest('figure').classList.contains('gone'));
+      await bookKeep(c,"story"); const h=await bookKeptHTML(c.universeId,"story");
+      const kept=await bookKept(c.universeId,"story"), sec=kept.sections.find(x=>x.media==="b1");
+      m.img=keep; delete m.imgSrc; delete m.imgStored; closeStoryBook();
+      return (shown&&!!sec&&(h.match(/<img src="data:image\/png/g)||[]).length>=3) ? true : JSON.stringify({shown,sec:!!sec,imgs:(h.match(/<img /g)||[]).length}); }));
+  const RS=await pg.evaluate(async()=>{
+    // the story is reset: a new chat for the same universe, starting again at Day 1
+    const old=curChat(); const nc={id:"c_reset",universeId:old.universeId,castIds:[],presentIds:[],memCounts:{},tempChars:[],messages:[],gameDay:1,title:old.title};
+    nc.messages=[{mid:"r1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"A new day, a new start."',present:["p_a"],status:{day:1,period:"Morning",location:"Pier",trackers:[]},img:__pic("#0a0"),imgState:"done"}];
+    state.chats[nc.id]=nc; state.curChat=nc.id;
+    await bookCatchUp(nc,"story",{day:1}); await bookKeep(nc,"story");
+    const kept=await bookKept(nc.universeId,"story"), h=await bookKeptHTML(nc.universeId,"story");
+    state.curChat=old.id; delete state.chats[nc.id];
+    return {chats:kept.sections.map(x=>x.chat).filter((x,i,a)=>a.indexOf(x)===i),last:kept.sections[kept.sections.length-1].chat,
+      oldStill:kept.sections.some(x=>x.chat===old.id), days:(h.match(/<h2><small>Chapter<\/small>Day 1<\/h2>/g)||[]).length, orn:/class="orn"/.test(h), title:/<h1>/.test(h)};
+  });
+  ok("after a reset it is still ONE book: the earlier telling kept, the new one added after it", RS.chats.length===2&&RS.last==="c_reset"&&RS.oldStill&&RS.days===2&&RS.orn&&RS.title, JSON.stringify(RS));
+  const FS=await pg.evaluate(async()=>{
+    // a browser that can write to a file: the first Save picks it, every later Save — and a new passage — rewrites it
+    const writes=[]; let picks=0;
+    const handle={name:"Story — Story Book.html",queryPermission:async()=>"granted",requestPermission:async()=>"granted",
+      createWritable:async()=>{ let buf=""; return {write:async b=>{ buf=await b.text(); },close:async()=>{ writes.push(buf); }}; }};
+    window.showSaveFilePicker=async()=>{ picks++; return handle; };
+    const realSet=mediaDB.kvSet.bind(mediaDB), realGet=mediaDB.kvGet.bind(mediaDB); let stored=null;
+    mediaDB.kvSet=async(k,v)=>{ if(/^bookfile:/.test(k)){ stored=v; return true; } return realSet(k,v); };
+    mediaDB.kvGet=async k=>(/^bookfile:/.test(k)?stored:realGet(k));
+    _bookDay=1; openStoryBook(); await new Promise(r=>setTimeout(r,100));
+    await bookSaveBook(); await bookSaveBook();
+    const before=writes.length;
+    // a new section arrives: the file is rewritten on its own
+    const c=curChat(); c.messages.push({mid:"z1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"One more thing."',present:["p_a"],status:{day:3,period:"Night",location:"Home",trackers:[]},img:__pic("#abc"),imgState:"done"});
+    await bookCatchUp(c,"story",{day:3}); await new Promise(r=>setTimeout(r,1200)); await bookKeep(c,"story"); await new Promise(r=>setTimeout(r,2900));
+    const opts=document.getElementById('bookFileTxt').textContent;
+    mediaDB.kvSet=realSet; mediaDB.kvGet=realGet; delete window.showSaveFilePicker; closeStoryBook();
+    return {picks,before,after:writes.length,whole:/Day 1/.test(writes[0]||"")&&/Day 3/.test(writes[writes.length-1]||"")&&/<img src="data:image/.test(writes[0]||""),opts};
+  });
+  ok("Save picks the file once and rewrites that one file with the whole book", FS.picks===1&&FS.before===2&&FS.whole, JSON.stringify(FS));
+  ok("and a new section is added to it on its own", FS.after===3, JSON.stringify(FS));
+  ok("elsewhere Save hands over the whole book as one file", await pg.evaluate(async()=>{
+      const got=[]; const realClick=HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click=function(){ got.push(this.download); };
+      const realShare=navigator.canShare; try{ navigator.canShare=()=>false; }catch(e){}
+      _bookDay=1; openStoryBook(); await bookSaveBook(); HTMLAnchorElement.prototype.click=realClick; try{ navigator.canShare=realShare; }catch(e){} closeStoryBook();
+      return (got.length===1&&/Story Book\.html$/.test(got[0])) ? true : JSON.stringify(got); }));
+  console.log("\n[the kept book in the backup]");
+  const BK=await pg.evaluate(async()=>{
+    const c=curChat(); await bookKeep(c,"story");
+    const full=await buildBackup({noKeys:true}), snap=await buildBackup({noMedia:true});
+    const fk=(full.books||[]).map(x=>x.key), sk=(snap.books||[]).map(x=>x.key);
+    // wipe the kept book, then restore it from the full bundle the way an import does (one transaction)
+    const before=await bookKept(c.universeId,"story");
+    for(const k of fk) await mediaDB.kvDelete(k);
+    const gone=(await bookKept(c.universeId,"story")).sections.length;
+    await mediaDB.restoreAtomic(bookRestoreEntries(JSON.parse(JSON.stringify(full.books))),null);
+    const back=await bookKept(c.universeId,"story"), pic=await mediaDB.kvGet(_bkMediaKey(c.universeId,"story","b1"));
+    let got=null; const real=window._downloadJSON; window._downloadJSON=o=>{ got=o; };
+    await exportRoleplay(c.universeId); window._downloadJSON=real;
+    const bad=bookRestoreEntries([{key:"settings",value:"x"},{key:"bookmedia:u:story:m",value:"javascript:alert(1)"},{key:"bookmedia:u:story:n",value:"https://x/y.png"},
+      {key:"book:u:story",value:{sections:[{text:1}]}},{key:"bookmedia:u:video:v",value:{blob:"data:video/mp4;base64,AAAA"}}]);
+    let rejected=false; try{ validateBackupBundle({app:"StoryMind",backupVersion:1,collections:{},books:"nope"}); }catch(e){ rejected=/books/.test(e.message); }
+    return {full:fk.some(k=>/^book:/.test(k))&&fk.some(k=>/^bookmedia:/.test(k)),snap:sk.length>0&&sk.every(k=>/^book:/.test(k)),
+      gone,back:back.sections.length===before.sections.length&&back.sections.length>0,pic:/^data:image\/png/.test(pic||""),
+      rp:!!(got&&Array.isArray(got.books)&&got.books.some(x=>/^bookmedia:/.test(x.key))),
+      bad:Object.keys(bad),blob:bad["bookmedia:u:video:v"] instanceof Blob,rejected};
+  });
+  ok("Export everything carries every kept book with its pictures; a snapshot carries the books' text", BK.full&&BK.snap, JSON.stringify(BK));
+  ok("restored from the backup, the book and its pictures come back", BK.gone===0&&BK.back&&BK.pic, JSON.stringify(BK));
+  ok("a roleplay export carries its story's book", BK.rp, JSON.stringify(BK));
+  ok("a backup can only write kept books and their pictures; a clip comes back as a file", JSON.stringify(BK.bad)==='["bookmedia:u:video:v"]'&&BK.blob&&BK.rejected, JSON.stringify(BK));
+  ok("the Save button is in the book's bar", await pg.evaluate(()=>{ const b=document.querySelector('.bookBar #bookSaveBtn'); return !!(b&&/bookSaveBook/.test(b.getAttribute('onclick'))); }));
   ok("the menu opens it", await pg.evaluate(()=>{ closeStoryBook(); toggleChatMenu&&toggleChatMenu();
       const btn=[...document.querySelectorAll('button')].find(x=>/openStoryBook/.test(x.getAttribute('onclick')||"")); if(btn)btn.click();
       const r=document.getElementById('bookModal').classList.contains('show'); closeStoryBook(); return r ? true : "not opened"; }));
   ok("the writer is a registry prompt on the book card, and the comic editor is gone", await pg.evaluate(()=>
-      !!PROMPT_BY_KEY.x_book_writer&&!PROMPT_BY_KEY.x_book_editor&&!PROMPT_BY_KEY.x_video_book_narrator&&X_PROMPT_CARDS.some(c=>c.key==="story_book"&&c.keys.includes("x_book_writer"))
+      !!PROMPT_BY_KEY.x_book_writer&&!!PROMPT_BY_KEY.x_book_writer_redo&&!PROMPT_BY_KEY.x_book_editor&&!PROMPT_BY_KEY.x_video_book_narrator&&X_PROMPT_CARDS.some(c=>c.key==="story_book"&&c.keys.includes("x_book_writer"))
       &&typeof bookStructure==="undefined"&&typeof toggleBookLayout==="undefined"));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

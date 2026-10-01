@@ -37,7 +37,8 @@ bubbles, the webtoon / comic-page layouts, Save page, the Video Book's speeches 
 ### The writer (`x_book_writer`, Settings › Prompts › Story Book & Video Book)
 One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's model), `fn:"narrate"`. `{{media}}` is
 "picture" or "video clip". The user message (`epDefine("x_book_writer")`):
-- **THE BOOK SO FAR** — the last `BOOK_PREV_CHARS` (2200) of prose before the run;
+- **THE BOOK SO FAR** (`_bkSoFar`, v150.1) — the passages before the run, whole and newest last, as many as fit
+  `BOOK_PREV_CHARS` (6000); only the oldest that does not fit is cut, at a paragraph, behind a "…";
 - **WHERE AND WHEN** — day, part of the day, place, and the place's description;
 - **THE PEOPLE** (`_bkPeople`) — speakers first, then whoever was present (max 8), each with: *FIRST TIME IN THE BOOK*
   when they were in no earlier passage's lines and are not named in its prose; looks (`normalizeLook`); the card's
@@ -45,16 +46,25 @@ One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's m
   what the lines have not shown*; what they are to the player (`playerTieLine`); how they stand with the player and
   with each other person here — the tie word and the slow relationship readings as behaviour (`relReadings`);
 - **THE PLAYER'S CHARACTER** (`_playerProfileBlock`);
-- **THE LINES** — speech, `*actions*` and `_thoughts_` as played, the player marked "(the player)", events in brackets:
+- **THE LINES** — speech and `*actions*` as played, each `_thought_` marked `(unspoken thought: …)` (`_bkThoughtsMarked`,
+  v150.1), the player marked "(the player)", events in brackets:
   `[Berk leaves.]`, `[Time passes — it is now Night.]`, `[A journey] …`, `[The day ends.] <narration>`;
 - **WHERE THIS PASSAGE SITS** — opens the book / a new day / a new scene / carries on; ends on the picture (or, in the
   Video Book, "its last N lines: the clip that follows shows them in motion, without words") / closes the scene /
   closes the day / the story goes on;
 - **LENGTH** — `BOOK_LEN[state.bookLen]` (short / medium / long): words per told line, clamped.
 The prompt: tell every line in order, retell rather than copy, keep quoted words faithful (trim, never change the
-meaning or add a promise or decision), thoughts may be shown and belong to who had them, improvise texture but not
-events, keep sheet secrets, introduce first appearances, set the scene when opening, end on the picture's moment,
-bring a closing to rest; plain prose, `*italics*` only. `_bkCleanOut` strips fences, a stray heading or JSON.
+meaning or add a promise or decision), improvise texture but not events, keep sheet secrets, introduce first
+appearances, set the scene when opening, continue the book so far without retelling it or reusing its images and
+phrases, end on the picture's moment, bring a closing to rest; plain prose, no markdown. `_bkCleanOut` strips fences,
+a stray heading or JSON.
+
+**Thoughts are material, not text (v150.1).** Reported: the characters' thoughts appeared in the book as they were
+typed. A thought is the writer's private knowledge of that character, to write their inner world from — what they
+want, fear, notice and hide, the gap between their words and their meaning — never quoted, italicised or paraphrased
+line by line. In code, `_bkCopiedThoughts` looks for any five consecutive words of a thought in the draft; a draft that
+has one goes back once with `x_book_writer_redo` naming the copied thoughts (the draft as the assistant turn before it),
+and the second draft is kept. Passages written before v150.1 keep their text until rewritten (↻).
 
 ### Stored, and the failsafes
 `chat.book[kind] = {passages:{<first mid>:{mids, sig, text, end, at, stale?}}, hidden:{<mid>:true}}`. A passage
@@ -77,8 +87,30 @@ Paper, Literata/serif, justified with hyphenation; *Chapter / Day N*, a small-ca
 (⁂ between scenes, ▶ plays from there), a drop capital on the chapter's first passage, pictures (or clips with their
 controls) sized to their own shape between passages. `_bkReconcile` replaces only the blocks whose HTML changed, so a
 picture or a playing clip is never reloaded when a passage arrives. The **Writer** button opens the options: Write as
-you play, passage length, writer model, *Write what this day is missing*, *Save chapter* (`bookChapterHTML`: one HTML
-file with the prose and the pictures inside, share sheet on a phone) and *Save as video* (Story Book only).
+you play, passage length, writer model, *Write what this day is missing*, *Save the book* (see below) and *Save as video* (Story Book only).
+
+### The kept book and Save (v150.2)
+Reported: no visible save, and the pictures are erased after a while. Why they go: a hosted picture is only a link
+until its bytes are copied (the copy can be refused by the host), and a chat's stored bytes are swept with the chat
+(a universe reset, a restarted scene). So the book keeps itself, apart from the chat — always ONE book per story:
+- `book:<uni>:<kind>` (IndexedDB) holds the kept book's sections in reading order — chat, day, place, text, and the
+  picture/clip it leads to; `bookmedia:<uni>:<kind>:<mid>` holds the book's own copy of each picture (data URL) or
+  clip (Blob). No prune sweep touches these keys.
+- `bookKeep(chat, kind)` syncs it: `_bkArchive` copies every anchor the kept book lacks (sources: the message, its
+  `mimg:` bytes, the gallery copy, a fetch), then this chat's sections are replaced in place by its written passages
+  (a passage being rewritten keeps its old text); sections of an earlier chat of the same story stay, so a reset adds
+  to the same book. A picture the chat lost keeps its kept copy; one taken out or whose message was deleted leaves it.
+- It runs when a picture or clip is made (`bookOnMedia`, before the writer — so the bytes are taken while the link is
+  alive, whether or not the writer is on), after every passage, when the book opens, and when a picture is taken out
+  or put back. The page and the reader fall back to the kept copy (`bookKeptSrc`) when the chat's is gone.
+- **Save** (the bar, always labelled; also in the Writer options) — `bookSaveBook` writes the whole kept book
+  (`bookKeptHTML`: title, every chapter, place headings, prose, the pictures or clips inside) as one HTML file. With
+  `showSaveFilePicker` (Chrome on a computer) the first Save picks the file and stores its handle
+  (`bookfile:<uni>:<kind>`); every later Save rewrites that file, and `_bkAutoSave` rewrites it after each new passage
+  while the tab holds write permission. Elsewhere Save hands over the whole book each time (share sheet or download).
+  *Other file* forgets the chosen file.
+- **In the backup (v150.3)**: Export everything carries every kept book with its pictures and clips, the rolling
+  snapshots the books' text, and a roleplay export its story's book (see 11-settings-and-backup).
 
 ### The reader (`openBookPlayer`) and Save as video
 `bookPlayItems` plays exactly what the book holds: a card per scene, each paragraph of each passage on a dark page,

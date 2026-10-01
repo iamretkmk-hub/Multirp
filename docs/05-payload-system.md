@@ -353,6 +353,12 @@ line is: it was never spoken, so it still stands next turn and either shows or i
 blob by the builder rather than called from the layout — a `{{call//resistance_actions}}` there
 resolves against nothing and the editor correctly flags it as a piece that does not exist.
 
+**(!) v150.5 — `resistance` ships on every turn outside heat.** The ask gate (v62.1–v148.6: a question, a
+hand in the player's latest line, a stated limit, a stalled exchange, a pursuit already put) is gone at the
+player's request. Their `resistance_body` judges for itself whether anything is being asked. What still
+depends on the turn: heat beats skip the block, `resistance_actions` needs a physical move in the line
+being answered or the player's latest line, and `resistance_limits` needs a limit this character drew.
+
 ## v113.1 — the warning that reported the data instead of the template
 
 Ten "names that did not resolve" errors in the debug log, every one blamed on the **Prompt tuner**,

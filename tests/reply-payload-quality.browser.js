@@ -328,7 +328,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("without a Scene Writer bring-in", r10.writer===false, JSON.stringify(r10));
 
   /* ------------------------------------------------------------------------------------------ */
-  console.log("\n[11 — the consent rail ships when something was asked]");
+  console.log("\n[11 — the consent rail ships on every turn; the actions part when a hand is on them]");
   const r11=await pg.evaluate(()=>{
     const c=__setup(); const sami=__P("p_sami"); const H=["p_sami","p_berk"];
     const tail=()=>buildTailBlocks({chat:c,selfP:sami,selfId:"p_sami",selfName:"Sami Ozucak",targetName:"Emre",targetId:"__user__",multi:true,injected:{}});
@@ -336,12 +336,12 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       {mid:"a1",role:"assistant",speaker:"Berker Ozucak",speakerId:"p_berk",present:H,content:'*Defteri aciyor.* "Vardiya listesi hazir."'},
       {mid:"a2",role:"assistant",speaker:"Sami Ozucak",speakerId:"p_sami",present:H,content:'*Omuz silkiyor.* "Iyi."'},
       {mid:"a3",role:"user",present:H,content:'"Pazartesi ben geceye kalirim."'}];
-    const plain=!!tail().resistance;
+    const t0=tail(); const plain=!!t0.resistance&&!/AN ASK IS NOT ONLY A SENTENCE/.test(String(t0.resistance));
     c.messages.push({mid:"a4",role:"user",present:H,content:'*Elimi Sami\'nin omzuna koyuyorum.* "Yardim et."'});
     const t=tail();
     return {plain,hand:!!t.resistance,actions:/AN ASK IS NOT ONLY A SENTENCE/.test(String(t.resistance||""))};
   });
-  ok("a statement in a scene full of character beats does not ship the rail", r11.plain===false, JSON.stringify(r11));
+  ok("v150.5 — a plain statement ships the rail too (the ask gate is gone)", r11.plain===true, JSON.stringify(r11));
   ok("the player's hand on this character does, with the actions part", r11.hand===true && r11.actions===true, JSON.stringify(r11));
 
   /* ------------------------------------------------------------------------------------------ */

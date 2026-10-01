@@ -48,6 +48,17 @@ evening scene about the money Sami owes) is built in the sandbox at boot. **Use 
 roleplay export, a universe export or a full backup instead. Prompt overrides stored inside a universe
 (`u.prompts`, `u.blockTpls`) are cleared in the sandbox, so the preview shows the editor's prompts.
 
+The sample carries data for every piece of a reply: condensed and older memories, a rumour (Buket's stake,
+Sami and Berker carrying it), trackers, a plan due tonight and one lived this afternoon, promises both ways,
+a quest, where they have been today, relationship readings with a live charge, private motives, a limit
+Buket drew, and drives passages for both. Its last line is an ask with a hand in it, and a short text
+thread gives the text kind something to answer.
+
+**This turn** switches bring in the blocks that depend on the moment: *arriving* (`situation`), *video
+playing* (`watching_now`), *voiced aloud* (`spoken_delivery`) and *after heat* (`after_heat`). The preview
+lists every block of the layout that came back empty, with the condition that brings it in. Alternative
+wordings that only one of a set can fill (heat or not, text or spoken) are counted separately.
+
 Engine payloads show their own call-site data as `‹labels›`, because only the call site can produce it.
 The shared library pieces (`scene`, `exchange`, `memories`…) are filled from the story.
 

@@ -50,6 +50,22 @@ const ROOT=path.resolve(__dirname,'..');
     ok("its solo layout is the one in the editor", s0.solo===JSON.parse(start.settings.payloadTemplates).solo);
     ok("and it builds with every name known", s0.unk.length===0&&s0.unkV.length===0, JSON.stringify(s0));
     ok("nothing counts as edited", s0.edited===0, s0.edited);
+    console.log("\n[0b — every piece of the layouts has something to show]");
+    const rich=await pg.evaluate(async()=>{
+      const body=__PE.itemVal(__PE.findItem("frag:resistance_body")).replace(/\{\{[^}]*\}\}/g,"").trim().split("\n")[0].slice(0,40);
+      const o={body};
+      for(const k of ["solo","multi","gm","text","heat"]){ const p=await __PE.engCall('build',{kind:k});
+        o[k]={resist:p.messages.some(m=>m.content.indexOf(body)>=0),empties:p.empties}; }
+      const on=await __PE.engCall('build',{kind:'solo',turn:{arriving:true,video:true,voice:true,afterHeat:true}});
+      o.on=on.empties;
+      return o; });
+    ["solo","multi","gm","text"].forEach(k=>ok("v150.5 — the resistance block is in the "+k+" payload", rich[k].resist===true, JSON.stringify(rich[k])));
+    ok("heat beats still leave it out", rich.heat.resist===false);
+    const allowed=/^(others_present|player|after_heat|situation|watching_now|spoken_delivery|private_intent)(\/\/full)?$/;
+    ["solo","multi","gm","text","heat"].forEach(k=>ok("only turn-dependent blocks are empty in "+k, rich[k].empties.every(e=>allowed.test(e)), rich[k].empties.join(" ")));
+    ok("the This turn switches bring in arrival, video, voice and after heat",
+       ["situation","watching_now","spoken_delivery","after_heat"].every(b=>!rich.on.some(e=>e.split("//")[0]===b)), rich.on.join(" "));
+
     /* a draft with an edit, from an older file: reloading must not throw the edit away silently */
     await pg.evaluate(()=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); __PE.S.orig.date=1; });
     await pg.waitForTimeout(800);

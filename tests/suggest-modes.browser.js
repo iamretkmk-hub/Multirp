@@ -159,6 +159,8 @@ const {chromium}=require('playwright');
   ok("…and at a scene cut", /THE LAST LINES:\nNarrator: Later, at the counter\.\nAyla Kaya: "Coffee\?"/.test(SC.b)&&!/Oh, you|walks to the bakery/.test(SC.b), SC.b.slice(-400));
   ok("the narrator reads this scene only too", /Later, at the counter/.test(SC.n)&&!/Old beach line|walks to the bakery/.test(SC.n), SC.n.slice(0,500));
 
+  ok("the narrator keeps a turn short: one beat, one or two sentences, under 40 words, and never copies earlier long turns",
+     await pg.evaluate(()=>{ const t=up("playerNarratePrompt"); return /KEEP IT SHORT:/.test(t)&&/under 40 words in all, in ONE paragraph/.test(t)&&/Never a speech, never a monologue/.test(t)&&/never copy their\s+length/.test(t)&&!/don't truncate/.test(t) ? true : t.slice(0,400); }));
   console.log("\n[4. the prompts are editable]");
   ok("the five mode prompts are registry prompts on the Autopilot card", await pg.evaluate(()=>{
     const ks=["x_reply_suggest_woman","x_reply_suggest_man","x_reply_suggest_group","x_reply_suggest_heat","x_reply_suggest_neutral"];

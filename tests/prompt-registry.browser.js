@@ -154,7 +154,8 @@ const {chromium}=require('playwright');
         "request","json_rule","ph_rule","seconds","beats","tracker","name","owner","gist",
         "title","who","days",      // v63.1 — x_unkept_meeting / x_neglect, filled by their planters
         "when","others","lines",   // v103.1 — x_call_scene / x_call_recent, filled by buildCallInstructions
-        "focus","people","women","men","couples"]); // v149.2 — the suggested-reply modes, filled by suggestModeText
+        "focus","people","women","men","couples",   // v149.2 — the suggested-reply modes, filled by suggestModeText
+        "media"]);                // v150.0 — x_book_writer: "picture" or "video clip", filled by bookWriteRun
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
         (String(X_ENGINE_PROMPTS[k].def).match(/\{\{(\w+)\}\}/g)||[]).forEach(t=>{

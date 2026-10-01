@@ -808,7 +808,11 @@
   .avatarPreview{width:120px;height:120px;border-radius:16px;object-fit:cover;border:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;font-size:54px;margin:0 auto;}
   /* v30.2 — the reference strip: a person's four pictures, slot 1 being their profile one. */
   /* v150.6 — pose presets: one compact row per scene type (thumbnail · name · buttons) */
-  .poseRow{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);}
+  .poseRow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:7px 0;border-bottom:1px solid var(--border);}
+  .poseRow .poseThumbs{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;}
+  #pePoseRefs .poseThumbs .refSlot{width:46px;height:46px;flex:0 0 46px;}
+  #pePoseRefs .poseThumbs:empty{display:none;}
+  .poseRow .poseCount{font-weight:400;color:var(--muted);font-size:12px;}
   .poseRow:last-child{border-bottom:none;}
   .poseRow .refStrip{margin:0;flex:0 0 auto;}
   .poseRow .refSlot{width:52px;height:52px;border-radius:10px;cursor:pointer;}
@@ -1400,7 +1404,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.6</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.7</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2670,9 +2674,9 @@
       </div>
       <div class="desc"><b>This picture is the character's reference</b> when no reference sheet is set. With an image-edit model every scene they appear in is built from it, so their face and build stay the same throughout. It is also the avatar you see everywhere in the app. A new upload replaces it. <b>Choose from gallery</b> takes one the story already made, <b>Generate</b> draws a new one from the Appearance fields below.</div>
     </div>
-    <div><label>Pose presets <span class="desc" style="display:inline;font-weight:400">— one picture per image scene type</span></label>
+    <div><label>Pose presets <span class="desc" style="display:inline;font-weight:400">— pictures per image scene type</span></label>
       <div id="pePoseRefs"></div>
-      <div class="desc">One slot for every scene type in Settings › Image. When the image writer picks that scene type for a picture of <b>this</b> character, the picture in its slot is the only reference sent — <b>no face pictures</b> of this character, the player or anyone else go with it. A slot left empty means the face pictures are sent as usual. The scene's location and its continuity (the previous picture, with an edit model) are not affected.</div>
+      <div class="desc">One row for every scene type in Settings › Image, holding up to 8 pictures. When the image writer picks that scene type for a picture of <b>this</b> character, one of its pictures — chosen at random, each equally likely — is the only reference sent — <b>no face pictures</b> of this character, the player or anyone else go with it. A slot left empty means the face pictures are sent as usual. The scene's location and its continuity (the previous picture, with an edit model) are not affected.</div>
     </div>
     <div><label>Avatar (emoji fallback)</label><input type="text" id="peAvatar" placeholder="🧝‍♀️" maxlength="4"></div>
     <div><label>Roleplay instructions</label><textarea class="fld" id="peInstructions" placeholder="How this character should be played: rules, tone, content boundaries, formatting preferences, things to always/never do…" style="min-height:64px"></textarea></div>
@@ -23650,62 +23654,109 @@ function pickMediaRefFromGallery(){
   });
 }
 function clearMediaRef(){ peMediaRef=""; renderMediaRefPreview(); }
-/* ===== v150.5 — POSE PRESETS. One picture per image scene type (state.imgRules, by rule id), stored
-   on the card as poseRefs {ruleId: data URI}. When the router picks that scene type for this
-   character's picture, the pose picture replaces every face picture (see illustrate). */
+/* ===== v150.5 — POSE PRESETS. Pictures per image scene type (state.imgRules, by rule id), stored on
+   the card as poseRefs {ruleId: [data URI, …]}. When the router picks that scene type for this
+   character's picture, ONE of them — chosen at random, each with an equal chance — replaces every
+   face picture (see illustrate).
+   v150.7 — several pictures per scene type (up to POSE_MAX_PER_TYPE). A card saved by v150.5/6 holds
+   a single string per scene type; it reads as a list of one. */
+const POSE_MAX_PER_TYPE=8;
 let pePoseRefs={};
+function _poseList(v){
+  return (Array.isArray(v)?v:[v]).filter(x=>typeof x==="string"&&x.trim()).slice(0,POSE_MAX_PER_TYPE);
+}
+function _pePoseAdd(ruleId,d){
+  const l=_poseList(pePoseRefs[ruleId]);
+  if(l.indexOf(d)>=0){ toast("That picture is already here"); return false; }
+  if(l.length>=POSE_MAX_PER_TYPE){ toast(`${POSE_MAX_PER_TYPE} pictures is the most for one scene type — remove one first`); return false; }
+  l.push(d); pePoseRefs[ruleId]=l; return true;
+}
 function renderPePoseRefs(){
   const box=document.getElementById('pePoseRefs'); if(!box)return;
   const rules=(state.imgRules||[]).filter(r=>r&&r.id);
   if(!rules.length){ box.innerHTML=`<div class="desc">No image scene types yet — add them in Settings › Image.</div>`; return; }
-  // v150.6 — one compact row per scene type: tap the thumbnail (or ＋) to upload, the picture icon for the
-  // gallery; the × on a filled thumbnail clears it
-  box.innerHTML=`<div class="card" style="margin:0;padding:2px 10px">`+rules.map(r=>`<div class="poseRow">
-      <div id="pePose_${esc(r.id)}" class="refStrip" data-pose-up="${esc(r.id)}" title="Upload a pose picture"></div>
-      <div class="poseName" title="${esc(r.label||"Scene type")}">${esc(r.label||"Scene type")}${r.enabled===false?` <span class="desc">(off)</span>`:""}</div>
+  // v150.6 — one compact row per scene type. v150.7 — the name and the buttons on top, every picture
+  // below it with an × each, and a dashed ＋ tile to add another while there is room
+  box.innerHTML=`<div class="card" style="margin:0;padding:2px 10px">`+rules.map(r=>{
+      const n=_poseList(pePoseRefs[r.id]).length;
+      return `<div class="poseRow">
+      <div class="poseName" title="${esc(r.label||"Scene type")}">${esc(r.label||"Scene type")}${r.enabled===false?` <span class="desc">(off)</span>`:""}${n>1?` <span class="poseCount">· ${n}, one at random</span>`:""}</div>
       <div class="poseBtns">
         <button class="btn sec small" type="button" data-pose-up="${esc(r.id)}" title="Upload" aria-label="Upload">＋</button>
         <button class="btn sec small" type="button" data-pose-gal="${esc(r.id)}" title="Choose from gallery" aria-label="Choose from gallery"><svg class="ic"><use href="#i-image"/></svg></button>
-      </div></div>`).join("")+`</div>`;
-  rules.forEach(r=>renderRefStrip('pePose_'+r.id, pePoseRefs[r.id]?[pePoseRefs[r.id]]:[], "＋", function(){ delete pePoseRefs[r.id]; renderPePoseRefs(); }, 1));
+      </div>
+      <div id="pePose_${esc(r.id)}" class="poseThumbs"></div></div>`; }).join("")+`</div>`;
+  rules.forEach(r=>{
+    const el=document.getElementById('pePose_'+r.id); if(!el)return;
+    const list=_poseList(pePoseRefs[r.id]);
+    list.forEach((src,i)=>{
+      const cell=document.createElement('div'); cell.className="refSlot";
+      cell.innerHTML=`<img src="${escUrl(src)}" referrerpolicy="no-referrer" alt="">`;
+      const x=document.createElement('button'); x.type="button"; x.className="rsDel"; x.textContent="×"; x.title="Remove this picture";
+      x.onclick=ev=>{ ev.stopPropagation(); const l=_poseList(pePoseRefs[r.id]); l.splice(i,1);
+        if(l.length)pePoseRefs[r.id]=l; else delete pePoseRefs[r.id]; renderPePoseRefs(); };
+      cell.appendChild(x); el.appendChild(cell);
+    });
+    if(list.length&&list.length<POSE_MAX_PER_TYPE){   // an empty row adds with its ＋ button; no tile line
+      const add=document.createElement('div'); add.className="refSlot empty"; add.setAttribute('data-pose-up',r.id);
+      add.title="Add a pose picture"; add.innerHTML=`<span>＋</span>`; el.appendChild(add);
+    }
+  });
   box.querySelectorAll('[data-pose-up]').forEach(b=>b.onclick=()=>uploadPoseRef(b.getAttribute('data-pose-up')));
   box.querySelectorAll('[data-pose-gal]').forEach(b=>b.onclick=()=>pickPoseRefFromGallery(b.getAttribute('data-pose-gal')));
 }
 async function uploadPoseRef(ruleId){
-  const files=await pickFiles("image/*",false);
+  const files=await pickFiles("image/*",true);
   if(!files||!files.length)return;
-  const f=files[0];
-  if(f.size>10*1024*1024){ toast("That file is over 10 MB"); return; }
-  const d=await fitRefImage(await fileToDataUri(f));
-  if(!d){ toast("Couldn't read that image"); return; }
-  pePoseRefs[ruleId]=d; renderPePoseRefs(); toast("Pose picture set");
+  let added=0, skipped=0;
+  for(const f of files){
+    if(_poseList(pePoseRefs[ruleId]).length>=POSE_MAX_PER_TYPE)break;
+    if(f.size>10*1024*1024){ skipped++; continue; }
+    const d=await fitRefImage(await fileToDataUri(f));
+    if(!d){ skipped++; continue; }
+    if(_pePoseAdd(ruleId,d))added++;
+  }
+  renderPePoseRefs();
+  toast(added?`${added} pose picture${added===1?"":"s"} added${skipped?` · ${skipped} skipped`:""}`:"Nothing was added");
 }
 function pickPoseRefFromGallery(ruleId){
   const nameEl=document.getElementById('peName');
   openGalleryPicker({
-    title:"Pose picture",
-    hint:"Pick the one picture sent for this scene type.",
+    title:"Pose pictures",
+    hint:"Pick one or more. Each time this scene type is drawn, one of them is sent, at random.",
     charId:editingPersona?editingPersona.id:null,
     charName:(nameEl&&nameEl.value.trim())||"",
-    multiple:false,
+    multiple:true,
     onPick:async recs=>{
-      const rec=(recs||[])[0]; if(!rec)return;
-      const blob=await galleryRecordBlob(rec); if(!blob){ toast("Couldn't load that picture"); return; }
-      const d=await fitRefImage(await blobToDataURL(blob));
-      if(!d){ toast("Couldn't read that image"); return; }
-      pePoseRefs[ruleId]=d; renderPePoseRefs(); toast("Pose picture set");
+      let added=0;
+      for(const rec of (recs||[])){
+        if(_poseList(pePoseRefs[ruleId]).length>=POSE_MAX_PER_TYPE)break;
+        const blob=await galleryRecordBlob(rec); if(!blob)continue;
+        const d=await fitRefImage(await blobToDataURL(blob));
+        if(d&&_pePoseAdd(ruleId,d))added++;
+      }
+      renderPePoseRefs();
+      toast(added?`${added} pose picture${added===1?"":"s"} added`:"Couldn't read those pictures");
     }
   });
 }
 // Only slots that hold a picture are kept; a scene type deleted since keeps its picture until the card is saved.
 function _pePoseRefsToSave(){
   const out={}, ids=new Set((state.imgRules||[]).map(r=>r&&r.id).filter(Boolean));
-  Object.keys(pePoseRefs||{}).forEach(k=>{ const v=pePoseRefs[k]; if(ids.has(k)&&typeof v==="string"&&v.trim())out[k]=v; });
+  Object.keys(pePoseRefs||{}).forEach(k=>{ const l=_poseList(pePoseRefs[k]); if(ids.has(k)&&l.length)out[k]=l; });
   return out;
 }
-// The pose picture this character has for this scene type, or "".
-function poseRefFor(c,rule){
-  try{ const v=c&&c.poseRefs&&rule&&rule.id?c.poseRefs[rule.id]:""; return (typeof v==="string"&&v.trim())?v:""; }catch(e){ return ""; }
+// Every pose picture this character has for this scene type (a list, possibly empty).
+function poseRefsFor(c,rule){
+  try{ return (c&&c.poseRefs&&rule&&rule.id)?_poseList(c.poseRefs[rule.id]):[]; }catch(e){ return []; }
+}
+/* v150.7 — ONE OF THEM, AT RANDOM, EACH WITH AN EQUAL CHANCE: a uniform index in [0, n). Its own
+   function so a test can fix the roll. */
+function _poseRoll(n){ return n>1?Math.min(n-1,Math.floor(Math.random()*n)):0; }
+// The pose picture to send for this scene type ("" when there is none), and which one it was.
+function poseRefPick(c,rule){
+  const l=poseRefsFor(c,rule); if(!l.length)return {src:"",idx:-1,of:0};
+  const i=_poseRoll(l.length); return {src:l[i],idx:i,of:l.length};
 }
 /* The player's own sheet — same idea, stored on state (and overridable per universe). */
 function renderPlayerMediaRef(){
@@ -39654,12 +39705,13 @@ async function illustrate(mid,replyText,force){
       /* v150.5 — A POSE PRESET REPLACES EVERY FACE. When the character whose line this is has a picture
          for this scene type, it is the only reference sent: no face pictures of them, the player or
          anyone else. The pack built above still says who is in the frame (clothes, the scene chain). */
-      const _poseSrc=poseRefFor(speaker,rule);
-      if(_poseSrc&&_pack){
-        _pack={urls:[_poseSrc],names:[],subjects:[],people:[],unpictured:[],pose:true,
+      // v150.7 — with several pictures for this scene type, one is chosen at random, each equally likely
+      const _posePick=poseRefPick(speaker,rule);
+      if(_posePick.src&&_pack){
+        _pack={urls:[_posePick.src],names:[],subjects:[],people:[],unpictured:[],pose:true,
                poseOf:(_pack.people||[]).concat(_pack.unpictured||[])};
-        msg.imgPose=rule.id;
-      }else{ try{ delete msg.imgPose; }catch(e){} }
+        msg.imgPose=rule.id; msg.imgPoseIdx=_posePick.idx;
+      }else{ try{ delete msg.imgPose; delete msg.imgPoseIdx; }catch(e){} }
       /* v150.5 — the previous picture rides last. If its bytes cannot be had, this frame is a base
          frame after all (clothes and place described), never an edit of nothing. */
       if(_chain){
@@ -56617,7 +56669,7 @@ async function confirmClear(w){
    wrote into or gave a picture (_playerTouched) stays; the deleted chats' stored images and clips go; and
    Day 1 opens at the player's home with whoever is there (_landFreshChat). */
 function _playerTouched(p){
-  return !!(p&&(p.playerEdited||p.image||(Array.isArray(p.refImages)&&p.refImages.length)||p.mediaRef||(p.poseRefs&&Object.keys(p.poseRefs).length)));
+  return !!(p&&(p.playerEdited||p.image||(Array.isArray(p.refImages)&&p.refImages.length)||p.mediaRef||(p.poseRefs&&Object.keys(p.poseRefs).some(k=>_poseList(p.poseRefs[k]).length))));
 }
 function wipeUniverseState(uniId){
   const u=universeById(uniId); if(!u)return null;

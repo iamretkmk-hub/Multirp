@@ -29,6 +29,7 @@ breaks when you change something in the wrong place.
 | 03 | [03-ui-structure.md](03-ui-structure.md) | Screens, nav, modals, the chat menu & modes menu, icon system, theming, UI ↔ function mapping |
 | 04 | [04-chat-engine.md](04-chat-engine.md) | `sendMessage`, Auto-RP, OOC commands, turn routers, multi-character chains, heat mode, presence, witness-scoped history |
 | 05 | [05-payload-system.md](05-payload-system.md) | **The heart of the app.** Reply payloads, blocks, templates, engine payloads, the prompt registry, placeholders, coupling guards |
+| — | [prompt-editor.md](prompt-editor.md) | The separate Prompt Editor page: edit a prompt export, see the full payload StoryMind would build, ask Claude, download the file back |
 | — | [prompts/](prompts/) | **Every prompt, for rewriting.** `README.md` the machinery (registry, placeholders, buckets, language directives, refresh pipes), `INDEX.md` → ten grouped files carrying all 103 prompts with their contracts and full text, `flows.md` how they chain |
 | 06 | [06-ai-providers.md](06-ai-providers.md) | OpenRouter call anatomy, model selection/fallback chains, rotation, refusal handling, ModelsLab/AtlasCloud/fal.ai, smart routing, the Debug log |
 | 07 | [07-memory-system.md](07-memory-system.md) | Arc-bounded memory, bystander gists, diaries, condensation, weighted retrieval, embeddings |

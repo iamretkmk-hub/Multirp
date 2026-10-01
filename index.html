@@ -2647,15 +2647,19 @@
       </div>
       <div class="desc">One image, and it is the only one sent to an image or video model for this character. Make it a <b>sheet</b>: a full-body view plus several close-ups of the face from different angles and expressions, in one picture. That single frame holds identity far better than several separate photos, and it is what the video templates mean by "the reference sheet".<br><b>While this is set, the profile pictures below are never used for generation</b> — they are just the avatar. Leave it empty and the old behaviour returns (the pictures below are used instead).</div>
     </div>
-    <div><label>Pictures <span class="desc" style="display:inline;font-weight:400">— up to 4; the first one is the profile picture</span></label>
+    <div><label>Profile picture</label>
       <div id="peAvatarPreview" class="refStrip"></div>
       <div class="row" style="margin-top:8px">
         <button class="btn sec small" id="peUploadPic" onclick="uploadProfilePic()">＋ Upload</button>
         <button class="btn sec small" id="pePickPic" onclick="pickProfilePicFromGallery()"><svg class="ic"><use href="#i-image"/></svg> Choose from gallery</button>
         <button class="btn sec small" id="peGenPic" onclick="generateProfilePic()"><svg class="ic"><use href="#i-sparkle"/></svg> Generate from appearance</button>
-        <button class="btn sec small" id="peClearPic" onclick="clearProfilePic()">Clear all</button>
+        <button class="btn sec small" id="peClearPic" onclick="clearProfilePic()">Clear</button>
       </div>
-      <div class="desc"><b>These pictures are the character's reference.</b> With an image-edit model (<code>alibaba/wan-2.6/image-edit</code>, <code>alibaba/wan-2.7/image-edit</code>) every scene they appear in is built from them, so their face and build stay the same throughout. One clear likeness is enough; <b>adding a second and third view</b> — profile, full body, a different light — holds the face steadier still, and all of them are sent with the request. The first is the avatar you see everywhere in the app; remove it and the next takes its place. <b>Upload</b> takes several at once, <b>Choose from gallery</b> takes ones the story already made, <b>Generate</b> draws a new one from the Appearance fields below.</div>
+      <div class="desc"><b>This picture is the character's reference</b> when no reference sheet is set. With an image-edit model every scene they appear in is built from it, so their face and build stay the same throughout. It is also the avatar you see everywhere in the app. A new upload replaces it. <b>Choose from gallery</b> takes one the story already made, <b>Generate</b> draws a new one from the Appearance fields below.</div>
+    </div>
+    <div><label>Pose presets <span class="desc" style="display:inline;font-weight:400">— one picture per image scene type</span></label>
+      <div id="pePoseRefs"></div>
+      <div class="desc">One slot for every scene type in Settings › Image. When the image writer picks that scene type for a picture of <b>this</b> character, the picture in its slot is the only reference sent — <b>no face pictures</b> of this character, the player or anyone else go with it. A slot left empty means the face pictures are sent as usual. The scene's location and its continuity (the previous picture, with an edit model) are not affected.</div>
     </div>
     <div><label>Avatar (emoji fallback)</label><input type="text" id="peAvatar" placeholder="🧝‍♀️" maxlength="4"></div>
     <div><label>Roleplay instructions</label><textarea class="fld" id="peInstructions" placeholder="How this character should be played: rules, tone, content boundaries, formatting preferences, things to always/never do…" style="min-height:64px"></textarea></div>
@@ -3843,6 +3847,17 @@ Do NOT describe or change anyone's clothes — the picture carries them. Mention
   x_img_edit_roster_move:{label:"Image model — the previous picture, moved to a new area",json:false,
     hint:"Put in front of the prompt the edit model receives, on the first picture in a new area of the same place. Placeholder: {{n}} (the number of the previous picture — always the last one).",
     def:`Figure {{n}} is not a person: it is the previous scene. Keep the people in it and exactly the clothes they wear, and replace the whole background with the new area the text below describes. Faces always come from the people's own figures. `},
+
+  /* v150.5 — POSE PRESETS. A character can hold one picture per image scene type; when that scene type
+     is picked for their picture, that picture is the only reference sent (no faces). */
+  x_img_pose_writer:{label:"Image writer — a pose preset picture goes instead of the faces",json:false,
+    hint:"Sent to the image prompt writer (edit models) when the character whose line this is has a pose picture for the chosen scene type. That picture is sent instead of every face picture. Placeholder: {{people}} (who is in this frame).",
+    def:`POSE REFERENCE — instead of face pictures, the image model receives ONE picture made for this scene type: it shows the people, the pose, the body positions and the framing this kind of shot should have. It is the FIRST picture the model is given.
+In this frame: {{people}}
+Write the moment against that picture: keep its pose and arrangement, and say what the latest exchange changes in it — expressions, hands, small shifts of position, what someone holds. Refer to the people as that picture shows them ("the woman", "the man", "the woman on the left"), never by name and never by IMAGE numbers. Do not describe anyone's face, hair or build; the picture carries them.`},
+  x_img_pose_roster:{label:"Image model — the pose preset picture",json:false,
+    hint:"Put in front of the prompt the edit model receives when a pose preset picture is sent instead of the face pictures. Placeholder: {{n}} (its number — always 1).",
+    def:`Figure {{n}} is the pose reference for this scene: take the people, their faces, their pose, their positions and the framing from it, and apply the text below. `},
 
   /* v145.1 — SCENE VIDEO. The film button in a reply's action row turns the last stretch of the
      roleplay (one line per second of the configured clip length) into ONE reference-to-video clip.
@@ -12550,7 +12565,7 @@ function refRuns(names,subjects){
   live.forEach(function(r,k){ r.slot=k+1; r.label="the "+(r.subject?r.subject.toLowerCase():"person")+" in IMAGE "+(k+1); });
   return live;
 }
-function editPrompt(model,prompt,names,subjects,scene){
+function editPrompt(model,prompt,names,subjects,scene,pose){
   const spec=atlasEditSpec(model)||{promptMax:800};
   const live=refRuns(names,subjects);
   const HER={Woman:"her",Girl:"her",Man:"his",Boy:"his"};
@@ -12565,6 +12580,7 @@ function editPrompt(model,prompt,names,subjects,scene){
       +", for "+poss+" build and colouring";
   }).join(". ");
   let head=roster?(live.length>1?"IMAGE numbers the people in the scene; Figure numbers the pictures you were given. ":"")+roster+". The scene text names each person by these same words. Draw every person from their OWN figures only — never blend two people's features and never move one face onto the other's body. Match face, body proportions, skin tone and texture; the rendering style comes from the scene text, not from the photos. ":"";
+  if(pose) head+=fillTpl(up("x_img_pose_roster"),{n:"1"});   // v150.5 — a pose preset picture, sent first, instead of the faces
   /* v150.5 — the previous picture, sent last (see _imgChainPrev): named as the scene to edit, never as a person */
   if(scene&&scene.n) head+=fillTpl(up(scene.mode==="move"?"x_img_edit_roster_move":"x_img_edit_roster_scene"),{n:String(scene.n)});
   let body=String(prompt||"").replace(/\s+/g," ").trim();
@@ -12606,7 +12622,7 @@ async function atlasImage(prompt,negative,rule,opts){
     // The payload is built from the spec, not hard-coded, because the edit models disagree on the
     // names: qwen/wan-2.6 want num_images + prompt_extend, wan 2.7 wants n and takes neither.
     const body={model:spec.id||model,
-      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length-(_scene?1:0)),(built.subjects||[]).slice(0,urls.length-(_scene?1:0)),_scene)};
+      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length-(_scene?1:0)),(built.subjects||[]).slice(0,urls.length-(_scene?1:0)),_scene,!!(built.pose&&!(opts&&opts.refs&&opts.refs.length)))};
     body[spec.refKey||"images"]=urls;       // grok calls this list image_urls
     if(!spec.noCount)body[spec.countKey||"num_images"]=1;
     if(!spec.noPromptExtend)body.prompt_extend=false;
@@ -23560,11 +23576,11 @@ let peImages=[];        // working reference pictures for the open editor sessio
 /* v30.2 — one renderer for every place a person's pictures are edited: the character editor,
    Settings › You and a universe's player identity. They were bound to drift apart otherwise, and
    the strip is the only thing that makes "the first one is the profile picture" visible. */
-function renderRefStrip(elId,list,fallback,onRemove){
+function renderRefStrip(elId,list,fallback,onRemove,slots){
   const el=document.getElementById(elId); if(!el)return;
   el.classList.add('refStrip');
   el.innerHTML="";
-  for(let i=0;i<MAX_PERSON_REFS;i++){
+  for(let i=0;i<(slots||MAX_PERSON_REFS);i++){
     const src=list[i]||"";
     const cell=document.createElement('div');
     cell.className="refSlot"+(src?"":" empty");
@@ -23592,7 +23608,7 @@ function renderRefStrip(elId,list,fallback,onRemove){
    changes for anyone who has not set one. */
 let peMediaRef="";
 function renderMediaRefPreview(){
-  renderRefStrip('peMediaRef', peMediaRef?[peMediaRef]:[], "🎞️", function(){ peMediaRef=""; renderMediaRefPreview(); });
+  renderRefStrip('peMediaRef', peMediaRef?[peMediaRef]:[], "🎞️", function(){ peMediaRef=""; renderMediaRefPreview(); }, 1);
 }
 async function uploadMediaRef(){
   const files=await pickFiles("image/*",false);
@@ -23621,6 +23637,63 @@ function pickMediaRefFromGallery(){
   });
 }
 function clearMediaRef(){ peMediaRef=""; renderMediaRefPreview(); }
+/* ===== v150.5 — POSE PRESETS. One picture per image scene type (state.imgRules, by rule id), stored
+   on the card as poseRefs {ruleId: data URI}. When the router picks that scene type for this
+   character's picture, the pose picture replaces every face picture (see illustrate). */
+let pePoseRefs={};
+function renderPePoseRefs(){
+  const box=document.getElementById('pePoseRefs'); if(!box)return;
+  const rules=(state.imgRules||[]).filter(r=>r&&r.id);
+  if(!rules.length){ box.innerHTML=`<div class="desc">No image scene types yet — add them in Settings › Image.</div>`; return; }
+  box.innerHTML=rules.map(r=>`<div class="card" style="margin:0 0 8px;padding:8px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:6px">${esc(r.label||"Scene type")}${r.enabled===false?` <span class="desc" style="display:inline">(off)</span>`:""}</div>
+      <div id="pePose_${esc(r.id)}" class="refStrip"></div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn sec small" type="button" data-pose-up="${esc(r.id)}">＋ Upload</button>
+        <button class="btn sec small" type="button" data-pose-gal="${esc(r.id)}"><svg class="ic"><use href="#i-image"/></svg> Choose from gallery</button>
+        <button class="btn sec small" type="button" data-pose-clr="${esc(r.id)}">Clear</button>
+      </div></div>`).join("");
+  rules.forEach(r=>renderRefStrip('pePose_'+r.id, pePoseRefs[r.id]?[pePoseRefs[r.id]]:[], "🧍", function(){ delete pePoseRefs[r.id]; renderPePoseRefs(); }, 1));
+  box.querySelectorAll('[data-pose-up]').forEach(b=>b.onclick=()=>uploadPoseRef(b.getAttribute('data-pose-up')));
+  box.querySelectorAll('[data-pose-gal]').forEach(b=>b.onclick=()=>pickPoseRefFromGallery(b.getAttribute('data-pose-gal')));
+  box.querySelectorAll('[data-pose-clr]').forEach(b=>b.onclick=()=>{ delete pePoseRefs[b.getAttribute('data-pose-clr')]; renderPePoseRefs(); });
+}
+async function uploadPoseRef(ruleId){
+  const files=await pickFiles("image/*",false);
+  if(!files||!files.length)return;
+  const f=files[0];
+  if(f.size>10*1024*1024){ toast("That file is over 10 MB"); return; }
+  const d=await fitRefImage(await fileToDataUri(f));
+  if(!d){ toast("Couldn't read that image"); return; }
+  pePoseRefs[ruleId]=d; renderPePoseRefs(); toast("Pose picture set");
+}
+function pickPoseRefFromGallery(ruleId){
+  const nameEl=document.getElementById('peName');
+  openGalleryPicker({
+    title:"Pose picture",
+    hint:"Pick the one picture sent for this scene type.",
+    charId:editingPersona?editingPersona.id:null,
+    charName:(nameEl&&nameEl.value.trim())||"",
+    multiple:false,
+    onPick:async recs=>{
+      const rec=(recs||[])[0]; if(!rec)return;
+      const blob=await galleryRecordBlob(rec); if(!blob){ toast("Couldn't load that picture"); return; }
+      const d=await fitRefImage(await blobToDataURL(blob));
+      if(!d){ toast("Couldn't read that image"); return; }
+      pePoseRefs[ruleId]=d; renderPePoseRefs(); toast("Pose picture set");
+    }
+  });
+}
+// Only slots that hold a picture are kept; a scene type deleted since keeps its picture until the card is saved.
+function _pePoseRefsToSave(){
+  const out={}, ids=new Set((state.imgRules||[]).map(r=>r&&r.id).filter(Boolean));
+  Object.keys(pePoseRefs||{}).forEach(k=>{ const v=pePoseRefs[k]; if(ids.has(k)&&typeof v==="string"&&v.trim())out[k]=v; });
+  return out;
+}
+// The pose picture this character has for this scene type, or "".
+function poseRefFor(c,rule){
+  try{ const v=c&&c.poseRefs&&rule&&rule.id?c.poseRefs[rule.id]:""; return (typeof v==="string"&&v.trim())?v:""; }catch(e){ return ""; }
+}
 /* The player's own sheet — same idea, stored on state (and overridable per universe). */
 function renderPlayerMediaRef(){
   renderRefStrip('setUserMediaRef', state.userMediaRef?[state.userMediaRef]:[], "🎞️",
@@ -23650,14 +23723,16 @@ function renderAvatarPreview(){
   const av=document.getElementById('peAvatar');
   renderRefStrip('peAvatarPreview',peImages,(av&&av.value.trim())||"🎭",function(i){
     peImages.splice(i,1); renderAvatarPreview();
-  });
+  },CHAR_PIC_SLOTS);
 }
 // Add a picture to the first free slot. Full is full — silently replacing the oldest is how the
 // single-slot version lost people's uploads.
 function peAddImage(d){
   if(!d)return false;
-  if(peImages.length>=MAX_PERSON_REFS){
-    toast(`${MAX_PERSON_REFS} pictures is the most — remove one first`); return false;
+  // v150.5 — a character has ONE profile picture; a new one replaces it
+  if(CHAR_PIC_SLOTS===1){ peImages=[d]; renderAvatarPreview(); return true; }
+  if(peImages.length>=CHAR_PIC_SLOTS){
+    toast(`${CHAR_PIC_SLOTS} pictures is the most — remove one first`); return false;
   }
   if(peImages.indexOf(d)>=0){ toast("That picture is already here"); return false; }
   peImages.push(d); renderAvatarPreview(); return true;
@@ -23722,8 +23797,9 @@ function _renderPeRelationships(persona,targetEl){
 }
 function editPersona(id){
   editingPersona=id?state.personas.find(p=>p.id===id):null;const p=editingPersona||{};
-  peImages=personRefs(p,{avatars:true});
+  peImages=personRefs(p,{avatars:true}).slice(0,CHAR_PIC_SLOTS);
   peMediaRef=(p&&p.mediaRef)||""; renderMediaRefPreview();
+  pePoseRefs=Object.assign({},(p&&p.poseRefs&&typeof p.poseRefs==="object")?p.poseRefs:{}); renderPePoseRefs();
   document.getElementById('peTitle').textContent=id?"Edit Character":"New Character";
   // Populate the universe selector; default to the universe currently open.
   const sel=document.getElementById('peUniverse');
@@ -23887,11 +23963,11 @@ function clearPlayerPic(){ _setPlayerPics([]); toast("Pictures cleared"); }
 // v30.2 — several at once, each ADDED to a free slot. Uploading used to overwrite whatever was
 // there, which is why a second upload looked like it had deleted the first.
 async function uploadProfilePic(){
-  const files=await pickFiles("image/*",true);
+  const files=await pickFiles("image/*",CHAR_PIC_SLOTS>1);
   if(!files||!files.length)return;
   let added=0, skipped=0;
   for(const f of files){
-    if(peImages.length>=MAX_PERSON_REFS)break;
+    if(added>=CHAR_PIC_SLOTS)break;
     if(f.size>10*1024*1024){ skipped++; continue; }
     const d=await fitRefImage(await fileToDataUri(f));
     if(!d){ skipped++; continue; }
@@ -23905,18 +23981,16 @@ async function uploadProfilePic(){
    a data URI on the persona (same shape generateProfilePic produces), so nothing downstream changes. */
 function pickProfilePicFromGallery(){
   const nameEl=document.getElementById('peName');
-  const room=MAX_PERSON_REFS-peImages.length;
-  if(room<=0){ toast(`${MAX_PERSON_REFS} pictures is the most — remove one first`); return; }
   openGalleryPicker({
-    title:"Reference pictures",
-    hint:`Tap the pictures you want, then Add. ${room} slot${room===1?"":"s"} free.`,
+    title:"Profile picture",
+    hint:"Tap the picture you want, then Add. It replaces the current one.",
     charId:editingPersona?editingPersona.id:null,
     charName:(nameEl&&nameEl.value.trim())||"",
-    multiple:true,
+    multiple:CHAR_PIC_SLOTS>1,
     onPick:async recs=>{
       let added=0;
       for(const rec of (recs||[])){
-        if(peImages.length>=MAX_PERSON_REFS)break;
+        if(added>=CHAR_PIC_SLOTS)break;
         const blob=await galleryRecordBlob(rec);
         const d=blob?await fitRefImage(await fileToDataUri(blob)):"";
         if(d&&peAddImage(d))added++;
@@ -26022,7 +26096,8 @@ function savePersona(){
       return (editingPersona&&Array.isArray(editingPersona.locations))?editingPersona.locations:[];
     })(),
     image:splitPersonRefs(peImages).image,
-    refImages:splitPersonRefs(peImages).refImages, mediaRef:peMediaRef||""};
+    refImages:splitPersonRefs(peImages).refImages, mediaRef:peMediaRef||"",
+    poseRefs:_pePoseRefsToSave()};
   // If the player hand-picked locations, drop any stale generated schedule so the new
   // hand-picked spread (varied weighting) takes effect immediately.
   if(editingPersona && obj.locations.length){
@@ -29343,7 +29418,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"sceneLangRetry"},
     {kind:"prompt",promptKey:"narrateVerbatim"},
     {kind:"prompt",promptKey:"imgFoundation"},{kind:"prompt",promptKey:"imgFrameGuide"},{kind:"prompt",promptKey:"imgPovGuide"},{kind:"prompt",promptKey:"x_img_cast"},{kind:"prompt",promptKey:"x_img_cast_text"},
-    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},
+    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},{kind:"prompt",promptKey:"x_img_pose_writer"},{kind:"prompt",promptKey:"x_img_pose_roster"},
     {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video Prompt Writer",desc:"Turns a still into ONE motion prompt for the clip. Receives the configured clip length, the shared video ruleset (mid-scene pacing, the facial/hands/body detail, the anatomy rules) and the routed position's own template.",blocks:[
@@ -39563,6 +39638,15 @@ async function illustrate(mid,replyText,force){
           &&_ex.indexOf(String(c.name).toLocaleLowerCase("tr"))>-1);
       }catch(e){}
       _pack=await buildRefPack(_castRule,speaker,chat,editModelMaxRefs(effImgModel())-(_chain?1:0),{involved:_involved});
+      /* v150.5 — A POSE PRESET REPLACES EVERY FACE. When the character whose line this is has a picture
+         for this scene type, it is the only reference sent: no face pictures of them, the player or
+         anyone else. The pack built above still says who is in the frame (clothes, the scene chain). */
+      const _poseSrc=poseRefFor(speaker,rule);
+      if(_poseSrc&&_pack){
+        _pack={urls:[_poseSrc],names:[],subjects:[],people:[],unpictured:[],pose:true,
+               poseOf:(_pack.people||[]).concat(_pack.unpictured||[])};
+        msg.imgPose=rule.id;
+      }else{ try{ delete msg.imgPose; }catch(e){} }
       /* v150.5 — the previous picture rides last. If its bytes cannot be had, this frame is a base
          frame after all (clothes and place described), never an edit of nothing. */
       if(_chain){
@@ -39575,6 +39659,10 @@ async function illustrate(mid,replyText,force){
          the speaker's. */
       const _unp=(_pack&&_pack.unpictured)||[];
       const _ppl=(_pack&&_pack.people)||[];
+      if(_pack&&_pack.pose){
+        const _who=(_pack.poseOf||[]).map(p=>(p.player?`${state.user} (the player)`:p.name)+(p.speaker?", whose line this picture is for":"")).join("; ");
+        _castBlock=fillTpl(up("x_img_pose_writer"),{people:_who||(speaker?speaker.name:"the person whose line this is")})+"\n\n";
+      }else
       if(_ppl.length>=2||_unp.length||(_ppl.length===1&&!_ppl[0].speaker)){
         const _lines=_ppl.map(p=>{
           const figs=p.from===p.to?`picture ${p.from}`:`pictures ${p.from}-${p.to}`;
@@ -39684,7 +39772,7 @@ async function illustrate(mid,replyText,force){
     }
     /* v150.5 — WHO THE PICTURE BEING EDITED ALREADY SHOWS. Their clothes are in it, so they are not
        described again; someone new to the frame still is. The place is the edit block's to state. */
-    const _frameIds=(()=>{ const ids=_pack?(_pack.people||[]).concat(_pack.unpictured||[]).map(p=>p.player?"__user__":p.id).filter(Boolean):[];
+    const _frameIds=(()=>{ const ids=_pack?(_pack.poseOf||(_pack.people||[]).concat(_pack.unpictured||[])).map(p=>p.player?"__user__":p.id).filter(Boolean):[];
       if(!ids.length&&speaker)ids.push(speaker.id); return ids; })();
     try{ if(msg.imgMeta)msg.imgMeta.frame=_frameIds; }catch(e){}
     let _editBlock="";
@@ -40718,6 +40806,12 @@ async function toDataUri(src){
    avatar, chip, diary cover and map pin in the app reads that field and none of them had to
    change — and the extra views live alongside it in `.refImages`. */
 const MAX_PERSON_REFS=4;
+/* v150.5 — A CHARACTER HAS ONE PROFILE PICTURE AND ONE REFERENCE SHEET. Four slots each was more
+   than anyone filled, and the pose presets (below, per scene type) are where a second picture of a
+   character belongs now. The player's own pictures (Settings › You, a universe's player identity)
+   keep their four. Extra pictures saved by an older build are ignored for generation and dropped
+   the next time the card is saved. */
+const CHAR_PIC_SLOTS=1;
 /* (!) `mediaRef` WINS, AND IT WINS ALONE. It is the one picture chosen for generation — a
    reference sheet, a full body plus several face angles in one frame — and sending the avatar
    alongside it defeats the point: two sources for one face is how a face drifts. So when a card
@@ -40734,7 +40828,7 @@ function personRefs(o,opts){
   }
   push(o.image);
   (Array.isArray(o.refImages)?o.refImages:[]).forEach(push);
-  return out.slice(0,MAX_PERSON_REFS);
+  return out.slice(0,o.id?CHAR_PIC_SLOTS:MAX_PERSON_REFS);   // a character card has an id; the player's holder does not
 }
 // Split an edited list back into the two fields. The first picture is always the profile one, so
 // deleting it promotes the next — there is never a person with references but no avatar.
@@ -56510,7 +56604,7 @@ async function confirmClear(w){
    wrote into or gave a picture (_playerTouched) stays; the deleted chats' stored images and clips go; and
    Day 1 opens at the player's home with whoever is there (_landFreshChat). */
 function _playerTouched(p){
-  return !!(p&&(p.playerEdited||p.image||(Array.isArray(p.refImages)&&p.refImages.length)||p.mediaRef));
+  return !!(p&&(p.playerEdited||p.image||(Array.isArray(p.refImages)&&p.refImages.length)||p.mediaRef||(p.poseRefs&&Object.keys(p.poseRefs).length)));
 }
 function wipeUniverseState(uniId){
   const u=universeById(uniId); if(!u)return null;

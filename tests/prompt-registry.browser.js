@@ -156,7 +156,8 @@ const {chromium}=require('playwright');
         "when","others","lines",   // v103.1 — x_call_scene / x_call_recent, filled by buildCallInstructions
         "focus","people","women","men","couples",   // v149.2 — the suggested-reply modes, filled by suggestModeText
         "media",                  // v150.0 — x_book_writer: "picture" or "video clip", filled by bookWriteRun
-        "thoughts"]);             // v150.1 — x_book_writer_redo: the thoughts a draft copied, filled by bookWriteRun
+        "thoughts",               // v150.1 — x_book_writer_redo: the thoughts a draft copied, filled by bookWriteRun
+        "n"]);                    // v150.5 — x_img_edit_roster_*: the number of the scene picture, filled by editPrompt
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
         (String(X_ENGINE_PROMPTS[k].def).match(/\{\{(\w+)\}\}/g)||[]).forEach(t=>{

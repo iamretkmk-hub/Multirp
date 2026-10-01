@@ -16,6 +16,12 @@ A separate page, next to `index.html`, for rewriting StoryMind's prompts away fr
 
 Edits are kept in the browser as a draft until another file is opened.
 
+**The starting prompts.** `prompt-editor-start.json`, beside the page, is the latest prompt export (a
+plain `kind:"prompts"` file). It opens automatically when there is no draft, or when it is newer than the
+file the draft came from. A draft that has edits is never replaced silently: the page offers the newer
+file and says to download the edits first. **⋯ › Open the bundled latest prompts** opens it at any time.
+To update it, replace the file with a newer export.
+
 ## The full payload is the app's own
 
 The editor does not reimplement payload assembly. It fetches `index.html`, boots the whole app in a

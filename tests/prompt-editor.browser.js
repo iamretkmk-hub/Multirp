@@ -8,6 +8,7 @@
      5  the downloaded file is accepted by StoryMind's own importPromptsFile, and carries the edit
      6  a reset prompt is written out in full (the app's import keeps any key a file leaves out)
      7  Test & review: the reviewer's edit is applied by find/replace to the right item
+     0  prompt-editor-start.json (the latest prompts) opens on first load; a draft with edits is kept
    Run: node tests/prompt-editor.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const http=require('http'), fs=require('fs'), path=require('path');
@@ -33,6 +34,28 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.goto(base+'prompt-editor.html');
     await pg.evaluate(()=>{ try{ localStorage.setItem("sm_canary","real app data"); }catch(e){} });
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+
+    console.log("\n[0 — the bundled latest prompts open on first load]");
+    const start=JSON.parse(fs.readFileSync(path.join(ROOT,'prompt-editor-start.json'),'utf8'));
+    const s0=await pg.evaluate(async()=>{ const S=__PE.S; const p=await __PE.engCall('build',{kind:'solo'});
+      return {file:S.fileName,date:S.orig&&S.orig.date,solo:__PE.itemVal(__PE.findItem("tpl:solo")),unk:p.unknownCalls,unkV:p.unknownVars,
+        edited:__PE.ITEMS().filter(it=>__PE.itemStatus(it).edited).length}; });
+    ok("prompt-editor-start.json is the opened file", /^Latest prompts/.test(s0.file)&&s0.date===start.date, JSON.stringify({file:s0.file,date:s0.date}));
+    ok("its solo layout is the one in the editor", s0.solo===JSON.parse(start.settings.payloadTemplates).solo);
+    ok("and it builds with every name known", s0.unk.length===0&&s0.unkV.length===0, JSON.stringify(s0));
+    ok("nothing counts as edited", s0.edited===0, s0.edited);
+    /* a draft with an edit, from an older file: reloading must not throw the edit away silently */
+    await pg.evaluate(()=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); __PE.S.orig.date=1; });
+    await pg.waitForTimeout(800);
+    await pg.reload();
+    await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+    await pg.waitForSelector(".modal",{timeout:10000});
+    const kept=await pg.evaluate(()=>({modal:document.querySelector(".modal header").textContent,
+      draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header")))}));
+    ok("a draft with edits is kept, and the newer file is offered", /Newer prompts/.test(kept.modal)&&kept.draft, JSON.stringify(kept));
+    await pg.click(".modal footer .btn.pri");
+    await pg.waitForTimeout(600);
+    ok("choosing it opens the latest prompts", await pg.evaluate(d=>__PE.S.orig.date===d&&!/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),start.date));
 
     console.log("\n[1 — the engine runs and builds every reply kind]");
     const kinds=await pg.evaluate(async()=>{ const o={}; for(const k of __PE.S.meta.kinds){ try{ const p=await __PE.engCall('build',{kind:k});

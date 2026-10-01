@@ -709,7 +709,7 @@ $("#fileApp").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   const t=await f.text();
   if(t.indexOf("const PROMPT_REGISTRY")<0){ toast("That file is not StoryMind's index.html"); return; }
-  try{ await bootEngine(t); afterEngine(); }catch(err){ setEng("bad","Engine: failed to start"); toast("The engine failed to start: "+err.message,5000); }
+  try{ await bootEngine(t); afterEngine(true); }catch(err){ setEng("bad","Engine: failed to start"); toast("The engine failed to start: "+err.message,5000); }
 });
 
 /* ---------------- the item model ---------------- */
@@ -1090,12 +1090,14 @@ $("#btnMore").onclick=()=>{
     `<div style="display:flex;flex-direction:column;gap:8px">
       <button class="btn" type="button" id="mUnsaved">Show everything I edited</button>
       <button class="btn" type="button" id="mDraft">Start over from the opened file</button>
+      <button class="btn" type="button" id="mStart" ${S.startPack?"":"hidden"}>Open the bundled latest prompts${S.startPack?" ("+esc(startPackName(S.startPack).replace("Latest prompts · ",""))+")":""}</button>
       <button class="btn" type="button" id="mApp">Load a different StoryMind index.html…</button>
       <p class="hint" style="margin:0">Your edits are kept in this browser as a draft until you open another file. The engine is StoryMind ${esc((S.meta&&S.meta.appVersion)||"")} running in a sealed sandbox with no network and no access to your saved data.</p>
     </div>`);
   $("#mUnsaved").onclick=()=>{ const ch=ITEMS.filter(it=>itemStatus(it).edited);
     modal(ch.length+" edited",ch.length?ch.map(it=>`<div><b>${esc(it.label)}</b> <code>${esc(it.key)}</code></div>${diffHTML(origVal(it),itemVal(it))}`).join(""):`<div class="empty">Nothing edited yet.</div>`); };
   $("#mDraft").onclick=()=>{ if(S.orig) openPack(Object.assign({},S.orig,{prompts:S.orig.prompts,settings:S.orig.settings}),S.fileName); else { S.prompts={};S.frag={};S.tpl={};S.settings={}; saveDraft(); renderList(); renderEditor(); scheduleApply(); } $("#modalHost").innerHTML=""; toast("Edits discarded"); };
+  $("#mStart").onclick=()=>{ $("#modalHost").innerHTML=""; if(S.startPack) openPack(S.startPack,startPackName(S.startPack)); };
   $("#mApp").onclick=()=>{ $("#modalHost").innerHTML=""; $("#fileApp").click(); };
 };
 function saveDraft(){ clearTimeout(saveDraft._t); saveDraft._t=setTimeout(()=>{ lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,settings:S.settings}); },500); }
@@ -1295,8 +1297,27 @@ function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("butto
 $("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setView(b.dataset.v); });
 
 /* ---------------- start ---------------- */
-async function afterEngine(){
+/* The starting prompts: prompt-editor-start.json beside this page, when there is one. It is opened when
+   there is no draft yet, or when it is newer than the file the draft came from. A draft with edits is
+   never thrown away without asking. */
+async function fetchStartPack(){
+  try{ const r=await fetch("prompt-editor-start.json",{cache:"no-store"}); if(!r.ok) return null;
+    const b=await r.json(); return (b&&b.app==="StoryMind"&&b.kind==="prompts")?b:null; }catch(e){ return null; }
+}
+function startPackName(b){ const d=new Date(b.date||Date.now()),p=n=>String(n).padStart(2,"0");
+  return "Latest prompts · "+d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
+async function useStartPack(hadDraft){
+  const b=S.startPack||(S.startPack=await fetchStartPack()); if(!b) return;
+  if(hadDraft&&S.orig&&S.orig.date===b.date) return;          // the draft already comes from this file
+  const edits=hadDraft?ITEMS.filter(it=>itemStatus(it).edited).length:0;
+  if(!edits){ openPack(b,startPackName(b)); return; }
+  modal("Newer prompts are bundled",
+    `<p class="hint" style="margin:0">This editor comes with <b>${esc(startPackName(b))}</b>. You have ${edits} unsaved edit${edits>1?"s":""} on <b>${esc(S.fileName||"the shipped defaults")}</b>. Download them first if you want to keep them.</p>`,
+    [{label:"Keep my edits"},{label:"Open the latest prompts",pri:true,fn:()=>{ openPack(b,startPackName(b)); }}]);
+}
+async function afterEngine(hadDraft){
   ITEMS=allItems();
+  await useStartPack(hadDraft);
   S.world=await engCall("world").catch(()=>null);
   await engCall("apply",packForEngine()).catch(()=>{});
   fillPreviewControls();
@@ -1305,11 +1326,11 @@ async function afterEngine(){
   renderList(); select(first);
 }
 (async function main(){
-  loadDraft();
+  const hadDraft=loadDraft();
   chatIntro();
   renderList(); renderEditor();
   aiInit();
-  if(await startEngine()) await afterEngine();
+  if(await startEngine()) await afterEngine(hadDraft);
   window.__PE={S,ENG,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>

@@ -2,114 +2,99 @@
 
 
 
-## Story Book (v119.1)
+## The Book — Story Book and Video Book as a novel (v150.0)
 
-The scene images of a chat, read back as a comic (chat menu › Go to › Story Book; `openStoryBook`).
-Nothing is generated to make it — every scene image is already stored against the message it
-illustrates (`m.img`, or its bytes under `mimg:<mid>`), and the message carries the speaker and,
-through its `status` stamp, the day, part of the day and place.
+Asked: "like a book written by a third person with pictures … use image generation as a trigger … the LLM should
+receive all the dialogue, narration and thoughts and write the gap between the images like a writer … no dialogue
+bubbles — it is not a comic book anymore." This replaced the comic of v119.1–v145.1 (panels, captions, word-for-word
+bubbles, the webtoon / comic-page layouts, Save page, the Video Book's speeches and gap narration). Chat menu › Go to ›
+**Story Book** (`openStoryBook`) or **Video Book** (`openVideoBook`) — one modal, `_bookMode` "story" | "video".
 
-- `bookStructure(chat)`: **chapters** are days; **scenes** are runs of one (day, period, place),
-  also cut at a travel beat, with unstamped player lines carried into the scene around them;
-  **panels** are the messages with a picture. Scenes with no picture are left out.
-- **In code** (`_bookDefaultPanel`): the bubble is the first thing said aloud in the pictured line,
-  the caption that line's `*narration*`; a narrator beat is a caption alone. Thoughts never appear.
-- **The editor** (`x_book_editor`, one call per scene on the memory model, `state.bookEditor`,
-  default on, toggled in the book's bar): given the numbered lines and which picture was drawn at
-  which line, it returns a title, a recap, and per panel a caption, up to two bubbles and keep/cut.
-  `_bookVerbatim` checks every bubble fragment (split at the editor's `…` cuts) against what that
-  speaker said aloud in the scene and drops anything reworded or misattributed. It never cuts every
-  picture of a scene. Cached in `chat.bookEdits[sceneId]`, signed by the scene's pictures.
-- **Reader**: `#bookModal`, one chapter at a time, every third panel wide. Bubbles drag off a face;
-  the spot is kept in `chat.bookPos`. A picture whose bytes are gone is skipped.
-- **Save page**: `bookRenderPageCanvas` draws the scene (header, panels cover-cropped, caption
-  boxes, bubbles at their saved spots) on a 1080-px canvas and downloads a PNG. A hosted picture
-  without CORS cannot be drawn and is left off the page.
+### Shape (`bookPlan(chat, kind)`)
+- **Chapters** are days, **scenes** are places (a journey's `travelBeat` starts one; `_bkStamp` stamps a journey with
+  where it arrives, and a line typed after a day marker with the new day).
+- The book's **anchors** are the pictures (Story Book: `m.img`/`imgSrc`/`imgStored`/`hadImg`) or the scene clips
+  (Video Book: `m.sceneClip.src`). A still is not a Video Book anchor; the books are written separately.
+- A **run** is the lines since the last passage up to: an anchor (`end:"anchor"`, a lead-in), the end of the scene
+  (`"scene"`), the day's marker (`"day"`), `BOOK_RUN_MAX` (40) lines (`"cap"`), or a passage already written
+  (`"before"`) — all *closed*, ready to write. `"open"` is the live edge (the story goes on); `"waiting"` stops at a
+  picture or clip still being made, so the book is always written in story order.
+- Lines (`_bkCounts`): every user/assistant line with text, presence notes (arrivals, departures) and day markers; no
+  app notices (`sysError`, `uiNote`) and no text-message thread.
 
-## Captions that summarise, and the line being answered (v126.1)
+### The trigger
+- `illustrate` → `bookOnMedia(chat,"story")` when a picture finishes — whatever the image mode (`always`, `smart`, or
+  `off` with the Generate image button). `sceneVideo` → `bookOnMedia(chat,"video")` when a clip finishes.
+- A journey (`travelBeat` pushed) → both books (the scene left behind can close). End Day and `_quietDayEnd` →
+  `bookOnDayEnd(chat, day)`: the day that ended gets its closing passage (with the marker's narration).
+- `bookOnMedia` is debounced (1.2 s) and writes only the **current day**, at most `BOOK_LIVE_MAX` (6) passages, and
+  only in a chapter with a picture or a passage in it — never a day nobody illustrates, never history behind the
+  player's back. It runs in the background (`foreground:false`), never delays a reply. `state.bookAuto` (Write as
+  you play, default on) turns it off.
+- Opening a chapter (`_bkOpenCatchUp`) writes what that chapter is missing, foreground, stopping when the book is
+  closed or another day is chosen. One queue per chat and book (`_bkJob`), one passage at a time.
 
-Reported: a caption with one line of narration made scenes feel disconnected, and without the
-player's words the reader could not tell why a character answered as they did.
+### The writer (`x_book_writer`, Settings › Prompts › Story Book & Video Book)
+One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's model), `fn:"narrate"`. `{{media}}` is
+"picture" or "video clip". The user message (`epDefine("x_book_writer")`):
+- **THE BOOK SO FAR** — the last `BOOK_PREV_CHARS` (2200) of prose before the run;
+- **WHERE AND WHEN** — day, part of the day, place, and the place's description;
+- **THE PEOPLE** (`_bkPeople`) — speakers first, then whoever was present (max 8), each with: *FIRST TIME IN THE BOOK*
+  when they were in no earlier passage's lines and are not named in its prose; looks (`normalizeLook`); the card's
+  personality and "how they talk" (`style`); the card's background, labelled *to understand them, never to reveal
+  what the lines have not shown*; what they are to the player (`playerTieLine`); how they stand with the player and
+  with each other person here — the tie word and the slow relationship readings as behaviour (`relReadings`);
+- **THE PLAYER'S CHARACTER** (`_playerProfileBlock`);
+- **THE LINES** — speech, `*actions*` and `_thoughts_` as played, the player marked "(the player)", events in brackets:
+  `[Berk leaves.]`, `[Time passes — it is now Night.]`, `[A journey] …`, `[The day ends.] <narration>`;
+- **WHERE THIS PASSAGE SITS** — opens the book / a new day / a new scene / carries on; ends on the picture (or, in the
+  Video Book, "its last N lines: the clip that follows shows them in motion, without words") / closes the scene /
+  closes the day / the story goes on;
+- **LENGTH** — `BOOK_LEN[state.bookLen]` (short / medium / long): words per told line, clamped.
+The prompt: tell every line in order, retell rather than copy, keep quoted words faithful (trim, never change the
+meaning or add a promise or decision), thoughts may be shown and belong to who had them, improvise texture but not
+events, keep sheet secrets, introduce first appearances, set the scene when opening, end on the picture's moment,
+bring a closing to rest; plain prose, `*italics*` only. `_bkCleanOut` strips fences, a stray heading or JSON.
 
-- The editor is given the whole scene, numbered, with the player's lines marked "(the player)", and
-  for every picture the stretch it covers ("P2 — covers L2–L3, drawn at L3": from just after the
-  previous picture's line to its own). Its **caption** is now a summary of that stretch — 1 to 3
-  sentences, up to ~50 words, saying what the player said or did and how the others reacted
-  (`BOOK_SUM_MAX` 340 characters when shown; the video draws a long caption smaller).
-- **Bubbles**: when the character at a picture is answering something the player said in that
-  stretch, the player's line is the first bubble and the answer the second. Still checked word for
-  word; a player line typed without quotation marks counts as speech (`_bookSpoken`).
-- Without the editor, `_bookDefaultPanel` puts the player's last line since the previous picture
-  before the character's reply.
-- `_bookSig` carries a "v2" prefix, so every scene edited before this is edited again the next time
-  it is opened with the editor on.
+### Stored, and the failsafes
+`chat.book[kind] = {passages:{<first mid>:{mids, sig, text, end, at, stale?}}, hidden:{<mid>:true}}`. A passage
+stands while its messages stand unchanged (`_bkSig` hashes their ids and text), contiguous and in one scene, with no
+anchor inside it but at its end.
+- **Picture taken out of the book** (the × on it, `bookHidePic`; the chat keeps it) or **bytes gone**: the text stays —
+  the passage is still a true telling of its lines and runs on into the next. *Put back* (`bookUnhideDay`) returns it.
+- **A line deleted, edited, or a reply retried**: the passage no longer matches and becomes a *ghost* — shown faded
+  ("The story changed here") until it is written again over what is left.
+- **A picture added mid-passage** (Generate image on an old line): the passage is re-cut and written as two.
+- **A picture regenerated on the same line**: nothing changes — the passage tells the moment, not the drawing.
+- **No key, or the writer failed**: the run shows "Not written yet — as it was played" (`_bkRawHTML`) with *Write it*;
+  a failure stops the queue until the next trigger.
+- **After the day's last picture**: "The story goes on — N lines since the last picture" with *Write them now* and the
+  lines folded away. **A day with no pictures**: "No picture was made on Day N" with *Write this day as text*.
+- **Rewrite** (the ↻ under a passage, `bookRewrite`): marks it stale and writes it again; old text faded meanwhile.
 
-## The player on the right, the player's voice, and the chat as a comic (v122.1)
+### The page (`renderBook`)
+Paper, Literata/serif, justified with hyphenation; *Chapter / Day N*, a small-caps place · time heading per scene
+(⁂ between scenes, ▶ plays from there), a drop capital on the chapter's first passage, pictures (or clips with their
+controls) sized to their own shape between passages. `_bkReconcile` replaces only the blocks whose HTML changed, so a
+picture or a playing clip is never reloaded when a passage arrives. The **Writer** button opens the options: Write as
+you play, passage length, writer model, *Write what this day is missing*, *Save chapter* (`bookChapterHTML`: one HTML
+file with the prose and the pictures inside, share sheet on a phone) and *Save as video* (Story Book only).
 
-- **Sides by speaker**: `bookIsPlayer(name)` decides it — the player's bubbles on the right, everyone
-  else's on the left, in both book layouts, the storyteller, a saved page and the video (the canvas
-  bubble's tail follows its side).
-- **The player's voice**: `state.userVoice` (Settings › Game Preferences › You, and per universe in
-  its editor, resolved by `applyUniverseProfile`); `playerVoiceId()` falls back to the default call
-  voice. With Speak replies on, `speakPlayerTurn` voices a typed turn — the quoted words in the
-  player's voice, the narration in the narrator voice when that is on, an unmarked turn as all
-  speech — queued before the reply. Skipped while the open mic runs (they said it aloud). The
-  storyteller and its video read the player's lines in it.
-- **Comic view** (`state.chatComic`, Roleplay options): `msgBodyHTML` is the one place a bubble's text
-  becomes HTML; with the view on, `comicBodyHTML` splits it (`comicSegments`) into the opening
-  narration (`.cTop`, caption boxes) and the rest (`.cBot`: speech bubbles, thoughts, later
-  narration), and CSS `order` puts the picture between them (`.body` is `display:contents`). The
-  player's bubbles align right. Stored text is untouched; the typewriter reveal renders through it.
+### The reader (`openBookPlayer`) and Save as video
+`bookPlayItems` plays exactly what the book holds: a card per scene, each paragraph of each passage on a dark page,
+read in the narrator voice through the narrator effect (`_mcPrep`, needs the Inworld relay and `state.bookVoice`;
+silent otherwise, held for `_mcReadMs`), then the picture drifting (`mcShotLayout` frames it; its animation plays
+instead when it has one) or, in the Video Book, the clip played through with its own sound. A part not yet written is
+passed over; a picture or clip that is gone is skipped. Pause, back, next, close and the voice switch cancel through
+`_mc.seq`, drawn from one counter (`_mcSeqN`) so a loop left from a closed session can never drive the next.
+`bookRecordVideo` records the same list (cards, pages of prose, pictures) on a 1080×1920 canvas with the voice
+(`_mcVidDraw` kinds `title`, `text`, `panel`, `end`) — MP4 or WebM, in real time, cancellable.
 
-## Save as video (v121.2)
-
-The film button in the storyteller's controls, the **Video** button in the Story Book's bar (the whole
-chapter) and **Save video** under each scene (from that scene on) — all `bookSaveVideo(sid)` — record the same chapter — play
-list, framing (`mcShotLayout`), drift, captions, bubbles, title and end cards, voices — into a video
-file. `bookRecordVideo` draws each frame on an offscreen 1080×1920 (9:16) canvas (`_mcVidDraw`, ~30
-fps), captures it with `canvas.captureStream`, adds the voices through a `MediaStreamDestination`
-(they also play aloud while recording), and records with `MediaRecorder`: MP4 where the browser can
-write it (Safari, recent Chrome), WebM otherwise. It runs in real time, so a chapter takes as long
-to save as to play; a card shows progress and can cancel. On a phone the finished file goes to the
-share sheet (`navigator.share`), elsewhere it downloads. A clip plays inside its panel; a hosted
-picture that blocks drawing is skipped. The end card is at least 1.5 s so even a very short
-recording is long enough for the muxer to write.
-
-## The panel follows the picture (v121.1)
-
-Reported with a screenshot of square pictures squeezed into 16:10 and 3:4 frames, half-width panels
-about 200 px wide on a phone, and long bubbles covering the pictures and each other.
-
-- Every frame takes its picture's own shape, read once from the loaded image (`_bookAR`).
-- Two book layouts (`state.bookLayout`, the button in the book's bar): **Webtoon** (default) — one
-  picture per row at full width, the caption in a strip above it and the bubbles below it with
-  their tails pointing up, so nothing covers a face; **Comic page** — frames in the picture's shape,
-  portrait ones paired side by side, the caption as a band across the top and the bubbles stacked at
-  the bottom (text shrinks with its length; bubbles still drag).
-- Shorter text: bubbles at most `BOOK_BUB_MAX` (100) characters, captions `BOOK_CAP_MAX` (130), cut at
-  a word — applied when shown, so scenes edited earlier shrink too; the editor is asked for ~12-word
-  bubbles and 15-word captions.
-- **Save page** draws the chosen layout; a page taller than `BOOK_CANVAS_MAX` is saved in parts.
-- The storyteller frames each shot by the picture (`mcShotLayout`, shared with the video export): a
-  picture within 30% of the screen's shape (a 9:16 on a phone) fills the screen with the caption over
-  the top and the bubble over the lower third; anything else is framed whole with the caption in the
-  space above and the bubble below, falling back to over-the-picture only when there is no room.
-
-## The storyteller (v120.1)
-
-A Story Book chapter played back as a motion comic — **Play** in the book's bar (the whole chapter)
-or **Play from here** under a scene. `bookPlayItems` makes the play list from exactly what the book
-shows: a title card per scene (the editor's title and recap when there are some), then its kept
-panels. Each picture drifts (one of four CSS pan-and-zoom paths, timed to the panel); a panel whose
-message has a clip plays the clip instead (`msgVideoBlobUrl`); a picture whose bytes are gone is
-skipped.
-
-Voices (`state.bookVoice`, default on, needs the Inworld relay): the caption and the recap are read
-in the narrator voice through the narrator effect chain, each bubble in the voice of whoever said it
-(`voiceIdFor`; the player's own lines and anyone without a voice in the default call voice). The
-next item's audio is synthesized while the current one plays (`_mcPrep`). With no relay or the voice
-off it plays silently, each piece held for its reading time (`_mcReadMs`). Pause, back, next, close
-and the voice switch all cancel what is in flight through `_mc.seq` and `_stopDub`.
+### The chat's own Comic view and the player's voice (v122.1, unchanged)
+- **Comic view** (`state.chatComic`, Roleplay options) is a way of showing the *chat*, not the book: `comicBodyHTML`
+  splits a bubble's text into caption boxes above the picture and speech below it.
+- **The player's voice**: `state.userVoice`; `playerVoiceId()` falls back to the default call voice. With Speak replies
+  on, `speakPlayerTurn` voices a typed turn.
 
 ## Video model (v39.7)
 

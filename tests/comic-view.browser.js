@@ -2,10 +2,9 @@
    Reported with a screenshot of the Story Book: "Make the player's dialogue always appear on the
    right and character dialogue on the left. Give speech to the player — a voice id, and when replies
    are spoken the player speaks his turn. Can we make this format the roleplay screen format?"
-     - the side of a bubble is decided by who speaks, in the book (both layouts), the storyteller and
-       the video;
+     - (v150.0) the book is no longer a comic: it is prose around the pictures, with no bubbles;
      - the player has a voice id (global, and per universe); with Speak replies on a typed turn is
-       voiced in it before the reply, never while the open mic is on, and the storyteller uses it;
+       voiced in it before the reply, never while the open mic is on;
      - Comic view: a message's opening narration is captions above its picture, what is said is
        bubbles below it (the player's on the right), thoughts their own line, text left as stored.
    Run: node tests/comic-view.browser.js */
@@ -27,36 +26,20 @@ const {chromium}=require('playwright');
     window.chatCompletion=async()=>"{}";
     const uni=state.universes[0];
     state.personas=[{id:"p_b",name:"Buket",universeId:uni.id,voiceId:"Olivia",look:{}}];
-    state.user="Emre"; state.key="k"; state.bookEditor=false; state.callVoice="Ashley";
+    state.user="Emre"; state.key="k"; state.callVoice="Ashley";
     const st={day:2,period:"Afternoon",location:"Sahil",trackers:[]};
-    const chat=curChat(); chat.presentIds=["p_b"]; chat.bookEdits={}; chat.bookPos={};
+    const chat=curChat(); chat.presentIds=["p_b"];
     chat.messages=[
       {mid:"u1",role:"user",content:'*Buket\'e gülümser.* "Gel beraber bir şeyler içelim, ne dersin?"',present:["p_b"],img:pic("#383")},
       {mid:"a1",role:"assistant",speaker:"Buket",speakerId:"p_b",content:'*Buket omzunun üzerinden bakar.* _Yine mi o?_ "Başka bir zaman." *Yürümeye devam eder.* "Acelem var."',present:["p_b"],status:st,img:pic("#833"),imgState:"done"}];
     markChatDirty(chat);
   });
 
-  console.log("\n[the player on the right]");
-  const SD=await pg.evaluate(async()=>{
-    const c=curChat(); c.bookEdits={}; state.bookLayout="webtoon"; _bookDay=null; show('chat'); openStoryBook();
-    await new Promise(r=>setTimeout(r,400));
-    const wt=[...document.querySelectorAll('#bookBody .bkBub')].map(x=>({n:x.querySelector('b').textContent,alt:x.classList.contains('alt')}));
-    toggleBookLayout(); await new Promise(r=>setTimeout(r,300));
-    const pgb=[...document.querySelectorAll('#bookBody .bkBub')].map(x=>({n:x.querySelector('b').textContent,alt:x.classList.contains('alt')}));
-    toggleBookLayout(); closeStoryBook();
-    return {wt,pgb};
-  });
-  ok("in the webtoon the player's bubble is on the right, the character's on the left",
-     SD.wt.find(x=>x.n==="Emre").alt===true && SD.wt.find(x=>x.n==="Buket").alt===false, JSON.stringify(SD.wt));
-  ok("and on the comic page too", SD.pgb.find(x=>x.n==="Emre").alt===true && SD.pgb.find(x=>x.n==="Buket").alt===false, JSON.stringify(SD.pgb));
-  ok("the saved page and the video put the player's bubble on the right", await pg.evaluate(()=>{
-      const cv=document.createElement('canvas'); cv.width=MC_VID_W; cv.height=MC_VID_H; const ctx=cv.getContext('2d');
-      const im=document.createElement('canvas'); im.width=im.height=100; im.getContext('2d').fillStyle="#000"; im.getContext('2d').fillRect(0,0,100,100);
-      const px=(bub)=>{ ctx.clearRect(0,0,cv.width,cv.height); _mcVidDraw(ctx,{kind:"panel",im,ar:1,t0:0,dur:1,kb:0,cap:"",bub,bubAlt:bookIsPlayer(bub.speaker),fade0:-1000},0);
-        const L=mcShotLayout(MC_VID_W,MC_VID_H,1,0), y=L.bot.y+80;
-        return {left:ctx.getImageData(120,y,1,1).data[0], right:ctx.getImageData(MC_VID_W-120,y,1,1).data[0]}; };
-      const me=px({speaker:"Emre",text:"Hi"}), her=px({speaker:"Buket",text:"Hi"});
-      return (me.right>150&&me.left<50&&her.left>150&&her.right<50) ? true : JSON.stringify({me,her}); }));
+  console.log("\n[the book is not a comic any more]");
+  ok("v150.0 — the Story Book is prose around the pictures: no bubble, side or caption box in it", await pg.evaluate(async()=>{
+      _bookDay=null; show('chat'); openStoryBook(); await new Promise(r=>setTimeout(r,300));
+      const n=document.querySelectorAll('#bookBody .bkBub,#bookBody .bkCap,#bookBody .cSay').length, figs=document.querySelectorAll('#bookBody figure.nvFig').length;
+      closeStoryBook(); return (n===0&&figs===2) ? true : JSON.stringify({n,figs}); }));
 
   console.log("\n[the player's own voice]");
   ok("there is a voice id for the player in Settings, and it saves", await pg.evaluate(()=>{
@@ -96,11 +79,6 @@ const {chromium}=require('playwright');
       document.getElementById('chatInput').value='"Selam."'; await sendMessage();
       window.speakPlayerTurn=real; c.presentIds=["p_b"];
       return spoke==='"Selam."' ? true : String(spoke); }));
-  ok("the storyteller reads the player's lines in the player's voice", await pg.evaluate(()=>{
-      state.user="Emre";   // the Settings save above re-read the player name from its own field
-      const r={me:_mcVoiceFor("Emre"),her:_mcVoiceFor("Buket"),user:state.user};
-      return (r.me==="Dennis"&&r.her==="Olivia") ? true : JSON.stringify(r); }));
-
   console.log("\n[comic view]");
   const SG=await pg.evaluate(()=>({
     ai:comicSegments('*Bakar.* _Yine mi o?_ "Başka bir zaman." *Yürür.* "Acelem var."',false),

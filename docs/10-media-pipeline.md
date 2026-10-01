@@ -87,8 +87,28 @@ Paper, Literata/serif, justified with hyphenation; *Chapter / Day N*, a small-ca
 (⁂ between scenes, ▶ plays from there), a drop capital on the chapter's first passage, pictures (or clips with their
 controls) sized to their own shape between passages. `_bkReconcile` replaces only the blocks whose HTML changed, so a
 picture or a playing clip is never reloaded when a passage arrives. The **Writer** button opens the options: Write as
-you play, passage length, writer model, *Write what this day is missing*, *Save chapter* (`bookChapterHTML`: one HTML
-file with the prose and the pictures inside, share sheet on a phone) and *Save as video* (Story Book only).
+you play, passage length, writer model, *Write what this day is missing*, *Save the book* (see below) and *Save as video* (Story Book only).
+
+### The kept book and Save (v150.2)
+Reported: no visible save, and the pictures are erased after a while. Why they go: a hosted picture is only a link
+until its bytes are copied (the copy can be refused by the host), and a chat's stored bytes are swept with the chat
+(a universe reset, a restarted scene). So the book keeps itself, apart from the chat — always ONE book per story:
+- `book:<uni>:<kind>` (IndexedDB) holds the kept book's sections in reading order — chat, day, place, text, and the
+  picture/clip it leads to; `bookmedia:<uni>:<kind>:<mid>` holds the book's own copy of each picture (data URL) or
+  clip (Blob). No prune sweep touches these keys.
+- `bookKeep(chat, kind)` syncs it: `_bkArchive` copies every anchor the kept book lacks (sources: the message, its
+  `mimg:` bytes, the gallery copy, a fetch), then this chat's sections are replaced in place by its written passages
+  (a passage being rewritten keeps its old text); sections of an earlier chat of the same story stay, so a reset adds
+  to the same book. A picture the chat lost keeps its kept copy; one taken out or whose message was deleted leaves it.
+- It runs when a picture or clip is made (`bookOnMedia`, before the writer — so the bytes are taken while the link is
+  alive, whether or not the writer is on), after every passage, when the book opens, and when a picture is taken out
+  or put back. The page and the reader fall back to the kept copy (`bookKeptSrc`) when the chat's is gone.
+- **Save** (the bar, always labelled; also in the Writer options) — `bookSaveBook` writes the whole kept book
+  (`bookKeptHTML`: title, every chapter, place headings, prose, the pictures or clips inside) as one HTML file. With
+  `showSaveFilePicker` (Chrome on a computer) the first Save picks the file and stores its handle
+  (`bookfile:<uni>:<kind>`); every later Save rewrites that file, and `_bkAutoSave` rewrites it after each new passage
+  while the tab holds write permission. Elsewhere Save hands over the whole book each time (share sheet or download).
+  *Other file* forgets the chosen file.
 
 ### The reader (`openBookPlayer`) and Save as video
 `bookPlayItems` plays exactly what the book holds: a card per scene, each paragraph of each passage on a dark page,

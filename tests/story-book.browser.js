@@ -135,6 +135,7 @@ const {chromium}=require('playwright');
   ok("put back, it returns where it was", H.back===2, JSON.stringify(H));
   ok("a picture whose bytes are gone is passed over, its text kept", await pg.evaluate(async()=>{
       const m=curChat().messages.find(x=>x.mid==="a3"); const keep=m.img; m.img=null; m.imgStored=true;
+      await new Promise(r=>setTimeout(r,300)); await mediaDB.kvDelete(_bkMediaKey(curChat().universeId,"story","a3"));   // and no kept copy either (see the kept book below)
       document.getElementById('bookBody').innerHTML=""; renderBook(); await new Promise(r=>setTimeout(r,400));   // as after a reload
       const gone=document.querySelector('#bookBody figure.nvFig[data-mid="a3"]'), r=(gone&&gone.classList.contains('gone')&&document.querySelectorAll('#bookBody .nvPass').length===4);
       m.img=keep; delete m.imgStored; document.getElementById('bookBody').innerHTML=""; renderBook();
@@ -252,9 +253,65 @@ const {chromium}=require('playwright');
       bookRewrite("a1"); await _bkJob(curChat(),"story").p; window.chatCompletion=real; state.bookModel=""; state.bookLen="medium";
       const u=__calls[0].messages[1].content; const w=+(/About (\d+) words/.exec(u)||[])[1];
       return (model==="my/model"&&w>=120) ? true : JSON.stringify({model,w}); }));
-  ok("Save chapter is one HTML file with the prose and the pictures in it", await pg.evaluate(async()=>{
-      const h=await bookChapterHTML(curChat(),"story",1);
-      return (/^<!doctype html>/.test(h)&&/<h1><small>Chapter<\/small>Day 1<\/h1>/.test(h)&&/the harbour lay still/.test(h)&&/<img src="data:image\/png/.test(h)&&!/bkBub/.test(h)) ? true : h.slice(0,300); }));
+
+  console.log("\n[the kept book: one per story, with its own pictures]");
+  const KB=await pg.evaluate(async()=>{
+    const c=curChat(); await bookKeep(c,"story");
+    const kept=await bookKept(c.universeId,"story"), live=Object.keys(c.book.story.passages).length;
+    const pic=await mediaDB.kvGet(_bkMediaKey(c.universeId,"story","b1"));
+    return {n:kept.sections.length,live,pic:/^data:image\/png/.test(pic||""),chats:[...new Set(kept.sections.map(x=>x.chat))].length,
+      first:kept.sections[0]&&{day:kept.sections[0].day,where:kept.sections[0].where,media:kept.sections[0].media}};
+  });
+  ok("every written passage is bound into the kept book, in order", KB.n===KB.live&&KB.chats===1&&KB.first.day===1&&/Harbour Bar/.test(KB.first.where), JSON.stringify(KB));
+  ok("with its own copy of each picture, taken while the chat still has it", KB.pic===true, JSON.stringify(KB));
+  ok("a picture the chat has lost still shows in the book and is still in the saved book", await pg.evaluate(async()=>{
+      const c=curChat(), m=c.messages.find(x=>x.mid==="b1"), keep=m.img;
+      m.img=null; m.imgSrc="https://expired.example/b1.png"; m.imgStored=true; await mediaDB.kvDelete("mimg:b1");
+      _bookDay=1; openStoryBook(); document.getElementById('bookBody').innerHTML=""; renderBook(); await new Promise(r=>setTimeout(r,500));
+      const img=document.querySelector('#bookBody figure.nvFig[data-mid="b1"] img'), shown=!!(img&&/^data:image\/png/.test(img.src)&&!img.closest('figure').classList.contains('gone'));
+      await bookKeep(c,"story"); const h=await bookKeptHTML(c.universeId,"story");
+      const kept=await bookKept(c.universeId,"story"), sec=kept.sections.find(x=>x.media==="b1");
+      m.img=keep; delete m.imgSrc; delete m.imgStored; closeStoryBook();
+      return (shown&&!!sec&&(h.match(/<img src="data:image\/png/g)||[]).length>=3) ? true : JSON.stringify({shown,sec:!!sec,imgs:(h.match(/<img /g)||[]).length}); }));
+  const RS=await pg.evaluate(async()=>{
+    // the story is reset: a new chat for the same universe, starting again at Day 1
+    const old=curChat(); const nc={id:"c_reset",universeId:old.universeId,castIds:[],presentIds:[],memCounts:{},tempChars:[],messages:[],gameDay:1,title:old.title};
+    nc.messages=[{mid:"r1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"A new day, a new start."',present:["p_a"],status:{day:1,period:"Morning",location:"Pier",trackers:[]},img:__pic("#0a0"),imgState:"done"}];
+    state.chats[nc.id]=nc; state.curChat=nc.id;
+    await bookCatchUp(nc,"story",{day:1}); await bookKeep(nc,"story");
+    const kept=await bookKept(nc.universeId,"story"), h=await bookKeptHTML(nc.universeId,"story");
+    state.curChat=old.id; delete state.chats[nc.id];
+    return {chats:kept.sections.map(x=>x.chat).filter((x,i,a)=>a.indexOf(x)===i),last:kept.sections[kept.sections.length-1].chat,
+      oldStill:kept.sections.some(x=>x.chat===old.id), days:(h.match(/<h2><small>Chapter<\/small>Day 1<\/h2>/g)||[]).length, orn:/class="orn"/.test(h), title:/<h1>/.test(h)};
+  });
+  ok("after a reset it is still ONE book: the earlier telling kept, the new one added after it", RS.chats.length===2&&RS.last==="c_reset"&&RS.oldStill&&RS.days===2&&RS.orn&&RS.title, JSON.stringify(RS));
+  const FS=await pg.evaluate(async()=>{
+    // a browser that can write to a file: the first Save picks it, every later Save — and a new passage — rewrites it
+    const writes=[]; let picks=0;
+    const handle={name:"Story — Story Book.html",queryPermission:async()=>"granted",requestPermission:async()=>"granted",
+      createWritable:async()=>{ let buf=""; return {write:async b=>{ buf=await b.text(); },close:async()=>{ writes.push(buf); }}; }};
+    window.showSaveFilePicker=async()=>{ picks++; return handle; };
+    const realSet=mediaDB.kvSet.bind(mediaDB), realGet=mediaDB.kvGet.bind(mediaDB); let stored=null;
+    mediaDB.kvSet=async(k,v)=>{ if(/^bookfile:/.test(k)){ stored=v; return true; } return realSet(k,v); };
+    mediaDB.kvGet=async k=>(/^bookfile:/.test(k)?stored:realGet(k));
+    _bookDay=1; openStoryBook(); await new Promise(r=>setTimeout(r,100));
+    await bookSaveBook(); await bookSaveBook();
+    const before=writes.length;
+    // a new section arrives: the file is rewritten on its own
+    const c=curChat(); c.messages.push({mid:"z1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"One more thing."',present:["p_a"],status:{day:3,period:"Night",location:"Home",trackers:[]},img:__pic("#abc"),imgState:"done"});
+    await bookCatchUp(c,"story",{day:3}); await new Promise(r=>setTimeout(r,1200)); await bookKeep(c,"story"); await new Promise(r=>setTimeout(r,2900));
+    const opts=document.getElementById('bookFileTxt').textContent;
+    mediaDB.kvSet=realSet; mediaDB.kvGet=realGet; delete window.showSaveFilePicker; closeStoryBook();
+    return {picks,before,after:writes.length,whole:/Day 1/.test(writes[0]||"")&&/Day 3/.test(writes[writes.length-1]||"")&&/<img src="data:image/.test(writes[0]||""),opts};
+  });
+  ok("Save picks the file once and rewrites that one file with the whole book", FS.picks===1&&FS.before===2&&FS.whole, JSON.stringify(FS));
+  ok("and a new section is added to it on its own", FS.after===3, JSON.stringify(FS));
+  ok("elsewhere Save hands over the whole book as one file", await pg.evaluate(async()=>{
+      const got=[]; const realClick=HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click=function(){ got.push(this.download); };
+      const realShare=navigator.canShare; try{ navigator.canShare=()=>false; }catch(e){}
+      _bookDay=1; openStoryBook(); await bookSaveBook(); HTMLAnchorElement.prototype.click=realClick; try{ navigator.canShare=realShare; }catch(e){} closeStoryBook();
+      return (got.length===1&&/Story Book\.html$/.test(got[0])) ? true : JSON.stringify(got); }));
+  ok("the Save button is in the book's bar", await pg.evaluate(()=>{ const b=document.querySelector('.bookBar #bookSaveBtn'); return !!(b&&/bookSaveBook/.test(b.getAttribute('onclick'))); }));
   ok("the menu opens it", await pg.evaluate(()=>{ closeStoryBook(); toggleChatMenu&&toggleChatMenu();
       const btn=[...document.querySelectorAll('button')].find(x=>/openStoryBook/.test(x.getAttribute('onclick')||"")); if(btn)btn.click();
       const r=document.getElementById('bookModal').classList.contains('show'); closeStoryBook(); return r ? true : "not opened"; }));

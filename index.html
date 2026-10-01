@@ -578,6 +578,7 @@
   .bookEd .ic{width:14px;height:14px;margin:0;}
   .bookPlay{color:#fff;border-color:#8a5a2b;background:#8a5a2b;}
   @media (max-width:520px){ .bookName{display:none;} .bookEd .lbl{display:none;} #bookDaySel{flex:1;max-width:none;} .bookEd{padding:7px 9px;} }
+  @media (max-width:520px){ #bookSaveBtn .lbl{display:inline;} }   /* v150.2 — Save is the one that must never be missed */
   .bookOpts{background:#2b2721;color:#eee;padding:10px 14px 12px;display:flex;flex-direction:column;gap:10px;flex-shrink:0;font-size:14px;max-height:55vh;overflow:auto;}
   .bookOpts[hidden]{display:none;}
   .bkRow{display:flex;align-items:center;justify-content:space-between;gap:12px;}
@@ -1386,7 +1387,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.1</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.2</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2341,6 +2342,7 @@
       <button type="button" class="iconBtn" onclick="closeStoryBook()" aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
       <div class="bookName">Story Book</div>
       <select id="bookDaySel" onchange="bookSetDay(this.value)" aria-label="Chapter"></select>
+      <button type="button" class="bookEd" id="bookSaveBtn" onclick="bookSaveBook()" title="Save the whole book as one file" aria-label="Save the book"><svg class="ic"><use href="#i-download"/></svg> <span class="lbl">Save</span></button>
       <button type="button" class="bookEd" id="bookOptBtn" onclick="toggleBookOpts()" title="The writer" aria-label="The writer"><svg class="ic"><use href="#i-sparkle"/></svg> <span class="lbl">Writer</span></button>
       <button type="button" class="bookEd bookPlay" onclick="openBookPlayer()" title="Read this chapter aloud"><svg class="ic"><use href="#i-play"/></svg> Play</button>
     </div>
@@ -2348,7 +2350,8 @@
       <label class="bkRow"><span>Write as you play<small>Each time a picture (in the Video Book, a clip) is made, the writer turns everything said, done and thought since the last passage into the prose that leads into it.</small></span><input type="checkbox" id="bookAutoChk" onchange="setBookAuto(this.checked)"></label>
       <div class="bkRow"><span>Passage length</span><div class="bkSeg"><button type="button" data-len="short" onclick="setBookLen('short')">Short</button><button type="button" data-len="medium" onclick="setBookLen('medium')">Medium</button><button type="button" data-len="long" onclick="setBookLen('long')">Long</button></div></div>
       <label class="bkRow"><span>Writer model<small>Blank: the story's own model.</small></span><input type="text" id="bookModelIn" autocomplete="off" spellcheck="false" onchange="setBookModel(this.value)"></label>
-      <div class="bkRow bkBtns"><button type="button" class="btn sec small" onclick="bookWriteDay()"><svg class="ic"><use href="#i-sparkle"/></svg> Write what this day is missing</button><button type="button" class="btn sec small" onclick="bookSaveChapter()"><svg class="ic"><use href="#i-download"/></svg> Save chapter</button><button type="button" class="btn sec small" id="bookVidBtn" onclick="bookSaveVideo('')"><svg class="ic"><use href="#i-film"/></svg> Save as video</button></div>
+      <div class="bkRow"><span>The kept book<small id="bookFileTxt">One book per story. It keeps its own copy of every picture, so it stays whole after the chat's pictures are gone.</small></span><button type="button" class="btn sec small" id="bookFileForget" onclick="bookForgetFile()" hidden>Other file</button></div>
+      <div class="bkRow bkBtns"><button type="button" class="btn sec small" onclick="bookWriteDay()"><svg class="ic"><use href="#i-sparkle"/></svg> Write what this day is missing</button><button type="button" class="btn sec small" onclick="bookSaveBook()"><svg class="ic"><use href="#i-download"/></svg> Save the book</button><button type="button" class="btn sec small" id="bookVidBtn" onclick="bookSaveVideo('')"><svg class="ic"><use href="#i-film"/></svg> Save as video</button></div>
     </div>
     <div class="bookBody" id="bookBody"></div>
     <!-- v150.0 — the reader: this chapter read aloud, passage by passage, picture by picture -->
@@ -41086,6 +41089,7 @@ async function bookWriteRun(chat,kind,run,plan,opts){
   Object.keys(B.passages).forEach(id=>{ const q=B.passages[id]; if(id===first||(q&&Array.isArray(q.mids)&&q.mids.some(x=>set.has(x))))delete B.passages[id]; });
   B.passages[first]={mids:run.mids.slice(),sig,text,end:run.end,at:Date.now()};
   try{ markChatDirty(chat); persistChats(); }catch(e){}
+  try{ bookKeepSoon(chat,kind); }catch(e){}     // v150.2 — into the one kept book (and its file)
   try{ _alog("book.write",kind+" · "+where+" — "+run.lines.length+" line(s) → "+text.split(/\s+/).length+" words"); }catch(e){}
   return B.passages[first];
 }
@@ -41143,6 +41147,8 @@ function _bkNextRun(plan,opts,tried){
 /* THE TRIGGER — a picture or a clip finished, a journey began: write what is now complete. Debounced, so a burst of
    pictures is one pass. */
 function bookOnMedia(chat,kind,opts){
+  // v150.2 — the kept book copies the new picture now, while its link is alive, whether or not the writer runs
+  try{ if(chat)bookKeepSoon(chat,kind,300); }catch(e){}
   if(!chat||state.bookAuto===false||!state.key)return;
   const J=_bkJob(chat,kind), o=Object.assign({live:true},opts||{});
   clearTimeout(J.timer);
@@ -41160,9 +41166,11 @@ function _bkRefresh(chat,kind){
 /* ---- the reader ---- */
 async function _bookImgSrc(chat,mid){
   const m=(chat.messages||[]).find(x=>x&&x.mid===mid); if(!m)return "";
-  if(m.img&&typeof m.img==="string")return m.img;
+  if(m.img&&typeof m.img==="string"&&!/^https?:/.test(m.img))return m.img;
   try{ const d=await mediaDB.kvGet("mimg:"+mid); if(d)return d; }catch(e){}
-  return m.imgSrc||"";
+  // v150.2 — the kept book's own copy outlives the chat's and the host's link
+  try{ const k=await bookKeptSrc(chat.universeId,"story",mid); if(k)return k; }catch(e){}
+  return (typeof m.img==="string"&&m.img)||m.imgSrc||"";
 }
 function _bkInline(t){ return esc(String(t||"")).replace(/\*([^*\n]+)\*/g,"<em>$1</em>"); }
 function _bkSplitParas(t){ return String(t||"").split(/\n+/).map(x=>x.trim()).filter(Boolean); }
@@ -41248,12 +41256,17 @@ function _bkLoadMedia(chat,kind,el){
     if(kind==="video"){
       const v=fig.querySelector('video'); if(!m||!m.sceneClip||!v){ fig.classList.add('gone'); return; }
       v.src=svClipSrcNow(m.sceneClip);
-      v.onerror=async()=>{ if(v._tried){ fig.classList.add('gone'); return; } v._tried=true; const s=await svClipSrc(m.sceneClip); if(s&&s!==v.src)v.src=s; else fig.classList.add('gone'); };
+      v.onerror=async()=>{
+        if(v._tried>=2){ fig.classList.add('gone'); return; }
+        v._tried=(v._tried||0)+1;
+        const s=v._tried===1?await svClipSrc(m.sceneClip):await bookKeptSrc(chat.universeId,"video",mid);   // v150.2 — then the kept copy
+        if(s&&s!==v.src)v.src=s; else if(v._tried===1)v.onerror(); else fig.classList.add('gone'); };
       return;
     }
     const img=fig.querySelector('img'), src=await _bookImgSrc(chat,mid);
     if(!src||!img){ fig.classList.add('gone'); return; }               // bytes gone: the picture goes, the text stays
-    img.onerror=async()=>{ let d=null; try{ d=await mediaDB.kvGet("mimg:"+mid); }catch(_){} if(d&&img.src!==d)img.src=d; else fig.classList.add('gone'); };
+    img.onerror=async()=>{ let d=null; try{ d=await mediaDB.kvGet("mimg:"+mid); }catch(_){} if(!d){ try{ d=await bookKeptSrc(chat.universeId,"story",mid); }catch(_){} }
+      if(d&&img.src!==d)img.src=d; else fig.classList.add('gone'); };
     img.onclick=()=>{ try{ viewSceneImage(mid); }catch(e){} };
     img.src=src;
   });
@@ -41291,6 +41304,7 @@ function _bookOpen(kind){
   renderBook();
   openModal('bookModal');
   _bkOpenCatchUp(chat);
+  try{ bookKeep(chat,_bookMode); }catch(e){}   // v150.2 — copy every picture the chat still has into the kept book
 }
 function openStoryBook(){ _bookOpen("story"); }
 function openVideoBook(){ _bookOpen("video"); }
@@ -41324,14 +41338,14 @@ function bookRewrite(key){
 function bookHidePic(mid){
   const chat=curChat(); if(!chat)return;
   _bkStore(chat,_bookMode).hidden[mid]=true; try{ markChatDirty(chat); persistChats(); }catch(e){}
-  renderBook();
+  renderBook(); bookKeepSoon(chat,_bookMode);
 }
 function bookUnhideDay(){
   const chat=curChat(); if(!chat)return;
   const B=_bkStore(chat,_bookMode), chap=bookPlan(chat,_bookMode).chapters.find(c=>c.day===_bookDay);
   (chap?chap.hidden:[]).forEach(mid=>{ delete B.hidden[mid]; });
   try{ markChatDirty(chat); persistChats(); }catch(e){}
-  renderBook();
+  renderBook(); bookKeepSoon(chat,_bookMode);
 }
 /* ---- the writer's settings, in the book's bar ---- */
 function toggleBookOpts(){ const o=document.getElementById('bookOpts'); if(!o)return; o.hidden=!o.hidden; _bkSyncOpts(); }
@@ -41339,37 +41353,202 @@ function _bkSyncOpts(){
   const a=document.getElementById('bookAutoChk'); if(a)a.checked=state.bookAuto!==false;
   document.querySelectorAll('#bookOpts [data-len]').forEach(b=>b.classList.toggle('on',(BOOK_LEN[state.bookLen]?state.bookLen:"medium")===b.dataset.len));
   const m=document.getElementById('bookModelIn'); if(m&&document.activeElement!==m){ m.value=state.bookModel||""; m.placeholder=state.model||"the story's model"; }
+  const f=document.getElementById('bookFileTxt'), c=curChat();
+  if(f&&c)_bkFileHandle(c.universeId,_bookMode).then(h=>{
+    f.textContent=h&&h.name?`Saved to ${h.name} — each Save, and each new section while this tab has permission, rewrites it with the whole book.`
+      :(typeof window.showSaveFilePicker==="function"?"Save asks once where to keep the book; after that it rewrites that one file, which grows as the story does."
+        :"Save hands over the whole book as one file — every chapter and picture, the newest sections included.");
+    const fb=document.getElementById('bookFileForget'); if(fb)fb.hidden=!(h&&h.name); }).catch(()=>{});
 }
 function setBookAuto(on){ state.bookAuto=!!on; store.set(K.bookAuto,state.bookAuto); _bkSyncOpts(); if(on)_bkOpenCatchUp(curChat()); }
 function setBookLen(v){ state.bookLen=BOOK_LEN[v]?v:"medium"; store.setRaw(K.bookLen,state.bookLen); _bkSyncOpts(); }
 function setBookModel(v){ state.bookModel=String(v||"").trim(); store.setRaw(K.bookModel,state.bookModel); _bkSyncOpts(); }
-/* ---- a chapter to keep: one HTML file, pictures inside it, that opens anywhere and prints ---- */
-async function bookChapterHTML(chat,kind,day){
-  const plan=bookPlan(chat,kind), chap=plan.chapters.find(c=>c.day===day); if(!chap)return "";
-  let body=`<h1><small>Chapter</small>Day ${esc(chap.day)}</h1>`;
-  for(const s of chap.scenes){
-    body+=`<h2>${esc(_bkWhereLabel(s))}</h2>`;
-    for(const it of s.items){
-      if(it.type==="media"){ if(kind==="video")continue; const src=await _bookImgSrc(chat,it.mid); if(src)body+=`<figure><img src="${esc(src)}" alt=""></figure>`; continue; }
-      const t=it.type==="passage"?it.text:it.ghost; if(t)body+=_bkParasHTML(t);
-    }
+/* ===== v150.2 — THE KEPT BOOK: always one book per story, with its own copy of every picture =====================
+   Reported: "I couldn't see a save option. These images are erased after a while. We should be able to save all as a
+   single book and each added section when saved should add to that book. Always a single book."
+   Why pictures go: a picture from a hosted link is only a link until its bytes are copied, and the copy can fail (the
+   host blocks it) — then the picture dies with the link; and everything a chat held is swept from storage with the chat
+   (a universe reset, a restarted scene). So the book keeps ITSELF, apart from the chat:
+     - one kept book per story (universe) and per kind, in IndexedDB under book:<uni>:<kind>: its sections in reading
+       order — chapter (the chat and the day), the place, the passage's text and the picture or clip it leads to;
+     - its own copy of every picture (a data URL) or clip (a Blob) under bookmedia:<uni>:<kind>:<mid>, taken the moment
+       the picture is made (bookOnMedia) and whenever the book is synced — while the link is still alive. The prune
+       sweeps never touch these keys;
+     - bookKeep(chat, kind) syncs it from the live book: this chat's sections are replaced, in place, by what the chat
+       now holds (written passages, and a passage being rewritten with its old text); sections from an earlier chat of
+       the same story (before a reset) stay, so it is always ONE book that only grows. A picture whose bytes the chat
+       lost keeps its kept copy; a picture taken out of the book, or whose message was deleted, leaves it.
+     - SAVE (the bar's Save button) writes the whole kept book as one HTML file, pictures inside. Where the browser can
+       write to a file (Chrome on a computer: showSaveFilePicker) the first Save picks the file and every later Save —
+       and every new passage, while the permission lasts — rewrites that same file, so the one book on disk grows with
+       the story. Elsewhere Save hands over the whole book each time (share sheet or download), always complete.
+     - The page itself shows the kept copy when the chat's own picture is gone. */
+function _bkKeptKey(uni,kind){ return "book:"+(uni||"none")+":"+_bkKind(kind); }
+function _bkMediaKey(uni,kind,mid){ return "bookmedia:"+(uni||"none")+":"+_bkKind(kind)+":"+mid; }
+function _bkFileKey(uni,kind){ return "bookfile:"+(uni||"none")+":"+_bkKind(kind); }
+async function bookKept(uni,kind){
+  let k=null; try{ k=await mediaDB.kvGet(_bkKeptKey(uni,kind)); }catch(e){}
+  if(!k||typeof k!=="object"||!Array.isArray(k.sections))k={v:1,uni,kind:_bkKind(kind),sections:[],media:{}};
+  if(!k.media||typeof k.media!=="object")k.media={};
+  return k;
+}
+function _bkBlobToData(b){ return new Promise(res=>{ try{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result||"")); fr.onerror=()=>res(""); fr.readAsDataURL(b); }catch(e){ res(""); } }); }
+// The bytes of a message's picture (a data URL) or clip (a Blob), from wherever they still are.
+async function _bkMediaBytes(chat,m,kind){
+  if(!m)return null;
+  if(_bkKind(kind)==="video"){
+    const c=m.sceneClip; if(!c)return null;
+    try{ const b=await mediaBlob(c.src,c.recId||null,m.mid); if(b&&b.size)return b; }catch(e){}
+    return null;
   }
-  const u=universeById(chat.universeId), title=`${(u&&u.name)||"Story"} — Day ${chap.day}`;
+  if(m.img&&String(m.img).startsWith("data:"))return m.img;
+  try{ const d=await mediaDB.kvGet("mimg:"+m.mid); if(d)return d; }catch(e){}
+  const url=m.img||m.imgSrc||""; if(!url)return null;
+  try{
+    const rec=(state.images||[]).find(r=>r&&r.id&&(r.remote===url||r.url===url||(m.imgSrc&&r.remote===m.imgSrc)));
+    const b=await mediaBlob(url,rec?rec.id:null,null);
+    if(b&&b.size)return await _bkBlobToData(b)||null;
+  }catch(e){}
+  return null;
+}
+// Copy every picture (clip) of the chat's book the kept book does not hold yet.
+async function _bkArchive(chat,kind,plan,kept){
+  const uni=chat.universeId; let n=0;
+  for(const c of plan.chapters)for(const s of c.scenes)for(const it of s.items){
+    if(it.type!=="media"||kept.media[it.mid])continue;
+    const v=await _bkMediaBytes(chat,it.m,kind);
+    if(v&&await mediaDB.kvSet(_bkMediaKey(uni,kind,it.mid),v)){ kept.media[it.mid]=1; n++; }
+  }
+  return n;
+}
+const _bkKeepQ=new WeakMap();
+/* Bring the kept book up to date with this chat. One at a time per chat (a sync reads and writes the whole record). */
+function bookKeep(chat,kind){
+  if(!chat||!chat.universeId)return Promise.resolve(null);
+  kind=_bkKind(kind);
+  let o=_bkKeepQ.get(chat); if(!o){ o={}; _bkKeepQ.set(chat,o); }
+  const p=(o[kind]||Promise.resolve()).then(()=>_bkKeep(chat,kind)).catch(e=>{ try{ _alog("book.keep.fail",String(e&&e.message||e).slice(0,140)); }catch(_){} return null; });
+  o[kind]=p; return p;
+}
+async function _bkKeep(chat,kind){
+  if(_storageRO)return null;
+  const uni=chat.universeId, plan=bookPlan(chat,kind), kept=await bookKept(uni,kind);
+  const u=universeById(uni); kept.title=(u&&u.name)||chat.title||kept.title||"Story";
+  await _bkArchive(chat,kind,plan,kept);
+  const B=_bkStore(chat,kind), alive=new Set((chat.messages||[]).map(m=>m&&m.mid));
+  const old=new Map(kept.sections.filter(x=>x.chat===chat.id).map(x=>[x.k,x]));
+  const mine=[];
+  plan.chapters.forEach(c=>c.scenes.forEach(s=>s.items.forEach((it,i)=>{
+    if(it.type==="media")return;
+    const text=it.type==="passage"?it.text:it.ghost; if(!text)return;
+    const last=it.lines[it.lines.length-1].m, k=chat.id+"|"+it.key, was=old.get(k);
+    // the picture it leads to: the live one, or the kept copy of one the chat lost; never one taken out or deleted
+    let media=null;
+    if(_bkMediaOf(last,kind)&&!B.hidden[last.mid])media=last.mid;
+    else if(was&&was.media&&alive.has(was.media)&&!B.hidden[was.media]&&kept.media[was.media])media=was.media;
+    mine.push({k,chat:chat.id,day:c.day,where:_bkWhereLabel(s),text,media,at:(was&&was.at)||Date.now()});
+  })));
+  // this chat's sections are replaced where they stood; another chat's (an earlier telling) are kept as they are
+  const at=kept.sections.findIndex(x=>x.chat===chat.id), rest=kept.sections.filter(x=>x.chat!==chat.id);
+  const pos=at<0?rest.length:kept.sections.slice(0,at).filter(x=>x.chat!==chat.id).length;
+  const next=rest.slice(0,pos).concat(mine,rest.slice(pos));
+  const sig=JSON.stringify(next.map(x=>[x.k,x.text.length,x.media]))+"#"+Object.keys(kept.media).length;
+  if(sig===kept.sig)return kept;
+  kept.sections=next; kept.sig=sig; kept.at=Date.now();
+  // pictures nothing in the book uses any more (taken out, deleted) are let go
+  const used=new Set(next.map(x=>x.media).filter(Boolean));
+  for(const mid of Object.keys(kept.media)){
+    if(!used.has(mid)&&!alive.has(mid)){ delete kept.media[mid]; try{ await mediaDB.kvDelete(_bkMediaKey(uni,kind,mid)); }catch(e){} }
+  }
+  await mediaDB.kvSet(_bkKeptKey(uni,kind),kept);
+  _bkAutoSave(uni,kind);
+  return kept;
+}
+let _bkKeepT=null;
+function bookKeepSoon(chat,kind,ms){ clearTimeout(_bkKeepT); _bkKeepT=setTimeout(()=>{ bookKeep(chat,kind); },ms==null?800:ms); }
+// The kept copy of a picture (a data URL) or a clip (an object URL), for the page when the chat's own is gone.
+const _bkKeptUrls=new Map();
+async function bookKeptSrc(uni,kind,mid){
+  let v=null; try{ v=await mediaDB.kvGet(_bkMediaKey(uni,kind,mid)); }catch(e){}
+  if(!v)return "";
+  if(typeof v==="string")return v;
+  const key=uni+"|"+kind+"|"+mid; if(_bkKeptUrls.has(key))return _bkKeptUrls.get(key);
+  try{ const u=URL.createObjectURL(v); _bkKeptUrls.set(key,u); return u; }catch(e){ return ""; }
+}
+/* The whole kept book as one HTML file: every chapter, every passage, every picture (or clip) inside it. */
+async function bookKeptHTML(uni,kind){
+  kind=_bkKind(kind);
+  const kept=await bookKept(uni,kind); if(!kept.sections.length)return "";
+  const title=`${kept.title||"Story"} — ${kind==="video"?"Video Book":"Story Book"}`;
+  let body=`<header><h1>${esc(kept.title||"Story")}</h1><div class="sub">${kind==="video"?"Video Book":"Story Book"}</div></header>`;
+  let prev=null;
+  for(const x of kept.sections){
+    const newChap=!prev||prev.chat!==x.chat||prev.day!==x.day;
+    if(prev&&prev.chat!==x.chat)body+=`<div class="orn">❦</div>`;
+    if(newChap)body+=`<h2><small>Chapter</small>Day ${esc(x.day)}</h2>`;
+    if(newChap||prev.where!==x.where)body+=`<h3>${esc(x.where)}</h3>`;
+    body+=_bkParasHTML(x.text);
+    if(x.media){
+      let v=null; try{ v=await mediaDB.kvGet(_bkMediaKey(uni,kind,x.media)); }catch(e){}
+      if(v&&typeof v!=="string")v=await _bkBlobToData(v);
+      if(v)body+=kind==="video"?`<figure><video controls playsinline src="${esc(v)}"></video></figure>`:`<figure><img src="${esc(v)}" alt=""></figure>`;
+    }
+    prev=x;
+  }
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
     +`<style>body{max-width:680px;margin:40px auto;padding:0 18px;background:#fbf7ee;color:#1b1b1b;font:19px/1.65 Literata,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif}`
-    +`h1{text-align:center;font-weight:400;font-size:40px;margin:10px 0 30px}h1 small{display:block;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#7a6b52}`
-    +`h2{text-align:center;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#7a6b52;font-weight:400;margin:40px 0 16px}`
-    +`p{margin:0;text-indent:1.4em;text-align:justify;hyphens:auto}h1+h2+p,h2+p,figure+p{text-indent:0}figure{margin:24px 0}img{width:100%;display:block;border-radius:3px}</style></head><body>${body}</body></html>`;
+    +`header{text-align:center;margin:30px 0 50px}h1{font-weight:400;font-size:44px;margin:0}.sub{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#7a6b52}`
+    +`h2{text-align:center;font-weight:400;font-size:34px;margin:60px 0 24px;page-break-before:always}h2 small{display:block;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:#7a6b52}`
+    +`h3{text-align:center;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#7a6b52;font-weight:400;margin:40px 0 16px}`
+    +`p{margin:0;text-indent:1.4em;text-align:justify;hyphens:auto}h3+p,figure+p{text-indent:0}figure{margin:24px 0;text-align:center}`
+    +`img,video{max-width:100%;max-height:90vh;display:inline-block;border-radius:3px}.orn{text-align:center;color:#b4a481;margin:50px 0}</style></head><body>${body}</body></html>`;
 }
-async function bookSaveChapter(){
+function _bkFileName(t,kind){ return String(t||"Story").replace(/[\\/:*?"<>|]+/g,"").trim().slice(0,60)+" — "+(_bkKind(kind)==="video"?"Video Book":"Story Book")+".html"; }
+async function _bkFileHandle(uni,kind){ try{ return await mediaDB.kvGet(_bkFileKey(uni,kind)); }catch(e){ return null; } }
+async function _bkCanWrite(h,ask){
+  try{ const o={mode:"readwrite"};
+    if(h.queryPermission&&await h.queryPermission(o)==="granted")return true;
+    return !!(ask&&h.requestPermission&&await h.requestPermission(o)==="granted"); }catch(e){ return false; }
+}
+async function _bkWrite(h,html){ const w=await h.createWritable(); await w.write(new Blob([html],{type:"text/html"})); await w.close(); }
+/* THE SAVE BUTTON. The whole book, every time — into the file chosen once where the browser allows it. */
+async function bookSaveBook(){
   const chat=curChat(); if(!chat)return;
-  const html=await bookChapterHTML(chat,_bookMode,_bookDay); if(!html)return;
-  const name=`${_bookMode==="video"?"videobook":"storybook"}_day${_bookDay}.html`;
+  const kind=_bookMode, uni=chat.universeId;
+  toast("Binding the book…");
+  await bookKeep(chat,kind);
+  const html=await bookKeptHTML(uni,kind);
+  if(!html){ toast("Nothing written yet — the book fills as pictures are made"); return; }
+  const kept=await bookKept(uni,kind), name=_bkFileName(kept.title,kind);
+  if(typeof window.showSaveFilePicker==="function"){
+    let h=await _bkFileHandle(uni,kind);
+    try{
+      if(h&&await _bkCanWrite(h,true)){ await _bkWrite(h,html); toast(`Saved — ${h.name} holds the whole book`); _bkSyncOpts(); return; }
+      h=await window.showSaveFilePicker({suggestedName:name,types:[{description:"Book",accept:{"text/html":[".html"]}}]});
+      await _bkWrite(h,html);
+      try{ await mediaDB.kvSet(_bkFileKey(uni,kind),h); }catch(e){}
+      toast(`Saved to ${h.name} — every new section is added to it`); _bkSyncOpts(); return;
+    }catch(e){ if(e&&e.name==="AbortError")return; }
+  }
   const blob=new Blob([html],{type:"text/html"});
   try{ const file=new File([blob],name,{type:"text/html"}); if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:name}); return; } }catch(e){ if(e&&e.name==="AbortError")return; }
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
   setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); }catch(_){} },60000);
-  toast(`Saved ${name}`);
+  toast(`Saved ${name} — the whole book, every chapter`);
+}
+// After a new passage: rewrite the chosen file, if this session may (no prompt — that needs a tap on Save).
+let _bkAutoT=null;
+function _bkAutoSave(uni,kind){
+  clearTimeout(_bkAutoT);
+  _bkAutoT=setTimeout(async()=>{
+    try{ const h=await _bkFileHandle(uni,kind); if(!h||!await _bkCanWrite(h,false))return;
+      const html=await bookKeptHTML(uni,kind); if(html){ await _bkWrite(h,html); try{ _alog("book.autosave",h.name); }catch(_){} } }catch(e){}
+  },2500);
+}
+async function bookForgetFile(){
+  const chat=curChat(); if(!chat)return;
+  try{ await mediaDB.kvDelete(_bkFileKey(chat.universeId,_bookMode)); }catch(e){}
+  toast("The next Save asks where to keep the book"); _bkSyncOpts();
 }
 /* ===== THE READER ALOUD: a chapter played back — each paragraph read in the narrator voice, then the picture it led
    to (drifting, or its animation), or in the Video Book the clip, played through with its own sound. A card opens each

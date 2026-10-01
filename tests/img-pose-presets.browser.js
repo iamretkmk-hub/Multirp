@@ -34,15 +34,27 @@ const {chromium}=require('playwright');
                     {id:"r_hug",label:"Hug",cast:"player",pov:true,promptStyle:"",enabled:true}];
     state.personas=[{id:"p_sami",name:"Sami",universeId:uni.id,look:{subject:"Man"},image:"data:image/png;base64,S1",
       refImages:["data:image/png;base64,S2","data:image/png;base64,S3"],instructions:"x",personality:"x",
-      poseRefs:{r_hug:"data:image/png;base64,HUG",r_gone:"data:image/png;base64,OLD"}}];
+      poseRefs:{r_hug:"data:image/png;base64,HUG",r_gone:"data:image/png;base64,OLD"}}];   // a v150.6 card: one string per scene type
     editPersona("p_sami");
     const slots=id=>document.querySelectorAll('#'+id+' .refSlot').length;
     const out={profile:slots('peAvatarPreview'),sheet:slots('peMediaRef'),
       poseTalk:slots('pePose_r_talk'),poseHug:slots('pePose_r_hug'),
-      hugFilled:!!document.querySelector('#pePose_r_hug .refSlot img'),talkFilled:!!document.querySelector('#pePose_r_talk .refSlot img'),
+      hugFilled:document.querySelectorAll('#pePose_r_hug .refSlot img').length,talkFilled:document.querySelectorAll('#pePose_r_talk .refSlot img').length,
       labels:Array.from(document.querySelectorAll('#pePoseRefs .poseRow .poseName')).map(c=>c.textContent.trim()),
       kept:peImages.slice()};
-    pePoseRefs.r_talk="data:image/png;base64,TALK";
+    // several pictures for one scene type
+    _pePoseAdd("r_talk","data:image/png;base64,TALK1"); _pePoseAdd("r_talk","data:image/png;base64,TALK2"); _pePoseAdd("r_talk","data:image/png;base64,TALK3");
+    out.dupe=_pePoseAdd("r_talk","data:image/png;base64,TALK1");
+    renderPePoseRefs();
+    out.talkThumbs=document.querySelectorAll('#pePose_r_talk .refSlot img').length;
+    out.talkAdd=document.querySelectorAll('#pePose_r_talk .refSlot.empty').length;
+    out.talkName=document.querySelectorAll('#pePoseRefs .poseRow .poseName')[0].textContent;
+    for(let i=4;i<=10;i++)_pePoseAdd("r_hug","data:image/png;base64,H"+i);
+    out.hugCap=_poseList(pePoseRefs.r_hug).length; renderPePoseRefs();
+    out.hugAdd=document.querySelectorAll('#pePose_r_hug .refSlot.empty').length;
+    // the × removes just that one picture
+    document.querySelectorAll('#pePose_r_hug .rsDel')[1].click();
+    out.hugAfterDel=_poseList(pePoseRefs.r_hug);
     savePersona();
     const p=state.personas.find(x=>x.id==="p_sami");
     out.saved=p.poseRefs; out.savedImage=p.image; out.savedRefs=p.refImages;
@@ -50,11 +62,18 @@ const {chromium}=require('playwright');
   });
   ok("one profile-picture slot", E.profile===1, JSON.stringify(E));
   ok("one reference-sheet slot", E.sheet===1, JSON.stringify(E));
-  ok("a pose slot for every image scene type, by name", E.poseTalk===1&&E.poseHug===1&&/Talking/.test(E.labels[0])&&/Hug/.test(E.labels[1]), JSON.stringify(E.labels));
-  ok("a saved pose picture shows in its slot, an empty one stays empty", E.hugFilled===true&&E.talkFilled===false, JSON.stringify(E));
+  ok("a pose row for every image scene type, by name", /Talking/.test(E.labels[0])&&/Hug/.test(E.labels[1]), JSON.stringify(E.labels));
+  ok("an older card's single pose picture reads as a list of one (with an add tile); an empty row is one line, no tiles",
+     E.hugFilled===1&&E.poseHug===2&&E.talkFilled===0&&E.poseTalk===0, JSON.stringify(E));
+  ok("one scene type takes several pictures, each shown with an add tile after them",
+     E.talkThumbs===3&&E.talkAdd===1&&/3, one at random/.test(E.talkName), JSON.stringify(E));
+  ok("the same picture is not added twice", E.dupe===false, JSON.stringify(E.dupe));
+  ok("up to eight per scene type, and the add tile goes when full", E.hugCap===8&&E.hugAdd===0, JSON.stringify(E));
+  ok("the × removes just that picture", E.hugAfterDel.length===7&&E.hugAfterDel.indexOf("data:image/png;base64,H4")<0&&E.hugAfterDel[0]==="data:image/png;base64,HUG", JSON.stringify(E.hugAfterDel));
   ok("only the first of an older card's pictures is kept", JSON.stringify(E.kept)==='["data:image/png;base64,S1"]', JSON.stringify(E.kept));
-  ok("saving keeps the pose pictures and drops a slot whose scene type is gone",
-     JSON.stringify(E.saved)==='{"r_hug":"data:image/png;base64,HUG","r_talk":"data:image/png;base64,TALK"}', JSON.stringify(E.saved));
+  ok("saving keeps every pose picture as a list and drops a scene type that is gone",
+     JSON.stringify(Object.keys(E.saved).sort())==='["r_hug","r_talk"]'&&E.saved.r_hug.length===7
+     &&JSON.stringify(E.saved.r_talk)==='["data:image/png;base64,TALK1","data:image/png;base64,TALK2","data:image/png;base64,TALK3"]', JSON.stringify(E.saved).slice(0,300));
   ok("and the card is left with one profile picture", E.savedImage==="data:image/png;base64,S1"&&(E.savedRefs||[]).length===0, JSON.stringify([E.savedImage,E.savedRefs]));
   const U=await pg.evaluate(async()=>{ const box=document.getElementById('pePoseRefs'); const n0=box.querySelectorAll('.poseRow').length;
     state.imgRules.push({id:"r_new",label:"Kiss",cast:"player",pov:false,promptStyle:"",enabled:true}); editPersona("p_sami");
@@ -119,6 +138,26 @@ const {chromium}=require('playwright');
   ok("another scene type with an empty slot sends the faces", T.images.indexOf("data:S1")===0&&T.images.indexOf("data:HUG")<0&&T.pose===null, JSON.stringify(T.images));
   const B2=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She hugs him back.*"});
   ok("another character with no pose picture for that scene type sends the faces", B2.images.indexOf("data:U1")===0&&B2.images.indexOf("data:HUG")<0, JSON.stringify(B2.images));
+
+  console.log("\n[6. several pictures for one scene type: one at random, each equally likely]");
+  const RR=await pg.evaluate(async()=>{
+    const sami=state.personas.find(p=>p.id==="p_sami"); sami.poseRefs={r_hug:["data:H0","data:H1","data:H2"]};
+    window.__rule=state.imgRules.find(r=>r.id==="r_hug");
+    // the roll is uniform: 30000 rolls over 3 pictures land near 10000 each
+    const n=[0,0,0]; for(let i=0;i<30000;i++)n[_poseRoll(3)]++;
+    const pick=[0,0,0]; for(let i=0;i<3000;i++)pick[poseRefPick(sami,window.__rule).idx]++;
+    // a fixed roll sends exactly that picture, alone
+    const keep=window._poseRoll; window._poseRoll=()=>2;
+    const c=curChat(); const m={mid:"mr"+c.messages.length,role:"assistant",speaker:"Sami",speakerId:"p_sami",content:"*He hugs her.*",present:c.presentIds.slice()};
+    c.messages.push(m); window.__body=null; await illustrate(m.mid,m.content,true);
+    window._poseRoll=keep;
+    return {n,pick,one:_poseRoll(1),imgs:(window.__body||{}).images||[],idx:m.imgPoseIdx};
+  });
+  ok("the roll is uniform (30000 rolls over three pictures)", RR.n.every(x=>x>9400&&x<10600), JSON.stringify(RR.n));
+  ok("every picture is picked, about equally often", RR.pick.every(x=>x>850&&x<1150), JSON.stringify(RR.pick));
+  ok("a single picture is always the one", RR.one===0);
+  ok("the picked picture is the one sent — first, alone, before the previous scene picture",
+     RR.imgs[0]==="data:H2"&&RR.imgs.indexOf("data:H0")<0&&RR.imgs.indexOf("data:H1")<0&&RR.imgs.indexOf("data:S1")<0&&RR.idx===2, JSON.stringify(RR));
 
   ok("the two pose prompts are registry prompts on the image writer's card", await pg.evaluate(()=>
      ["x_img_pose_writer","x_img_pose_roster"].every(k=>!!PROMPT_BY_KEY[k]&&!!K[k]&&ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey===k)))));

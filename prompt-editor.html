@@ -269,12 +269,16 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     </div>
 
     <div id="rDrift" class="scroll" style="display:none;flex-direction:column">
+      <div class="provider" id="driftModelBox"></div>
       <div class="ctl">
         <button class="btn sm pri" id="btnDriftAll" type="button">Run all 10</button>
+        <button class="btn sm" id="btnDriftAnalyse" type="button">Analyse all</button>
         <button class="btn sm" id="btnDriftStop" type="button" hidden>Stop</button>
+        <button class="btn sm" id="btnDriftExport" type="button">Export results</button>
+        <button class="btn sm" id="btnDriftImport" type="button">Import results</button>
         <span class="stat" id="driftStat"></span>
       </div>
-      <div class="empty" style="padding:10px 12px">Each scene plays the sample story with your current prompts. A scripted player pushes the character off course one line at a time; the model answers every turn through the full payload StoryMind would send. Then Claude reads the whole exchange and marks each reply <b>held</b>, <b>bent</b> or <b>broke</b>, names the turn it first drifted, and proposes exact edits.</div>
+      <div class="empty" style="padding:10px 12px">Each scene plays the sample story with your current prompts. A scripted player pushes Buket off course one line at a time; <b>your model</b> answers every turn through the full payload StoryMind would send. Then Claude reads the whole exchange, marks each reply <b>held</b>, <b>bent</b> or <b>broke</b>, names the turn it first drifted, and proposes exact edits.</div>
       <div id="driftList" class="msgs"></div>
     </div>
 
@@ -301,6 +305,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
 
 <input type="file" id="filePack" accept=".json,application/json" hidden>
 <input type="file" id="fileWorld" accept=".json,application/json" hidden>
+<input type="file" id="fileDrift" accept=".json,application/json" hidden>
 <input type="file" id="fileApp" accept=".html,text/html" hidden>
 <iframe id="engineFrame" title="StoryMind engine" sandbox="allow-scripts"></iframe>
 <div id="modalHost"></div>
@@ -365,7 +370,21 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   try{Object.defineProperty(navigator,"serviceWorker",{value:undefined,configurable:true});}catch(e){}
   try{window.BroadcastChannel=undefined;}catch(e){}
   /* No network from inside: the preview never calls a model or loads anything. */
-  window.fetch=function(){return Promise.reject(new Error("offline (prompt editor sandbox)"));};
+  /* The one way out: a request is handed to the editor, which sends it only if it is for OpenRouter
+     (the model under test). Everything else is refused there. */
+  var RELAY={n:0,wait:{}};
+  window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.pe!=="fetchres"||!RELAY.wait[d.id])return;
+    var w=RELAY.wait[d.id];delete RELAY.wait[d.id];
+    if(d.err)w.rej(new TypeError(d.err));else w.res(new Response(d.text,{status:d.status,headers:{"Content-Type":"application/json"}}));});
+  window.fetch=function(url,init){
+    init=init||{};var id=++RELAY.n,h={};
+    try{var hh=init.headers||{};if(typeof hh.forEach==="function")hh.forEach(function(v,k){h[k]=v;});else Object.keys(hh).forEach(function(k){h[k]=hh[k];});}catch(e){}
+    var body=(typeof init.body==="string")?init.body:null;
+    return new Promise(function(res,rej){RELAY.wait[id]={res:res,rej:rej};
+      if(init.signal){if(init.signal.aborted){delete RELAY.wait[id];return rej(new DOMException("aborted","AbortError"));}
+        init.signal.addEventListener("abort",function(){if(RELAY.wait[id]){delete RELAY.wait[id];rej(new DOMException("aborted","AbortError"));}});}
+      parent.postMessage({pe:"fetch",id:id,url:String(url),method:init.method||"GET",headers:h,body:body},"*");});
+  };
   window.XMLHttpRequest=function(){throw new Error("offline (prompt editor sandbox)");};
   window.WebSocket=function(){throw new Error("offline (prompt editor sandbox)");};
   window.open=function(){return null;};
@@ -696,14 +715,24 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     return out;
   }
 
-  var OPS={meta:meta,apply:apply,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
+  /* The model under test. Its key lives only in this sandbox's memory; the reply is written by the app's
+     own chatCompletion with rp:true — the roleplay bucket's model, temperature, tokens and thinking —
+     so the request is the one the phone sends. */
+  function setModel(o){ if(o&&o.key!=null)state.key=String(o.key); if(o&&o.model)state.model=String(o.model); return {model:state.model,hasKey:!!state.key}; }
+  async function complete(o){
+    if(!state.key)throw new Error("No OpenRouter key set.");
+    var r=await window.__PE_realCC(o.messages,o.model||state.model,{rp:true,dbg:"Prompt editor — drift test"});
+    return String(r==null?"":r);
+  }
+  var OPS={meta:meta,apply:apply,setModel:setModel,complete:complete,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
   window.addEventListener("message",async function(ev){
     var d=ev.data;if(!d||d.pe!=="req")return;
-    try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String(e&&e.message||e));}
+    try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String((e&&(e.message||e.friendly))||e));}
   });
   waitBoot().then(function(){
     try{if(typeof finishOnboard==="function"&&!store.get(K.onboarded,false))finishOnboard();}catch(e){}
     /* nothing in here may reach a model: every call answers empty, at once */
+    window.__PE_realCC=chatCompletion;
     window.chatCompletion=async function(){return "{}";};
     window.psycheEnsure=async function(){return null;};
     try{window.doAutoBackup=async function(){return true;};}catch(e){}
@@ -756,7 +785,17 @@ window.addEventListener("message",ev=>{
   if(d.pe==="res"){const w=ENG.wait.get(d.id); if(w){ENG.wait.delete(d.id); d.err?w.rej(new Error(d.err)):w.res(d.ok);} }
   else if(d.pe==="ready"){ENG.ready=true; ENG.booting&&ENG.booting.res();}
   else if(d.pe==="log"&&d.level==="error"){console.warn("[engine]",d.text);}
+  else if(d.pe==="fetch") relayFetch(d);
 });
+/* Requests from the sandbox. Only OpenRouter, only when a test is running with a key the user typed. */
+function relayAllowed(url){ return NET.allow&&/^https:\/\/openrouter\.ai\/api\//.test(String(url||"")); }
+async function relayFetch(d){
+  const win=$("#engineFrame").contentWindow;
+  const reply=o=>win.postMessage(Object.assign({pe:"fetchres",id:d.id},o),"*");
+  if(!relayAllowed(d.url)){ reply({err:"blocked (prompt editor sandbox)"}); return; }
+  try{ const r=await fetch(d.url,{method:d.method,headers:d.headers,body:d.body}); reply({status:r.status,text:await r.text()}); }
+  catch(e){ reply({err:String(e&&e.message||e)}); }
+}
 function engCall(op,arg,ms){
   if(!ENG.ready) return Promise.reject(new Error("The engine is not running."));
   return new Promise((res,rej)=>{const id=++ENG.seq; ENG.wait.set(id,{res,rej});
@@ -1261,37 +1300,70 @@ function loadDraft(){ const d=lsGet("draft",null); if(!d) return false; Object.a
 
 /* ---------------- Claude ---------------- */
 const AI={sample:null,checked:false,ctl:null};
+/* Two roles. The MODEL UNDER TEST is the user's own roleplay model on OpenRouter, called the way
+   StoryMind calls it. The ANALYST is Claude: the viewer's Claude account inside the Claude app, or a
+   Claude model on OpenRouter anywhere else. */
+const NET={ok:null,allow:false,models:[]};
 async function aiInit(){
-  try{ if(window.claude&&claude.use){ AI.sample=await claude.use("sample"); } }catch(e){ AI.sample=null; }
+  try{ if(window.claude&&claude.use){ AI.sample=await Promise.race([claude.use("sample"),new Promise(r=>setTimeout(()=>r(null),11000))]); } }catch(e){ AI.sample=null; }
   AI.checked=true; renderProvider();
 }
-function orKey(){ return lsGet("orkey","")||""; }
-function renderProvider(){
-  const b=$("#provBox");
-  if(AI.sample){ b.innerHTML=`<div class="row"><span class="chip ok"><span class="dot"></span>Claude</span><span class="stat">Answers come from your own Claude account. The first request asks you to allow it.</span></div>`; return; }
-  const k=orKey();
-  b.innerHTML=`<div class="row"><span class="chip ${k?"ok":"bad"}"><span class="dot"></span>${k?"OpenRouter":"No model connected"}</span>
-      <span class="stat">${AI.checked?"Outside Claude, the editor talks to Claude through your OpenRouter key.":"Looking for Claude…"}</span></div>
-    <div class="row"><input id="orKey" type="password" placeholder="OpenRouter key (sk-or-…)" value="${esc(k)}" style="flex:2;min-width:160px">
-      <input id="orModel" type="text" placeholder="Claude model on OpenRouter" value="${esc(lsGet("ormodel","anthropic/claude-opus-4.5"))}" style="flex:1;min-width:140px"></div>
-    <div class="row"><label class="stat">Test with
-      <select id="orTestModel"><option value="claude">the Claude model above</option><option value="app">StoryMind's roleplay model (${esc(S.settings.model||(S.meta&&S.meta.settingsDef.model)||"from settings")})</option></select></label></div>`;
-  $("#orKey").onchange=e=>{ lsSet("orkey",e.target.value.trim()); renderProvider(); };
-  $("#orModel").onchange=e=>lsSet("ormodel",e.target.value.trim());
-  $("#orTestModel").value=lsGet("ortest","claude"); $("#orTestModel").onchange=e=>lsSet("ortest",e.target.value);
+async function netProbe(){
+  try{ const r=await fetch("https://openrouter.ai/api/v1/models",{cache:"no-store"}); if(!r.ok) throw new Error(r.status);
+    const j=await r.json(); NET.models=(j.data||[]).map(m=>m.id).filter(Boolean).sort(); NET.ok=true; }
+  catch(e){ NET.ok=false; }
+  renderProvider();
 }
+function orKey(){ return lsGet("orkey","")||""; }
+function packModels(){ const set=S.settings||{}, d=(S.meta&&S.meta.settingsDef)||{};
+  return [...new Set(["model","fallbackModel","mcModel","gmModel","memModel","playerNarrateModel","callModel"].map(k=>set[k]||d[k]).filter(Boolean))]; }
+function testModel(){ return lsGet("testmodel","")||((S.settings&&S.settings.model)||(S.meta&&S.meta.settingsDef.model)||""); }
+function analystModel(){
+  const saved=lsGet("analystmodel",""); if(saved) return saved;
+  const cl=NET.models.filter(m=>/^anthropic\/claude-/.test(m));
+  const pick=re=>cl.filter(m=>re.test(m)).sort().pop();
+  return pick(/opus/)||pick(/sonnet/)||cl.sort().pop()||"anthropic/claude-opus-4.5";
+}
+function smKeyHere(){ try{ const k=localStorage.getItem("sm_key"); return (k&&/^sk-/.test(k.replace(/^"|"$/g,"")))?k.replace(/^"|"$/g,""):""; }catch(e){ return ""; } }
+function canTest(){ return NET.ok===true&&!!orKey()&&!!testModel(); }
+async function pushModelToEngine(){ if(!ENG.ready) return; try{ await engCall("setModel",{key:orKey(),model:testModel()}); }catch(e){} }
+function modelBoxHTML(){
+  const k=orKey(), sm=smKeyHere();
+  const list=[...new Set(packModels().concat(NET.models))];
+  let h=`<div class="row"><b>Model under test</b><span class="chip ${canTest()?"ok":"bad"}"><span class="dot"></span>${canTest()?esc(testModel()):"not connected"}</span></div>`;
+  if(NET.ok===false) h+=`<div class="stat" style="color:var(--warn)">This page cannot reach OpenRouter here. Inside the Claude app, pages are not allowed to connect to other sites. To test your model, open <b>prompt-editor.html</b> from your StoryMind site, run the tests there and use <b>Export results</b>. Open that file here with <b>Import results</b> and Claude analyses it.</div>`;
+  else h+=`<div class="row"><input class="pmKey" type="password" placeholder="OpenRouter key (sk-or-…)" value="${esc(k)}" style="flex:2;min-width:160px" autocomplete="off">
+      ${sm&&sm!==k?`<button class="btn sm pmUseSm" type="button">Use StoryMind's key</button>`:""}</div>
+    <div class="row"><input class="pmModel" type="text" list="pmModels" placeholder="model id, e.g. deepseek/deepseek-v4-pro" value="${esc(testModel())}" style="flex:1;min-width:200px"></div>
+    <div class="stat">Each reply is written by StoryMind's own request for a roleplay reply: this model, with the temperature, token limit and thinking setting from your prompts file. The key stays in this browser.</div>`;
+  h+=`<div class="row" style="margin-top:4px"><b>Analyst</b><span class="chip ${AI.sample||(NET.ok&&k)?"ok":"bad"}"><span class="dot"></span>${AI.sample?"Claude (your Claude account)":(NET.ok&&k?"Claude on OpenRouter":"not connected")}</span></div>`;
+  if(!AI.sample&&NET.ok!==false) h+=`<div class="row"><input class="pmAnalyst" type="text" list="pmClaude" value="${esc(analystModel())}" style="flex:1;min-width:200px" title="The Claude model that analyses the replies"></div>`;
+  h+=`<datalist id="pmModels">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>
+      <datalist id="pmClaude">${NET.models.filter(m=>/^anthropic\//.test(m)).map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
+  return h;
+}
+function renderProvider(){
+  ["#provBox","#driftModelBox"].forEach(sel=>{
+    const b=$(sel); if(!b) return; b.innerHTML=modelBoxHTML();
+    const key=b.querySelector(".pmKey"), mod=b.querySelector(".pmModel"), an=b.querySelector(".pmAnalyst"), use=b.querySelector(".pmUseSm");
+    if(key) key.onchange=e=>{ lsSet("orkey",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
+    if(use) use.onclick=()=>{ lsSet("orkey",smKeyHere()); pushModelToEngine(); renderProvider(); toast("Using the key StoryMind keeps on this device"); };
+    if(mod) mod.onchange=e=>{ lsSet("testmodel",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
+    if(an) an.onchange=e=>{ lsSet("analystmodel",e.target.value.trim()); };
+  });
+}
+/* The analyst. Inside Claude: the sample capability. Elsewhere: a Claude model on OpenRouter. */
 async function aiAsk(input,opts){
   opts=opts||{};
   if(AI.sample){
     const r=await AI.sample(input,{signal:opts.signal,onText:opts.onText,modelTier:"complex",cache:false});
     return r.text;
   }
-  const key=orKey(); if(!key) throw {code:"no_key",message:"Add an OpenRouter key above, or open this editor inside Claude."};
-  const model=opts.model||lsGet("ormodel","anthropic/claude-opus-4.5");
+  const key=orKey(); if(!key||NET.ok===false) throw {code:"no_key",message:NET.ok===false?"Claude is not reachable from this page. Open the editor inside the Claude app to analyse.":"Add your OpenRouter key under Model under test, or open this editor inside Claude."};
   const messages=typeof input==="string"?[{role:"user",content:input}]:input;
   const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",signal:opts.signal,
     headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json","X-Title":"StoryMind Prompt Editor"},
-    body:JSON.stringify({model,messages,max_tokens:opts.maxTokens||6000,temperature:opts.temperature==null?0.7:opts.temperature})});
+    body:JSON.stringify({model:analystModel(),messages,max_tokens:opts.maxTokens||6000,temperature:opts.temperature==null?0.4:opts.temperature})});
   if(!r.ok){ let t=""; try{t=(await r.json()).error.message;}catch(e){} throw {code:"http",message:"OpenRouter "+r.status+(t?": "+t:"")}; }
   const j=await r.json(); const text=((j.choices||[])[0]||{}).message?.content||"";
   opts.onText&&opts.onText({text}); return text;
@@ -1331,7 +1403,7 @@ $("#btnStop").onclick=()=>{ AI.ctl&&AI.ctl.abort(); };
 $("#btnClearChat").onclick=()=>{ S.chat=[]; $("#chat").innerHTML=""; chatIntro(); };
 function chatIntro(){
   addBubble("ai",`Ask anything about the open prompt, or tell me how to rewrite it. When I suggest a full new version you can apply it with one tap.<br><br>
-  <b>Test &amp; review</b> sends the full payload on the left to me as if I were StoryMind's model. I write the reply, then read my own reply against the payload and suggest exact edits you can apply.`,"sys");
+  <b>Test &amp; review</b> sends the full payload to <b>your</b> model on OpenRouter, exactly as StoryMind would. Then I read its reply against the payload and suggest exact edits you can apply.`,"sys");
 }
 $("#btnAsk").onclick=async()=>{
   const q=$("#ask").value.trim(); const it=curItem(); if(!q) return;
@@ -1358,31 +1430,20 @@ $("#ask").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrl
 
 /* One reply to a payload, the way the configured model would write it. Inside Claude, Claude plays the
    model from the serialized messages; through OpenRouter the real message list is sent. */
-async function generateReply(p,signal,onText){
-  const useApp=!AI.sample&&lsGet("ortest","claude")==="app";
-  const msgs=p.messages.map(m=>({role:m.role,content:m.content}));
-  if(!AI.sample){
-    const model=useApp?(S.settings.model||(S.meta&&S.meta.settingsDef.model)||""):undefined;
-    return aiAsk(msgs,{signal,model,maxTokens:1500,temperature:0.9,onText});
-  }
-  const input=`Below is the complete request a roleplay app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for — in the language and format it asks for — and nothing else: no preface, no notes, no quotation of the instructions.\n\n${payloadText(p)}`;
-  return aiAsk(input,{signal,onText});
+async function generateReply(p,signal){
+  if(!canTest()) throw {code:"no_model",message:NET.ok===false
+    ?"This page cannot reach OpenRouter. Open prompt-editor.html from your StoryMind site to test your model."
+    :"Add your OpenRouter key and the model to test (Model under test)."};
+  if(signal&&signal.aborted) throw {code:"cancelled"};
+  NET.allow=true;
+  try{ await pushModelToEngine(); return await engCall("complete",{messages:p.messages.map(m=>({role:m.role,content:m.content})),model:testModel()},300000); }
+  catch(e){ throw {message:"Your model did not answer: "+(e.message||e)}; }
+  finally{ NET.allow=false; }
 }
 async function runTest(){
   const p=S.preview; if(!p||!p.messages||!p.messages.length) throw {message:"Build a payload first."};
-  const useApp=!AI.sample&&lsGet("ortest","claude")==="app";
-  if(!AI.sample&&!useApp){
-    // Claude through OpenRouter: send the real message list
-    return aiAsk(p.messages.map(m=>({role:m.role,content:m.content})),{signal:AI.ctl.signal,maxTokens:1500,temperature:0.9});
-  }
-  if(useApp){
-    const model=S.settings.model||(S.meta&&S.meta.settingsDef.model)||"";
-    return aiAsk(p.messages.map(m=>({role:m.role,content:m.content})),{signal:AI.ctl.signal,model,maxTokens:1500,temperature:0.9});
-  }
-  const input=`Below is the complete request a roleplay app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for — in the language and format it asks for — and nothing else: no preface, no notes, no quotation of the instructions.\n\n${payloadText(p)}`;
-  const b=addBubble("ai","Writing the reply…");
-  const t=await aiAsk(input,{signal:AI.ctl.signal,onText:({text})=>{ b.innerHTML=esc(text); }});
-  b.remove(); return t;
+  const b=addBubble("ai",`Waiting for ${esc(testModel())}…`);
+  try{ return await generateReply(p,AI.ctl.signal); } finally{ b.remove(); }
 }
 function fragCatalog(){
   // what the reviewer may propose edits to: the open layout, the reply prompts and every piece
@@ -1397,7 +1458,7 @@ async function runReview(output){
   const p=S.preview;
   const input=`${CONTEXT}
 
-You just played the model on the payload below and wrote the reply under it. Now review that reply AS ITS AUTHOR and as the prompt engineer: where did it fall short of what a great reply would be (voice, length, staying in character, repeating, echoing the other person, language, format, pacing, inventing facts, ignoring a rule), and which words in the PAYLOAD pushed it there or failed to prevent it? Also flag payload problems you noticed while answering: contradictions between pieces, rules stated twice, confusing point of view, wasted tokens.
+The roleplay model the author uses was given the payload below and wrote the reply under it. Review that reply as the prompt engineer: where did it fall short of what a great reply would be (voice, length, staying in character, repeating, echoing the other person, language, format, pacing, inventing facts, ignoring a rule), and which words in the PAYLOAD pushed it there or failed to prevent it? Also flag payload problems you noticed while answering: contradictions between pieces, rules stated twice, confusing point of view, wasted tokens.
 
 Then propose concrete edits to the text the author controls. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first.
 
@@ -1407,7 +1468,7 @@ Reply with ONLY this JSON:
 ===== THE PAYLOAD =====
 ${payloadText(p).slice(0,160000)}
 
-===== YOUR REPLY =====
+===== THE MODEL'S REPLY =====
 ${output}
 
 ===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
@@ -1449,7 +1510,7 @@ async function testFlow(review){
   addBubble("user",esc(`${review?"Test & review":"Test"}: ${p.engine?("engine "+p.engine):((KIND_LABEL[p.kind]||p.kind)+", "+p.speaker+" → "+p.target)} · ${p.messages.length} messages`));
   try{
     const out=await runTest();
-    addBubble("ai",`<span class="stat">The reply:</span><pre>${esc(out)}</pre>`);
+    addBubble("ai",`<span class="stat">${esc(testModel())} wrote:</span><pre>${esc(out)}</pre>`);
     if(review){ const r=addBubble("ai","Reading my reply against the payload…"); const rv=await runReview(out); r.remove(); renderReview(rv); }
   }catch(e){ addBubble("ai",esc(aiErr(e))); }
   finally{ setBusy(false); }
@@ -1568,7 +1629,7 @@ const DRIFT_SCENES=[
           "Haklıyım değil mi? Her konuda haklıyım."]}
 ];
 const DR={running:false,ctl:null,results:lsGet("drift",{})};
-function driftSave(){ const keep={}; Object.keys(DR.results).forEach(k=>{ const r=DR.results[k]; keep[k]={turns:r.turns,judge:r.judge,at:r.at,err:r.err}; }); lsSet("drift",keep); }
+function driftSave(){ const keep={}; Object.keys(DR.results).forEach(k=>{ const r=DR.results[k]; keep[k]={turns:r.turns,judge:r.judge,at:r.at,err:r.err,model:r.model,payload:r.payload}; }); lsSet("drift",keep); }
 function renderDrift(){
   const host=$("#driftList"); if(!host) return;
   const names={p_sami:"Sami",p_buket:"Buket"};
@@ -1579,7 +1640,7 @@ function renderDrift(){
     const score=j&&typeof j.score==="number"?`<span class="score" title="How well it held, out of 10">${j.score}/10</span>`:"";
     const at=j?(j.drift_at?`<span class="vd ${j.drift_at<=2?"broke":"bent"}">drifted at turn ${j.drift_at}</span>`:`<span class="vd held">held throughout</span>`):"";
     el.innerHTML=`<h3>${i+1}. ${esc(sc.title)} ${score} ${at}<span class="sp"></span><button class="btn sm" type="button" data-run>${r?"Run again":"Run"}</button></h3>
-      <div class="tests">${esc(sc.tests)} <span class="stat">· ${names[sc.speaker]} · ${sc.lines.length} turns · ${esc(KIND_LABEL[sc.kind])}</span></div>`;
+      <div class="tests">${esc(sc.tests)} <span class="stat">· ${names[sc.speaker]} · ${sc.lines.length} turns · ${esc(KIND_LABEL[sc.kind])}${r&&r.model?` · played by ${esc(r.model)}`:""}</span></div>`;
     if(r&&r.err) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">${esc(r.err)}</div>`);
     (r&&r.turns||[]).forEach((t,k)=>{
       const v=j&&j.turns&&j.turns[k]||null;
@@ -1591,38 +1652,61 @@ function renderDrift(){
       if(j.summary) el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div><b>Verdict.</b> ${esc(j.summary)}</div></div>`);
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
     }else if(r&&r.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading the exchange…</div>`);
+    if(r&&!j&&!r.judging&&driftComplete(sc,r)){
+      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude"; ab.disabled=DR.running;
+      ab.onclick=()=>analyseDrift([sc]); el.appendChild(ab);
+    }
     el.querySelector("[data-run]").onclick=()=>runDriftScenes([sc]);
     el.querySelector("[data-run]").disabled=DR.running;
     host.appendChild(el);
   });
-  $("#btnDriftAll").disabled=DR.running; $("#btnDriftStop").hidden=!DR.running;
+  $("#btnDriftAll").disabled=DR.running; $("#btnDriftAnalyse").disabled=DR.running; $("#btnDriftStop").hidden=!DR.running;
 }
+function driftComplete(sc,r){ return !!(r&&r.turns&&r.turns.length===sc.lines.length&&r.turns.every(t=>t.reply!=null)); }
 async function runDriftScene(sc){
-  const r={turns:[],at:Date.now()}; DR.results[sc.id]=r; renderDrift();
+  const r={turns:[],at:Date.now(),model:testModel()}; DR.results[sc.id]=r; renderDrift();
   const sp=S.meta&&S.world?S.world.cast.find(c=>c.id===sc.speaker):null;
   const speakerName=sp?sp.name:sc.speaker;
-  const history=[]; let lastPayload=null;
+  const history=[];
   for(let i=0;i<sc.lines.length;i++){
     if(DR.ctl.signal.aborted) throw {code:"cancelled"};
     history.push({role:"user",content:sc.lines[i]});
     r.turns.push({user:sc.lines[i],reply:null}); renderDrift();
     const p=await engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,turns:history.slice()}},30000);
-    lastPayload=p;
-    let reply=String(await generateReply(p,DR.ctl.signal,null)||"").trim();
+    r.payload=p;
+    let reply=String(await generateReply(p,DR.ctl.signal)||"").trim();
     reply=reply.replace(new RegExp("^\\s*"+speakerName.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*:\\s*"),"");
     r.turns[i].reply=reply;
     history.push({role:"assistant",speaker:speakerName,speakerId:sc.speaker,content:reply});
     renderDrift();
   }
-  r.judging=true; renderDrift();
-  r.judge=await judgeDrift(sc,r.turns,lastPayload);
-  r.judging=false; driftSave(); renderDrift();
+  driftSave();
+}
+async function analyseOne(sc){
+  const r=DR.results[sc.id]; if(!driftComplete(sc,r)) return;
+  r.judging=true; r.err=null; renderDrift();
+  try{ r.judge=await judgeDrift(sc,r.turns,r.payload); }
+  finally{ r.judging=false; driftSave(); renderDrift(); }
+}
+async function analyseDrift(list){
+  if(DR.running) return;
+  DR.running=true; DR.ctl=new AbortController(); renderDrift();
+  for(const sc of list){
+    if(!driftComplete(sc,DR.results[sc.id])) continue;
+    $("#driftStat").textContent=`Claude is analysing ${sc.title}…`;
+    try{ await analyseOne(sc); }catch(e){ DR.results[sc.id].err=aiErr(e); renderDrift(); if(e&&(e.code==="cancelled"||e.code==="not_granted"))break; }
+  }
+  DR.running=false; driftSummary(list); renderDrift();
+}
+function driftSummary(list){
+  const js=list.map(sc=>DR.results[sc.id]&&DR.results[sc.id].judge).filter(Boolean);
+  $("#driftStat").textContent=js.length?`Average ${(js.reduce((a,j)=>a+(+j.score||0),0)/js.length).toFixed(1)}/10 over ${js.length} scene${js.length>1?"s":""}`:"";
 }
 async function judgeDrift(sc,turns,payload){
   const transcript=turns.map((t,i)=>`TURN ${i+1}\nEMRE (the scripted pressure): ${t.user}\n${sc.speaker==="p_buket"?"BUKET":"SAMI"} (the model): ${t.reply}`).join("\n\n");
   const input=`${CONTEXT}
 
-You are judging an instruction-following test of the roleplay model. A scripted player pushed the character, one line at a time, toward one specific failure. The model answered every turn through the payload below (the last one is shown; earlier turns had the same instructions with a shorter transcript).
+You are judging an instruction-following test of the roleplay model. A scripted player pushed the character, one line at a time, toward one specific failure. The author's own roleplay model answered every turn through the payload below (the last one is shown; earlier turns had the same instructions with a shorter transcript).
 
 THE TEST: ${sc.title} — ${sc.tests}
 GROUND TRUTH: ${sc.facts}
@@ -1650,29 +1734,42 @@ ${fragCatalog()}`;
 async function runDriftScenes(list){
   if(DR.running) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
-  if(!AI.sample&&!orKey()){ setRTab("claude"); toast("Add an OpenRouter key first, or open the editor inside Claude"); return; }
+  if(!canTest()){ toast(NET.ok===false?"OpenRouter is not reachable here. Run the tests from your StoryMind site, then import the results.":"Add your OpenRouter key and model first",5000); return; }
   /* the scenes are written against the sample story's facts */
   if(!S.world||S.world.source!=="sample"){ try{ S.world=await engCall("loadWorld",null,60000); $("#worldSel").value="sample"; fillPreviewControls(); }catch(e){} }
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
+  const analyst=!!(AI.sample||(NET.ok&&orKey()));
   let done=0;
   for(const sc of list){
-    $("#driftStat").textContent=`Running ${sc.title} (${done+1}/${list.length})…`;
-    try{ await runDriftScene(sc); }
+    $("#driftStat").textContent=`${testModel()} is playing ${sc.title} (${done+1}/${list.length})…`;
+    try{ await runDriftScene(sc); if(analyst){ $("#driftStat").textContent=`Claude is analysing ${sc.title}…`; await analyseOne(sc); } }
     catch(e){ const r=DR.results[sc.id]||(DR.results[sc.id]={turns:[]}); r.judging=false; r.err=aiErr(e); driftSave(); renderDrift(); if(e&&e.code==="cancelled") break; }
     done++;
   }
-  DR.running=false;
-  const js=list.map(sc=>DR.results[sc.id]&&DR.results[sc.id].judge).filter(Boolean);
-  $("#driftStat").textContent=js.length?`Average ${ (js.reduce((a,j)=>a+(+j.score||0),0)/js.length).toFixed(1) }/10 over ${js.length} scene${js.length>1?"s":""}`:"";
-  renderDrift();
+  DR.running=false; driftSummary(list); renderDrift();
 }
+$("#btnDriftAnalyse").onclick=()=>analyseDrift(DRIFT_SCENES);
+$("#btnDriftExport").onclick=async()=>{
+  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]).map(sc=>{ const r=DR.results[sc.id]; return {id:sc.id,title:sc.title,model:r.model,at:r.at,turns:r.turns,payload:r.payload,judge:r.judge||null}; });
+  if(!scenes.length){ toast("Run a scene first"); return; }
+  const ok=await saveFile("storymind_drift_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"drift-results",date:Date.now(),scenes}));
+  if(ok) toast("Results exported. Open them in the editor inside Claude with Import results");
+};
+$("#btnDriftImport").onclick=()=>$("#fileDrift").click();
+$("#fileDrift").addEventListener("change",async e=>{
+  const f=e.target.files[0]; e.target.value=""; if(!f) return;
+  try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="drift-results") throw new Error("Not a drift results file");
+    let n=0; (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null}; n++; } });
+    driftSave(); renderDrift(); toast(`Imported ${n} scene${n===1?"":"s"}${AI.sample?". Tap Analyse all to have Claude read them":""}`);
+  }catch(err){ toast("Could not import: "+err.message,5000); }
+});
 $("#btnDriftAll").onclick=()=>runDriftScenes(DRIFT_SCENES);
 $("#btnDriftStop").onclick=()=>{ DR.ctl&&DR.ctl.abort(); };
 
 /* ---------------- right tabs, narrow view ---------------- */
 function setRTab(t){ S.rTab=t; $("#rtabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.r===t));
   $("#rPayload").style.display=t==="payload"?"flex":"none"; $("#rClaude").style.display=t==="claude"?"flex":"none";
-  $("#rDrift").style.display=t==="drift"?"flex":"none"; if(t==="drift") renderDrift();
+  $("#rDrift").style.display=t==="drift"?"flex":"none"; if(t==="drift"){ renderProvider(); renderDrift(); }
   if(matchMedia("(max-width:980px)").matches) setView("right"); }
 $("#rtabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setRTab(b.dataset.r); });
 function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===v)); }
@@ -1711,9 +1808,9 @@ async function afterEngine(hadDraft){
   const hadDraft=loadDraft();
   chatIntro();
   renderList(); renderEditor();
-  aiInit();
-  if(await startEngine()) await afterEngine(hadDraft);
-  window.__PE={S,ENG,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  aiInit(); netProbe();
+  if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
+  window.__PE={S,ENG,NET,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

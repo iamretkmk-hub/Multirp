@@ -73,18 +73,33 @@ The shared library pieces (`scene`, `exchange`, `memories`…) are filled from t
   heading (`LY_ORDER`), whose blank value means "remove this heading".
 - Only `PROMPT_PACK_KEYS` settings are written, and every value is a string. That is the import allowlist.
 
-## Claude
+## Your model, and Claude as the analyst
 
-Inside the Claude app the page uses the `sample` capability (the viewer's own Claude). Opened anywhere
-else, it uses an OpenRouter key typed into the page. That key is kept in this page's localStorage
-(`pe_v1_orkey`) and is never read from StoryMind.
+Two roles, kept apart:
+
+- **Model under test**: the player's own roleplay model on OpenRouter. The key and the model are typed into
+  the page. The model defaults to `model` from the prompts file, and the list comes from OpenRouter's model
+  index plus every model the file names. On the StoryMind site itself (same origin), **Use StoryMind's key**
+  copies the key StoryMind keeps on this device. The reply is written by **StoryMind's own
+  `chatCompletion`** inside the sandbox with `rp:true`, so the request carries the roleplay bucket's
+  temperature, token limit and thinking setting exactly as the phone sends it. The sandbox's `fetch` is
+  relayed to the editor, which sends it only to `https://openrouter.ai/api/` and only while a test is
+  sending (`relayAllowed`). Everything else is refused.
+- **Analyst**: Claude. Inside the Claude app it is the `sample` capability (the viewer's own Claude).
+  Anywhere else it is a Claude model on OpenRouter with the same key (the newest Opus in the index by
+  default, changeable).
+
+(!) **Inside the Claude app the page cannot reach OpenRouter.** Artifact pages may not connect to other
+sites. The model box says so there. The way through: run the tests from `prompt-editor.html` on the
+StoryMind site, **Export results**, and open the file in the editor inside Claude with **Import results**,
+where **Analyse all** has Claude read them. The exported file carries every turn and the last payload of
+each scene, so it can also be handed to Claude in a conversation.
 
 - **Ask Claude** sends the open item (its text, its purpose and the shipped default) and optionally the
   full payload. A reply with a ```` ```prompt ```` block gets **See the change** / **Use this version**.
-- **Test & review this payload**: Claude first answers the payload as the roleplay model would. Through
-  OpenRouter the real message list is sent, and the "Test with" switch can use StoryMind's own roleplay
-  model. Claude then reviews its own reply against the payload and returns find/replace edits on named
-  items (`frag:` / `prompt:` / `tpl:`). Each edit applies only if its `find` text is still present.
+- **Test & review this payload**: your model answers the built payload, then Claude reviews the reply
+  against it and returns find/replace edits on named items (`frag:` / `prompt:` / `tpl:`). Each edit
+  applies only if its `find` text is still present.
 
 ## Drift tests
 
@@ -105,13 +120,13 @@ Buket, the woman of the sample cast, and is written against facts the sample fix
 | Staying in character | OOC requests, "you are an AI", an English poem |
 | Agency | confessing, handing over a PIN, flattering on command, agreeing with everything |
 
-Each line is one turn. The editor builds the real payload for that turn (the bridge's `build` takes a
+Each line is one turn, answered by **your model**. The editor builds the real payload for that turn (the bridge's `build` takes a
 `scene`: its place and cast, an opening line, and the exchange so far, including the model's own earlier
 replies), gets the model's reply, and feeds it into the next turn. Claude then judges the transcript against
 the scene's ground truth and pass line: each reply **held**, **bent** or **broke**, the turn it first
 drifted, a score out of 10, and find/replace edits on named items that can be applied in place. A full run
-is 45 replies and 10 judgements. Through OpenRouter, "Test with" can make StoryMind's own roleplay model
-play the scenes, with Claude as the judge.
+is 45 replies from your model and 10 analyses by Claude. Results are kept in the browser and can be
+exported and imported (see above).
 
 ## Making a pack the shipped defaults
 

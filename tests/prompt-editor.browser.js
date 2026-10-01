@@ -32,6 +32,18 @@ const ROOT=path.resolve(__dirname,'..');
   const b=await chromium.launch({executablePath:BIN});
   const ctx=await b.newContext({viewport:{width:1300,height:900}});
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());
+  /* OpenRouter, stood in for: the model list the editor reads at start, and a chat endpoint whose
+     answer each section sets. Every chat request is recorded with its headers and body. */
+  const OR={calls:[],answer:()=>'"Tamam."'};
+  await ctx.route(/openrouter\.ai/,async r=>{
+    const url=r.request().url();
+    if(/\/models/.test(url)) return r.fulfill({status:200,contentType:"application/json",
+      body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"}]})});
+    const body=JSON.parse(r.request().postData()||"{}");
+    OR.calls.push({auth:r.request().headers()["authorization"]||"",body});
+    const content=OR.answer(body);
+    await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{role:"assistant",content},finish_reason:"stop"}]})});
+  });
   const pg=await ctx.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   let pass=0,fail=0;
@@ -134,17 +146,14 @@ const ROOT=path.resolve(__dirname,'..');
     ok("gmJudge, reset in the editor, overwrites the phone's copy with the default", imp.gm);
     await app.close();
 
-    console.log("\n[7 — Test & review applies the reviewer's edit]");
-    await ctx.route(/openrouter\.ai/,async r=>{
-      const body=JSON.parse(r.request().postData()||"{}");
-      const last=String((body.messages||[]).slice(-1)[0].content||"");
-      const content=/Reply with ONLY this JSON/.test(last)
+    console.log("\n[7 — Test & review: YOUR model writes the reply, Claude reviews it]");
+    OR.calls=[];
+    OR.answer=body=>{ const last=String((body.messages||[]).slice(-1)[0].content||"");
+      return /Reply with ONLY this JSON/.test(last)
         ? JSON.stringify({verdict:"Too long, and it repeated his question.",problems:[{issue:"echo",evidence:"Dört bin mi?"}],
             edits:[{item:"frag:style_header",find:"PE-TEST-MARKER",replace:"PE-REVIEWED",why:"clearer"}]})
-        : '"Dört bin mi? Abi otur bir çay iç önce."';
-      await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{content}}]})});
-    });
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_orkey",JSON.stringify("sk-or-test")); });
+        : '"Dört bin mi? Abi otur bir çay iç önce."'; };
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_orkey",JSON.stringify("sk-or-test")); localStorage.setItem("pe_v1_testmodel",JSON.stringify("deepseek/deepseek-v4-pro")); });
     await pg.evaluate(()=>{ document.querySelector("#btnRebuild").click(); });
     await pg.waitForTimeout(800);
     await pg.click('#rtabs button[data-r="claude"]');
@@ -153,34 +162,56 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.click('.chg [data-a="apply"]');
     const rv=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("frag:style_header")));
     ok("the reviewer's edit is applied to the named piece", /PE-REVIEWED/.test(rv)&&!/PE-TEST-MARKER/.test(rv), rv.slice(-120));
+    const gen=OR.calls.find(c=>c.body.model==="deepseek/deepseek-v4-pro"), rev=OR.calls.find(c=>/^anthropic\//.test(c.body.model||""));
+    ok("the reply came from the model under test, through StoryMind's own request", !!gen&&gen.auth==="Bearer sk-or-test"
+       &&typeof gen.body.temperature==="number"&&typeof gen.body.max_tokens==="number"&&Array.isArray(gen.body.messages)&&gen.body.messages.length>3,
+       JSON.stringify(OR.calls.map(c=>({m:c.body.model,t:c.body.temperature,mx:c.body.max_tokens,n:(c.body.messages||[]).length}))));
+    ok("the review was written by a Claude model", !!rev&&/Reply with ONLY this JSON/.test(JSON.stringify(rev.body.messages)), JSON.stringify(OR.calls.map(c=>c.body.model)));
+    ok("the sandbox can reach nothing but OpenRouter, and only while a test is sending", await pg.evaluate(()=>{
+      const A=__PE.relayAllowed, was=__PE.NET.allow;
+      __PE.NET.allow=false; const idle=A("https://openrouter.ai/api/v1/chat/completions");
+      __PE.NET.allow=true; const r={idle,or:A("https://openrouter.ai/api/v1/chat/completions"),other:A("https://evil.example/api"),
+        lookalike:A("https://openrouter.ai.evil.example/api/v1/x"),plain:A("http://openrouter.ai/api/v1/x")};
+      __PE.NET.allow=was; return !r.idle&&r.or&&!r.other&&!r.lookalike&&!r.plain; }));
 
     console.log("\n[9 — drift tests: ten scripted scenes, every turn through the real payload]");
-    const seen=[];
-    await ctx.unroute(/openrouter\.ai/);
-    await ctx.route(/openrouter\.ai/,async r=>{
-      const body=JSON.parse(r.request().postData()||"{}"); const msgs=body.messages||[];
-      const last=String((msgs.slice(-1)[0]||{}).content||"");
-      let content;
+    const seen=[]; OR.calls=[];
+    OR.answer=body=>{ const msgs=body.messages||[]; const last=String((msgs.slice(-1)[0]||{}).content||"");
       if(/instruction-following test/.test(last)){
         const n=(last.match(/^TURN \d+$/gm)||[]).length;
-        content=JSON.stringify({turns:Array.from({length:n},(_,i)=>({verdict:i===2?"bent":"held",note:"t"+(i+1)})),drift_at:3,score:7,
+        return JSON.stringify({turns:Array.from({length:n},(_,i)=>({verdict:i===2?"bent":"held",note:"t"+(i+1)})),drift_at:3,score:7,
           summary:"Held, then gave ground on turn 3.",edits:[{item:"frag:style_header",find:"PE-REVIEWED",replace:"PE-DRIFT-FIX",why:"t"}]});
-      }else{ seen.push(msgs.map(m=>m.content).join("\n")); content='"Hatırlamıyorum abi." *Çakmağı çeviriyor.*'; }
-      await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{content}}]})});
-    });
+      }
+      seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
     await pg.click('#rtabs button[data-r="drift"]');
     const nScenes=await pg.evaluate(()=>__PE.DRIFT_SCENES.length);
     ok("there are ten scenes", nScenes===10, nScenes);
     await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
     const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
-    ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply)), JSON.stringify(d.r&&d.r.turns));
+    ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns));
     ok("each turn was built from the real payload, with the earlier replies in the transcript",
-       seen.length===5&&/Antakya/.test(seen[0])&&/Selin/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum abi/g)||[]).length>=4, seen.map(x=>x.length).join(","));
+       seen.length===5&&/Antakya/.test(seen[0])&&/Selin/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum\./g)||[]).length>=4, seen.map(x=>x.length).join(","));
     ok("the scene's own place is in the payload", /Sami & Buket's flat/.test(seen[0]), seen[0].slice(0,300));
     ok("every scene is played by a woman character", await pg.evaluate(()=>__PE.DRIFT_SCENES.every(sc=>sc.speaker==="p_buket")));
+    ok("all five turns went to the model under test, and the analysis to Claude",
+       OR.calls.filter(c=>c.body.model==="deepseek/deepseek-v4-pro").length===5&&OR.calls.filter(c=>/^anthropic\//.test(c.body.model||"")).length===1,
+       JSON.stringify(OR.calls.map(c=>c.body.model)));
     ok("the judge's verdicts and the drift turn are shown", /drifted at turn 3/.test(d.html)&&/7\/10/.test(d.html)&&/bent/.test(d.html), d.html.slice(0,400));
     await pg.click('#dr_past .chg [data-a="apply"]');
     ok("its edit applies to the named piece", await pg.evaluate(()=>/PE-DRIFT-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header")))));
+
+    console.log("\n[9b — results travel: export here, import and analyse elsewhere]");
+    const exported=await pg.evaluate(()=>{ const r=__PE.DR.results.past; return JSON.stringify({app:"StoryMind",kind:"drift-results",date:Date.now(),
+      scenes:[{id:"past",title:"x",model:r.model,turns:r.turns,payload:r.payload,judge:null}]}); });
+    await pg.evaluate(()=>{ __PE.DR.results={}; });
+    await pg.setInputFiles("#fileDrift",{name:"drift.json",mimeType:"application/json",buffer:Buffer.from(exported)});
+    await pg.waitForTimeout(400);
+    const imp9=await pg.evaluate(()=>({n:(__PE.DR.results.past||{}).turns&&__PE.DR.results.past.turns.length,btn:!!document.querySelector("#dr_past button.pri")}));
+    ok("an exported run imports, with an Analyse button", imp9.n===5&&imp9.btn, JSON.stringify(imp9));
+    OR.calls=[];
+    await pg.evaluate(()=>__PE.analyseDrift([__PE.DRIFT_SCENES[0]]));
+    ok("Analyse sends it to Claude only, never back to the model", OR.calls.length===1&&/^anthropic\//.test(OR.calls[0].body.model)
+       &&await pg.evaluate(()=>!!__PE.DR.results.past.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above

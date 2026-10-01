@@ -8,6 +8,7 @@
      5  the downloaded file is accepted by StoryMind's own importPromptsFile, and carries the edit
      6  a reset prompt is written out in full (the app's import keeps any key a file leaves out)
      7  Test & review: the reviewer's edit is applied by find/replace to the right item
+     8  served as Claude serves it (editor = index.html, StoryMind = storymind.html), the engine starts
      0  prompt-editor-start.json (the latest prompts) opens on first load; a draft with edits is kept
    Run: node tests/prompt-editor.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
@@ -16,8 +17,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
 const ROOT=path.resolve(__dirname,'..');
 (async()=>{
   /* the editor fetches index.html beside it, so it is served over http, not file:// */
+  /* /art/… is the layout Claude serves the editor with: the editor IS index.html there, and StoryMind
+     sits beside it as storymind.html. */
+  const ART={"index.html":"prompt-editor.html","storymind.html":"index.html","prompt-editor-start.json":"prompt-editor-start.json"};
   const srv=http.createServer((q,r)=>{
-    const f=path.join(ROOT,decodeURIComponent(q.url.split('?')[0]).replace(/^\/+/,'')||'index.html');
+    let rel=decodeURIComponent(q.url.split('?')[0]).replace(/^\/+/,'');
+    if(rel.startsWith('art/')){ rel=ART[rel.slice(4)]||'__none__'; }
+    const f=path.join(ROOT,rel||'index.html');
     if(!f.startsWith(ROOT)||!fs.existsSync(f)||fs.statSync(f).isDirectory()){ r.writeHead(404); r.end(); return; }
     r.writeHead(200,{'Content-Type':f.endsWith('.html')?'text/html; charset=utf-8':'application/octet-stream'}); fs.createReadStream(f).pipe(r);
   });
@@ -131,6 +137,20 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.click('.chg [data-a="apply"]');
     const rv=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("frag:style_header")));
     ok("the reviewer's edit is applied to the named piece", /PE-REVIEWED/.test(rv)&&!/PE-TEST-MARKER/.test(rv), rv.slice(-120));
+
+    console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
+    const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above
+    await actx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());
+    const art=await actx.newPage(); const artErrs=[]; art.on('pageerror',e=>artErrs.push(e.message));
+    await art.goto(base+'art/index.html');
+    const booted=await art.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000}).then(()=>true,()=>false);
+    const a=await art.evaluate(()=>({chip:document.querySelector("#engTxt").textContent,n:window.__PE&&window.__PE.S.preview&&window.__PE.S.preview.messages&&window.__PE.S.preview.messages.length,
+      file:window.__PE&&window.__PE.S.fileName}));
+    ok("the engine starts from storymind.html, not from the editor itself", booted&&/v\d/.test(a.chip)&&a.n>2, JSON.stringify(a));
+    ok("and the bundled latest prompts are open", /^Latest prompts/.test(a.file||""), a.file);
+    ok("the editor's own source is never taken for StoryMind", await art.evaluate(async()=>{ const t=await (await fetch("index.html")).text(); return !isAppSource(t); }));
+    errs.push(...artErrs);
+    await actx.close();
 
     ok("no page errors", errs.length===0, errs.join("\n"));
   }catch(e){ fail++; console.log("  FAIL  crashed: "+(e.stack||e)); }

@@ -1,0 +1,79 @@
+# The Prompt Editor (`prompt-editor.html`)
+
+A separate page, next to `index.html`, for rewriting StoryMind's prompts away from the phone UI.
+
+## The loop
+
+1. In StoryMind: **Settings › Backup › Export prompts**. That gives `storymind_prompts_….json`.
+2. Open `prompt-editor.html` and use **Open prompt export** to load that file. A full backup works too:
+   the prompts are lifted out of its `localStorage` copy.
+3. Edit. Every registry prompt, every reply piece (`BLOCK_TPL_DEFAULTS`), every payload layout (the five
+   reply kinds and every `eng:` engine layout) and the model/switch settings are in the list on the left.
+   The dot beside each item tells you its state: violet means your version differs from the shipped
+   default, and pink means you edited it in this session.
+4. **Download for StoryMind** writes a file of the same shape. In StoryMind: **Settings › Backup › Import
+   prompts**. The app takes a safety snapshot first.
+
+Edits are kept in the browser as a draft until another file is opened.
+
+## The full payload is the app's own
+
+The editor does not reimplement payload assembly. It fetches `index.html`, boots the whole app in a
+`sandbox="allow-scripts"` iframe (an opaque origin, so it **cannot** reach the real app's
+localStorage or IndexedDB), and gives it:
+
+- an in-memory `localStorage`/`sessionStorage` and a small in-memory IndexedDB (the shim in `#shimSrc`);
+- no network (`fetch`, XHR and WebSocket throw), `chatCompletion` answering `"{}"`, `psycheEnsure` a no-op;
+- a bridge (`#bridgeSrc`) that applies the editor's working pack to `state` live and builds payloads
+  through the same calls the reply paths make: `buildSystemPromptBlocks` / `buildCharPromptBlocks`,
+  `buildTailBlocks`, `castHistory` + `tagLastForTarget`, `ptBuildMessages`; `buildTextPayload` for the
+  text kind; `epMessages` for engines.
+
+So a new block, fragment or layout in `index.html` shows up in the editor with no change to the editor.
+The defaults it compares against are read from the running engine (`PROMPT_REGISTRY[].def()`,
+`BLOCK_TPL_DEFAULTS`, `ptDefaultTemplate`, `epDefaultTemplate`).
+
+Memory retrieval is replaced by the speaker's own memories (newest six fresh, newest four condensed),
+because the real retrieval costs a model call. Drives (`psycheEnsure`) are not written for the same
+reason, so the drives block is empty unless the story data carries `_psyche`.
+
+**Story data.** A sample world (Isdemir Lojmanları: Sami, Buket and Berker Özüçak, player Emre, an
+evening scene about the money Sami owes) is built in the sandbox at boot. **Use my own story…** loads a
+roleplay export, a universe export or a full backup instead. Prompt overrides stored inside a universe
+(`u.prompts`, `u.blockTpls`) are cleared in the sandbox, so the preview shows the editor's prompts.
+
+Engine payloads show their own call-site data as `‹labels›`, because only the call site can produce it.
+The shared library pieces (`scene`, `exchange`, `memories`…) are filled from the story.
+
+## (!) Export rules
+
+- `importPromptsFile` only writes the keys a file carries. A key left out keeps whatever the phone already
+  has. So every prompt that was in the opened file, or that was touched, is written out **in full**,
+  including one reset to the default. Otherwise "reset" would silently not reach the phone.
+- An empty prompt means "the default" (that is how `up()` reads it), and the editor treats it the same way.
+- `blockTpls` and `payloadTemplates` are written whole, as JSON strings. A piece equal to its default is
+  dropped from the object, the same "keep lean" rule the app's own editor uses. The exception is a layout
+  heading (`LY_ORDER`), whose blank value means "remove this heading".
+- Only `PROMPT_PACK_KEYS` settings are written, and every value is a string. That is the import allowlist.
+
+## Claude
+
+Inside the Claude app the page uses the `sample` capability (the viewer's own Claude). Opened anywhere
+else, it uses an OpenRouter key typed into the page. That key is kept in this page's localStorage
+(`pe_v1_orkey`) and is never read from StoryMind.
+
+- **Ask Claude** sends the open item (its text, its purpose and the shipped default) and optionally the
+  full payload. A reply with a ```` ```prompt ```` block gets **See the change** / **Use this version**.
+- **Test & review this payload**: Claude first answers the payload as the roleplay model would. Through
+  OpenRouter the real message list is sent, and the "Test with" switch can use StoryMind's own roleplay
+  model. Claude then reviews its own reply against the payload and returns find/replace edits on named
+  items (`frag:` / `prompt:` / `tpl:`). Each edit applies only if its `find` text is still present.
+
+## Making a pack the shipped defaults
+
+The editor produces a prompt pack. That changes what one phone uses, not what `index.html` ships. To
+make a pack the defaults, give the file to Claude in this repository: the registry `def()`s and
+`BLOCK_TPL_DEFAULTS` are rewritten from it, and the `vNNN.N refresh` migrations follow the usual rules
+for upgrading stored copies.
+
+Test: `tests/prompt-editor.browser.js`.

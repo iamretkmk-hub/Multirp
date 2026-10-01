@@ -140,6 +140,10 @@ Tapping one sets `_apForceRp` and calls `sendMessage`, so the short intention al
   about her instead of repeating the player's own confession) and in the narrator. The offered list
   (`chat._sugPrev`, the last nine) now comes last in the message, right before the ask, as
   ALREADY OFFERED, so a small model still has it in view after thirty long lines.
+- *Short turns (v150.4)*: the narrator prompt's KEEP IT SHORT caps a turn at one short action beat and
+  one or two spoken sentences, under 40 words, one paragraph — never a speech — and tells it not to copy
+  the length of the player's earlier long turns in the recent lines. Only a longer turn the player typed
+  may be longer, and never longer than what they typed.
 - *This scene only (v149.3)*: both read `_playerSceneLines(…,{scene:true})`, which starts at the last
   travel beat or scene cut (`sceneCut`, now set on `runSceneCut`'s narration), or after the last day
   marker — the lines of the scene before a walk somewhere are not sent.

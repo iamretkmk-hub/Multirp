@@ -9,9 +9,8 @@
      - the clips of this place play in order and loop; a new clip restarts from the first; another
        place starts a new movie;
      - landscape: the same player sits at the top of the rail, above a newer still or alone;
-     - the Video Book: the day's clips with scene cards, speeches from each clip's own lines (a line
-       two clips share is spoken once), and narration for an uncovered stretch between two clips,
-       written once and cached, with the gap's own narration as the fallback; it plays in order.
+     - the Video Book (v150.0): a novel around the clips — each run of lines is written as the passage that leads
+       into its clip, no speeches; it plays each passage read aloud, then its clip.
    Run: node tests/scene-movie.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -163,61 +162,50 @@ const {chromium}=require('playwright');
 
   console.log("\n[the Video Book]");
   const V=await pg.evaluate(()=>{
-    const ch=vbookChapters(curChat());
-    const d=ch.find(c=>c.day===2);
-    return d?d.items.map(x=>x.kind==="clip"?{k:"clip",mid:x.mid,sp:x.speeches.map(s=>s.speaker+": "+s.text+(s.player?" (p)":""))}
-      :x.kind==="gap"?{k:"gap",n:x.lines.length,key:x.key}:{k:"scene",w:x.where}):null;
+    const p=bookPlan(curChat(),"video"), d=p.chapters.find(c=>c.day===2);
+    return d?d.scenes.map(s=>s.location+": "+s.items.map(i=>i.type==="media"?"CLIP:"+i.mid:"R/"+i.end+"["+i.mids.join(",")+"]").join(" ")):null;
   });
-  ok("a day reads: place card, clip, the uncovered stretch, clip, clip, the walk to the next place, its card, clip",
-     JSON.stringify(V.map(x=>x.k))==='["scene","clip","gap","clip","clip","gap","scene","clip"]', JSON.stringify(V));
-  ok("the travel between two places is an uncovered stretch too", V[5].key==="a5>h1"&&V[5].n===2, JSON.stringify(V[5]));
-  ok("each clip's speeches are what was said aloud in its own lines, by who said it",
-     JSON.stringify(V[1].sp)==='["Emre: Hi Ayla. (p)","Ayla: Hello, Emre.","Emre: Coffee? (p)","Ayla: Yes please."]', JSON.stringify(V[1]));
-  ok("the gap is the lines neither clip covered", V[2].n===2&&V[2].key==="a2>a4", JSON.stringify(V[2]));
-  ok("a line two clips share is spoken once — in the first", JSON.stringify(V[4].sp)==='[]'&&JSON.stringify(V[3].sp)==='["Emre: Of course. (p)","Ayla: Then tell me about the letter."]', JSON.stringify([V[3],V[4]]));
-
+  ok("the clips are the book's anchors: each run of lines leads into a clip, a still is not one",
+     JSON.stringify(V)==='["Cafe Derya: R/anchor[t0,u1,a1,u2,a2] CLIP:a2 R/anchor[u3,a3,u4,a4] CLIP:a4 R/anchor[a5] CLIP:a5 R/scene[u5]","Harbour: R/anchor[t1,h1] CLIP:h1 R/open[h2]"]', JSON.stringify(V));
   const NR=await pg.evaluate(async()=>{
-    const c=curChat(); const gap=vbookChapters(c)[0].items.find(x=>x.kind==="gap");
-    const fb=await vbNarration(c,gap);                 // no key: the gap's own narrated passages
-    state.key="k"; let calls=0, sent=null;
+    const c=curChat(); c.book=null; state.key="k"; state.bookAuto=true; let n=0; const sent=[];
     const rc=window.chatCompletion;
-    window.chatCompletion=async(msgs,model,opts)=>{ if(opts&&opts.dbg==="Video Book narrator"){ calls++; sent=msgs; return '"Emre brings coffee, and Ayla is touched he remembered."'; } return "{}"; };
-    const t1=await vbNarration(c,gap), t2=await vbNarration(c,gap);
+    window.chatCompletion=async(msgs,model,opts)=>{ if(/Video Book writer/.test(opts&&opts.dbg||"")){ n++; sent.push(msgs); return "Passage "+n+": Emre and Ayla, in the warm cafe."; } return "{}"; };
+    const w=await bookCatchUp(c,"video",{day:2});
     window.chatCompletion=rc;
-    const usr=sent?sent.filter(m=>m.role==="user").map(m=>m.content).join("\n"):"";
-    return {fb,t1,t2,calls,usr,cached:c.vbookNarr&&c.vbookNarr["a2>a4"]&&c.vbookNarr["a2>a4"].text};
+    return {w,sys:sent[0]&&sent[0][0].content,u0:sent[0]&&sent[0][1].content,u1:sent[1]&&sent[1][1].content,story:!!(c.book&&c.book.story&&Object.keys(c.book.story.passages).length)};
   });
-  ok("without a key the gap is told from its own narrated passages", /I bring two cups/.test(NR.fb)&&/wraps her hands/.test(NR.fb)&&!/You remembered/.test(NR.fb), NR.fb);
-  ok("with a key the narrator writes it once, it is cached, and quotes are taken out",
-     NR.t1==="Emre brings coffee, and Ayla is touched he remembered."&&NR.t2===NR.t1&&NR.calls===1&&NR.cached===NR.t1, JSON.stringify(NR));
-  ok("the narrator gets the lines between, how the clip before ended and what the next opens on",
-     /THE CLIP BEFORE ENDS ON:\nAyla sits\./.test(NR.usr)&&/THE LINES BETWEEN THE TWO CLIPS[^\n]*\nEmre \(the player\): \*I bring two cups/.test(NR.usr)&&/THE NEXT CLIP OPENS ON:\nEmre: "Of course\."/.test(NR.usr), NR.usr);
+  ok("opening the day writes its five complete runs, the open tail left for later", NR.w===5, JSON.stringify(NR.w));
+  ok("the writer is told the book is shown in video clips", /shows a video clip/.test(NR.sys)&&/ends on a video clip/.test(NR.sys), (NR.sys||"").slice(0,300));
+  ok("a run ends on the lines its clip shows in motion", /It ends on its last 4 lines: the video clip that follows shows them in motion, without words\./.test(NR.u0), NR.u0);
+  ok("and it is told all of them, said and done", /Emre \(the player\): "Hi Ayla\."\nAyla: \*She smiles\.\* "Hello, Emre\."/.test(NR.u0)&&/It ends on its last 2 lines/.test(NR.u1), NR.u1);
+  ok("the Story Book is a book of its own", NR.story===false, JSON.stringify(NR));
 
-  const O=await pg.evaluate(()=>{
-    closeChatMenu&&closeChatMenu(); _bookDay=null; openVideoBook();
+  const O=await pg.evaluate(async()=>{
+    closeChatMenu&&closeChatMenu(); _bookDay=null; state.key=""; openVideoBook(); await new Promise(r=>setTimeout(r,300));
     const w=document.querySelector('#bookModal .bookWrap');
-    const hid=id=>getComputedStyle(document.getElementById(id)).display==="none";
-    return {open:document.getElementById('bookModal').classList.contains('show'),
+    const r={open:document.getElementById('bookModal').classList.contains('show'),
       name:document.querySelector('#bookModal .bookName').textContent,vb:w.classList.contains('vbMode'),
-      hidden:hid('bookLayBtn')&&hid('bookEdBtn')&&hid('bookVidBtn'),
-      clips:document.querySelectorAll('#bookBody .vbClip video').length,
-      narr:(document.querySelector('#bookBody .vbNarr')||{}).textContent||"",
-      speech:document.querySelectorAll('#bookBody .vbClip[data-mid="a2"] .vbSpeech>div').length,
+      kids:[...document.getElementById('bookBody').children].map(n=>n.className.split(" ")[0]),
+      clips:document.querySelectorAll('#bookBody figure.nvFig video').length,
+      speech:document.querySelectorAll('#bookBody .vbSpeech,#bookBody .bkBub').length,
+      vidBtn:getComputedStyle(document.getElementById('bookVidBtn')).display,
       opt:(document.getElementById('bookDaySel').options[0]||{}).textContent};
+    return r;
   });
-  ok("the menu's Video Book opens the book in video mode", O.open&&O.name==="Video Book"&&O.vb&&O.hidden, JSON.stringify(O));
-  ok("with the day's clips, their speeches and the cached narration between them",
-     O.clips===4&&O.speech===4&&/touched he remembered/.test(O.narr)&&/4 clips/.test(O.opt), JSON.stringify(O));
+  ok("the menu's Video Book opens the book in video mode", O.open&&O.name==="Video Book"&&O.vb&&O.vidBtn==="none", JSON.stringify(O));
+  ok("prose and clips, no speeches: each passage, then the clip it leads into",
+     JSON.stringify(O.kids)==='["nvDay","nvScene","nvPass","nvFig","nvPass","nvFig","nvPass","nvFig","nvPass","nvScene","nvPass","nvFig","nvTail","nvEnd"]'&&O.clips===4&&O.speech===0&&/4 clips/.test(O.opt), JSON.stringify(O));
 
   const PL=await pg.evaluate(async()=>{
     _mcScale=0.02; const said=[], shown=[];
     const rs=window._mcSay;
-    window._mcSay=async(f32,text,seq,fx)=>{ said.push((fx?"N:":"S:")+text); return rs(f32,text,seq,fx); };
+    window._mcSay=async(f32,text,seq,fx)=>{ said.push(text); return rs(f32,text,seq,fx); };
     openBookPlayer();
     const t0=Date.now();
     while(Date.now()-t0<20000){
       const st=document.getElementById('mcStage'); const h=st?st.innerHTML:"";
-      const k=/<video/.test(h)?"clip":/vbNarrCard/.test(h)?"narr":/The end of Day/.test(h)?"end":/mcWhere/.test(h)?"scene":"";
+      const k=/<video/.test(h)?"clip":/mcPage/.test(h)?"text":/The end of Day/.test(h)?"end":/mcWhere/.test(h)?"scene":"";
       if(k&&shown[shown.length-1]!==k)shown.push(k);
       if(k==="end")break;
       await new Promise(r=>setTimeout(r,30));
@@ -228,18 +216,18 @@ const {chromium}=require('playwright');
     closeBookPlayer(); _mcScale=1;
     return r;
   });
-  ok("Play runs the day in order: card, clip, narration, clips, narration, card, clip, the end",
-     JSON.stringify(PL.shown)==='["scene","clip","narr","clip","narr","scene","clip","end"]', JSON.stringify(PL.shown));
-  ok("the speeches are spoken over their clips and the narration between them",
-     JSON.stringify(PL.said.slice(0,6))==='["S:Hi Ayla.","S:Hello, Emre.","S:Coffee?","S:Yes please.","N:Emre brings coffee, and Ayla is touched he remembered.","S:Of course."]', JSON.stringify(PL.said));
+  ok("Play reads each passage, then plays its clip: card, text, clip ×3, text, card, text, clip, the end",
+     JSON.stringify(PL.shown)==='["scene","text","clip","text","clip","text","clip","text","scene","text","clip","end"]', JSON.stringify(PL.shown));
+  ok("the passages are what is read", PL.said.length===5&&/^Passage 1:/.test(PL.said[0]), JSON.stringify(PL.said));
   ok("the counter counts clips", /^4 \/ 4$/.test(PL.prog)&&PL.vb, PL.prog);
 
   const SB=await pg.evaluate(()=>{ closeStoryBook(); openStoryBook();
     const r={name:document.querySelector('#bookModal .bookName').textContent,vb:document.querySelector('#bookModal .bookWrap').classList.contains('vbMode')};
     closeStoryBook(); return r; });
   ok("the Story Book still opens as the Story Book", SB.name==="Story Book"&&SB.vb===false, JSON.stringify(SB));
-  ok("the narrator is a registry prompt on the Video Book card", await pg.evaluate(()=>
-      !!PROMPT_BY_KEY.x_video_book_narrator&&!!K.x_video_book_narrator&&ENGINE_PAYLOAD_DEFS.some(d=>d.key==="video_book"&&(d.blocks||[]).some(x=>x.promptKey==="x_video_book_narrator"))));
+  ok("the writer is a registry prompt on the book's payload card", await pg.evaluate(()=>
+      !!PROMPT_BY_KEY.x_book_writer&&!!K.x_book_writer&&ENGINE_PAYLOAD_DEFS.some(d=>d.key==="video_book"&&(d.blocks||[]).some(x=>x.promptKey==="x_book_writer"))));
+  ok("a finished clip is the Video Book's trigger", await pg.evaluate(()=>/bookOnMedia\(chat,"video"\)/.test(String(sceneVideo))));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

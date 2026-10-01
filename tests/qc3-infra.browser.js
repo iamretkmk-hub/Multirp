@@ -193,7 +193,7 @@ const path=require('path');
       arc:has(generateQuestArc,'foreground:true'), next:has(generateNextQuest,'foreground:!!(qo&&qo.fg)'),
       writeNext:has(questDeleteUI,'{fg:true}'), travel:has(travelTo,'foreground:true'), day:has(_endDayRun,'foreground:true'),
       sug:has(fetchSuggestions,'foreground:!!fg')&&has(rerollSuggestions,'tail.mid,true'), edit:has(_aiEditPrompt,'foreground:true'),
-      spawn:has(runCharQuestSpawn,'foreground:!!(opts&&opts.fg)')&&has(charQuestSpawnNowUI,'{fg:true}'), vb:has(vbNarration,'foreground:true')};
+      spawn:has(runCharQuestSpawn,'foreground:!!(opts&&opts.fg)')&&has(charQuestSpawnNowUI,'{fg:true}'), vb:has(_bkCatchUp,'foreground:!opts.live')};
   });
   ok("quest arc, Write what follows, travel, day, suggestions reroll, playground edit, spawn now, Video Book",Object.values(R).every(Boolean),JSON.stringify(R));
 

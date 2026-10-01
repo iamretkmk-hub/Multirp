@@ -40,7 +40,7 @@ const {chromium}=require('playwright');
     const out={profile:slots('peAvatarPreview'),sheet:slots('peMediaRef'),
       poseTalk:slots('pePose_r_talk'),poseHug:slots('pePose_r_hug'),
       hugFilled:!!document.querySelector('#pePose_r_hug .refSlot img'),talkFilled:!!document.querySelector('#pePose_r_talk .refSlot img'),
-      labels:Array.from(document.querySelectorAll('#pePoseRefs .card')).map(c=>c.textContent.trim().split("\n")[0].trim()),
+      labels:Array.from(document.querySelectorAll('#pePoseRefs .poseRow .poseName')).map(c=>c.textContent.trim()),
       kept:peImages.slice()};
     pePoseRefs.r_talk="data:image/png;base64,TALK";
     savePersona();
@@ -56,9 +56,9 @@ const {chromium}=require('playwright');
   ok("saving keeps the pose pictures and drops a slot whose scene type is gone",
      JSON.stringify(E.saved)==='{"r_hug":"data:image/png;base64,HUG","r_talk":"data:image/png;base64,TALK"}', JSON.stringify(E.saved));
   ok("and the card is left with one profile picture", E.savedImage==="data:image/png;base64,S1"&&(E.savedRefs||[]).length===0, JSON.stringify([E.savedImage,E.savedRefs]));
-  const U=await pg.evaluate(async()=>{ const box=document.getElementById('pePoseRefs'); const n0=box.querySelectorAll('.card').length;
+  const U=await pg.evaluate(async()=>{ const box=document.getElementById('pePoseRefs'); const n0=box.querySelectorAll('.poseRow').length;
     state.imgRules.push({id:"r_new",label:"Kiss",cast:"player",pov:false,promptStyle:"",enabled:true}); editPersona("p_sami");
-    const n1=document.getElementById('pePoseRefs').querySelectorAll('.card').length; state.imgRules.pop(); return [n0,n1]; });
+    const n1=document.getElementById('pePoseRefs').querySelectorAll('.poseRow').length; state.imgRules.pop(); return [n0,n1]; });
   ok("a new scene type gets a new slot in every character's bio", U[0]===2&&U[1]===3, JSON.stringify(U));
   await pg.evaluate(()=>{ try{ closeModal&&closeModal('personaModal'); }catch(e){} });
 

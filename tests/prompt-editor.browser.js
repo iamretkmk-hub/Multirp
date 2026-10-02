@@ -41,6 +41,10 @@ const ROOT=path.resolve(__dirname,'..');
       body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"}]})});
     const body=JSON.parse(r.request().postData()||"{}");
     OR.calls.push({auth:r.request().headers()["authorization"]||"",body});
+    const ms=OR.delay?OR.delay(body):0;
+    OR.inflight=(OR.inflight||0)+1; if(ms) OR.peak=Math.max(OR.peak||0,OR.inflight);
+    if(ms) await new Promise(res=>setTimeout(res,ms));
+    OR.inflight--;
     const content=OR.answer(body);
     await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{role:"assistant",content},finish_reason:"stop"}]})});
   });
@@ -323,13 +327,17 @@ const ROOT=path.resolve(__dirname,'..');
     OR.calls=[];
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
       if(/reading the results of a whole test run AT ONCE/.test(all)) return JSON.stringify({score:6,summary:"s",patterns:[{pattern:"too stiff in daily talk",scenes:["Daily talk: fun and real"],cause:"x"}],
+        decisions:[{id:"R:flirt_gm#1",verdict:"drop",why:"helps one scene, stiffens daily talk"}],
         edits:[{item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-DRIFT-FIX",replace:"PE-ALL-FIX",why:"w",helps:["Daily talk: fun and real","Flirting by text, at night"],risks:"none"}]});
-      if(/instruction-following test/.test(all)){ const n=(all.match(/TURN \d+\\n/g)||[]).length||4; return JSON.stringify({turns:Array.from({length:n},()=>({verdict:"held",note:"n"})),drift_at:null,score:8,summary:"ok",edits:[]}); }
+      if(/instruction-following test/.test(all)){ const n=(all.match(/TURN \d+\\n/g)||[]).length||4;
+        const ed=/Flirting at Emre's, and the world interrupts/.test(all)?[{item:"frag:style_header",kind:"add",cause:"c",find:"PE-DRIFT-FIX",replace:"PE-DRIFT-FIX ONLY-ONE-SCENE",why:"w"}]:[];
+        return JSON.stringify({turns:Array.from({length:n},()=>({verdict:"held",note:"n"})),drift_at:null,score:8,summary:"ok",edits:ed}); }
       if(/BACKGROUND ENGINE/.test(all)) return JSON.stringify({verdict:"good",summary:"ok",problems:[],edits:[]});
       const sys=String(((body.messages||[])[0]||{}).content||""); return /JSON/i.test(sys)?"{}":'"Tamam." *Gülümsüyor.*'; };
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_selreply",JSON.stringify(["daily_text","flirt_gm"])); localStorage.setItem("pe_v1_seleng",JSON.stringify(["comings"]));
       localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); localStorage.setItem("pe_v1_engscript",JSON.stringify("")); document.querySelector("#engEndDay").checked=false; });
     await pg.click('#rtabs button[data-r="tests"]');
+    OR.peak=0; OR.delay=body=>/instruction-following test|BACKGROUND ENGINE/.test(JSON.stringify(body.messages||[]))?400:0;
     const est=await pg.evaluate(()=>document.querySelector("#allEstimate").textContent);
     ok("the estimate counts what is ticked", /2 reply scenes \(9 replies\) and 1 engine scene/.test(est), est);
     await pg.evaluate(()=>__PE.runEverything());
@@ -341,6 +349,11 @@ const ROOT=path.resolve(__dirname,'..');
     const tj=together?JSON.stringify(together.body.messages):"";
     ok("then Claude read everything together: every scene, every engine verdict, real payloads", !!together&&/Daily talk by text/.test(tj)&&/Flirting at Emre's, and the world interrupts/.test(tj)&&/Engine scene: Comings and goings/.test(tj)&&/A REAL TEXT MESSAGES PAYLOAD/.test(tj), tj.slice(0,400));
     ok("the combined verdict shows, with each edit's scenes", !!all.overall&&/Across all scenes/.test(all.box)&&/too stiff in daily talk/.test(all.box)&&/Helps: Daily talk/.test(all.box), all.box.slice(0,300));
+    OR.delay=null;
+    ok("the analysts read the scenes and engines at the same time", OR.peak>=2, OR.peak);
+    ok("the overseer was handed every analyst edit by id", /\[R:flirt_gm#1\]/.test(tj)&&/OVERSEER/.test(tj), (tj.match(/.{0,80}R:flirt_gm.{0,80}/)||[""])[0]);
+    const od=await pg.evaluate(()=>({box:(document.querySelector("#overallBox")||{}).textContent||"",card:(document.querySelector("#dr_flirt_gm")||{}).textContent||""}));
+    ok("its decisions show, on the run and on the analyst's own edit", /1 dropped/.test(od.box)&&/Overseer: dropped helps one scene/.test(od.card), od.card.slice(-400));
     ok("the combined edit applies", await pg.evaluate(()=>{ const b=document.querySelector('#overallBox .chg [data-a="apply"]'); if(!b||b.disabled) return false; b.click(); return /PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))); }));
 
     console.log("\n[12 — LLM evaluation: models compared on fixed prompts, no prompt edits]");

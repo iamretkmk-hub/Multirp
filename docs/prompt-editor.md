@@ -190,12 +190,29 @@ Reply scenes are grouped by theme, and a theme is played in the payload kinds th
 A line in a scene is the player's, texted in a text scene (`textMsg`), or a gamemaster beat (`{gm:"…"}`),
 which goes into the transcript as a narrator event that the character reacts to.
 
-**The combined analysis** (`analyseTogether`) reads the whole run at once: every scene's exchange and
-verdict, every engine's verdict and problems, one real payload per kind, the editable items, and the
-engine prompts that had issues. It looks for patterns across scenes and tensions between them, for
-example resistance that holds after intimacy but goes stiff in daily talk. Its edits name the scenes they
-help and what they risk, so the prompts are tuned for every situation at once. It runs at the end of Run
-everything and of **Analyse all**.
+**The analyst team** (`runTeam`). After **Run everything** has played every ticked scene, or when you
+press **Analyse all**, every unanalysed reply scene and every engine group gets its own analyst. Each
+analyst is one Claude call, and several run at the same time. **Analysts at once** sets how many, 1 to 8,
+default 3. An analyst Claude tells to slow down (`rate_limited`) waits 15, 30 and then 45 seconds before
+trying again. The status line shows how many are reading, done, failed and waiting. Each proposed edit
+gets an id: `R:<scene>#n` for a reply scene, `E:<scene>:<engine>#n` for an engine.
+
+**The overseer** (`analyseTogether`) reads the whole run at once:
+
+- every scene's exchange and verdict;
+- every engine's verdict and problems;
+- one real payload per kind;
+- the editable items, and the engine prompts that had issues;
+- **every analyst's proposed edits**, by id.
+
+It looks for patterns across scenes and tensions between them, for example resistance that holds after
+intimacy but goes stiff in daily talk. It then decides on every proposed edit: **keep**, **merge** (the
+same cause as others, folded into one) or **drop** (helps one scene and hurts another, adds where a cut
+would do, duplicates or conflicts). Last, it writes at most 8 final edits for the run, each naming the
+scenes it helps and what it risks.
+
+Its decisions are listed under its verdict, and each analyst's edit card carries the overseer's call on
+it.
 
 ## LLM evaluation (a separate test: models, not prompts)
 

@@ -277,6 +277,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button class="btn sm" id="btnAllStop" type="button" hidden>Stop</button>
         <button class="btn sm" id="btnAllExport" type="button">Export results</button>
         <button class="btn sm" id="btnAllImport" type="button">Import results</button>
+        <label class="stat" title="How many Claude analysts read scenes and engines at the same time">Analysts at once <input type="number" id="teamSize" min="1" max="8" value="3" style="width:42px"></label>
         <span class="stat" id="allStat"></span>
       </div>
       <div class="stat" id="allEstimate" style="padding:0 12px"></div>
@@ -1913,7 +1914,9 @@ function editCard(ed){
     const kind=String(ed.kind||"").toLowerCase()||(String(ed.replace||"").trim()===""?"remove":String(ed.replace||"").length>String(ed.find||"").length*1.5?"add":"rewrite");
     const delta=String(ed.replace||"").length-String(ed.find||"").length;
     const kcls=kind==="remove"?"held":kind==="add"?"broke":"bent";
+    let od=null; try{ od=ed._id&&ALL.overall&&Array.isArray(ALL.overall.decisions)?ALL.overall.decisions.find(d=>d&&d.id===ed._id):null; }catch(e){}
     box.innerHTML=`<div class="tgt">${esc(ed.item)}${it?"":" · not found"} <span class="vd ${kcls}">${esc(kind)}</span> <span class="stat">${delta>0?"+":delta<0?"−":"±"}${Math.abs(delta)} chars</span></div>
+      ${od?`<div class="stat"><b>Overseer:</b> <span class="vd ${od.verdict==="keep"?"held":od.verdict==="drop"?"broke":"bent"}">${esc(od.verdict==="merge"?"merged into the run's edits":od.verdict==="drop"?"dropped":"kept")}</span> ${esc(od.why||"")}</div>`:""}
       ${ed.cause?`<div class="stat"><b>Cause:</b> ${esc(ed.cause)}</div>`:""}
       <div class="why">${esc(ed.why||"")}</div>
       ${kind==="add"?`<div class="stat" style="color:var(--warn)">This adds text. Apply it only if nothing in the payload could be cut or rewritten instead.</div>`:""}
@@ -2366,7 +2369,7 @@ async function runDriftScenes(list,inAll){
   /* the scenes are written against the sample story's facts */
   await useTestWorld();
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
-  const analyst=!!(AI.sample||(NET.ok&&orKey()));
+  const analyst=!inAll&&!!(AI.sample||(NET.ok&&orKey()));   // in a full run the analyst team reads them all at once afterwards
   let done=0;
   for(const sc of list){
     $("#driftStat").textContent=`${testLabel()} is playing ${sc.title} (${done+1}/${list.length})…`;
@@ -2504,7 +2507,7 @@ function renderEng(){
     }else if(gr.calls.some(c=>c.output!=null)&&!busyAll()){
       const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude";
       ab.onclick=()=>analyseEngines([gr.key]); el.appendChild(ab);
-    }else if(ENGRUN.judging===gr.key) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading this engine…</div>`);
+    }else if(ENGRUN.judging===gr.key||TEAM.busy.has(ENGRUN.cur+"|"+gr.key)) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading this engine…</div>`);
     host.appendChild(el);
   });
   paintAllButtons();
@@ -2544,9 +2547,10 @@ async function runEngines(presetId,inAll){
     const g=engGroups(); $("#engStat").textContent=`${ENGRUN.calls.length} calls across ${g.length} engines`;
     renderEng();
   }
-  if(claudeReachable()&&ENGRUN.calls.length&&!ENGRUN.ctl.signal.aborted) await analyseEngines(engGroups().map(g=>g.key),inAll);
+  if(!inAll&&claudeReachable()&&ENGRUN.calls.length&&!ENGRUN.ctl.signal.aborted) await analyseEngines(engGroups().map(g=>g.key),inAll);
 }
-async function judgeEngine(gr){
+async function judgeEngine(gr,cx){
+  cx=cx||{model:ENGRUN.model,focus:ENGRUN.focus,lines:ENGRUN.lines,signal:ENGRUN.ctl&&ENGRUN.ctl.signal};
   const sample=gr.calls.filter(c=>c.output!=null).slice(0,2);
   const promptText=gr.prompt?itemVal({type:"prompt",key:gr.prompt}):"";
   const input=`${CONTEXT}
@@ -2554,8 +2558,8 @@ async function judgeEngine(gr){
 You are reviewing one BACKGROUND ENGINE of the app — a model call the player never sees, whose output the app parses and stores (memories, relationship numbers, plans, promises, rumours, routing decisions, director beats…). Below are real calls from a played scene: the exact messages the app sent and what the model under test answered.
 
 ENGINE: ${gr.label}${gr.prompt?` (prompt key "${gr.prompt}")`:""} — debug label "${gr.calls[0].dbg}"
-MODEL THAT ANSWERED: ${ENGRUN.model||"(unknown)"}
-${ENGRUN.focus?`\nWHAT THE SCENE WAS BUILT TO TEST (judge this engine's part in it):\n${ENGRUN.focus}\n`:""}${(ENGRUN.lines||[]).length?`\nTHE PLAYER'S LINES, IN ORDER:\n${ENGRUN.lines.map((l,i)=>(i+1)+". "+l).join("\n")}\n`:""}${/^Roleplay reply/.test(gr.calls[0].dbg||"")?"\nThis group is the characters' own replies: judge realism, proportion and character under this pressure, and whether the right person answered. Their wording comes from the reply pieces, not one prompt, so propose no edits here; name the pieces at fault instead.\n":""}
+MODEL THAT ANSWERED: ${cx.model||"(unknown)"}
+${cx.focus?`\nWHAT THE SCENE WAS BUILT TO TEST (judge this engine's part in it):\n${cx.focus}\n`:""}${(cx.lines||[]).length?`\nTHE PLAYER'S LINES, IN ORDER:\n${cx.lines.map((l,i)=>(i+1)+". "+l).join("\n")}\n`:""}${/^Roleplay reply/.test(gr.calls[0].dbg||"")?"\nThis group is the characters' own replies: judge realism, proportion and character under this pressure, and whether the right person answered. Their wording comes from the reply pieces, not one prompt, so propose no edits here; name the pieces at fault instead.\n":""}
 Judge the ANSWER against the prompt: does it keep the output contract exactly (format, JSON shape and field names, nothing outside it); is every claim supported by the input (no invented events, people, feelings or facts); does it follow the prompt's own rules and scope (who it is about, point of view, language, length); would the app's parser and the next engine get something useful? Then judge the PROMPT: where its wording let the answer go wrong, or is contradictory, ambiguous, redundant or wastes tokens.
 
 Find the cause of each problem in the prompt's own words, then fix it following HOW TO FIX above, with at most 5 find-and-replace edits${gr.prompt?` on "prompt:${gr.prompt}"`:""}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); "replace" may be empty to delete; keep {{…}} placeholders intact. Never change the output contract's field names.
@@ -2567,8 +2571,8 @@ Reply with ONLY this JSON:
 ${promptText?promptText.slice(0,30000):"(this call has no editable prompt template: judge the answer only, and propose no edits)"}
 
 ${sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c).slice(0,50000)}\n\n===== CALL ${i+1}: THE ANSWER =====\n${String(c.output).slice(0,8000)}`).join("\n\n")}`;
-  if(AI.sample) return AI.sample.json(input,{signal:ENGRUN.ctl.signal,modelTier:"complex",cache:false});
-  const t=await aiAsk([{role:"user",content:input}],{signal:ENGRUN.ctl.signal,maxTokens:4000,temperature:0.2});
+  if(AI.sample) return AI.sample.json(input,{signal:cx.signal,modelTier:"complex",cache:false});
+  const t=await aiAsk([{role:"user",content:input}],{signal:cx.signal,maxTokens:4000,temperature:0.2});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The analysis did not come back as JSON."}; return JSON.parse(m[0]);
 }
 async function analyseEngines(keys,inAll){
@@ -2618,6 +2622,9 @@ function renderOverall(){
   el.innerHTML=`<h3>Across all scenes ${typeof o.score==="number"?`<span class="score">${o.score}/10</span>`:""}<span class="sp"></span><span class="stat">${esc(o.model||"")}</span></h3>
     <div class="turnRow"><div><b>Verdict.</b> ${esc(o.summary||"")}</div></div>
     ${Array.isArray(o.patterns)&&o.patterns.length?`<ul style="margin:0;padding-left:18px;font-size:12.5px">${o.patterns.map(x=>`<li><b>${esc(x.pattern||"")}</b>${x.scenes&&x.scenes.length?` <span class="stat">(${esc(x.scenes.join(", "))})</span>`:""}${x.cause?` <span class="stat">— cause: ${esc(x.cause)}</span>`:""}</li>`).join("")}</ul>`:""}`;
+  const ds=Array.isArray(o.decisions)?o.decisions:[];
+  if(ds.length){ const n=v=>ds.filter(d=>d.verdict===v).length;
+    el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The overseer decided on ${ds.length} analyst edit${ds.length>1?"s":""}: ${n("keep")} kept · ${n("merge")} merged · ${n("drop")} dropped</summary><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${ds.map(d=>`<li><code>${esc(d.id||"")}</code> <span class="vd ${d.verdict==="keep"?"held":d.verdict==="drop"?"broke":"bent"}">${esc(d.verdict||"")}</span> ${esc(d.why||"")}</li>`).join("")}</ul></details>`); }
   (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
   host.appendChild(el);
 }
@@ -2636,21 +2643,27 @@ function overallInput(){
   const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
   const prompts=[...flagged].slice(0,8).map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,9000)}`).join("\n\n");
   const pays=Object.keys(kinds).map(k=>`===== A REAL ${KIND_SHORT[k].toUpperCase()} PAYLOAD =====\n${payloadText(kinds[k]).slice(0,18000)}`).join("\n\n");
-  return {reply,engines,prompts,pays};
+  /* every edit an analyst proposed, with an id the overseer decides on */
+  const props=[];
+  DRIFT_SCENES.forEach(sc=>{ const j=DR.results[sc.id]&&DR.results[sc.id].judge; if(!j) return; tagEdits(j.edits,"R:"+sc.id); (j.edits||[]).forEach(ed=>props.push({ed,from:sc.title})); });
+  ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(!j) return; tagEdits(j.edits,"E:"+sc.id+":"+k); (j.edits||[]).forEach(ed=>props.push({ed,from:sc.label+" · "+k})); }); });
+  const proposals=props.map(({ed,from})=>`[${ed._id}] from ${from} · ${ed.item} · ${ed.kind||"?"}\n  cause: ${String(ed.cause||"").slice(0,300)}\n  find: ${JSON.stringify(String(ed.find||"").slice(0,400))}\n  replace: ${JSON.stringify(String(ed.replace||"").slice(0,400))}\n  why: ${String(ed.why||"").slice(0,300)}`).join("\n");
+  return {reply,engines,prompts,pays,proposals,nProps:props.length};
 }
 async function analyseTogether(){
   const x=overallInput();
   if(!x.reply&&!x.engines){ toast("Run some scenes first"); return null; }
   const input=`${CONTEXT}
 
-You are reading the results of a whole test run AT ONCE: every scene the author's roleplay model played (solo, several characters, reacting to the gamemaster, text messages, heat of the moment), each with its own verdict, and every background engine checked in scenes played for real. Each scene was already analysed alone. Your job is the picture across all of them, so the prompts are adjusted for every situation together, not tuned for one and broken for another.
+You are the OVERSEER of a team of analysts. You are reading the results of a whole test run AT ONCE: every scene the author's roleplay model played (solo, several characters, reacting to the gamemaster, text messages, heat of the moment), each with its own analyst's verdict, and every background engine checked in scenes played for real, each with its analyst's verdict. Each analyst saw only their own scene or engine, and proposed edits for it (listed below with ids). Your job is the picture across all of them, so the prompts are adjusted for every situation together, not tuned for one and broken for another.
 
 1. Find the PATTERNS: failures that repeat across scenes or kinds (say which), and tensions where one scene needs the opposite of another (for example resistance that holds in the after-intimacy scenes but turns stiff in daily talk).
 2. Trace each pattern to its cause in the shared text: a reply piece, the base instruction or format rules, a layout, or an engine prompt.
-3. Propose at most 8 edits that improve the run AS A WHOLE, following HOW TO FIX above. Each edit names the scenes it helps and anything it could make worse ("risks"). Prefer one cut or rewrite in a shared piece over several scene-specific additions. Leave out an edit that helps one scene but would hurt another.
+3. Decide on EVERY analyst edit by id: "keep" (right as it is, safe for the other scenes), "merge" (the same cause as other edits: folded into one of your final edits) or "drop" (fixes one scene and would hurt another, adds where a cut would do, duplicates, conflicts with another edit, or misreads the cause). One line why.
+4. Write the FINAL edits for the run as a whole, at most 8, following HOW TO FIX above: the kept ones copied exactly (with "from" naming their id) and the merged ones rewritten as one. Each names the scenes it helps and anything it could make worse ("risks"). Prefer one cut or rewrite in a shared piece over several scene-specific additions. Two final edits must never touch the same words.
 
 Reply with ONLY this JSON:
-{"score":7,"summary":"three sentences on the run as a whole","patterns":[{"pattern":"…","scenes":["scene title", "…"],"cause":"the words responsible"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible","find":"exact text","replace":"new text (empty for a removal)","why":"…","helps":["scene title"],"risks":"…"}]}
+{"score":7,"summary":"three sentences on the run as a whole","patterns":[{"pattern":"…","scenes":["scene title", "…"],"cause":"the words responsible"}],"decisions":[{"id":"R:daily#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"from":["R:daily#1"],"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible","find":"exact text","replace":"new text (empty for a removal)","why":"…","helps":["scene title"],"risks":"…"}]}
 
 ===== REPLY SCENES =====
 ${x.reply.slice(0,90000)}
@@ -2662,6 +2675,9 @@ ${x.pays}
 
 ${x.prompts?"===== ENGINE PROMPTS THAT HAD ISSUES (exact current text) =====\n"+x.prompts:""}
 
+===== THE ANALYSTS' PROPOSED EDITS (${x.nProps}) — decide on each =====
+${x.proposals?x.proposals.slice(0,60000):"(none proposed)"}
+
 ===== REPLY ITEMS YOU MAY EDIT (id — current text, abbreviated; the payloads above hold their full text) =====
 ${fragCatalog()}`;
   const sig=ALL.ctl?ALL.ctl.signal:undefined;
@@ -2671,6 +2687,55 @@ ${fragCatalog()}`;
   o.model=testLabel(); o.at=Date.now(); ALL.overall=o; lsSet("overall",o); renderOverall();
   return o;
 }
+/* ---------------- the analyst team and the overseer ----------------
+   Every scene and every engine is read by its own analyst, several at the same time (each one a Claude
+   call; "Analysts at once" sets how many). An analyst told to slow down waits and tries again. When they
+   are all done, the overseer reads every verdict and every proposed edit together, keeps, merges or
+   drops each one, and writes the final edits for the run as a whole. */
+const TEAM={busy:new Set(),done:0,total:0,failed:0};
+function teamSize(){ const v=+lsGet("teamsize",3); return Math.max(1,Math.min(8,v||3)); }
+function paintTeam(){ const el=$("#allStat"); if(!el||!TEAM.total) return;
+  el.textContent=`Analysts: ${TEAM.busy.size} reading · ${TEAM.done}/${TEAM.total} done${TEAM.failed?` · ${TEAM.failed} failed`:""} · ${Math.max(0,TEAM.total-TEAM.done-TEAM.busy.size)} waiting`; }
+function analystTasks(sig){
+  const tasks=[];
+  DRIFT_SCENES.forEach(sc=>{ const r=DR.results[sc.id]; if(!r||r.judge||!driftComplete(sc,r)) return;
+    tasks.push({key:"R|"+sc.id,label:sc.title,run:async()=>{ await analyseOne(sc); if(DR.results[sc.id].judge) tagEdits(DR.results[sc.id].judge.edits,"R:"+sc.id); }}); });
+  ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r||!(r.calls||[]).length) return; r.judge=r.judge||{};
+    engGroupsOf(r.calls).forEach(g=>{ if(r.judge[g.key]||!g.calls.some(c=>c.output!=null)) return;
+      tasks.push({key:sc.id+"|"+g.key,label:`${sc.label} · ${g.label}`,run:async()=>{
+        const j=await judgeEngine(g,{model:r.model,focus:r.focus,lines:r.lines,signal:sig}); tagEdits(j.edits,"E:"+sc.id+":"+g.key);
+        r.judge[g.key]=j; if(ENGRUN.cur===sc.id) ENGRUN.judge=r.judge; lsSet("engbyscene",ENGRUN.byScene); }}); }); });
+  return tasks;
+}
+function tagEdits(edits,prefix){ (edits||[]).forEach((ed,i)=>{ if(ed&&!ed._id) ed._id=prefix+"#"+(i+1); }); }
+async function runTeam(sig){
+  const tasks=analystTasks(sig); TEAM.busy.clear(); TEAM.done=0; TEAM.failed=0; TEAM.total=tasks.length; paintTeam();
+  if(!tasks.length) return;
+  let next=0;
+  const worker=async()=>{
+    while(next<tasks.length&&!sig.aborted){
+      const t=tasks[next++]; TEAM.busy.add(t.key); paintTeam(); renderDrift(); renderEng();
+      for(let attempt=0;;attempt++){
+        try{ await t.run(); break; }
+        catch(e){
+          if(e&&e.code==="rate_limited"&&attempt<3&&!sig.aborted){ await new Promise(r=>setTimeout(r,15000*(attempt+1))); continue; }
+          TEAM.failed++; if(t.key.startsWith("R|")){ const r=DR.results[t.key.slice(2)]; if(r){ r.err=aiErr(e); r.judging=false; } }
+          if(e&&(e.code==="cancelled"||e.code==="not_granted")) throw e;
+          break; }
+      }
+      TEAM.busy.delete(t.key); TEAM.done++; paintTeam(); renderDrift(); renderEng();
+    }
+  };
+  try{ await Promise.all(Array.from({length:Math.min(teamSize(),tasks.length)},worker)); }
+  finally{ TEAM.busy.clear(); driftSave(); engLoad(ENGRUN.cur||engPreset().id); }
+}
+async function analyseTeamAndOversee(){
+  const sig=ALL.ctl.signal;
+  await runTeam(sig);
+  if(sig.aborted) return;
+  const el=$("#allStat"); if(el) el.textContent=`The overseer is reading all ${TEAM.total||"the"} analyses together…`;
+  try{ await analyseTogether(); }catch(e){ toast("The overseer failed: "+aiErr(e),6000); }
+}
 async function runEverything(){
   if(busyAll()) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
@@ -2679,26 +2744,26 @@ async function runEverything(){
   if(!rs.length&&!es.length){ toast("Tick at least one scene"); return; }
   ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; paintAllButtons();
   try{
+    /* play everything first (one sandbox, one scene at a time), then the team reads it all at once */
+    rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; });
+    es.forEach(sc=>{ if(ENGRUN.byScene[sc.id]) ENGRUN.byScene[sc.id].judge={}; });
     if(rs.length){ $("#allStat").textContent=`Reply scenes (${rs.length})…`; await runDriftScenes(rs,true); }
     for(let i=0;i<es.length;i++){ if(ALL.ctl.signal.aborted) break; $("#allStat").textContent=`Engine scene ${i+1}/${es.length}: ${es[i].label}…`; await runEngines(es[i].id,true); }
-    if(!ALL.ctl.signal.aborted&&claudeReachable()){ $("#allStat").textContent="Claude is reading every scene together…"; try{ await analyseTogether(); }catch(e){ toast("The combined analysis failed: "+aiErr(e),6000); } }
+    if(!ALL.ctl.signal.aborted&&claudeReachable()) await analyseTeamAndOversee();
     $("#allStat").textContent=ALL.ctl.signal.aborted?"Stopped.":"Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:"");
-  }finally{ ALL.running=false; paintAllButtons(); renderDrift(); renderEng(); }
+  }catch(e){ toast(aiErr(e),6000); }
+  finally{ ALL.running=false; paintAllButtons(); renderDrift(); renderEng(); }
 }
 async function analyseEverything(){
   if(busyAll()) return;
   if(!claudeReachable()){ toast("Claude is not reachable from this page"); return; }
-  ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; paintAllButtons();
-  try{
-    const rs=DRIFT_SCENES.filter(sc=>DR.results[sc.id]&&!DR.results[sc.id].judge&&driftComplete(sc,DR.results[sc.id]));
-    if(rs.length) await analyseDrift(rs,true);
-    for(const sc of ENGINE_SCENES){ const r=ENGRUN.byScene[sc.id]; if(!r||ALL.ctl.signal.aborted) continue;
-      engLoad(sc.id); const todo=engGroups().filter(g=>!ENGRUN.judge[g.key]).map(g=>g.key); if(todo.length) await analyseEngines(todo,true); }
-    if(!ALL.ctl.signal.aborted){ $("#allStat").textContent="Claude is reading every scene together…"; await analyseTogether(); $("#allStat").textContent="Done."; }
-  }catch(e){ toast(aiErr(e),6000); }
+  ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; ENGRUN.ctl=ALL.ctl; paintAllButtons();
+  try{ await analyseTeamAndOversee(); if(!ALL.ctl.signal.aborted) $("#allStat").textContent="Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:""); }
+  catch(e){ toast(aiErr(e),6000); }
   finally{ ALL.running=false; paintAllButtons(); renderDrift(); renderEng(); }
 }
 $("#btnAll").onclick=runEverything;
+{ const ts=$("#teamSize"); if(ts){ ts.value=teamSize(); ts.onchange=()=>{ lsSet("teamsize",Math.max(1,Math.min(8,+ts.value||3))); ts.value=teamSize(); }; } }
 $("#btnAllAnalyse").onclick=analyseEverything;
 $("#btnAllStop").onclick=()=>{ [ALL.ctl,DR.ctl,ENGRUN.ctl].forEach(c=>{ try{ c&&c.abort(); }catch(e){} }); };
 $("#btnSelAllReply").onclick=()=>{ lsSet("selreply",DRIFT_SCENES.map(x=>x.id)); renderDrift(); renderEstimate(); };

@@ -193,22 +193,22 @@ const ROOT=path.resolve(__dirname,'..');
     const solo4=await pg.evaluate(async()=>{
       const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
       for(const id of ["daily","flirt","after1","after2"]){ const sc=by(id);
-        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,turns:[{role:"user",content:sc.lines[0]}]}});
+        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:[{role:"user",content:sc.lines[0]}]}});
         out[id]={t:p.messages.map(m=>m.content).join("\n"),speaker:p.speaker,quality:!!sc.quality}; }
       return out; });
     ok("the new scenes are quality scenes played by Buket", ["daily","flirt","after1","after2"].every(k=>solo4[k].quality&&/Buket/.test(solo4[k].speaker)));
-    ok("flirting happens at Emre's flat", /Emre's flat/.test(solo4.flirt.t), solo4.flirt.t.slice(0,400));
+    ok("flirting happens at Emre's house", /Emre's House/.test(solo4.flirt.t), solo4.flirt.t.slice(0,400));
     ok("the day after: her memory of the night and her decision are in the payload",
-       /I went down to Emre's flat to give back the casserole dish/.test(solo4.after1.t)&&/it will not happen again/.test(solo4.after1.t), solo4.after1.t.slice(-2500));
+       /I ended up in his bed/.test(solo4.after1.t)&&/the one full surrender/.test(solo4.after1.t), solo4.after1.t.slice(-2500));
     ok("some days on: both nights and her softer terms are in the payload, not the first decision",
-       /It happened again, on the sixth/.test(solo4.after2.t)&&/on your terms/.test(solo4.after2.t)&&!/you will be kind and you will close it/.test(solo4.after2.t), solo4.after2.t.slice(-2500));
-    ok("the setup does not leak into other scenes", !/casserole dish/.test(solo4.daily.t));
+       /It happened again, on day nine/.test(solo4.after2.t)&&/on your terms/.test(solo4.after2.t)&&!/the one full surrender/.test(solo4.after2.t), solo4.after2.t.slice(-2500));
+    ok("the setup does not leak into other scenes", !/ended up in his bed/.test(solo4.daily.t));
     await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
     const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
     ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns));
     ok("each turn was built from the real payload, with the earlier replies in the transcript",
-       seen.length===5&&/Antakya/.test(seen[0])&&/Selin/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum\./g)||[]).length>=4, seen.map(x=>x.length).join(","));
-    ok("the scene's own place is in the payload", /Sami & Buket's flat/.test(seen[0]), seen[0].slice(0,300));
+       seen.length===5&&/Palmera'da seninle şamandıraya/.test(seen[0])&&/kırmızı mayoyu/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum\./g)||[]).length>=4, seen.map(x=>x.length).join(","));
+    ok("the scene's own place is in the payload", /Big Özüçak's House/.test(seen[0]), seen[0].slice(0,300));
     ok("every scene is played by a woman character", await pg.evaluate(()=>__PE.DRIFT_SCENES.every(sc=>sc.speaker==="p_buket")));
     ok("the drift analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/instruction-following test/.test(JSON.stringify(c.body.messages))));
     ok("all five turns went to the model under test, and the analysis to Claude",
@@ -288,7 +288,7 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.evaluate(()=>__PE.runEngines());
     await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
     const cant=OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>JSON.stringify(c.body.messages)).join(" ");
-    ok("the canteen scene is played at the canteen, with Sami and Berker", /Isdemir Canteen/.test(cant)&&/Berker/.test(cant)&&/Sami/.test(cant), cant.slice(0,300));
+    ok("the canteen scene is played at the canteen, with Sami and Berker", /Worker Canteen|Isdemir/.test(cant)&&/Berker/.test(cant)&&/Sami/.test(cant), cant.slice(0,300));
     ok("its focus reaches the analysis", OR.calls.some(c=>/Two brothers set against each other in public/.test(JSON.stringify(c.body.messages))));
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); document.querySelector("#engEndDay").checked=true; });
 
@@ -317,7 +317,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the flirting theme is played in every kind", kindsOk.flirtThemes==="gm,heat,multi,solo,text", kindsOk.flirtThemes);
     ok("the text version is a text thread", /Uyudun mu\?/.test(kindsOk.text)&&/text/i.test(kindsOk.text), kindsOk.text.slice(-600));
     ok("the gamemaster version puts the beat in front of her", /phone lights up on the table: SAMI/.test(kindsOk.gm), kindsOk.gm.slice(-600));
-    ok("the heat version is built as a heat beat, at Emre's", /Emre's flat/.test(kindsOk.heat)&&kindsOk.heat!==kindsOk.multi, kindsOk.heat.slice(0,300));
+    ok("the heat version is built as a heat beat, at Emre's", /Emre's House/.test(kindsOk.heat)&&kindsOk.heat!==kindsOk.multi, kindsOk.heat.slice(0,300));
     ok("the several-characters version has Sami in the room", /Sami/.test(kindsOk.multi));
 
     OR.calls=[];
@@ -370,6 +370,78 @@ const ROOT=path.resolve(__dirname,'..');
     ok("Claude compared each setting blind, and was told not to touch the prompts", judge.length===2&&judge.every(c=>{ const t=JSON.stringify(c.body.messages); return /Model A/.test(t)&&/do not suggest prompt changes/.test(t)&&t.indexOf("x/rp-b")<0&&t.indexOf("x/mem-b")<0; }), judge.length);
     ok("the verdict names the real models again, with a table and a recommendation", /best: x\/rp-b/.test(ev.html)&&/x\/rp-b: livelier/.test(ev.html)&&/good at:/.test(ev.html), ev.html.slice(0,400));
     ok("no prompt edits are offered in the evaluation", ev.apply===0);
+
+
+    console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
+    const sctx=await b.newContext({viewport:{width:1300,height:900}});
+    await sctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());
+    await sctx.route(/openrouter\.ai/,r=>r.abort());          // as inside Claude: OpenRouter out of reach
+    const sp=await sctx.newPage(); const sErrs=[]; sp.on('pageerror',e=>sErrs.push(e.message));
+    await sp.goto(base+'prompt-editor.html');
+    await sp.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+    const U="u_t", BK={id:"p_x1",name:"Buket Özüçak",universeId:U,personality:"You are a calm dentist.",backstory:"Married to Sami.",instructions:"",image:"data:image/png;base64,AAAA",poseRefs:{a:["data:x"]},
+      relationships:{p_x4:{tie:"neighbour's girl",relationship:"x"}},afterHeatBy:{"Emre Tokmak":{text:"SEALED_DECISION never alone with him again.",day:6,period:"Afternoon"}},
+      goalsLive:{lines:["Keep Deniz away from the pool","Build a patient list"]}};
+    const backup={app:"StoryMind",backupVersion:1,localStorage:{sm_curuniverse:'"'+U+'"'},collections:{
+      universes:[{id:U,name:"Test Lojman",userName:"Emre Tokmak",playerHomeLocId:"L_E",image:"https://x/y.png",prompts:{x:"y"},
+        chronicle:[{day:2,text:"Deniz and Emre at the pool."},{day:3,text:"Sami lost the reports."}],userTies:{p_x4:{tie:"x"},p_x2:{tie:"friend"}},
+        originDoc:"Buket Özüçak is a dentist.\n\nDeniz Kaya is a cheerful fourteen-year-old.",
+        locations:[{id:"L_H",name:"Big Özüçak's House",type:"home",residents:["p_x1","p_x2","p_x4"],image:"data:z",sublocations:[{id:"S_L",name:"Living Room"},{id:"S_K",name:"Kitchen"}]},
+                   {id:"L_E",name:"Emre's House",type:"home",residents:[],sublocations:[{id:"S_EL",name:"Open-Plan Living Area"},{id:"S_EB",name:"Master Bedroom"}]},
+                   {id:"L_P",name:"Isdemir",type:"poi",residents:[],sublocations:[{id:"S_C",name:"Worker Canteen"}]}]}],
+      personas:[BK,{id:"p_x2",name:"Sami Özüçak",universeId:U,personality:"Charming.",backstory:"",instructions:""},{id:"p_x3",name:"Berker Özüçak",universeId:U,personality:"Meticulous.",backstory:"",instructions:""},
+        {id:"p_x4",name:"Deniz Kaya",universeId:U,personality:"You are a cheerful fourteen-year-old.",backstory:"",instructions:""}],
+      memory:[{id:"m1",ownerId:"p_x1",universeId:U,type:"EXPERIENCE",content:"EARLYMARK I walked the trail with Emre.",gameDay:3,gamePeriod:"Midday",vec:[0.1,0.2]},
+              {id:"m2",ownerId:"p_x1",universeId:U,type:"INTIMACY",content:"AFTERMARK it happened at his house.",gameDay:6,gamePeriod:"Afternoon"},
+              {id:"m3",ownerId:"p_x1",universeId:U,type:"EXPERIENCE",content:"I saw Deniz by the pool.",gameDay:4,gamePeriod:"Morning"},
+              {id:"m4",ownerId:"p_x4",universeId:U,type:"EXPERIENCE",content:"x",gameDay:4}],
+      gossip:[],
+      chats:{c1:{id:"c1",universeId:U,gameDay:6,period:"Afternoon",locationId:"L_E",location:"Emre's House",presentIds:["p_x1","p_x4"],
+        messages:[{mid:"a",role:"user",content:"Merhaba"},{mid:"b",role:"assistant",speaker:"Deniz Kaya",speakerId:"p_x4",content:"Selam"}],
+        rel:{"p_x1>__user__":{trust:10,desc:"d"},"p_x4>__user__":{trust:1}},intents:[{id:"i1",holderId:"p_x4",targetId:"__user__",status:"brewing",aim:"x"}],
+        book:{big:"x"},imgPromptBy:{p_x1:"x"},_psyche:{p_x1:{sig:"p_x1|p_x4|x",toward:"t",against:"a"}}}}}};
+    const sl=await sp.evaluate(b=>{ const w=__PE.slimWorld(b); const t=JSON.stringify(w);
+      return {t,left:w.left,ids:w.collections.personas.map(p=>p.id),home:w.collections.universes[0].locations.map(l=>l.id+":"+(l.sublocations||[]).map(s=>s.id).join("/")).join(" "),
+        mem:w.collections.memory.length,prompts:Object.keys(w.collections.universes[0].prompts).length}; },backup);
+    const noMinor=sl.t.replace(/"left":\[[^\]]*\]/,"");
+    ok("a character under 18 is left out, with every record that mentions her", JSON.stringify(sl.left)==='["Deniz Kaya"]'&&!/Deniz|p_x4/.test(noMinor), (noMinor.match(/.{0,60}(Deniz|p_x4).{0,40}/)||[""])[0]);
+    ok("pictures, embeddings and the book are dropped, the universe's own prompts too", !/data:|"vec"|"book"|imgPromptBy|poseRefs/.test(sl.t)&&sl.prompts===0, sl.t.slice(0,200));
+    ok("Buket, Sami and Berker and their places get the ids the scenes use", sl.ids.join()==="p_buket,p_sami,p_berk"&&/l_sami:s_door?\/?s_liv\/s_kit|l_sami:s_liv\/s_kit/.test(sl.home)&&/l_emre:s_eliv\/s_ebed/.test(sl.home)&&/l_can:s_tab/.test(sl.home), sl.ids.join()+" | "+sl.home);
+    await sp.click('#btnWorld'); await sp.waitForSelector('.modal, dialog, [role=dialog]',{timeout:5000}).catch(()=>{});
+    await sp.setInputFiles('#fileWorld',{name:"storymind_backup.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(backup))});
+    await sp.waitForFunction(()=>__PE.S.world&&__PE.S.world.source==="story",null,{timeout:30000});
+    const sw=await sp.evaluate(()=>({sel:document.querySelector("#worldSel").value,opts:[...document.querySelectorAll("#worldSel option")].map(o=>o.textContent),name:__PE.STORY.w&&__PE.STORY.w.name}));
+    ok("a loaded backup becomes the story every payload and test uses", sw.sel==="story"&&/Your story: Test Lojman/.test(sw.opts.join("|")), JSON.stringify(sw));
+    const bs=await sp.evaluate(async()=>{ const by=id=>__PE.DRIFT_SCENES.find(x=>x.id===id), out={};
+      for(const id of ["past","after1"]){ const sc=by(id);
+        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:[{role:"user",content:sc.lines[0]}]}});
+        out[id]=p.messages.map(m=>m.content).join("\n"); }
+      return out; });
+    ok("a scene set before day 6 is rewound: no memory of it, no decision after it", /EARLYMARK/.test(bs.past)&&!/AFTERMARK/.test(bs.past)&&!/SEALED_DECISION/.test(bs.past), JSON.stringify({e:/EARLYMARK/.test(bs.past),a:/AFTERMARK/.test(bs.past),s:/SEALED_DECISION/.test(bs.past)}));
+    ok("the day after uses the story's own memory and decision, not the sample's stand-in", /AFTERMARK/.test(bs.after1)&&/SEALED_DECISION/.test(bs.after1)&&!/ended up in his bed/.test(bs.after1), JSON.stringify({a:/AFTERMARK/.test(bs.after1),s:/SEALED_DECISION/.test(bs.after1),e:/ended up in his bed/.test(bs.after1)}));
+    ok("pieces the story never produced are filled from its facts (scenario, a condensed past)", /başhekim/.test(bs.past)&&/The first days:/.test(bs.past), bs.past.slice(0,600));
+    await sp.reload();
+    await sp.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.world,null,{timeout:90000});
+    ok("the story is kept in this browser across a reload", await sp.evaluate(()=>__PE.S.world.source==="story"&&__PE.STORY.w&&__PE.STORY.w.name==="Test Lojman"));
+
+    console.log("\n[14 — LLM evaluation inside Claude: Claude's tiers are the candidates]");
+    await sp.evaluate(()=>{ window.__tiers=[];
+      const f=async(input,o)=>{ const t=typeof input==="string"?input:JSON.stringify(input); window.__tiers.push({tier:o&&o.modelTier,eval:/You are evaluating LANGUAGE MODELS/.test(t)});
+        return {text:/Reply with ONLY|JSON/.test(t)?"{}":'"Tamam." *Gülümsüyor.*',truncated:false}; };
+      f.json=async(input,o)=>{ window.__tiers.push({tier:o&&o.modelTier,eval:true});
+        return {models:[{label:"A",scores:{realism:6},overall:6,good:"quick",weak:"thin"},{label:"B",scores:{realism:7},overall:7,good:"steady",weak:"plain"},{label:"C",scores:{realism:9},overall:9,good:"alive",weak:"slow"}],best:"C",recommend:"Model C: the most alive",summary:"Model C wins."}; };
+      AI.sample=f; NET.ok=false;
+      const L=__PE.LLM; L.cfg.cands={}; L.cfg.scenes=["daily_text"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg)); });
+    await sp.click('#rtabs button[data-r="llm"]');
+    const here=await sp.evaluate(()=>({c:__PE.llmCands("model"),box:document.querySelector("#llmKeyBox").textContent}));
+    ok("without OpenRouter the roleplay setting compares Claude's three tiers", here.c.join()==="claude:quick,claude:default,claude:complex"&&/Runs here, with Claude/.test(here.box), JSON.stringify(here));
+    await sp.evaluate(()=>__PE.runLlm());
+    const le=await sp.evaluate(()=>({res:__PE.LLM.res,tiers:window.__tiers,html:document.querySelector("#llmResults").textContent}));
+    const plays=le.tiers.filter(x=>!x.eval);
+    ok("each tier played the scene through Claude, at its own tier", ["quick","default","complex"].every(t=>plays.filter(x=>x.tier===t).length===4), JSON.stringify(plays.map(x=>x.tier)));
+    ok("and Claude compared them blind, naming the tiers again", le.tiers.some(x=>x.eval&&x.tier==="complex")&&/best: claude:complex/.test(le.html), le.html.slice(0,300));
+    errs.push(...sErrs);
+    await sctx.close();
 
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above

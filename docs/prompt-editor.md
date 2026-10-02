@@ -43,16 +43,67 @@ Memory retrieval is replaced by the speaker's own memories (newest six fresh, ne
 because the real retrieval costs a model call. Drives (`psycheEnsure`) are not written for the same
 reason, so the drives block is empty unless the story data carries `_psyche`.
 
-**Story data.** A sample world (Isdemir Lojmanları: Sami, Buket and Berker Özüçak, player Emre, an
-evening scene about the money Sami owes; Buket speaks by default) is built in the sandbox at boot. **Use my own story…** loads a
-roleplay export, a universe export or a full backup instead. Prompt overrides stored inside a universe
-(`u.prompts`, `u.blockTpls`) are cleared in the sandbox, so the preview shows the editor's prompts.
+**Story data: your story.** **Use my own story…** reads a full backup (best), a roleplay export or a
+universe export (`slimWorld`). It prefers the universe that has Buket in it, and slims it: no pictures,
+no embeddings, no book, the universe's own prompt overrides cleared, and the last 40 messages kept.
+The slimmed copy, about half a megabyte for the Isdemir backup, is kept in the browser (IndexedDB
+`pe-story`) and loads at every start. **Forget it** in the same dialog drops it. Nothing is uploaded.
+A `prompt-editor-world.json` beside the page is used when the browser holds none. The private copy
+of the editor inside Claude ships one; the public site does not, because the repository is public.
 
-The sample carries data for every piece of a reply: condensed and older memories, a rumour (Buket's stake,
-Sami and Berker carrying it), trackers, a plan due tonight and one lived this afternoon, promises both ways,
-a quest, where they have been today, relationship readings with a live charge, private motives, a limit
-Buket drew, and drives passages for both. Its last line is an ask with a hand in it, and a short text
-thread gives the text kind something to answer.
+- **The scenes' names.** Buket, Sami, Berker and Özlem, Buket's home (`l_sami`, with `s_liv`, `s_kit`,
+  `s_bed`, `s_door`), the player's home (`l_emre`, with `s_eliv`, `s_ebed`, `s_egate`…) and the plant
+  with its canteen (`l_can`/`s_tab`) are renamed to the short ids the scenes use. Every other id stays
+  as it is.
+- **Under 18.** Characters whose card says they are under 18 ("fourteen-year-old", "on the cusp of
+  adolescence") are left out of the copy. So is every record that mentions them: memories, chronicle,
+  ties, motives, relationship readings, plans, goals lines and their profile paragraphs in the origin
+  document. They are never test material.
+- **Gaps filled from the story's own facts** (`fillGaps`, every entry marked `source:"editor"`):
+  - a rumour when the story has none;
+  - a scenario line on Buket's and Sami's cards;
+  - a condensed "first days" memory for anyone without long-term memory. It covers only the first day
+    or two and is stamped with the last day it covers;
+  - the commitments the promises engine had not written;
+  - the characters' own quests, shown as story quests;
+  - a motive of Buket's toward Sami, so the private-intent piece has a case;
+  - a chat stamp on any after-heat decision that lacks one.
+
+**Rewinding (`asOf`).** A scene can be set earlier than the story's present. Everything stamped later is
+taken out before it is built:
+
+- memories;
+- promises, motives, world and event logs, and the player's memories;
+- spoken limits and the chronicle;
+- after-heat decisions and social facts;
+- plans made later (read from the plan's "planned this on day N"), with any completion after that date
+  undone.
+
+The drives notes are cleared, and "where you have been today" is rebuilt from that day's memories. The
+holding-the-line, daily-talk and flirting scenes are set at the end of day 5, before Buket's afternoon
+with Emre on day 6. The after-intimacy scenes are set on days 7 and 11 and use the story's own memory
+and her own after-heat decision.
+
+**The sample.** Before a backup is loaded, a short stand-in is built in the sandbox at boot: the same
+people, places and facts at the end of day 5. Buket is a dentist with a petition for evening shifts. Sami
+owes Emre the field reports. Ayça, Emre's wife, is in Istanbul. The Özüçaks live in Big Özüçak's House.
+It carries data for every piece of a reply.
+
+**The scenes' own setups.** Each scene can bring:
+
+- drives passages (`psyche`, always fresh);
+- a spoken limit (`limits`);
+- where she has been today (`dayLog`);
+- relationship readings.
+
+The sample's after-heat memory and decision are applied only when the story has none
+(`ifNoAfterHeat`).
+
+Some pieces stay empty by design:
+
+- the player's card and others present, when the reply goes to the player alone;
+- `situation`, unless someone is arriving or leaving;
+- `watching_now`, `already_said` and `spoken_delivery`, the video and voice pieces.
 
 **This turn** switches bring in the blocks that depend on the moment: *arriving* (`situation`), *video
 playing* (`watching_now`), *voiced aloud* (`spoken_delivery`) and *after heat* (`after_heat`). The preview
@@ -168,8 +219,16 @@ edit, and its results carry no Apply buttons.
   contract, faithfulness, judgement and economy. Then an overall score, what each model is good and weak
   at, the best model and a one-line recommendation; names are put back afterwards.
 
-It needs OpenRouter, so inside the Claude app it can only analyse: run it on the StoryMind site, use
-**Export results**, then **Import results** in the editor inside Claude and press **Compare again**.
+**Inside Claude** (no OpenRouter), it runs there too. The candidates are Claude's own tiers (`claude:quick`,
+`claude:default`, `claude:complex`), played through the viewer's Claude account (`sample` with
+`modelTier`). Claude stands in for the model, exactly as in the Tests tab. Roleplay compares the three
+tiers by default, and **Add Claude's tiers to every setting** adds them everywhere. The engine scene is
+recorded with the strongest tier (with the `pe-field` tags, so every call still knows its setting) and
+replayed with each tier. Claude's tiers can also be added as candidates beside OpenRouter models on the
+site.
+
+To compare your OpenRouter models themselves, run the tab on the StoryMind site, use **Export
+results**, then **Import results** inside Claude and press **Compare again**.
 
 ## Drift tests
 

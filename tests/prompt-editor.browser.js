@@ -213,6 +213,45 @@ const ROOT=path.resolve(__dirname,'..');
     ok("Analyse sends it to Claude only, never back to the model", OR.calls.length===1&&/^anthropic\//.test(OR.calls[0].body.model)
        &&await pg.evaluate(()=>!!__PE.DR.results.past.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
+    console.log("\n[10 — engine tests: the app plays for real, every background engine is recorded]");
+    OR.calls=[];
+    const memFind=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("prompt:memBuild")).split("\n").find(l=>l.trim().length>30).trim().slice(0,40));
+    OR.answer=(f=>body=>{ const all=JSON.stringify(body.messages||[]);
+      if(/BACKGROUND ENGINE of the app/.test(all)){
+        const k=(all.match(/prompt key \\"([A-Za-z0-9_]+)\\"/)||[])[1]||"";
+        return JSON.stringify({verdict:k==="memBuild"?"issues":"good",summary:"s",problems:[],edits:k==="memBuild"?[{item:"prompt:memBuild",find:f,replace:f+" PE-ENGINE-FIX",why:"t"}]:[]}); }
+      const sys=String(((body.messages||[])[0]||{}).content||"");
+      return /JSON/i.test(sys)?"{}":'"Tamam." *Başını sallıyor.*'; })(memFind);
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); });
+    await pg.click('#rtabs button[data-r="engines"]');
+    await pg.evaluate(()=>__PE.runEngines());
+    await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
+    const er=await pg.evaluate(()=>({groups:__PE.engGroups().map(g=>({k:g.key,n:g.calls.length,m:g.calls[0].model,err:g.calls.filter(c=>c.error).length})),
+      judged:Object.keys(__PE.ENGRUN.judge).length,rest:__PE.S.world&&__PE.S.world.source}));
+    const keys=er.groups.map(g=>g.k);
+    ok("a played scene plus End Day fires the background engines (≥15 of them)", er.groups.length>=15, keys.join(" "));
+    ["memEval","memBuild","relPrompt","daySummaryPrompt","goalsCurator","presencePrompt","routerChar","chronicler"].forEach(k=>
+      ok("…including "+k, keys.indexOf(k)>=0, keys.join(" ")));
+    ok("no engine call failed", er.groups.every(g=>g.err===0), JSON.stringify(er.groups.filter(g=>g.err)));
+    const models=new Set(OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
+    ok("each engine was sent to the model StoryMind assigns it (not one model for everything)", models.size>=2, [...models].join(", "));
+    ok("Claude analysed every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
+    const cal=await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); return !!(b&&b.querySelector('.chg [data-a="apply"]:not([disabled])')); });
+    ok("an engine's proposed edit is offered", cal);
+    if(cal){ await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); b.querySelector('.chg [data-a="apply"]').click(); });
+      ok("and applies to that engine's prompt", await pg.evaluate(()=>/PE-ENGINE-FIX/.test(__PE.itemVal(__PE.findItem("prompt:memBuild"))))); }
+    ok("the sandbox is back to the untouched sample afterwards", await pg.evaluate(async()=>{ const p=await __PE.engCall("build",{kind:"solo"}); return p.messages.filter(m=>m.hist).length>=3; }));
+
+    console.log("\n[10b — Claude stands in: every call goes to Claude]");
+    OR.calls=[];
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("claude")); });
+    await pg.evaluate(()=>{ document.querySelector("#engEndDay").checked=false; document.querySelector("#engScript").value="Merhaba Buket."; __PE.analyseEngines=__PE.analyseEngines; });
+    await pg.evaluate(()=>__PE.runEngines());
+    await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
+    const cm=new Set(OR.calls.map(c=>c.body.model));
+    ok("with Claude standing in, every call (reply, engines, analysis) went to a Claude model", OR.calls.length>3&&[...cm].every(m=>/^anthropic\//.test(m)), [...cm].join(", "));
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); document.querySelector("#engEndDay").checked=true; });
+
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above
     await actx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

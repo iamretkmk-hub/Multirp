@@ -128,6 +128,34 @@ drifted, a score out of 10, and find/replace edits on named items that can be ap
 is 45 replies from your model and 10 analyses by Claude. Results are kept in the browser and can be
 exported and imported (see above).
 
+## Engine tests
+
+The background engines cannot be tested from a hand-made payload: what each one is handed is assembled
+from live state, and most of them read what an earlier engine wrote. So **Engine tests** has the app play
+for real in the sandbox (`liveBegin` / `liveTurn` / `liveEndDay` / `liveEnd` in the bridge):
+
+1. Every engine switch is turned on and `chatCompletion` is wrapped. Each call is recorded with its debug
+   label, the prompt key(s) it read (`up()` calls since the last call whose text is in the messages), the
+   exact messages and the model.
+2. A scripted scene (editable in the tab; the default makes a plan, a promise, a rumour, a touch, a move
+   to the balcony and a goodbye) is typed into the real chat input through `sendMessage`, one line at a
+   time, and the run waits for the app to go quiet after each one. Then `endDay` (optional).
+3. Each call is answered by the **model under test**, and the answer flows on into the app exactly as on
+   the phone:
+   - **Your model on OpenRouter**: StoryMind's own `chatCompletion`, so every engine goes to the model the
+     app assigns it (`mcModel`, `memModel`, `gmModel`…), with its own settings.
+   - **Claude stands in**: the call is handed to the editor and answered by Claude (two at a time). This is
+     the only choice inside the Claude app.
+4. Claude then analyses each engine: the answer against its contract (format and JSON fields, nothing
+   invented, its own rules and scope, usable by the parser and the next engine), and the prompt for wording
+   that let it go wrong. Its find/replace edits on `prompt:<key>` apply in place.
+
+The tab groups calls by prompt key. A typical run (six lines plus End Day) makes about 95 calls across 24
+engines. Results export and import like the drift tests.
+
+The same **Claude stands in** switch works for Test & review and the drift tests, so the whole editor runs
+inside the Claude app. Your own model can only be tested where OpenRouter is reachable.
+
 ## Making a pack the shipped defaults
 
 The editor produces a prompt pack. That changes what one phone uses, not what `index.html` ships. To

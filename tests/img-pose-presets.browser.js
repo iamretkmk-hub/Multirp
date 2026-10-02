@@ -121,10 +121,13 @@ const {chromium}=require('playwright');
   },o||{});
   const P=await draw();
   ok("it generated", P.state==="done", JSON.stringify(P));
-  ok("the pose picture is the only picture sent — no face of Sami, Burcu or the player", JSON.stringify(P.images)==='["data:HUG"]', JSON.stringify(P.images));
-  ok("the image model is told it is the pose reference", /^Figure 1 is the pose reference for this scene/.test(P.prompt), P.prompt.slice(0,300));
-  ok("the writer is told a pose picture goes instead of the faces, and who is in the frame",
-     /POSE REFERENCE/.test(P.usr)&&/Sami \(man\), whose line this picture is for/.test(P.usr)&&/Burcu \(woman\)/.test(P.usr)&&/Burcu/.test(P.usr)&&!/PEOPLE IN THIS FRAME/.test(P.usr), P.usr.slice(0,800));
+  /* v150.11 — the faces go with the pose: the speaker's, then the player's, then the pose picture LAST;
+     on a POV scene type (Hug here) only the speaker's face. */
+  ok("a POV scene type: the speaker's face, then the pose picture last — not the player's, not Burcu's", JSON.stringify(P.images)==='["data:S1","data:HUG"]', JSON.stringify(P.images));
+  ok("the image model is told whose face is Figure 1 and that Figure 2 is the pose reference",
+     /^The man in IMAGE 1 is Figure 1/.test(P.prompt)&&/Figure 2 is not a person: it is the pose reference for this scene/.test(P.prompt), P.prompt.slice(0,600));
+  ok("the writer is told the faces come first and the pose picture last, by label, and that the player is the camera",
+     /POSE REFERENCE/.test(P.usr)&&/- the man in IMAGE 1 = Sami \(man\), whose line this picture is for \(picture 1\)/.test(P.usr)&&/Emre is the camera \(POV\)/.test(P.usr)&&!/PEOPLE IN THIS FRAME/.test(P.usr), P.usr.slice(0,900));
   ok("the clothes and the place are still described on this first picture", /WHERE THIS FRAME HAPPENS/.test(P.usr), P.usr.slice(0,1200));
   ok("the message records the pose used", P.pose==="r_hug", JSON.stringify(P.pose));
 
@@ -132,11 +135,19 @@ const {chromium}=require('playwright');
      picture. The pose picture goes alone; the scene chain stands down for a pose frame. */
   console.log("\n[4. a pose frame sends the pose picture alone — no previous picture]");
   const Q=await draw({line:"*He holds her tighter.*"});
-  ok("only the pose picture, even with a previous picture in this place (the reported case)", JSON.stringify(Q.images)==='["data:HUG"]', JSON.stringify(Q.images));
-  ok("the image model is told only about the pose picture", /Figure 1 is the pose reference/.test(Q.prompt)&&!/Figure 2/.test(Q.prompt)&&!/current scene/.test(Q.prompt), Q.prompt.slice(0,500));
+  ok("no previous picture, even with one in this place (the reported case)", JSON.stringify(Q.images)==='["data:S1","data:HUG"]', JSON.stringify(Q.images));
+  ok("the image model is told nothing about a current scene", /Figure 2 is not a person: it is the pose reference/.test(Q.prompt)&&!/Figure 3/.test(Q.prompt)&&!/current scene/.test(Q.prompt), Q.prompt.slice(0,600));
   ok("and the writer gets no edit brief", !/EDITING THE CURRENT SCENE/.test(Q.usr)&&/POSE REFERENCE/.test(Q.usr), Q.usr.slice(0,600));
   const Q2=await draw({rule:"r_talk",line:"*He lets go and sits up.*"});
   ok("the next ordinary frame edits the pose frame's picture", Q2.images[Q2.images.length-1]==="https://out/2.png"&&Q2.images.indexOf("data:HUG")<0, JSON.stringify(Q2.images));
+  console.log("\n[4b. not a POV scene type: the speaker, the player, then the pose]");
+  await pg.evaluate(()=>{ state.imgRules.push({id:"r_bed",label:"In bed",cast:"player",pov:false,promptStyle:"",enabled:true});
+    state.personas.find(p=>p.id==="p_sami").poseRefs.r_bed=["data:BED"]; });
+  const NP=await draw({rule:"r_bed",line:"*He lies down beside her.*"});
+  ok("the speaker's face, then the player's, then the pose picture last", JSON.stringify(NP.images)==='["data:S1","data:E1","data:BED"]', JSON.stringify(NP.images));
+  ok("the image model gets both faces and the pose as Figure 3",
+     /The man in IMAGE 1 is Figure 1/.test(NP.prompt)&&/The man in IMAGE 2 is Figure 2/.test(NP.prompt)&&/Figure 3 is not a person: it is the pose reference/.test(NP.prompt), NP.prompt.slice(0,700));
+  ok("the writer is told who each label is", /- the man in IMAGE 1 = Sami \(man\), whose line this picture is for \(picture 1\)/.test(NP.usr)&&/- the man in IMAGE 2 = Emre \(the player\) \(man\) \(picture 2\)/.test(NP.usr)&&!/is the camera/.test(NP.usr), NP.usr.slice(0,900));
   await pg.evaluate(()=>{ window.__rule=state.imgRules.find(r=>r.id==="r_hug"); });
 
   console.log("\n[5. no dedicated picture: the faces go as before]");
@@ -145,13 +156,13 @@ const {chromium}=require('playwright');
   /* v150.8 — reported: an intimate scene sent two faces and the previous picture though a pose picture
      was set — on the other person in the frame. Whoever in the frame holds one supplies it. */
   const B2=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She hugs him back.*"});
-  ok("the speaker has no pose picture but the other person in the frame does: theirs is sent, no faces (the reported case)",
-     B2.images[0]==="data:HUG"&&B2.images.indexOf("data:U1")<0&&B2.images.indexOf("data:S1")<0&&B2.images.indexOf("data:E1")<0&&B2.pose==="r_hug", JSON.stringify(B2.images));
+  ok("the speaker has no pose picture but the other person in the frame does: theirs is sent after the speaker's face (the reported case)",
+     JSON.stringify(B2.images)==='["data:U1","data:HUG"]'&&B2.pose==="r_hug", JSON.stringify(B2.images));
   const LOG=await pg.evaluate(()=>{ const l=dbgLog; const e=(Array.isArray(l)?l:[]).slice().reverse().find(x=>x&&/pose presets/.test(x.label||"")); return e?{ep:e.endpoint,res:String(e.result||"")}:null; });
-  ok("the debug log says which scene type was drawn and whose pose picture went", !!LOG&&/scene type: Hug/.test(LOG.ep)&&/sent Sami's pose picture 1 of 1/.test(LOG.res), JSON.stringify(LOG));
+  ok("the debug log says which scene type was drawn and whose pose picture went", !!LOG&&/scene type: Hug/.test(LOG.ep)&&/sent Burcu's face picture, then Sami's pose picture 1 of 1 last/.test(LOG.res), JSON.stringify(LOG));
   const B3=await pg.evaluate(()=>{ state.personas.find(p=>p.id==="p_burcu").poseRefs={r_hug:["data:BHUG"]}; return true; });
   const B4=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She holds on.*"});
-  ok("when both have one, the speaker's own wins", B4.images[0]==="data:BHUG", JSON.stringify(B4.images));
+  ok("when both have one, the speaker's own wins", JSON.stringify(B4.images)==='["data:U1","data:BHUG"]', JSON.stringify(B4.images));
   await pg.evaluate(()=>{ delete state.personas.find(p=>p.id==="p_burcu").poseRefs; state.personas.find(p=>p.id==="p_sami").poseRefs={}; });
   const B5=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She lets go.*"});
   ok("nobody in the frame holds one: the faces go as before", B5.images.indexOf("data:U1")===0&&B5.images.indexOf("data:HUG")<0, JSON.stringify(B5.images));
@@ -176,8 +187,8 @@ const {chromium}=require('playwright');
   ok("the roll is uniform (30000 rolls over three pictures)", RR.n.every(x=>x>9400&&x<10600), JSON.stringify(RR.n));
   ok("every picture is picked, about equally often", RR.pick.every(x=>x>850&&x<1150), JSON.stringify(RR.pick));
   ok("a single picture is always the one", RR.one===0);
-  ok("the picked picture is the one sent, alone",
-     JSON.stringify(RR.imgs)==='["data:H2"]'&&RR.imgs.indexOf("data:H0")<0&&RR.imgs.indexOf("data:H1")<0&&RR.imgs.indexOf("data:S1")<0&&RR.idx===2, JSON.stringify(RR));
+  ok("the picked picture is the one sent, last, after the speaker's face",
+     JSON.stringify(RR.imgs)==='["data:S1","data:H2"]'&&RR.imgs.indexOf("data:H0")<0&&RR.imgs.indexOf("data:H1")<0&&RR.idx===2, JSON.stringify(RR));
 
   ok("the two pose prompts are registry prompts on the image writer's card", await pg.evaluate(()=>
      ["x_img_pose_writer","x_img_pose_roster"].every(k=>!!PROMPT_BY_KEY[k]&&!!K[k]&&ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey===k)))));

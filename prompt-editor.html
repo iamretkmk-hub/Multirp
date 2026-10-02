@@ -188,7 +188,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
 <body>
 
 <div class="top">
-  <div class="brand">Prompt Editor <small>for StoryMind</small></div>
+  <div class="brand">Prompt Editor <small>for StoryMind · build 2026-10-02c</small></div>
   <span class="chip" id="engChip" title="The StoryMind engine runs in a sealed sandbox in this page. It never sees your saved data."><span class="dot"></span><span id="engTxt">Engine: starting</span></span>
   <span class="stat" id="packStat">Shipped defaults</span>
   <button class="btn" id="btnImport" type="button">Open prompt export</button>
@@ -893,10 +893,18 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   /* The model under test. Its key lives only in this sandbox's memory; the reply is written by the app's
      own chatCompletion with rp:true — the roleplay bucket's model, temperature, tokens and thinking —
      so the request is the one the phone sends. */
-  function setModel(o){ if(o&&o.key!=null)state.key=String(o.key); if(o&&o.model)state.model=String(o.model); return {model:state.model,hasKey:!!state.key}; }
+  /* Which API the model under test is on: "or" (OpenRouter) or "nano" (NanoGPT). StoryMind's own request
+     code sends it (opts.prov picks the provider), so a NanoGPT call is built exactly as the phone builds it. */
+  var PE_PROV="or", PE_REASON_KEEP;
+  var PROV_LABEL={or:"OpenRouter",nano:"NanoGPT"};
+  function provKey(p){ return String((p==="nano"?state.nanoKey:state.key)||"").trim(); }
+  function setModel(o){ o=o||{}; if(o.key!=null)state.key=String(o.key); if(o.nanoKey!=null)state.nanoKey=String(o.nanoKey); if(o.prov)PE_PROV=o.prov==="nano"?"nano":"or"; if(o.model)state.model=String(o.model);
+    if(o.reasoning!=null){ if(PE_REASON_KEEP===undefined)PE_REASON_KEEP=state.reasoningOn; state.reasoningOn=o.reasoning?true:PE_REASON_KEEP; }
+    return {model:state.model,prov:PE_PROV,hasKey:!!provKey(PE_PROV)}; }
   async function complete(o){
-    if(!state.key)throw new Error("No OpenRouter key set.");
-    var r=await window.__PE_realCC(o.messages,o.model||state.model,{rp:true,dbg:"Prompt editor — drift test"});
+    var pv=(o&&o.prov)||PE_PROV;
+    if(!provKey(pv))throw new Error("No "+PROV_LABEL[pv]+" key set.");
+    var r=await window.__PE_realCC(o.messages,o.model||state.model,{rp:true,prov:pv,dbg:"Prompt editor — drift test"});
     return String(r==null?"":r);
   }
   /* ---------------- live engine run ----------------
@@ -927,6 +935,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     window.uiChoose=async function(msg,opts){return opts&&opts[0]?opts[0].value:null;};
     if(o.scene){ var ch=curChat(); if(ch){ if(o.scene.chat)Object.assign(ch,J(o.scene.chat)); rewind(ch,o.scene.asOf); if(o.scene.opener)ch.messages=[]; if(o.scene.opener)ch.messages.push({mid:"lv0",role:"assistant",speaker:"Narrator",narratorEvent:true,present:(ch.presentIds||[]).slice(),content:o.scene.opener}); applySetup(ch,o.scene.setup); } }
     if(o.key)state.key=String(o.key); else if(!state.key)state.key="pe-claude";
+    if(o.nanoKey!=null)state.nanoKey=String(o.nanoKey);
+    /* the provider for the roleplay replies, and (provEngines) for every background engine too */
+    LIVE.prov=o.prov==="nano"?"nano":null; LIVE.provEngines=!!o.provEngines;
     if(o.model)state.model=String(o.model);
     /* Which model SETTING chose each call. Every text-model field is set to a tag naming itself, so the
        call records its setting; the tag is then swapped for the real model (fieldModels: the file's
@@ -947,7 +958,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       rec.prompts=promptKeysFor(rec.messages,LIVE.ups.slice(-12));
       LIVE.calls.push(rec);LIVE.inflight++;LIVE.lastAt=Date.now();
       try{
-        var out=(LIVE.mode==="or")?await window.__PE_realCC(messages,model,opts):await askParent(rec);
+        var pv=LIVE.prov&&(opts.rp===true||LIVE.provEngines)?LIVE.prov:null;
+        if(pv)rec.prov=pv;
+        var out=(LIVE.mode==="or")?await window.__PE_realCC(messages,model,pv?Object.assign({},opts,{prov:pv}):opts):await askParent(rec);
         rec.output=String(out==null?"":out);return out;
       }catch(e){rec.error=String((e&&(e.message||e.friendly))||e);throw e;}
       finally{rec.ms=Date.now()-rec.at;LIVE.inflight--;LIVE.lastAt=Date.now();}
@@ -978,8 +991,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   function liveCalls(o){ var since=(o&&o.since)||0; return {calls:LIVE?LIVE.calls.filter(function(c){return c.id>since;}):[],inflight:LIVE?LIVE.inflight:0}; }
   /* Replay one recorded call with another model: the same messages and the same request options. */
   async function replay(o){
-    if(!state.key)throw new Error("No OpenRouter key set.");
-    var r=await window.__PE_realCC(o.messages,o.model,Object.assign({},o.opts||{},{dbg:"Prompt editor — LLM evaluation"}));
+    var pv=o.prov||PE_PROV;
+    if(!provKey(pv))throw new Error("No "+PROV_LABEL[pv]+" key set.");
+    var r=await window.__PE_realCC(o.messages,o.model,Object.assign({},o.opts||{},{prov:pv,dbg:"Prompt editor — LLM evaluation"}));
     return String(r==null?"":r);
   }
   function liveEnd(){
@@ -1066,11 +1080,15 @@ function pumpLlm(){
       finally{ llmActive--; pumpLlm(); } })();
   }
 }
-function relayAllowed(url){ return NET.allow&&/^https:\/\/openrouter\.ai\/api\//.test(String(url||"")); }
+function paidClaude(body){ try{ const m=String((JSON.parse(body||"{}")||{}).model||""); return /^anthropic\//i.test(m)||/(^|[\/:._-])claude/i.test(m); }catch(e){ return false; } }
+function relayAllowed(url){ return NET.allow&&/^https:\/\/(openrouter\.ai|nano-gpt\.com)\/api\//.test(String(url||"")); }
 async function relayFetch(d){
   const win=$("#engineFrame").contentWindow;
   const reply=o=>win.postMessage(Object.assign({pe:"fetchres",id:d.id},o),"*");
   if(!relayAllowed(d.url)){ reply({err:"blocked (prompt editor sandbox)"}); return; }
+  /* (!) Claude never runs on a paid API from this editor: any request naming a Claude/Anthropic model is
+     refused here, whatever started it (a setting, a candidate, a model named in the prompts file). */
+  if(paidClaude(d.body)){ reply({err:"blocked: Claude models are never run on OpenRouter or NanoGPT from the prompt editor (Claude runs only inside the Claude app)"}); return; }
   try{ const r=await fetch(d.url,{method:d.method,headers:d.headers,body:d.body}); reply({status:r.status,text:await r.text()}); }
   catch(e){ reply({err:String(e&&e.message||e)}); }
 }
@@ -1687,38 +1705,62 @@ async function aiInit(){
 async function netProbe(){
   try{ const r=await fetch("https://openrouter.ai/api/v1/models",{cache:"no-store"}); if(!r.ok) throw new Error(r.status);
     /* batch-only variants ("…:batch") cannot answer a chat request: never offered, never picked */
-    const j=await r.json(); NET.models=(j.data||[]).map(m=>m.id).filter(m=>m&&!/:batch$/i.test(m)).sort(); NET.ok=true; }
+    const j=await r.json(); NET.models=(j.data||[]).map(m=>m.id).filter(m=>m&&!/:batch$/i.test(m)&&!paidClaude(JSON.stringify({model:m}))).sort(); NET.ok=true; }
   catch(e){ NET.ok=false; }
   renderProvider(); if(S.rTab==="llm") renderLlm();
 }
 function orKey(){ return lsGet("orkey","")||""; }
+/* NanoGPT: the same OpenAI-shaped API as OpenRouter, its own key and model list. */
+const NANO_NET={ok:null,models:[]};
+async function nanoProbe(){
+  try{ const k=nanoKey(); const r=await fetch("https://nano-gpt.com/api/v1/models",{cache:"no-store",headers:k?{"Authorization":"Bearer "+k}:{}}); if(!r.ok) throw new Error(r.status);
+    const j=await r.json(); NANO_NET.models=(j.data||[]).map(m=>m.id).filter(m=>m&&!paidClaude(JSON.stringify({model:m}))).sort(); NANO_NET.ok=true; }
+  catch(e){ NANO_NET.ok=false; }
+  renderProvider(); if(S.rTab==="llm") renderLlm();
+}
+function nanoKey(){ return lsGet("nanokey","")||""; }
+function smNanoKeyHere(){ try{ const k=localStorage.getItem("sm_nanokey"); return k?k.replace(/^"|"$/g,""):""; }catch(e){ return ""; } }
+const API={or:{label:"OpenRouter",net:()=>NET,key:()=>orKey(),ls:"orkey"},nano:{label:"NanoGPT",net:()=>NANO_NET,key:()=>nanoKey(),ls:"nanokey"}};
+/* the API the model under test is on ("or" | "nano"); Claude standing in is not an API */
+function testProv(){ return testMode()==="nano"?"nano":"or"; }
+function apiReady(p){ const A=API[p]; return A.net().ok===true&&!!A.key(); }
 function packModels(){ const set=S.settings||{}, d=(S.meta&&S.meta.settingsDef)||{};
   return [...new Set(["model","fallbackModel","mcModel","gmModel","memModel","playerNarrateModel","callModel"].map(k=>set[k]||d[k]).filter(Boolean))]; }
-function testModel(){ return lsGet("testmodel","")||((S.settings&&S.settings.model)||(S.meta&&S.meta.settingsDef.model)||""); }
+function testModel(){ return (testProv()==="nano"?lsGet("testmodel_nano",""):"")||lsGet("testmodel","")||((S.settings&&S.settings.model)||(S.meta&&S.meta.settingsDef.model)||""); }
 function smKeyHere(){ try{ const k=localStorage.getItem("sm_key"); return (k&&/^sk-/.test(k.replace(/^"|"$/g,"")))?k.replace(/^"|"$/g,""):""; }catch(e){ return ""; } }
 /* Who answers as the model under test: "or" = the user's own models on OpenRouter, sent by StoryMind's own
    request code; "claude" = Claude stands in (the only choice inside the Claude app, which cannot reach
    OpenRouter). */
-function testMode(){ const m=lsGet("testmode",""); if(m==="or"&&NET.ok!==false) return "or"; if(m==="claude") return "claude"; return NET.ok===false?"claude":"or"; }
+function testMode(){ const m=lsGet("testmode","");
+  if(m==="nano"&&NANO_NET.ok!==false) return "nano";
+  if(m==="or"&&NET.ok!==false) return "or"; if(m==="claude") return "claude";
+  return NET.ok===false?(NANO_NET.ok===true&&nanoKey()?"nano":"claude"):"or"; }
 /* Analysis is Claude's job, here, through the Claude app only. OpenRouter plays the tests; it never analyses. */
 function claudeReachable(){ return !!AI.sample; }
 const ANALYSE_HERE="Analysis runs only in the editor inside Claude. Use Export results here, then Import results there.";
-function canTest(){ return testMode()==="claude"?claudeReachable():(NET.ok===true&&!!orKey()&&!!testModel()); }
-function testLabel(){ return testMode()==="claude"?"Claude (standing in for your model)":testModel(); }
-async function pushModelToEngine(){ if(!ENG.ready) return; try{ await engCall("setModel",{key:orKey(),model:testModel()}); }catch(e){} }
+function canTest(){ return testMode()==="claude"?claudeReachable():(apiReady(testProv())&&!!testModel()); }
+function testLabel(){ return testMode()==="claude"?"Claude (standing in for your model)":testModel()+(testProv()==="nano"?" (NanoGPT)":""); }
+function engOnApi(){ return lsGet("engonapi",true)!==false; }   // NanoGPT: background engines go there too
+/* Thinking for the model under test's replies: on, or as the prompts file says. (A model that only works
+   with reasoning is also caught by StoryMind itself: it is sent again with reasoning on, and remembered.) */
+function testReasoning(){ return lsGet("testreasoning",false)===true; }
+async function pushModelToEngine(){ if(!ENG.ready) return; try{ await engCall("setModel",{prov:testProv(),key:orKey(),nanoKey:nanoKey(),model:testModel(),reasoning:testReasoning()}); }catch(e){} }
 function modelBoxHTML(){
-  const k=orKey(), sm=smKeyHere();
-  const list=[...new Set(packModels().concat(NET.models))];
-  const mode=testMode();
+  const mode=testMode(), pv=testProv(), A=API[pv], k=A.key(), sm=pv==="nano"?smNanoKeyHere():smKeyHere();
+  const list=[...new Set(packModels().concat(A.net().models))];
+  const off=p=>API[p].net().ok===false;
   let h=`<div class="row"><b>Model under test</b><span class="chip ${canTest()?"ok":"bad"}"><span class="dot"></span>${canTest()?esc(testLabel()):"not connected"}</span></div>
-    <div class="row"><label class="stat"><input type="radio" name="pmModeX" class="pmMode" value="or" ${mode==="or"?"checked":""} ${NET.ok===false?"disabled":""}> your model on OpenRouter</label>
+    <div class="row"><label class="stat"><input type="radio" name="pmModeX" class="pmMode" value="or" ${mode==="or"?"checked":""} ${off("or")?"disabled":""}> your model on OpenRouter</label>
+      <label class="stat"><input type="radio" name="pmModeX" class="pmMode" value="nano" ${mode==="nano"?"checked":""} ${off("nano")?"disabled":""}> your model on NanoGPT</label>
       <label class="stat"><input type="radio" name="pmModeX" class="pmMode" value="claude" ${mode==="claude"?"checked":""}> Claude stands in</label></div>`;
-  if(NET.ok===false) h+=`<div class="stat" style="color:var(--warn)">Inside the Claude app this page cannot reach OpenRouter, so Claude stands in for your model here. To test your own model, open <b>prompt-editor.html</b> from your StoryMind site, run the tests there and use <b>Export results</b>; open that file here with <b>Import results</b> and Claude analyses it.</div>`;
-  else if(mode==="claude") h+=`<div class="stat">Claude answers every call in place of your model, using the same payloads. Your own model may behave differently; switch to OpenRouter to test it.</div>`;
-  if(NET.ok!==false) h+=`<div class="row"><input class="pmKey" type="password" placeholder="OpenRouter key (sk-or-…)" value="${esc(k)}" style="flex:2;min-width:160px" autocomplete="off">
+  if(off("or")&&off("nano")) h+=`<div class="stat" style="color:var(--warn)">Inside the Claude app this page cannot reach OpenRouter or NanoGPT, so Claude stands in for your model here. To test your own model, open <b>prompt-editor.html</b> from your StoryMind site, run the tests there and use <b>Export results</b>; open that file here with <b>Import results</b> and Claude analyses it.</div>`;
+  else if(mode==="claude") h+=`<div class="stat">Claude answers every call in place of your model, using the same payloads. Your own model may behave differently; switch to OpenRouter or NanoGPT to test it.</div>`;
+  if(mode!=="claude") h+=`<div class="row"><input class="pmKey" type="password" placeholder="${pv==="nano"?"NanoGPT API key":"OpenRouter key (sk-or-…)"}" value="${esc(k)}" style="flex:2;min-width:160px" autocomplete="off">
       ${sm&&sm!==k?`<button class="btn sm pmUseSm" type="button">Use StoryMind's key</button>`:""}</div>
-    <div class="row"><input class="pmModel" type="text" list="pmModels" placeholder="model id, e.g. deepseek/deepseek-v4-pro" value="${esc(testModel())}" style="flex:1;min-width:200px"></div>
-    <div class="stat">Each reply is written by StoryMind's own request for a roleplay reply: this model, with the temperature, token limit and thinking setting from your prompts file. The key stays in this browser.</div>`;
+    <div class="row"><input class="pmModel" type="text" list="pmModels" placeholder="model id on ${A.label}" value="${esc(testModel())}" style="flex:1;min-width:200px"></div>
+    <div class="row"><label class="stat"><input type="checkbox" class="pmReason" ${testReasoning()?"checked":""}> thinking (reasoning) on for the replies. Models that only work with reasoning get it on automatically.</label></div>
+    ${pv==="nano"?`<div class="row"><label class="stat"><input type="checkbox" class="pmEngApi" ${engOnApi()?"checked":""}> engine tests: send the background engines to NanoGPT too (with the models in your prompts file); off sends them to OpenRouter</label></div>`:""}
+    <div class="stat">Each reply is written by StoryMind's own request for a roleplay reply, sent to ${A.label}: this model, with the temperature, token limit and thinking setting from your prompts file. The key stays in this browser.</div>`;
   h+=`<div class="row" style="margin-top:4px"><b>Analyst</b><span class="chip ${AI.sample?"ok":"bad"}"><span class="dot"></span>${AI.sample?"Claude, here (your Claude account)":"only in the editor inside Claude"}</span></div>`;
   if(!AI.sample) h+=`<div class="stat">This page plays the tests. Claude analyses them in the editor inside the Claude app: <b>Export results</b> here, <b>Import results</b> there.</div>`;
   h+=`<datalist id="pmModels">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
@@ -1728,10 +1770,13 @@ function renderProvider(){
   ["#provBox","#driftModelBox"].forEach(sel=>{
     const b=$(sel); if(!b) return; b.innerHTML=modelBoxHTML();
     const key=b.querySelector(".pmKey"), mod=b.querySelector(".pmModel"), use=b.querySelector(".pmUseSm");
-    if(key) key.onchange=e=>{ lsSet("orkey",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
-    if(use) use.onclick=()=>{ lsSet("orkey",smKeyHere()); pushModelToEngine(); renderProvider(); toast("Using the key StoryMind keeps on this device"); };
-    if(mod) mod.onchange=e=>{ lsSet("testmodel",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
-    b.querySelectorAll(".pmMode").forEach(r=>{ r.name="pmMode"+sel; r.onchange=e=>{ lsSet("testmode",e.target.value); renderProvider(); }; });
+    const pv=testProv(), ea=b.querySelector(".pmEngApi");
+    if(key) key.onchange=e=>{ lsSet(API[pv].ls,e.target.value.trim()); pushModelToEngine(); if(pv==="nano") nanoProbe(); renderProvider(); };
+    if(use) use.onclick=()=>{ lsSet(API[pv].ls,pv==="nano"?smNanoKeyHere():smKeyHere()); pushModelToEngine(); renderProvider(); toast("Using the key StoryMind keeps on this device"); };
+    if(mod) mod.onchange=e=>{ lsSet(pv==="nano"?"testmodel_nano":"testmodel",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
+    if(ea) ea.onchange=e=>{ lsSet("engonapi",!!e.target.checked); };
+    const rs=b.querySelector(".pmReason"); if(rs) rs.onchange=e=>{ lsSet("testreasoning",!!e.target.checked); pushModelToEngine(); renderProvider(); };
+    b.querySelectorAll(".pmMode").forEach(r=>{ r.name="pmMode"+sel; r.onchange=e=>{ lsSet("testmode",e.target.value); pushModelToEngine(); renderProvider(); }; });
   });
 }
 /* The analyst: Claude, through the Claude app (the sample capability). Never OpenRouter. */
@@ -1818,12 +1863,12 @@ async function claudeAsModel(messages,signal,tier){
 }
 async function generateReply(p,signal){
   if(!canTest()) throw {code:"no_model",message:testMode()==="claude"
-    ?"Claude is not reachable from this page. Open the editor inside the Claude app, or add an OpenRouter key."
-    :"Add your OpenRouter key and the model to test (Model under test)."};
+    ?"Claude is not reachable from this page. Open the editor inside the Claude app, or pick OpenRouter or NanoGPT with a key."
+    :`Add your ${API[testProv()].label} key and the model to test (Model under test).`};
   if(signal&&signal.aborted) throw {code:"cancelled"};
   if(testMode()==="claude") return claudeAsModel(p.messages,signal);
   NET.allow=true;
-  try{ await pushModelToEngine(); return await engCall("complete",{messages:p.messages.map(m=>({role:m.role,content:m.content})),model:testModel()},300000); }
+  try{ await pushModelToEngine(); return await engCall("complete",{messages:p.messages.map(m=>({role:m.role,content:m.content})),model:testModel(),prov:testProv()},300000); }
   catch(e){ throw {message:"Your model did not answer: "+(e.message||e)}; }
   finally{ NET.allow=false; }
 }
@@ -2263,7 +2308,7 @@ function renderDrift(){
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
     }else if(r&&r.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading the exchange…</div>`);
     if(r&&!j&&!r.judging&&driftComplete(sc,r)){
-      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude"; ab.disabled=busyAll();
+      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent=r.err?"Analyse again":"Analyse with Claude"; ab.disabled=busyAll()||!claudeReachable(); if(!claudeReachable()) ab.title=ANALYSE_HERE;
       ab.onclick=()=>analyseDrift([sc]); el.appendChild(ab);
     }
     el.querySelector("[data-run]").onclick=()=>runDriftScenes([sc]);
@@ -2351,7 +2396,7 @@ ${fragCatalog()}`;
 async function runDriftScenes(list,inAll){
   if(DR.running||(ALL.running&&!inAll)) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
-  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":"Add your OpenRouter key and model first",5000); return; }
+  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":`Add your ${API[testProv()].label} key and model first`,5000); return; }
   /* the scenes are written against the sample story's facts */
   await useTestWorld();
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
@@ -2486,12 +2531,14 @@ function renderEng(){
       el.insertAdjacentHTML("beforeend",`<div class="turnRow"><details><summary class="stat" style="cursor:pointer">Call ${c.id} · input ${fmtN(payloadText(c).length)} chars · ${c.ms!=null?(c.ms/1000).toFixed(1)+"s":"…"}</summary><pre style="white-space:pre-wrap;font:11px/1.45 var(--mono);max-height:340px;overflow:auto">${esc(payloadText(c))}</pre></details>
         <div class="rp">${c.error?`<span style="color:var(--danger)">${esc(c.error)}</span>`:c.output==null?'<span class="stat">waiting…</span>':esc(String(c.output).slice(0,1600))}</div></div>`);
     });
-    if(j){
+    const jf=judgeFailed(j);
+    if(jf) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">${esc(j.summary||"The analysis failed.")}</div>`);
+    if(j&&!jf){
       if(j.summary) el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div><b>Verdict.</b> ${esc(j.summary)}</div></div>`);
       if(Array.isArray(j.problems)&&j.problems.length) el.insertAdjacentHTML("beforeend",`<ul style="margin:0;padding-left:18px;font-size:12.5px">${j.problems.map(x=>`<li>${esc(x.issue||x)}${x.evidence?` <span class="stat">— “${esc(x.evidence)}”</span>`:""}</li>`).join("")}</ul>`);
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
     }else if(gr.calls.some(c=>c.output!=null)&&!busyAll()){
-      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude";
+      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent=jf?"Analyse again":"Analyse with Claude"; ab.disabled=!claudeReachable(); if(!claudeReachable()) ab.title=ANALYSE_HERE;
       ab.onclick=()=>analyseEngines([gr.key]); el.appendChild(ab);
     }else if(ENGRUN.judging===gr.key||TEAM.busy.has(ENGRUN.cur+"|"+gr.key)) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading this engine…</div>`);
     host.appendChild(el);
@@ -2501,7 +2548,7 @@ function renderEng(){
 async function runEngines(presetId,inAll){
   if(ENGRUN.running||(ALL.running&&!inAll)) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
-  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":"Add your OpenRouter key and model first",5000); return; }
+  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":`Add your ${API[testProv()].label} key and model first`,5000); return; }
   const pid=presetId||engPreset().id, preset=ENGINE_SCENES.find(x=>x.id===pid)||engPreset();
   /* the lines in the editor box belong to the scene being shown; any other scene plays its own */
   const lines=(pid===engPreset().id?($("#engScript").value||engScript()):preset.lines.join("\n")).split("\n").map(x=>x.trim()).filter(Boolean);
@@ -2511,10 +2558,12 @@ async function runEngines(presetId,inAll){
   ENGRUN.running=true; ENGRUN.ctl=ALL.ctl||new AbortController(); ENGRUN.calls=[]; ENGRUN.judge={}; ENGRUN.model=testLabel();
   ENGRUN.focus=preset.focus; ENGRUN.lines=lines; renderEng();
   const mode=testMode();
-  NET.allow=(mode==="or");
+  NET.allow=(mode!=="claude");
   let poll=null;
   try{
-    await engCall("liveBegin",{mode,key:mode==="or"?orKey():"",model:mode==="or"?testModel():"",scene:preset.scene||null,fieldModels:effectiveModels()});
+    const ext=mode!=="claude";
+    if(ext&&mode==="nano"&&!engOnApi()&&!orKey()){ toast("The background engines go to OpenRouter: add your OpenRouter key too, or send them to NanoGPT",6000); }
+    await engCall("liveBegin",{mode:ext?"or":"claude",prov:mode==="nano"?"nano":null,provEngines:mode==="nano"&&engOnApi(),key:ext?orKey():"",nanoKey:nanoKey(),model:ext?testModel():"",scene:preset.scene||null,fieldModels:ext?Object.assign(effectiveModels(),{model:testModel()}):effectiveModels()});
     poll=setInterval(async()=>{ try{ const r=await engCall("liveCalls",{since:0},5000); ENGRUN.calls=r.calls; renderEng(); }catch(e){} },1500);
     for(let i=0;i<lines.length;i++){
       if(ENGRUN.ctl.signal.aborted) break;
@@ -2571,7 +2620,7 @@ async function analyseEngines(keys,inAll){
     if(ENGRUN.ctl.signal.aborted) break;
     n++; ENGRUN.judging=gr.key; $("#engStat").textContent=`Claude is analysing ${gr.label} (${n}/${groups.length})…`; renderEng();
     try{ ENGRUN.judge[gr.key]=await judgeEngine(gr); }
-    catch(e){ ENGRUN.judge[gr.key]={verdict:"issues",summary:"The analysis failed: "+aiErr(e),problems:[],edits:[]}; if(e&&(e.code==="cancelled"||e.code==="not_granted"))break; }
+    catch(e){ ENGRUN.judge[gr.key]={failed:true,verdict:"issues",summary:"The analysis failed: "+aiErr(e),problems:[],edits:[]}; if(e&&(e.code==="cancelled"||e.code==="not_granted"||e.code==="no_claude"))break; }
     engSave();
   }
   ENGRUN.judging=null; ENGRUN.running=false;
@@ -2624,9 +2673,9 @@ function overallInput(){
       r.turns.map((t,i)=>`${t.gm?"GM":"EMRE"} ${i+1}: ${t.user}\nBUKET: ${String(t.reply||"").slice(0,700)}${j.turns&&j.turns[i]?`\n  → ${j.turns[i].verdict}: ${j.turns[i].note||""}`:""}`).join("\n")+
       (j.summary?`\nSCENE VERDICT (${j.score!=null?j.score+"/10":"?"}): ${j.summary}`:""); }).join("\n\n");
   const engines=ENGINE_SCENES.filter(sc=>ENGRUN.byScene[sc.id]).map(sc=>{ const r=ENGRUN.byScene[sc.id];
-    const gs=engGroupsOf(r.calls).map(g=>{ const j=(r.judge||{})[g.key]; return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?" Problems: "+j.problems.map(x=>x.issue||x).join("; "):""):"not analysed"}`; }).join("\n");
+    const gs=engGroupsOf(r.calls).map(g=>{ const j0=(r.judge||{})[g.key], j=judgeFailed(j0)?null:j0; return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?" Problems: "+j.problems.map(x=>x.issue||x).join("; "):""):"not analysed"}`; }).join("\n");
     return `### Engine scene: ${sc.label}\n${gs}`; }).join("\n\n");
-  const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
+  const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
   const prompts=[...flagged].slice(0,8).map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,9000)}`).join("\n\n");
   const pays=Object.keys(kinds).map(k=>`===== A REAL ${KIND_SHORT[k].toUpperCase()} PAYLOAD =====\n${payloadText(kinds[k]).slice(0,18000)}`).join("\n\n");
   /* every edit an analyst proposed, with an id the overseer decides on */
@@ -2687,12 +2736,14 @@ function analystTasks(sig){
   DRIFT_SCENES.forEach(sc=>{ const r=DR.results[sc.id]; if(!r||r.judge||!driftComplete(sc,r)) return;
     tasks.push({key:"R|"+sc.id,label:sc.title,run:async()=>{ await analyseOne(sc); if(DR.results[sc.id].judge) tagEdits(DR.results[sc.id].judge.edits,"R:"+sc.id); }}); });
   ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r||!(r.calls||[]).length) return; r.judge=r.judge||{};
-    engGroupsOf(r.calls).forEach(g=>{ if(r.judge[g.key]||!g.calls.some(c=>c.output!=null)) return;
+    engGroupsOf(r.calls).forEach(g=>{ if((r.judge[g.key]&&!judgeFailed(r.judge[g.key]))||!g.calls.some(c=>c.output!=null)) return;
       tasks.push({key:sc.id+"|"+g.key,label:`${sc.label} · ${g.label}`,run:async()=>{
         const j=await judgeEngine(g,{model:r.model,focus:r.focus,lines:r.lines,signal:sig}); tagEdits(j.edits,"E:"+sc.id+":"+g.key);
         r.judge[g.key]=j; if(ENGRUN.cur===sc.id) ENGRUN.judge=r.judge; lsSet("engbyscene",ENGRUN.byScene); }}); }); });
   return tasks;
 }
+/* an analysis that failed is not a verdict (older results only carry the message) */
+function judgeFailed(j){ return !!(j&&(j.failed||/^The analysis failed/.test(j.summary||""))); }
 function tagEdits(edits,prefix){ (edits||[]).forEach((ed,i)=>{ if(ed&&!ed._id) ed._id=prefix+"#"+(i+1); }); }
 async function runTeam(sig){
   const tasks=analystTasks(sig); TEAM.busy.clear(); TEAM.done=0; TEAM.failed=0; TEAM.total=tasks.length; paintTeam();
@@ -2725,7 +2776,7 @@ async function analyseTeamAndOversee(){
 async function runEverything(){
   if(busyAll()) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
-  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":"Add your OpenRouter key and model first",5000); return; }
+  if(!canTest()){ toast(testMode()==="claude"?"Claude is not reachable from this page":`Add your ${API[testProv()].label} key and model first`,5000); return; }
   const rs=DRIFT_SCENES.filter(sc=>selReply().indexOf(sc.id)>=0), es=ENGINE_SCENES.filter(sc=>selEng().indexOf(sc.id)>=0);
   if(!rs.length&&!es.length){ toast("Tick at least one scene"); return; }
   ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; paintAllButtons();
@@ -2796,7 +2847,7 @@ const MODEL_FIELDS=[
 function fileModel(f){ return String((S.settings&&S.settings[f])||(S.meta&&S.meta.settingsDef[f])||"").trim(); }
 function effectiveModel(f,seen){ seen=seen||{}; if(seen[f]) return ""; seen[f]=1; const v=fileModel(f); if(v) return v; const d=MODEL_FIELDS.find(x=>x.key===f); return d&&d.fallback?effectiveModel(d.fallback,seen):""; }
 function effectiveModels(){ const o={}; MODEL_FIELDS.forEach(d=>{ const v=effectiveModel(d.key); if(v) o[d.key]=v; }); return o; }
-const LLM={running:false,ctl:null,cfg:lsGet("llmcfg",{cands:{},scenes:["daily","flirt","after1","flirt_text"],eng:"flirt",per:4}),res:lsGet("llmres",null)};
+const LLM={running:false,ctl:null,cfg:lsGet("llmcfg",{cands:{},scenes:["daily","flirt","after1","flirt_text"],eng:"flirt",per:4}),res:llmMigrate(lsGet("llmres",null))};
 function llmSaveCfg(){ lsSet("llmcfg",LLM.cfg); }
 function llmSaveRes(){ if(!lsSet("llmres",LLM.res)){ const r=Object.assign({},LLM.res); delete r.baseline; lsSet("llmres",r); } }
 /* Claude's own tiers can be candidates too ("claude:quick" and so on). They run through the Claude app, so
@@ -2806,12 +2857,17 @@ const CLAUDE_TIERS=[{id:"claude:quick",label:"Claude · fast tier"},{id:"claude:
 function isClaudeCand(m){ return /^claude:(quick|default|complex)$/.test(String(m||"")); }
 /* Where the candidates run. "auto": OpenRouter only once it has answered here AND a key is set; otherwise
    Claude's tiers, here. A saved key or a slow probe never pulls the evaluation off Claude by itself. */
-function llmMode(){ const m=lsGet("llmmode","auto"); if(m==="claude"||m==="or") return m; return (NET.ok===true&&!!orKey())?"or":"claude"; }
+/* "or" here means YOUR API: OpenRouter or NanoGPT, whichever Model under test is on. A candidate can name
+   its API: "nano:<id>" for NanoGPT, "openrouter:<id>" for OpenRouter; a plain id is on Model under test's. */
+function llmMode(){ const m=lsGet("llmmode","auto"); if(m==="claude"||m==="or") return m; return apiReady(testProv())?"or":"claude"; }
 function llmHere(){ return llmMode()==="claude"; }
-function llmRunnable(m){ return isClaudeCand(m)?(!!AI.sample||!!(window.claude&&claude.use)):(llmMode()==="or"&&NET.ok!==false&&!!orKey()); }
+function candProv(m){ m=String(m||""); return /^nano:/.test(m)?"nano":/^openrouter:/.test(m)?"or":testProv(); }
+function candId(m){ return String(m||"").replace(/^(nano|openrouter):/,""); }
+function llmRunnable(m){ if(isClaudeCand(m)) return !!AI.sample||!!(window.claude&&claude.use); const p=candProv(m); return llmMode()==="or"&&API[p].net().ok!==false&&!!API[p].key(); }
 function candLabel(m){ const t=CLAUDE_TIERS.find(x=>x.id===m); return t?t.label:m; }
 function llmCands(f){
-  const cur=effectiveModel(f), extra=(LLM.cfg.cands[f]||[]).filter(m=>m&&m!==cur);
+  /* roleplay on your API: the model under test (on its API) is the one the others are compared with */
+  const cur=(f==="model"&&!llmHere()&&testModel())?testModel():effectiveModel(f), extra=(LLM.cfg.cands[f]||[]).filter(m=>m&&m!==cur);
   let all=[cur].concat(extra).filter(Boolean).filter(llmRunnable);
   if(f==="model"&&llmHere()&&!all.some(isClaudeCand)) all=CLAUDE_TIERS.map(x=>x.id);   // on Claude: the three tiers by default
   return all.length>1?all:[];
@@ -2820,26 +2876,27 @@ function llmCands(f){
 async function candComplete(messages,m,opts,signal){
   if(isClaudeCand(m)) return String(await claudeAsModel(messages,signal,m.slice(7))||"").trim();
   NET.allow=true;
-  try{ return opts?await engCall("replay",{messages,model:m,opts},300000):String(await engCall("complete",{messages,model:m},300000)||"").trim(); }
+  const prov=candProv(m), id=candId(m);
+  try{ return opts?await engCall("replay",{messages,model:id,opts,prov},300000):String(await engCall("complete",{messages,model:id,prov},300000)||"").trim(); }
   finally{ NET.allow=false; }
 }
 function renderLlm(){
   const kb=$("#llmKeyBox");
-  const modeSel=`<label class="stat">Candidates run on <select id="llmModeSel"><option value="auto">automatic</option><option value="claude">Claude, here</option><option value="or"${NET.ok===false?" disabled":""}>OpenRouter${NET.ok===false?" (not reachable here)":""}</option></select></label>`;
+  const modeSel=`<label class="stat">Candidates run on <select id="llmModeSel"><option value="auto">automatic</option><option value="claude">Claude, here</option><option value="or"${API[testProv()].net().ok===false?" disabled":""}>your API: ${API[testProv()].label}${API[testProv()].net().ok===false?" (not reachable here)":""}</option></select></label>`;
   if(kb){ kb.innerHTML=llmHere()&&(AI.sample||(window.claude&&claude.use))
       ?`<div class="row"><span class="chip ok"><span class="dot"></span>Runs here, with Claude</span>${modeSel}<span class="sp"></span><button type="button" class="btn sm" id="btnLlmTiers">Add Claude's tiers to every setting</button></div><div class="stat">The candidates are Claude's own tiers (fast, standard, strongest): each plays the same scenes and engine calls through your Claude account, and Claude compares them blind. No OpenRouter key is needed. Roleplay compares the three tiers by default; add them to other settings with the button or the box. To compare your OpenRouter models instead, run this tab on your StoryMind site, <b>Export results</b>, and <b>Import results</b> here.</div>`
-      :NET.ok===false
-      ?`<div class="row"><span class="chip bad"><span class="dot"></span>No model reachable</span></div><div class="stat" style="color:var(--warn)">This page reaches neither OpenRouter nor Claude. Open it inside the Claude app, or on your StoryMind site with an OpenRouter key.</div>`
-      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span>${modeSel}<span class="stat">The key is set under Model under test, in the Tests or Claude tab. ${AI.sample?"Claude, here, writes the comparison.":"The candidates play here; Claude compares them in the editor inside Claude (Export results, then Import results there)."}</span></div>`; }
+      :NET.ok===false&&NANO_NET.ok===false
+      ?`<div class="row"><span class="chip bad"><span class="dot"></span>No model reachable</span></div><div class="stat" style="color:var(--warn)">This page reaches neither OpenRouter, NanoGPT nor Claude. Open it inside the Claude app, or on your StoryMind site with a key.</div>`
+      :`<div class="row"><span class="chip ${API[testProv()].key()?"ok":"bad"}"><span class="dot"></span>${API[testProv()].label}: ${API[testProv()].key()?"key set":"no key"}</span>${modeSel}<span class="stat">The key is set under Model under test, in the Tests or Claude tab. ${AI.sample?"Claude, here, writes the comparison.":"The candidates play here; Claude compares them in the editor inside Claude (Export results, then Import results there)."}</span></div>`; }
   const ms=$("#llmModeSel"); if(ms){ ms.value=lsGet("llmmode","auto"); ms.onchange=()=>{ lsSet("llmmode",ms.value); renderLlm(); }; }
   const tb=$("#btnLlmTiers"); if(tb) tb.onclick=()=>{ MODEL_FIELDS.forEach(d=>{ const a=LLM.cfg.cands[d.key]=LLM.cfg.cands[d.key]||[]; CLAUDE_TIERS.forEach(t=>{ if(a.indexOf(t.id)<0) a.push(t.id); }); }); llmSaveCfg(); renderLlm(); };
   const host=$("#llmFields"); if(!host) return;
-  const list=[...new Set(CLAUDE_TIERS.map(x=>x.id).concat(packModels(),NET.models))];
+  const list=[...new Set(CLAUDE_TIERS.map(x=>x.id).concat(packModels(),NET.models.map(m=>testProv()==="or"?m:"openrouter:"+m),NANO_NET.models.map(m=>testProv()==="nano"?m:"nano:"+m)))];
   host.innerHTML=MODEL_FIELDS.map(d=>{ const cur=effectiveModel(d.key), cands=LLM.cfg.cands[d.key]||[];
     return `<div class="scene" data-f="${d.key}"><h3>${esc(d.label)} <span class="stat"><code>${d.key}</code></span></h3>
       <div class="tests">From your prompts file: <code>${esc(cur||"(not set)")}</code>${!fileModel(d.key)&&cur?` <span class="stat">(blank there, so it uses ${esc(d.fallback)})</span>`:""}${cur&&!llmRunnable(cur)?` <span class="stat">· not callable from here</span>`:""}${llmCands(d.key).length?` <span class="stat">· compares: ${esc(llmCands(d.key).map(candLabel).join(", "))}</span>`:""}</div>
       <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${cands.map(m=>`<span class="chip${llmRunnable(m)?"":" bad"}" title="${llmRunnable(m)?"":"cannot be called from this page"}">${esc(candLabel(m))} <button type="button" class="btn ghost sm" data-del="${esc(m)}" aria-label="Remove" style="padding:0 4px">×</button></span>`).join("")}
-        <input type="text" list="llmModelList" placeholder="add a model to compare…" style="flex:1;min-width:180px;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:4px 7px"><button type="button" class="btn sm" data-add>Add</button></div></div>`; }).join("")
+        <input type="text" list="llmModelList" placeholder="add a model to compare (nano:… for NanoGPT, claude:… for Claude)…" style="flex:1;min-width:180px;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:4px 7px"><button type="button" class="btn sm" data-add>Add</button></div></div>`; }).join("")
     +`<datalist id="llmModelList">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
   host.querySelectorAll("[data-f]").forEach(el=>{ const f=el.dataset.f;
     const add=()=>{ const inp=el.querySelector("input"), v=inp.value.trim(); if(!v) return; const a=LLM.cfg.cands[f]=LLM.cfg.cands[f]||[]; if(a.indexOf(v)<0&&v!==effectiveModel(f)) a.push(v); llmSaveCfg(); renderLlm(); };
@@ -2869,23 +2926,26 @@ function renderLlmResults(){
     let h=`<h3>${esc(d.label)} <span class="stat"><code>${f}</code></span>${v&&v.best?`<span class="sp"></span><span class="vd held">best: ${esc(v.best)}</span>`:""}</h3>`;
     if(v){
       h+=`<div class="turnRow"><div><b>Verdict.</b> ${esc(v.summary||"")}</div>${v.recommend?`<div class="stat"><b>Use:</b> ${esc(v.recommend)}</div>`:""}</div>`;
-      const rows=(v.models||[]);
+      const rows=(v.models||[]), SP=llmSpeed(F);
       if(rows.length){ const crit=[...new Set(rows.flatMap(r=>Object.keys(r.scores||{})))];
-        h+=`<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12px;width:100%"><thead><tr><th style="text-align:left;padding:3px 6px">Model</th>${crit.map(c=>`<th style="padding:3px 6px">${esc(c)}</th>`).join("")}<th style="padding:3px 6px">overall</th></tr></thead><tbody>`
-          +rows.map(r=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px"><code>${esc(r.model)}</code></td>${crit.map(c=>`<td style="text-align:center;padding:3px 6px;font-variant-numeric:tabular-nums">${r.scores&&r.scores[c]!=null?esc(r.scores[c]):"–"}</td>`).join("")}<td style="text-align:center;padding:3px 6px;font-weight:600">${r.overall!=null?esc(r.overall):"–"}</td></tr>`).join("")
+        h+=`<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12px;width:100%"><thead><tr><th style="text-align:left;padding:3px 6px">Model</th>${crit.map(c=>`<th style="padding:3px 6px">${esc(c)}</th>`).join("")}<th style="padding:3px 6px">time (avg)</th><th style="padding:3px 6px">overall</th></tr></thead><tbody>`
+          +rows.map(r=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px"><code>${esc(r.model)}</code></td>${crit.map(c=>`<td style="text-align:center;padding:3px 6px;font-variant-numeric:tabular-nums">${r.scores&&r.scores[c]!=null?esc(r.scores[c]):"–"}</td>`).join("")}<td style="text-align:center;padding:3px 6px;font-variant-numeric:tabular-nums">${esc(fmtSec(SP[r.model]&&SP[r.model].avg))}</td><td style="text-align:center;padding:3px 6px;font-weight:600">${r.overall!=null?esc(r.overall):"–"}</td></tr>`).join("")
           +`</tbody></table></div>`
           +rows.map(r=>`<div class="stat"><code>${esc(r.model)}</code> — <b>good at:</b> ${esc(r.good||"")}${r.weak?` · <b>weak at:</b> ${esc(r.weak)}`:""}</div>`).join(""); }
     }else if(F.error) h+=`<div class="stat" style="color:var(--danger)">${esc(F.error)}</div>`;
-    else h+=`<div class="stat">${F.judging?"Claude is comparing…":"Not compared yet."}</div>`;
+    else h+=`<div class="stat">${F.judging?"Claude is comparing…":F.cmpError?`<span style="color:var(--danger)">${esc(F.cmpError)}</span>`:"Not compared yet."}</div>`;
+    if(!F.error&&!F.judging&&F.models&&F.models.length>1) h+=`<div class="row" style="margin-top:4px"><button class="btn sm${v?"":" pri"}" type="button" data-cmp="${esc(f)}">${v?"Compare this setting again":"Compare with Claude"}</button>${claudeReachable()?"":` <span class="stat">only in the editor inside Claude</span>`}</div>`;
+    { const SP=llmSpeed(F), ms=Object.keys(SP); if(ms.length) h+=`<div class="stat"><b>Response time</b> (send to full answer, per ${F.kind==="reply"?"reply":"call"}): ${ms.sort((a,b)=>SP[a].avg-SP[b].avg).map(m=>`<code>${esc(candLabel(m))}</code> ${esc(fmtSec(SP[m].avg))} avg · ${esc(fmtSec(SP[m].median))} median (${SP[m].n})`).join(" · ")}</div>`; }
     h+=`<details class="turnRow"><summary class="stat" style="cursor:pointer">What each model wrote</summary>${llmSamplesHTML(f,F)}</details>`;
     el.innerHTML=h; host.appendChild(el);
+    const cb=el.querySelector("[data-cmp]"); if(cb){ cb.disabled=LLM.running||!claudeReachable(); cb.onclick=()=>compareLlm(false,f); }
   });
 }
 function llmSamplesHTML(f,F){
   if(F.kind==="reply") return Object.keys(F.runs||{}).map(sid=>{ const sc=DRIFT_SCENES.find(x=>x.id===sid)||{title:sid};
-    return `<div style="margin-top:6px"><b>${esc(sc.title)}</b>`+Object.keys(F.runs[sid]).map(m=>`<div class="stat" style="margin-top:4px"><code>${esc(m)}</code></div>`+F.runs[sid][m].map(t=>`<div class="turnRow"><div class="pl">${t.gm?"Gamemaster":"Emre"}: ${esc(t.user)}</div><div class="rp">${esc(t.reply==null?"…":t.reply)}</div></div>`).join("")).join("")+`</div>`; }).join("");
+    return `<div style="margin-top:6px"><b>${esc(sc.title)}</b>`+Object.keys(F.runs[sid]).map(m=>`<div class="stat" style="margin-top:4px"><code>${esc(m)}</code></div>`+F.runs[sid][m].map(t=>`<div class="turnRow"><div class="pl">${t.gm?"Gamemaster":"Emre"}: ${esc(t.user)}</div><div class="rp">${esc(t.reply==null?"…":t.reply)}${t.ms!=null?` <span class="stat">(${esc(fmtSec(t.ms/1000))})</span>`:""}</div></div>`).join("")).join("")+`</div>`; }).join("");
   return (F.calls||[]).map(c=>`<div style="margin-top:6px"><b>${esc(c.dbg||"")}</b><details><summary class="stat" style="cursor:pointer">input (${fmtN(payloadText(c).length)} chars)</summary><pre style="white-space:pre-wrap;font:11px/1.45 var(--mono);max-height:300px;overflow:auto">${esc(payloadText(c))}</pre></details>`
-    +Object.keys(c.outs||{}).map(m=>`<div class="stat"><code>${esc(m)}</code></div><div class="rp" style="font-size:12px">${esc(String(c.outs[m]).slice(0,1500))}</div>`).join("")+`</div>`).join("");
+    +Object.keys(c.outs||{}).map(m=>`<div class="stat"><code>${esc(m)}</code>${c.ms&&c.ms[m]!=null?` · ${esc(fmtSec(c.ms[m]/1000))}`:""}</div><div class="rp" style="font-size:12px">${esc(String(c.outs[m]).slice(0,1500))}</div>`).join("")+`</div>`).join("");
 }
 async function llmPlayScene(sc,model){
   const sp=S.world?S.world.cast.find(c=>c.id===sc.speaker):null, name=sp?sp.name:sc.speaker, hist=[], turns=[];
@@ -2896,7 +2956,8 @@ async function llmPlayScene(sc,model){
     else hist.push(Object.assign({role:"user",content:String(ln)},txt?{textMsg:true,textWith:sc.speaker,textWithName:name}:{}));
     const t={user:gm?String(ln.gm):String(ln),gm:!!gm,reply:null}; turns.push(t);
     const p=await engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:hist.slice()}},30000);
-    try{ t.reply=await candComplete(p.messages.map(m=>({role:m.role,content:m.content})),model,null,LLM.ctl.signal); }
+    const t0=performance.now();
+    try{ t.reply=await candComplete(p.messages.map(m=>({role:m.role,content:m.content})),model,null,LLM.ctl.signal); t.ms=Math.round(performance.now()-t0); }
     catch(e){ if(e&&e.code==="cancelled") throw e; t.reply="(failed: "+aiErr(e)+")"; }
     hist.push(Object.assign({role:"assistant",speaker:name,speakerId:sc.speaker,content:t.reply},txt?{textMsg:true,textWith:sc.speaker,textWithName:name}:{}));
     renderLlmResults();
@@ -2908,7 +2969,7 @@ async function runLlm(){
   if(!ENG.ready){ toast("The engine has to be running"); return; }
   if(llmHere()&&!AI.sample&&window.claude&&claude.use){ $("#llmStat").textContent="Connecting to Claude…"; await aiInit(); }
   if(llmHere()&&!AI.sample){ toast(window.claude?"Claude did not answer. Reload the page and allow it to use Claude.":"Open the editor inside the Claude app, or pick OpenRouter with a key on your StoryMind site",7000); return; }
-  if(!llmHere()&&!orKey()){ toast("Add your OpenRouter key under Model under test, or switch Candidates run on to Claude",6000); return; }
+  if(!llmHere()&&!API[testProv()].key()){ toast(`Add your ${API[testProv()].label} key under Model under test, or switch Candidates run on to Claude`,6000); return; }
   const rpC=llmCands("model"), engFields=MODEL_FIELDS.filter(d=>d.key!=="model"&&llmCands(d.key).length);
   if(!rpC.length&&!engFields.length){ toast("Add at least one model to compare"); return; }
   await useTestWorld();
@@ -2932,7 +2993,7 @@ async function runLlm(){
       if(!here) NET.allow=true;
       if(here) ENGRUN.ctl=LLM.ctl;
       try{
-        await engCall("liveBegin",{mode:here?"claude":"or",key:here?"":orKey(),model:here?"":effectiveModel("model"),scene:preset.scene||null,fieldModels:here?Object.fromEntries(MODEL_FIELDS.map(d=>[d.key,"claude:complex"])):effectiveModels() });
+        await engCall("liveBegin",{mode:here?"claude":"or",prov:!here&&testProv()==="nano"?"nano":null,provEngines:!here&&testProv()==="nano",key:here?"":orKey(),nanoKey:nanoKey(),model:here?"":effectiveModel("model"),scene:preset.scene||null,fieldModels:here?Object.fromEntries(MODEL_FIELDS.map(d=>[d.key,"claude:complex"])):effectiveModels() });
         for(const ln of preset.lines){ if(LLM.ctl.signal.aborted) break; await engCall("liveTurn",{text:ln},300000); }
         if(!LLM.ctl.signal.aborted) await engCall("liveEndDay",{},600000);
         const rec=(await engCall("liveCalls",{since:0},10000)).calls; R.baseline={scene:preset.id,calls:rec.length};
@@ -2942,11 +3003,12 @@ async function runLlm(){
           const mine=rec.filter(c=>c.field===d.key&&c.output!=null), seen=new Set(), pick=[];
           mine.forEach(c=>{ const k=String(c.dbg).replace(/\s*[·(].*$/,""); if(!seen.has(k)&&pick.length<(LLM.cfg.per||4)){ seen.add(k); pick.push(c); } });
           mine.forEach(c=>{ if(pick.length<(LLM.cfg.per||4)&&pick.indexOf(c)<0) pick.push(c); });
-          const F=R.fields[d.key]={kind:"engine",models:llmCands(d.key),calls:pick.map(c=>({id:c.id,dbg:c.dbg,messages:c.messages,opts:c.opts,outs:{[base(c.model)]:c.output}}))};
+          const F=R.fields[d.key]={kind:"engine",models:llmCands(d.key),calls:pick.map(c=>({id:c.id,dbg:c.dbg,messages:c.messages,opts:c.opts,outs:{[base(c.model)]:c.output},ms:c.ms!=null?{[base(c.model)]:c.ms}:{}}))};
           if(!pick.length){ F.error="These scenes never called this setting, so it could not be compared."; continue; }
           for(const c of F.calls) for(const m of F.models){ if(c.outs[m]!=null||LLM.ctl.signal.aborted) continue;
             $("#llmStat").textContent=`${d.label}: ${m} on ${c.dbg}…`;
-            try{ c.outs[m]=await candComplete(c.messages,m,c.opts||{},LLM.ctl.signal); }catch(e){ if(e&&e.code==="cancelled") break; c.outs[m]="(failed: "+aiErr(e)+")"; }
+            const t0=performance.now();
+            try{ c.outs[m]=await candComplete(c.messages,m,c.opts||{},LLM.ctl.signal); c.ms=c.ms||{}; c.ms[m]=Math.round(performance.now()-t0); }catch(e){ if(e&&e.code==="cancelled") break; c.outs[m]="(failed: "+aiErr(e)+")"; }
             renderLlmResults(); }
           llmSaveRes();
         }
@@ -2958,6 +3020,16 @@ async function runLlm(){
   }catch(e){ toast("The evaluation stopped: "+aiErr(e),6000); }
   finally{ LLM.running=false; NET.allow=false; paintLlm(); renderLlmResults(); llmSaveRes(); }
 }
+/* How fast each model answered: seconds per reply (roleplay) or per call (engines), measured here from
+   send to the full answer. Failed answers are not counted. */
+function llmSpeed(F){
+  const by={}; const add=(m,ms)=>{ if(ms==null||!isFinite(ms)) return; (by[m]=by[m]||[]).push(ms); };
+  if(F.kind==="reply") Object.values(F.runs||{}).forEach(r=>Object.keys(r).forEach(m=>(r[m]||[]).forEach(t=>{ if(t&&!/^\(failed/.test(String(t.reply||""))) add(m,t.ms); })));
+  else (F.calls||[]).forEach(c=>Object.keys(c.ms||{}).forEach(m=>{ if(!/^\(failed/.test(String((c.outs||{})[m]||""))) add(m,c.ms[m]); }));
+  const out={}; Object.keys(by).forEach(m=>{ const a=by[m].slice().sort((x,y)=>x-y), avg=a.reduce((x,y)=>x+y,0)/a.length;
+    out[m]={avg:avg/1000,median:a[Math.floor(a.length/2)]/1000,n:a.length}; }); return out;
+}
+function fmtSec(x){ return x==null?"–":(x<10?x.toFixed(1):Math.round(x))+" s"; }
 /* Claude compares the models per setting, BLIND (Model A, B, C…), then the names are put back. */
 async function judgeLlmField(f,F){
   const d=MODEL_FIELDS.find(x=>x.key===f)||{label:f};
@@ -2975,9 +3047,12 @@ async function judgeLlmField(f,F){
 THE JOB: ${d.label} (setting "${f}")${F.kind==="reply"?" — writing the characters' replies in Turkish, in character, through the app's payload":" — a background engine whose answer the app parses and stores; follow its output contract exactly and stay faithful to the input"}.
 The models are anonymised as ${labels.map(l=>"Model "+l).join(", ")}.
 
+MEASURED RESPONSE TIME (from sending the request to the complete answer, measured by the editor; average and median per ${F.kind==="reply"?"reply":"call"}):
+${(()=>{ const sp=llmSpeed(F); return F.models.map((m,i)=>`- Model ${labels[i]}: ${sp[m]?`average ${sp[m].avg.toFixed(1)} s, median ${sp[m].median.toFixed(1)} s over ${sp[m].n}`:"not measured"}`).join("\n"); })()}
+
 Score every model from 0 to 10 on each criterion that fits the job:
-${F.kind==="reply"?"- character (voice, consistency, personality)\n- realism (natural, specific, alive; pacing and proportion)\n- instructions (format, rules, stays in the fiction, never writes Emre)\n- language (natural Turkish)":"- contract (format and fields exactly as asked; parseable)\n- faithfulness (nothing invented; supported by the input)\n- judgement (the decision a careful person would make)\n- economy (no waste, no rambling)"}
-then an overall score, what each model is good at and weak at, and which model you would use for this job (cost and speed aside), with a one-line reason.
+${F.kind==="reply"?"- character (voice, consistency, personality)\n- realism (natural, specific, alive; pacing and proportion)\n- instructions (format, rules, stays in the fiction, never writes Emre)\n- language (natural Turkish)\n- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are; a reply the player waits for matters more than a background call)":"- contract (format and fields exactly as asked; parseable)\n- faithfulness (nothing invented; supported by the input)\n- judgement (the decision a careful person would make)\n- economy (no waste, no rambling)\n- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are)"}
+then an overall score, what each model is good at and weak at, and which model you would use for this job, weighing quality against speed (cost aside), with a one-line reason. Say in the summary when a faster model is close enough in quality to be the better choice, or when the quality gap is worth the wait.
 
 Reply with ONLY this JSON:
 {"models":[{"label":"A","scores":{"…":7},"overall":7,"good":"…","weak":"…"}],"best":"A","recommend":"one line: which model for this setting and why","summary":"two or three sentences comparing them"}
@@ -2992,15 +3067,18 @@ ${body}`;
   if(v.summary) labels.forEach((l,i)=>{ v.summary=String(v.summary).replace(new RegExp("\\bModel "+l+"\\b","g"),F.models[i]); });
   return v;
 }
-async function compareLlm(inRun){
+/* Results saved before v2 kept a failed comparison in F.error, which Compare again then skipped for good. */
+function llmMigrate(R){ Object.values((R&&R.fields)||{}).forEach(F=>{ if(F&&/^The comparison failed/.test(F.error||"")){ F.cmpError=F.error; F.error=null; } }); return R; }
+async function compareLlm(inRun,only){
   if(!LLM.res){ toast("Run the evaluation first"); return; }
   if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   if(!inRun){ if(LLM.running) return; LLM.running=true; LLM.ctl=new AbortController(); paintLlm(); }
   try{
-    for(const f of Object.keys(LLM.res.fields||{})){ const F=LLM.res.fields[f]; if(F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;
+    /* a failed comparison is tried again; only a setting that has nothing to compare is skipped */
+    for(const f of (only?[only]:Object.keys(LLM.res.fields||{}))){ const F=LLM.res.fields[f]; if(!F||F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;
       $("#llmStat").textContent=`Claude is comparing the models for ${(MODEL_FIELDS.find(x=>x.key===f)||{}).label||f}…`;
       F.judging=true; renderLlmResults();
-      try{ F.verdict=await judgeLlmField(f,F); F.error=null; }catch(e){ F.error="The comparison failed: "+aiErr(e); }
+      try{ F.verdict=await judgeLlmField(f,F); F.cmpError=null; }catch(e){ F.cmpError="The comparison failed: "+aiErr(e); if(e&&(e.code==="cancelled"||e.code==="not_granted"||e.code==="no_claude")){ F.judging=false; break; } }
       F.judging=false; llmSaveRes(); renderLlmResults(); }
   }finally{ if(!inRun){ LLM.running=false; paintLlm(); } $("#llmStat").textContent="Compared."; }
 }
@@ -3013,7 +3091,7 @@ $("#btnLlmExport").onclick=async()=>{ if(!LLM.res){ toast("Run the evaluation fi
 $("#btnLlmImport").onclick=()=>$("#fileLlm").click();
 $("#fileLlm").addEventListener("change",async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="llm-eval") throw new Error("Not an LLM evaluation file");
-    LLM.res=b.res; if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
+    LLM.res=llmMigrate(b.res); if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
     toast(claudeReachable()?"Imported. Tap Compare again to have Claude compare the models":"Imported"); }catch(err){ toast("Could not import: "+err.message,5000); } });
 
 /* ---------------- right tabs, narrow view ---------------- */
@@ -3063,7 +3141,7 @@ async function afterEngine(hadDraft){
   const hadDraft=loadDraft();
   chatIntro();
   renderList(); renderEditor();
-  aiInit(); netProbe();
+  aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
   window.__PE={STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();

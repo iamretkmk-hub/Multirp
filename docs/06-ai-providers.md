@@ -15,6 +15,12 @@ Anatomy of the request body (OpenRouter `/chat/completions`):
   (`reasoning:{enabled:false, exclude:true}`) — the pipeline is JSON/judgment work that must
   not think out loud, and hybrid models (deepseek-v4-pro) otherwise leak/waste. Three ways back
   in, most specific first:
+  0. **(!) v150.15 — a model that only works with reasoning.** Its endpoint answers "reasoning off" with a
+     4xx ("Reasoning is mandatory for this endpoint and cannot be disabled"); every engine on it failed.
+     On such a refusal (`_reasonRequiredMsg`) the same request is sent again once with reasoning on
+     (OpenRouter `reasoning:{enabled:true}`; elsewhere `reasoning_effort:"medium"`) and room for the
+     thinking. The model is remembered per provider (`sm_reasononly`, `_reasonOnly`) and gets reasoning
+     on from then on, whatever the switches say.
   1. `opts.reasoning:true` / `false` — one call, wins over everything.
   2. **The agent's own card** (v66.1). `opts.fn` names an `fnCfg` bucket, and that bucket's
      `reason` (`true`/`false`/`null`=Auto) and `effort` decide. ⚠️ The bucket must belong to the

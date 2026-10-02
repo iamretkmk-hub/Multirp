@@ -353,6 +353,21 @@ line is: it was never spoken, so it still stands next turn and either shows or i
 blob by the builder rather than called from the layout — a `{{call//resistance_actions}}` there
 resolves against nothing and the editor correctly flags it as a piece that does not exist.
 
+**(!) v150.14 — the feelings and the motives are weighed by the engines, not read by the actor.** The player
+takes `feelings` / `feel_lasting(_alt)`, `feelings_now` / `feel_now_*` and `private_intent` / `intent_*` out of the
+reply layouts (read raw, they made characters get stuck on one feeling or break too easily) and keeps
+`drives` and `after_heat`. The two writers behind those blocks therefore have to see all three:
+- **Drives writer** (`psychePrompt`, `_writePsyche`): already had the settled view (`settled`, the same
+  `settledViewOf` the reply's `feel_lasting` renders) and the per-axis readings (`axes`). New parts: `now`
+  (exactly what `feelings_now` would have shown: `feelingsBlock(...).feelNow` without its heading,
+  including the fast read's playable note) and `motives` (every live intent this character holds,
+  strongest first, marked *here now* / *not here*).
+- **After it is over** (`afterHeatPrompt`): its parts are built from the producers, not from the reply
+  layout, so `feelings`, `feelings_now` and `private_intent` reach it whatever the reply layouts call. The
+  player's own engine layout calls all three. (!) Removing the CALLS from the reply layouts is safe;
+  blanking the FRAGMENTS (`feel_lasting`, `intent_warm`…) would empty them here too.
+Pinned by `tests/feelings-to-engines.browser.js`.
+
 **(!) v150.13 — `resistance` ships on every turn outside heat.** The ask gate (v62.1–v148.6: a question, a
 hand in the player's latest line, a stated limit, a stalled exchange, a pursuit already put) is gone at the
 player's request. Their `resistance_body` judges for itself whether anything is being asked. What still

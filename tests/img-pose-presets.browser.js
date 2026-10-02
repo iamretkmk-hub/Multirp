@@ -136,8 +136,22 @@ const {chromium}=require('playwright');
   console.log("\n[5. no dedicated picture: the faces go as before]");
   const T=await draw({rule:"r_talk",line:"*He sits down.*"});
   ok("another scene type with an empty slot sends the faces", T.images.indexOf("data:S1")===0&&T.images.indexOf("data:HUG")<0&&T.pose===null, JSON.stringify(T.images));
+  /* v150.8 — reported: an intimate scene sent two faces and the previous picture though a pose picture
+     was set — on the other person in the frame. Whoever in the frame holds one supplies it. */
   const B2=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She hugs him back.*"});
-  ok("another character with no pose picture for that scene type sends the faces", B2.images.indexOf("data:U1")===0&&B2.images.indexOf("data:HUG")<0, JSON.stringify(B2.images));
+  ok("the speaker has no pose picture but the other person in the frame does: theirs is sent, no faces (the reported case)",
+     B2.images[0]==="data:HUG"&&B2.images.indexOf("data:U1")<0&&B2.images.indexOf("data:S1")<0&&B2.images.indexOf("data:E1")<0&&B2.pose==="r_hug", JSON.stringify(B2.images));
+  const LOG=await pg.evaluate(()=>{ const l=dbgLog; const e=(Array.isArray(l)?l:[]).slice().reverse().find(x=>x&&/pose presets/.test(x.label||"")); return e?{ep:e.endpoint,res:String(e.result||"")}:null; });
+  ok("the debug log says which scene type was drawn and whose pose picture went", !!LOG&&/scene type: Hug/.test(LOG.ep)&&/sent Sami's pose picture 1 of 1/.test(LOG.res), JSON.stringify(LOG));
+  const B3=await pg.evaluate(()=>{ state.personas.find(p=>p.id==="p_burcu").poseRefs={r_hug:["data:BHUG"]}; return true; });
+  const B4=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She holds on.*"});
+  ok("when both have one, the speaker's own wins", B4.images[0]==="data:BHUG", JSON.stringify(B4.images));
+  await pg.evaluate(()=>{ delete state.personas.find(p=>p.id==="p_burcu").poseRefs; state.personas.find(p=>p.id==="p_sami").poseRefs={}; });
+  const B5=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She lets go.*"});
+  ok("nobody in the frame holds one: the faces go as before", B5.images.indexOf("data:U1")===0&&B5.images.indexOf("data:HUG")<0, JSON.stringify(B5.images));
+  const LOG2=await pg.evaluate(()=>{ const l=dbgLog; const e=(Array.isArray(l)?l:[]).slice().reverse().find(x=>x&&/pose presets/.test(x.label||"")); return e?String(e.result||""):""; });
+  ok("and the debug log says why", /nobody in this frame has a pose picture for "Hug"/.test(LOG2), LOG2);
+  await pg.evaluate(()=>{ state.personas.find(p=>p.id==="p_sami").poseRefs={r_hug:"data:HUG"}; });
 
   console.log("\n[6. several pictures for one scene type: one at random, each equally likely]");
   const RR=await pg.evaluate(async()=>{

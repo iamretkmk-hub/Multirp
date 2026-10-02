@@ -1404,7 +1404,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.8</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.9</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -33705,7 +33705,7 @@ function bubble(m){
      (reIllustrate → illustrate with force), one tap from the row the other actions live in. A reply
      that already has a picture is drawn again. Phone texts carry no picture. */
   const _imgBtn=(m.role==='assistant'&&!m.textMsg)
-    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${esc(m.mid)}" onclick="reIllustrate('${escJs(m.mid)}')">${icon("image")}</button>`
+    ? `<button class="msgAct" title="Generate image" aria-label="Generate image" data-genimg="${esc(m.mid)}" onclick="pickSceneAndIllustrate('${escJs(m.mid)}')">${icon("image")}</button>`
     : "";
   // v144.1 — Retry: present on every reply, SHOWN only on the latest one (see refreshRetryMark)
   const _retryBtn=(m.role==='assistant'&&!m.textMsg)
@@ -34387,9 +34387,9 @@ function sceneHTML(m){
   // (also while "Pause images" is on: auto-gen is halted, but a manual request still works)
   {const st=_stickyImg(m);
    const gen=(!state.autoImg||state.imgPauseOn)
-     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>` : "";
+     ? `<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="pickSceneAndIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>` : "";
    if(st) return _stickyHTML(st,"Still this",gen,mid);
-   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>`;}
+   if(gen) return `<div style="padding:6px 0"><button class="btn sec small" onclick="pickSceneAndIllustrate('${escJs(mid)}')">${icon("image")} Generate image</button></div>`;}
   return "";
 }
 function refreshBubble(mid){
@@ -39455,7 +39455,7 @@ async function _imgChainSrc(m){
   if(!d) return [m.imgSrc,m.img].find(u=>typeof u==="string"&&/^https?:/i.test(u))||"";
   try{ return await fitRefImage(d); }catch(e){ return d; }
 }
-async function illustrate(mid,replyText,force){
+async function illustrate(mid,replyText,force,opts){
   const msg=findMsg(mid);if(!msg)return;
   // Idempotency guard: multiple reply paths (solo / multi-char / gamemaster / opening greeting /
   // post-turn) can each call illustrate() for the same message and race. The debug log showed two
@@ -39636,7 +39636,14 @@ async function illustrate(mid,replyText,force){
       +`LATEST EXCHANGE (the authority — what the scene is NOW; route on what it has BECOME, not what it was):\n${(()=>{ try{ return (triggerLine?`${triggerWho}: ${dropThoughtSpans(triggerLine)}\n`:``)+`${who}: ${dropThoughtSpans(replyText)}`; }catch(e){ return latestExchange; } })()}`;
     // (!) v148.4 — a minor anywhere in this frame takes every intimate scene type off the menu (see _imgRuleIntimate)
     const _minorHere=[speaker].concat(_nearby).some(_imgIsMinor);
-    const rule=await pickRule(_minorHere?_imgSafeRules(state.imgRules):state.imgRules,_routeText);
+    /* v150.9 — A SCENE TYPE CHOSEN BY HAND. The manual Generate button lets the player pick the scene type
+       (and with it the pose preset); that choice skips the scene selector. opts.ruleId:"" is "Automatic".
+       A regenerate of that picture (Retry, a new frame) keeps the hand-picked type. */
+    if(opts&&("ruleId" in opts)){ if(opts.ruleId)msg.imgForcedRule=opts.ruleId; else delete msg.imgForcedRule; }
+    const _forcedId=(opts&&("ruleId" in opts))?opts.ruleId:(force?msg.imgForcedRule:"");
+    let _forced=_forcedId?(state.imgRules||[]).find(r=>r&&r.id===_forcedId)||null:null;
+    if(_forced&&_minorHere&&_imgRuleIntimate(_forced)){ _forced=null; toast("That scene type is not available for this character — the scene selector picks instead"); }
+    const rule=_forced||await pickRule(_minorHere?_imgSafeRules(state.imgRules):state.imgRules,_routeText);
     if(chat&&rule&&rule.label){ if(!chat.lastImgRuleBy||typeof chat.lastImgRuleBy!=="object")chat.lastImgRuleBy={}; chat.lastImgRuleBy[_spkKey]=rule.label; }   // sticky memory for THIS character's next route
     if(rule&&rule.label){const e=document.getElementById('imgrule_'+mid);if(e)e.textContent=rule.label;}
     /* (!) v148.2 — A ONE-PERSON SCENE TYPE WITH OTHERS IN THE ROOM. "Just the speaking character" sent
@@ -40041,6 +40048,41 @@ async function illustrate(mid,replyText,force){
   }
 }
 function reIllustrate(mid){const m=findMsg(mid);if(!m)return;illustrate(mid,m.content,true);}
+/* v150.9 — THE MANUAL GENERATE BUTTON ASKS WHICH SCENE. "Automatic" is the scene selector, as before;
+   any other row is that scene type exactly, and the selector is skipped. A row where someone in the
+   scene holds pose pictures for it says so, since that is what decides which picture is sent. */
+function pickSceneAndIllustrate(mid){
+  const m=findMsg(mid); if(!m)return;
+  const chat=curChat();
+  let people=[];
+  try{
+    const sp=(curCast()||[]).find(c=>c&&c.name===m.speaker)||(state.personas||[]).find(c=>c&&c.id===m.speakerId);
+    people=[sp].concat(inSceneCast(chat)||[]).filter((c,i,a)=>c&&a.indexOf(c)===i);
+  }catch(e){}
+  const minor=people.some(_imgIsMinor);
+  const rules=(state.imgRules||[]).filter(r=>r&&r.id&&r.enabled!==false&&!(minor&&_imgRuleIntimate(r)));
+  const cur=m.imgForcedRule||"";
+  const poseNote=r=>{ const who=people.filter(c=>poseRefsFor(c,r).length).map(c=>c.name);
+    return who.length?` <span class="desc" style="display:inline">· pose picture: ${esc(who.join(", "))}</span>`:""; };
+  let ov=document.getElementById('scenePickModal');
+  if(!ov){ ov=document.createElement('div'); ov.className="modal"; ov.id="scenePickModal"; document.body.appendChild(ov); }
+  const row=(id,label,extra)=>`<button class="btn sec" data-scene="${esc(id)}" style="justify-content:flex-start;text-align:left;white-space:normal${id===cur?";border-color:var(--accent);color:var(--accent)":""}">${label}${extra||""}${id===cur?" "+icon("check"):""}</button>`;
+  ov.innerHTML=`
+    <button class="x" onclick="closeModal('scenePickModal')">×</button>
+    <div class="card editCard">
+      <h3><svg class="ic"><use href="#i-image"/></svg> Which scene?</h3>
+      <div class="desc" data-help>Pick the scene type for this picture, or let the scene selector choose. A scene type with a pose picture sends that picture instead of the faces.</div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:60vh;overflow:auto">
+        ${row("",`${icon("sparkle")} Automatic — the scene selector picks`)}
+        ${rules.map(r=>row(r.id,esc(r.label||"Scene type"),poseNote(r))).join("")}
+      </div>
+      <div class="row" style="margin-top:10px"><button class="btn sec" onclick="closeModal('scenePickModal')">Cancel</button></div>
+    </div>`;
+  ov.querySelectorAll('[data-scene]').forEach(b=>{
+    b.onclick=()=>{ const id=b.getAttribute('data-scene'); closeModal('scenePickModal'); illustrate(mid,m.content,true,{ruleId:id}); };
+  });
+  openModal('scenePickModal');
+}
 // Per-image frame picker: choose an aspect ratio for THIS scene; it regenerates at that frame and a
 // later Animate/Movie auto-matches (VID_AR). The global Settings aspect stays the default for new
 // scenes; this overrides only the tapped image.

@@ -269,27 +269,18 @@ const {chromium}=require('playwright');
       const m=mapMsgToApi({role:"assistant",speaker:"Burcu",content:"Selam."});
       return m.role==="assistant"&&m.name==="Burcu" ? true : JSON.stringify(m); }));
 
-  console.log("\n[resistance ships when something was asked, and not otherwise]");
-  /* v62.1 — v61.1 gated only the physical-ask clause and left the ~900-word ladder shipping every
-     turn. On a turn where nothing was asked it had nothing to apply to, and the cheapest way to
-     satisfy a wall of rules about holding out is to act as though there were something to hold out
-     against. The gate FAILS OPEN at every step: a question, a stall, a live pursuit or an
-     unreadable line all keep it. What it excludes is the turn that answers a statement. */
-  ok("the whole block is gated, not just the physical-ask clause", await pg.evaluate(()=>
-      /if\(_asked\)\{/.test(String(buildTailBlocks))
+  console.log("\n[resistance ships on every turn outside heat]");
+  /* v150.13 — the ask gate (v62.1–v148.6) is gone at the player's request: their resistance_body judges for
+     itself whether anything is being asked, and they want it read on every turn. Heat still skips it, and the
+     actions clause still needs a physical move to read. */
+  ok("the block is no longer gated on an ask", await pg.evaluate(()=>
+      !/if\(_asked\)\{/.test(String(buildTailBlocks)) && !/const _asked=/.test(String(buildTailBlocks))));
+  ok("heat still skips it, and the actions clause still needs a physical move", await pg.evaluate(()=>
+      /if\(!\(chat&&chat\._heatBeat\)\)\{/.test(String(buildTailBlocks))
    && /_physical && blkTpl\("resistance_actions"\)/.test(String(buildTailBlocks))));
   ok("and the physical half still reads a BOUNDED window", await pg.evaluate(()=>
       /slice\(-6\)/.test(String(buildTailBlocks))
    && !/_psycheBodySig\(chat\)/.test(String(buildTailBlocks))));
-  ok("every uncertain case fails open — a question, a stall, a pursuit, an unreadable line",
-     await pg.evaluate(()=>{
-      const src=String(buildTailBlocks);
-      return /if\(!_answering\) return true;/.test(src)
-          && /\[\?\uff1f\]/.test(src)
-          && /exchangeIsStalled\(chat,selfP\)/.test(src)
-          // v148.4 — the pursuit case reads the delivered-ask flag now (any pursuit at all kept the gate open)
-          && /_railFlags&&_railFlags\.pending_ask/.test(src)
-          && /catch\(e\)\{ return true; \}/.test(src); }));
   ok("the self-gating paragraph is gone from the text, now that code decides",
      await pg.evaluate(()=>!/THIS ONLY APPLIES IF SOMETHING WAS ACTUALLY ASKED/.test(blkTpl("resistance_body"))));
   ok("and the duplicate heading is gone from every layout", await pg.evaluate(()=>

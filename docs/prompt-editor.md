@@ -136,9 +136,10 @@ Two roles, kept apart:
   temperature, token limit and thinking setting exactly as the phone sends it. The sandbox's `fetch` is
   relayed to the editor, which sends it only to `https://openrouter.ai/api/` and only while a test is
   sending (`relayAllowed`). Everything else is refused.
-- **Analyst**: Claude. Inside the Claude app it is the `sample` capability (the viewer's own Claude).
-  Anywhere else it is a Claude model on OpenRouter with the same key (the newest Opus in the index by
-  default, changeable).
+- **Analyst**: Claude, **only in the editor inside the Claude app** (the `sample` capability, the viewer's
+  own Claude). OpenRouter never analyses. On the site, `aiAsk` refuses (`no_claude`) and the box says
+  "only in the editor inside Claude". The tests play there and the results are exported. Ask Claude and
+  Test & review also work only inside Claude.
 
 (!) **Inside the Claude app the page cannot reach OpenRouter.** Artifact pages may not connect to other
 sites. The model box says so there. The way through: run the tests from `prompt-editor.html` on the

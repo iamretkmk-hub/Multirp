@@ -38,7 +38,7 @@ const ROOT=path.resolve(__dirname,'..');
   await ctx.route(/openrouter\.ai/,async r=>{
     const url=r.request().url();
     if(/\/models/.test(url)) return r.fulfill({status:200,contentType:"application/json",
-      body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"}]})});
+      body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"},{id:"anthropic/claude-opus-5:batch"}]})});
     const body=JSON.parse(r.request().postData()||"{}");
     OR.calls.push({auth:r.request().headers()["authorization"]||"",body});
     const ms=OR.delay?OR.delay(body):0;
@@ -48,6 +48,18 @@ const ROOT=path.resolve(__dirname,'..');
     const content=OR.answer(body);
     await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{role:"assistant",content},finish_reason:"stop"}]})});
   });
+  /* Claude, as the Claude app serves it (the sample capability): the analyst. Its calls are recorded with
+     the OpenRouter ones (model "anthropic/claude (here)") so a section can tell who answered what. */
+  await ctx.exposeFunction("__claudeAnswer",async input=>{
+    const body={model:"anthropic/claude (here)",messages:[{role:"user",content:String(input)}]};
+    const ms=OR.delay?OR.delay(body):0;
+    OR.inflight=(OR.inflight||0)+1; if(ms) OR.peak=Math.max(OR.peak||0,OR.inflight);
+    if(ms) await new Promise(res=>setTimeout(res,ms));
+    OR.inflight--;
+    OR.calls.push({auth:"",body,claude:true}); return OR.answer(body); });
+  const installClaude=p=>p.evaluate(()=>{ const f=async(input,o)=>{ const t=typeof input==="string"?input:input.map(m=>m.content).join("\n\n"); const text=String(await window.__claudeAnswer(t)); o&&o.onText&&o.onText({text}); return {text,truncated:false}; };
+      f.json=async(input,o)=>{ const t=await f(input,o); const m=String(t.text).match(/\{[\s\S]*\}/); return JSON.parse(m?m[0]:t.text); };
+      AI.sample=f; renderProvider(); });
   const pg=await ctx.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   let pass=0,fail=0;
@@ -56,6 +68,9 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.goto(base+'prompt-editor.html');
     await pg.evaluate(()=>{ try{ localStorage.setItem("sm_canary","real app data"); }catch(e){} });
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+    const noClaude=await pg.evaluate(async()=>{ try{ await aiAsk("x",{}); return "answered"; }catch(e){ return e.code; } });
+    ok("without the Claude app there is no analyst at all (OpenRouter never analyses)", noClaude==="no_claude", noClaude);
+    await installClaude(pg);
 
     console.log("\n[0 — the bundled latest prompts open on first load]");
     const start=JSON.parse(fs.readFileSync(path.join(ROOT,'prompt-editor-start.json'),'utf8'));
@@ -87,6 +102,7 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.waitForTimeout(800);
     await pg.reload();
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+    await installClaude(pg);
     await pg.waitForSelector(".modal",{timeout:10000});
     const kept=await pg.evaluate(()=>({modal:document.querySelector(".modal header").textContent,
       draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header")))}));
@@ -374,9 +390,9 @@ const ROOT=path.resolve(__dirname,'..');
     const ev=await pg.evaluate(()=>{ const R=__PE.LLM.res; return {rp:R.fields.model,mem:R.fields.memModel,html:document.querySelector("#llmResults").textContent,apply:document.querySelectorAll("#llmResults [data-a=apply]").length}; });
     const rpModels=new Set(OR.calls.filter(c=>!/LANGUAGE MODELS/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
     ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.daily_text["x/rp-b"].length===4&&ev.rp.runs.daily_text[mf.e.model].length===4, [...rpModels].join(", "));
-    const mem=ev.mem;
+    const mem=ev.mem; const __dbgBase=await pg.evaluate(()=>({b:__PE.LLM.res.baseline,mode:llmMode(),here:llmHere(),fields:Object.keys(__PE.LLM.res.fields),stat:document.querySelector("#llmStat").textContent}));
     ok("the memory setting's recorded calls were replayed with the candidate, on identical input", !!mem&&mem.calls.length>0&&mem.calls.every(c=>c.outs["x/mem-b"]!=null&&c.outs[mf.e.memModel]!=null),
-       JSON.stringify(mem&&mem.calls.map(c=>({dbg:c.dbg,m:Object.keys(c.outs)}))));
+       JSON.stringify({calls:mem&&mem.calls.map(c=>({dbg:c.dbg,m:Object.keys(c.outs)})),err:mem&&mem.error,base:__dbgBase}));
     const rep=OR.calls.find(c=>c.body.model==="x/mem-b"), orig=mem&&mem.calls[0];
     ok("…sent with the same messages the app sent the original", !!rep&&!!orig&&JSON.stringify(rep.body.messages)===JSON.stringify(orig.messages.map(m=>({role:m.role,content:m.content})).concat([]))||(!!rep&&JSON.stringify(rep.body.messages).indexOf(String(orig.messages[0].content).slice(0,60).replace(/"/g,'\\"'))>=0));
     const judge=OR.calls.filter(c=>/You are evaluating LANGUAGE MODELS/.test(JSON.stringify(c.body.messages)));
@@ -385,6 +401,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("no prompt edits are offered in the evaluation", ev.apply===0);
 
 
+    ok("a batch-only model (…:batch) is never offered as a model to test", await pg.evaluate(()=>NET.models.every(m=>!/:batch$/.test(m))));
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});
     await sctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

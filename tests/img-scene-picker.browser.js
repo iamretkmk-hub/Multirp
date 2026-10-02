@@ -76,7 +76,7 @@ const {chromium}=require('playwright');
   });
   ok("it generated with the picked type", H.state==="done"&&H.rule==="Hug", JSON.stringify(H));
   ok("the scene selector was never asked", H.routed===0, JSON.stringify(H));
-  ok("and that type's pose picture is what was sent", H.images[0]==="data:HUG"&&H.images.indexOf("data:S1")<0, JSON.stringify(H.images));
+  ok("and that type's pose picture is what was sent — last, after the speaker's and the player's faces (v150.11)", JSON.stringify(H.images)==='["data:S1","data:E1","data:HUG"]', JSON.stringify(H.images));
 
   console.log("\n[3. a regenerate keeps it; Automatic goes back to the selector]");
   const R=await pg.evaluate(async()=>{ window.__routed=0; await illustrate("a1",curChat().messages[1].content,true); const m=curChat().messages[1]; return {routed:window.__routed,rule:m.imgRule}; });

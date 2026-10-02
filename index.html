@@ -3867,14 +3867,17 @@ Do NOT describe or change anyone's clothes — the picture carries them. Mention
 
   /* v150.5 — POSE PRESETS. A character can hold one picture per image scene type; when that scene type
      is picked for their picture, that picture is the only reference sent (no faces). */
-  x_img_pose_writer:{label:"Image writer — a pose preset picture goes instead of the faces",json:false,
-    hint:"Sent to the image prompt writer (edit models) when the character whose line this is has a pose picture for the chosen scene type. That picture is sent instead of every face picture. Placeholder: {{people}} (who is in this frame).",
-    def:`POSE REFERENCE — instead of face pictures, the image model receives ONE picture made for this scene type: it shows the people, the pose, the body positions and the framing this kind of shot should have. It is the FIRST picture the model is given.
-In this frame: {{people}}
-Write the moment against that picture: keep its pose and arrangement, and say what the latest exchange changes in it — expressions, hands, small shifts of position, what someone holds. Refer to the people as that picture shows them ("the woman", "the man", "the woman on the left"), never by name and never by IMAGE numbers. Do not describe anyone's face, hair or build; the picture carries them.`},
+  /* v150.11 — the faces go with it now: the speaker's, then the player's (only the speaker's on a POV
+     scene type), and the pose picture LAST. */
+  x_img_pose_writer:{label:"Image writer — a pose preset picture goes with the faces",json:false,
+    hint:"Sent to the image prompt writer (edit models) when someone in the frame has a pose picture for the chosen scene type. The image model receives the speaker's face, then the player's (only the speaker's on a POV scene type), then the pose picture last. Placeholder: {{people}} (who is in this frame, by label).",
+    def:`POSE REFERENCE — the image model receives the face pictures of the people below first, and then, as the LAST picture, a picture made for this scene type: it shows the pose, the body positions and the framing this kind of shot should have.
+People in this frame:
+{{people}}
+Write the moment in that pose: keep its arrangement and framing, put each person's own face into it, and say what the latest exchange changes — expressions, hands, small shifts of position, what someone holds. Call each person ONLY by their label ("the woman in IMAGE 1"), never by name. Where the scene instructions above call the pose picture "image1", they mean the LAST picture. Do not describe the face, hair or build of anyone who has a picture; their pictures carry them.`},
   x_img_pose_roster:{label:"Image model — the pose preset picture",json:false,
-    hint:"Put in front of the prompt the edit model receives when a pose preset picture is sent instead of the face pictures. Placeholder: {{n}} (its number — always 1).",
-    def:`Figure {{n}} is the pose reference for this scene: take the people, their faces, their pose, their positions and the framing from it, and apply the text below. `},
+    hint:"Put in front of the prompt the edit model receives when a pose preset picture is sent (after the face pictures). Placeholder: {{n}} (its number — always the last).",
+    def:`Figure {{n}} is not a person: it is the pose reference for this scene. Take the pose, the body positions and the framing from it, and put the people from the figures before it into it, each with their own face. `},
 
   /* v145.1 — SCENE VIDEO. The film button in a reply's action row turns the last stretch of the
      roleplay (one line per second of the configured clip length) into ONE reference-to-video clip.
@@ -12597,7 +12600,7 @@ function editPrompt(model,prompt,names,subjects,scene,pose){
       +", for "+poss+" build and colouring";
   }).join(". ");
   let head=roster?(live.length>1?"IMAGE numbers the people in the scene; Figure numbers the pictures you were given. ":"")+roster+". The scene text names each person by these same words. Draw every person from their OWN figures only — never blend two people's features and never move one face onto the other's body. Match face, body proportions, skin tone and texture; the rendering style comes from the scene text, not from the photos. ":"";
-  if(pose) head+=fillTpl(up("x_img_pose_roster"),{n:"1"});   // v150.5 — a pose preset picture, sent first, instead of the faces
+  if(pose) head+=fillTpl(up("x_img_pose_roster"),{n:String(pose)});   // v150.11 — the pose preset picture, sent LAST, after the faces
   /* v150.5 — the previous picture, sent last (see _imgChainPrev): named as the scene to edit, never as a person */
   if(scene&&scene.n) head+=fillTpl(up(scene.mode==="move"?"x_img_edit_roster_move":"x_img_edit_roster_scene"),{n:String(scene.n)});
   let body=String(prompt||"").replace(/\s+/g," ").trim();
@@ -12639,7 +12642,7 @@ async function atlasImage(prompt,negative,rule,opts){
     // The payload is built from the spec, not hard-coded, because the edit models disagree on the
     // names: qwen/wan-2.6 want num_images + prompt_extend, wan 2.7 wants n and takes neither.
     const body={model:spec.id||model,
-      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length-(_scene?1:0)),(built.subjects||[]).slice(0,urls.length-(_scene?1:0)),_scene,!!(built.pose&&!(opts&&opts.refs&&opts.refs.length)))};
+      prompt:editPrompt(model,prompt,(built.names||[]).slice(0,urls.length-(_scene?1:0)),(built.subjects||[]).slice(0,urls.length-(_scene?1:0)),_scene,(built.pose&&!(opts&&opts.refs&&opts.refs.length))?urls.length:0)};
     body[spec.refKey||"images"]=urls;       // grok calls this list image_urls
     if(!spec.noCount)body[spec.countKey||"num_images"]=1;
     if(!spec.noPromptExtend)body.prompt_extend=false;
@@ -39723,8 +39726,23 @@ async function illustrate(mid,replyText,force,opts){
       let _posePick={src:"",idx:-1,of:0}, _poseOwner=null;
       for(const c of _poseCands){ const pk=poseRefPick(c,rule); if(pk.src){ _posePick=pk; _poseOwner=c; break; } }
       if(_posePick.src&&_pack){
-        _pack={urls:[_posePick.src],names:[],subjects:[],people:[],unpictured:[],pose:true,
-               poseOf:(_pack.people||[]).concat(_pack.unpictured||[])};
+        /* (!) v150.11 — THE FACES GO WITH THE POSE: the speaker's, then the player's, then the pose picture
+           LAST. On a POV scene type the player is the camera, so only the speaker's face goes. One
+           picture each; someone with none is described in words. */
+        const _pf={urls:[],names:[],subjects:[],people:[],unpictured:[],pose:true,
+                   poseOf:(_pack.people||[]).concat(_pack.unpictured||[])};
+        const _face=async(name,subject,src,o)=>{
+          let d=""; try{ d=src?await toDataUri(src):""; }catch(e){ d=""; }
+          if(d&&_pf.urls.indexOf(d)<0){ _pf.urls.push(d); _pf.names.push(name); _pf.subjects.push(subject||"");
+            const k=_pf.people.length+1;
+            _pf.people.push(Object.assign({name,subject:subject||"",from:_pf.urls.length,to:_pf.urls.length,slot:k,
+              label:"the "+(subject?subject.toLowerCase():"person")+" in IMAGE "+k},o)); }
+          else _pf.unpictured.push(Object.assign({name,subject:subject||"",label:"the "+(subject?subject.toLowerCase():"person")+" with no picture"},o));
+        };
+        if(speaker) await _face(speaker.name,_refSubject(speaker),personRefs(speaker)[0]||"",{id:speaker.id,speaker:true});
+        if(!rulePov(rule)){ const _ph=_playerRefHolder(); await _face(state.user||"the player",_refSubject(_ph),playerRefs()[0]||"",{player:true}); }
+        _pf.urls.push(_posePick.src);
+        _pack=_pf;
         msg.imgPose=rule.id; msg.imgPoseIdx=_posePick.idx; msg.imgPoseOwner=_poseOwner.id;
         /* (!) v150.10 — THE POSE PICTURE GOES ALONE. Reported (debug export): a pose frame went out as the
            pose picture plus the previous scene picture, and the player wants only the pose picture. The
@@ -39735,7 +39753,7 @@ async function illustrate(mid,replyText,force,opts){
       try{
         const _has=c=>(state.imgRules||[]).filter(r=>poseRefsFor(c,r).length).map(r=>r.label||r.id);
         const _note=_posePick.src
-          ?`sent ${_poseOwner.name}'s pose picture ${_posePick.idx+1} of ${_posePick.of} — no face pictures`
+          ?`sent ${(_pack.people||[]).map(p=>p.player?"the player's":p.name+"'s").join(" and ")||"no"} face picture${(_pack.people||[]).length===1?"":"s"}, then ${_poseOwner.name}'s pose picture ${_posePick.idx+1} of ${_posePick.of} last`
           :`none: nobody in this frame has a pose picture for "${(rule&&rule.label)||"?"}" — face pictures sent`;
         const e=dbg("Image references · pose presets","app","scene type: "+((rule&&rule.label)||"(none)"),
           {sceneType:(rule&&rule.label)||"",inFrame:_poseCands.map(c=>c.name),
@@ -39757,8 +39775,11 @@ async function illustrate(mid,replyText,force,opts){
       if(_pack&&_pack.pose){
         /* (!) v150.10 — with man or woman beside each name: given only "Buket Özüçak", the writer turned her
            into "Man on all fours" (the template reads "she" as whoever the line is for, man or woman). */
-        const _who=(_pack.poseOf||[]).map(p=>(p.player?`${state.user} (the player)`:p.name)+(p.subject?` (${String(p.subject).toLowerCase()})`:"")+(p.speaker?", whose line this picture is for":"")).join("; ");
-        _castBlock=fillTpl(up("x_img_pose_writer"),{people:_who||(speaker?speaker.name:"the person whose line this is")})+"\n\n";
+        const _nm=p=>(p.player?`${state.user} (the player)`:p.name)+(p.subject?` (${String(p.subject).toLowerCase()})`:"")+(p.speaker?", whose line this picture is for":"");
+        const _who=(_pack.people||[]).map(p=>`- ${p.label} = ${_nm(p)} (picture ${p.from})`)
+          .concat((_pack.unpictured||[]).map(p=>`- ${p.label} = ${_nm(p)} — NO PICTURE: describe them briefly in words`));
+        if(rulePov(rule))_who.push(`- ${state.user||"the player"} is the camera (POV): not in the picture, and no picture of them is sent`);
+        _castBlock=fillTpl(up("x_img_pose_writer"),{people:_who.join("\n")||"- (nobody pictured)"})+"\n\n";
       }else
       if(_ppl.length>=2||_unp.length||(_ppl.length===1&&!_ppl[0].speaker)){
         const _lines=_ppl.map(p=>{

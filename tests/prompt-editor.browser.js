@@ -204,6 +204,20 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the judge's verdicts and the drift turn are shown", /drifted at turn 3/.test(d.html)&&/7\/10/.test(d.html)&&/bent/.test(d.html), d.html.slice(0,400));
     await pg.click('#dr_past .chg [data-a="apply"]');
     ok("its edit applies to the named piece", await pg.evaluate(()=>/PE-DRIFT-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header")))));
+    const ap=await pg.evaluate(()=>{
+      const once=__PE.itemVal(__PE.findItem("frag:style_header"));
+      __PE.DR.results.past.judge=JSON.parse(JSON.stringify(__PE.DR.results.past.judge));   // a fresh analysis render
+      document.querySelector('#rtabs button[data-r="drift"]').click();
+      const b=document.querySelector('#dr_past .chg [data-a="apply"]');
+      const label=b.textContent, dis=b.disabled; b.click();
+      const twice=__PE.itemVal(__PE.findItem("frag:style_header"));
+      return {label,dis,same:once===twice,count:(twice.match(/PE-DRIFT-FIX/g)||[]).length,undo:!document.querySelector('#dr_past .chg [data-a="undo"]').hidden}; });
+    ok("after the list is rebuilt, an applied edit still reads Applied and cannot be applied twice", ap.label==="Applied"&&ap.dis&&ap.same&&ap.count===1, JSON.stringify(ap));
+    ok("…and offers Undo", ap.undo===true);
+    await pg.click('#dr_past .chg [data-a="undo"]');
+    const un=await pg.evaluate(()=>({v:__PE.itemVal(__PE.findItem("frag:style_header")),b:document.querySelector('#dr_past .chg [data-a="apply"]').textContent}));
+    ok("Undo puts the old words back and the edit can be applied again", /PE-REVIEWED/.test(un.v)&&!/PE-DRIFT-FIX/.test(un.v)&&un.b==="Apply", JSON.stringify({b:un.b,tail:un.v.slice(-80)}));
+    await pg.click('#dr_past .chg [data-a="apply"]');
 
     console.log("\n[9b — results travel: export here, import and analyse elsewhere]");
     const exported=await pg.evaluate(()=>{ const r=__PE.DR.results.past; return JSON.stringify({app:"StoryMind",kind:"drift-results",date:Date.now(),
@@ -241,6 +255,9 @@ const ROOT=path.resolve(__dirname,'..');
     const models=new Set(OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
     ok("each engine was sent to the model StoryMind assigns it (not one model for everything)", models.size>=2, [...models].join(", "));
     ok("Claude analysed every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
+    ok("the intense scene is the default: Emre flirts with Buket in front of Sami", await pg.evaluate(()=>__PE.ENGRUN.lines.length===6&&/Buket/.test(__PE.ENGRUN.lines[0])&&/Vur hadi/.test(__PE.ENGRUN.lines[4])));
+    ok("its purpose reaches the analysis (who the routers pick, realism under intensity)", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /BACKGROUND ENGINE/.test(t)&&/WHAT THE SCENE WAS BUILT TO TEST/.test(t)&&/turn routers pick/.test(t)&&/Vur hadi/.test(t); }));
+    ok("the characters' replies are analysed for realism, with no edits proposed against them", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /judge realism, proportion and character under this pressure/.test(t); }));
     ok("the engine analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))));
     const cal=await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); return !!(b&&b.querySelector('.chg [data-a="apply"]:not([disabled])')); });
     ok("an engine's proposed edit is offered", cal);

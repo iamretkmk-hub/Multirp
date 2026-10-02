@@ -111,6 +111,11 @@ Every analysis (Ask Claude, Test & review, the drift tests, the engine tests) ca
    No new rule on top of one that failed, and no emphasis to make an old rule louder.
 4. The text should come out the same length or shorter.
 
+Applied edits are remembered per browser (`APPLIED`, keyed on item + find + replace). A card that is rebuilt,
+which every analysis does to its list, still reads **Applied** and cannot be applied twice. An edit whose old
+words are gone and whose new words are present counts as applied even without that record. **Undo** puts
+the old words back.
+
 Each proposed edit returns `kind` (`remove` / `rewrite` / `add`) and `cause` with its find/replace. The card
 shows the kind, the net change in characters and the cause. An `add` is marked in amber with a note to
 apply it only if nothing could be cut or rewritten instead.
@@ -151,8 +156,18 @@ for real in the sandbox (`liveBegin` / `liveTurn` / `liveEndDay` / `liveEnd` in 
 1. Every engine switch is turned on and `chatCompletion` is wrapped. Each call is recorded with its debug
    label, the prompt key(s) it read (`up()` calls since the last call whose text is in the messages), the
    exact messages and the model.
-2. A scripted scene (editable in the tab; the default makes a plan, a promise, a rumour, a touch, a move
-   to the balcony and a goodbye) is typed into the real chat input through `sendMessage`, one line at a
+2. A scripted scene (`ENGINE_SCENES`, picked and editable in the tab) is typed into the real chat input. The
+   scenes are:
+   - **Emre flirts with Buket in front of Sami (intense)**, the default. A compliment and a dig at Sami, a
+     knee against hers on the sofa, a jab about the four thousand lira, her hand held and an invitation to
+     leave with him, a squared-up "Vur hadi", and an invitation from the door.
+   - **Everyday**: a meeting at eight, a promise, a rumour, a touch, the balcony, a goodbye.
+
+   Each scene carries a `focus`, what it was built to test, and the analysis judges every engine's part in
+   it. For the intense scene that means who the turn routers pick to answer (Sami cannot sit passive,
+   Buket must not be skipped), proportion under pressure, nobody folding on the spot, presence when
+   someone storms out, and which way the relationship readings move. The characters' own replies are
+   judged for realism, with no edits proposed against them. Each line goes through `sendMessage`, one line at a
    time, and the run waits for the app to go quiet after each one. Then `endDay` (optional).
 3. Each call is answered by the **model under test**, and the answer flows on into the app exactly as on
    the phone:

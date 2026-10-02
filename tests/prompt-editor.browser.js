@@ -189,7 +189,20 @@ const ROOT=path.resolve(__dirname,'..');
       seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
     await pg.click('#rtabs button[data-r="drift"]');
     const nScenes=await pg.evaluate(()=>__PE.DRIFT_SCENES.length);
-    ok("there are ten scenes", nScenes===10, nScenes);
+    ok("there are fourteen solo scenes", nScenes===14, nScenes);
+    const solo4=await pg.evaluate(async()=>{
+      const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
+      for(const id of ["daily","flirt","after1","after2"]){ const sc=by(id);
+        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,turns:[{role:"user",content:sc.lines[0]}]}});
+        out[id]={t:p.messages.map(m=>m.content).join("\n"),speaker:p.speaker,quality:!!sc.quality}; }
+      return out; });
+    ok("the new scenes are quality scenes played by Buket", ["daily","flirt","after1","after2"].every(k=>solo4[k].quality&&/Buket/.test(solo4[k].speaker)));
+    ok("flirting happens at Emre's flat", /Emre's flat/.test(solo4.flirt.t), solo4.flirt.t.slice(0,400));
+    ok("the day after: her memory of the night and her decision are in the payload",
+       /I went down to Emre's flat to give back the casserole dish/.test(solo4.after1.t)&&/it will not happen again/.test(solo4.after1.t), solo4.after1.t.slice(-2500));
+    ok("some days on: both nights and her softer terms are in the payload, not the first decision",
+       /It happened again, on the sixth/.test(solo4.after2.t)&&/on your terms/.test(solo4.after2.t)&&!/you will be kind and you will close it/.test(solo4.after2.t), solo4.after2.t.slice(-2500));
+    ok("the setup does not leak into other scenes", !/casserole dish/.test(solo4.daily.t));
     await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
     const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
     ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns));
@@ -255,6 +268,8 @@ const ROOT=path.resolve(__dirname,'..');
     const models=new Set(OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
     ok("each engine was sent to the model StoryMind assigns it (not one model for everything)", models.size>=2, [...models].join(", "));
     ok("Claude analysed every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
+    ok("the engine scene picker is visible at the top of the tab, not folded away", await pg.evaluate(()=>{ const sel=document.querySelector("#engPreset");
+      return !!sel&&!sel.closest("details")&&sel.options.length===6&&/Sami/.test(document.querySelector("#engPresetFocus").textContent); }));
     ok("the intense scene is the default: Emre flirts with Buket in front of Sami", await pg.evaluate(()=>__PE.ENGRUN.lines.length===6&&/Buket/.test(__PE.ENGRUN.lines[0])&&/Vur hadi/.test(__PE.ENGRUN.lines[4])));
     ok("its purpose reaches the analysis (who the routers pick, realism under intensity)", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /BACKGROUND ENGINE/.test(t)&&/WHAT THE SCENE WAS BUILT TO TEST/.test(t)&&/turn routers pick/.test(t)&&/Vur hadi/.test(t); }));
     ok("the characters' replies are analysed for realism, with no edits proposed against them", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /judge realism, proportion and character under this pressure/.test(t); }));
@@ -264,6 +279,18 @@ const ROOT=path.resolve(__dirname,'..');
     if(cal){ await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); b.querySelector('.chg [data-a="apply"]').click(); });
       ok("and applies to that engine's prompt", await pg.evaluate(()=>/PE-ENGINE-FIX/.test(__PE.itemVal(__PE.findItem("prompt:memBuild"))))); }
     ok("the sandbox is back to the untouched sample afterwards", await pg.evaluate(async()=>{ const p=await __PE.engCall("build",{kind:"solo"}); return p.messages.filter(m=>m.hist).length>=3; }));
+
+    console.log("\n[10a — an engine scene with its own place and cast plays there]");
+    OR.calls=[];
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_engpreset",JSON.stringify("canteen")); localStorage.setItem("pe_v1_engscript",JSON.stringify(""));
+      const sel=document.querySelector("#engPreset"); sel.value="canteen"; sel.dispatchEvent(new Event("change")); document.querySelector("#engEndDay").checked=false;
+      document.querySelector("#engScript").value=__PE.ENGINE_SCENES.find(x=>x.id==="canteen").lines.slice(0,2).join("\n"); });
+    await pg.evaluate(()=>__PE.runEngines());
+    await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
+    const cant=OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>JSON.stringify(c.body.messages)).join(" ");
+    ok("the canteen scene is played at the canteen, with Sami and Berker", /Isdemir Canteen/.test(cant)&&/Berker/.test(cant)&&/Sami/.test(cant), cant.slice(0,300));
+    ok("its focus reaches the analysis", OR.calls.some(c=>/Two brothers set against each other in public/.test(JSON.stringify(c.body.messages))));
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); document.querySelector("#engEndDay").checked=true; });
 
     console.log("\n[10b — Claude stands in: every call goes to Claude]");
     OR.calls=[];

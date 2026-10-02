@@ -187,9 +187,9 @@ const ROOT=path.resolve(__dirname,'..');
           summary:"Held, then gave ground on turn 3.",edits:[{item:"frag:style_header",find:"PE-REVIEWED",replace:"PE-DRIFT-FIX",why:"t"}]});
       }
       seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
-    await pg.click('#rtabs button[data-r="drift"]');
+    await pg.click('#rtabs button[data-r="tests"]');
     const nScenes=await pg.evaluate(()=>__PE.DRIFT_SCENES.length);
-    ok("there are fourteen solo scenes", nScenes===14, nScenes);
+    ok("there are twenty-three reply scenes", nScenes===23, nScenes);
     const solo4=await pg.evaluate(async()=>{
       const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
       for(const id of ["daily","flirt","after1","after2"]){ const sc=by(id);
@@ -220,7 +220,7 @@ const ROOT=path.resolve(__dirname,'..');
     const ap=await pg.evaluate(()=>{
       const once=__PE.itemVal(__PE.findItem("frag:style_header"));
       __PE.DR.results.past.judge=JSON.parse(JSON.stringify(__PE.DR.results.past.judge));   // a fresh analysis render
-      document.querySelector('#rtabs button[data-r="drift"]').click();
+      document.querySelector('#rtabs button[data-r="tests"]').click();
       const b=document.querySelector('#dr_past .chg [data-a="apply"]');
       const label=b.textContent, dis=b.disabled; b.click();
       const twice=__PE.itemVal(__PE.findItem("frag:style_header"));
@@ -255,7 +255,7 @@ const ROOT=path.resolve(__dirname,'..');
       const sys=String(((body.messages||[])[0]||{}).content||"");
       return /JSON/i.test(sys)?"{}":'"Tamam." *Başını sallıyor.*'; })(memFind);
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); });
-    await pg.click('#rtabs button[data-r="engines"]');
+    await pg.click('#rtabs button[data-r="tests"]');
     await pg.evaluate(()=>__PE.runEngines());
     await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
     const er=await pg.evaluate(()=>({groups:__PE.engGroups().map(g=>({k:g.key,n:g.calls.length,m:g.calls[0].model,err:g.calls.filter(c=>c.error).length})),
@@ -301,6 +301,47 @@ const ROOT=path.resolve(__dirname,'..');
     const cm=new Set(OR.calls.map(c=>c.body.model));
     ok("with Claude standing in, every call (reply, engines, analysis) went to a Claude model", OR.calls.length>3&&[...cm].every(m=>/^anthropic\//.test(m)), [...cm].join(", "));
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); document.querySelector("#engEndDay").checked=true; });
+
+    console.log("\n[11 — one run: every payload kind, each scene shaped to it, then everything analysed together]");
+    const kindsOk=await pg.evaluate(async()=>{
+      const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
+      const one=async(id,turns)=>{ const sc=by(id); const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,turns}}); return p.messages.map(m=>m.content).join("\n"); };
+      out.kinds=[...new Set(S.map(x=>x.kind))].sort().join(",");
+      out.flirtThemes=S.filter(x=>x.theme==="Flirting").map(x=>x.kind).sort().join(",");
+      out.text=await one("flirt_text",[{role:"user",content:"Uyudun mu?",textMsg:true,textWith:"p_buket",textWithName:"Buket Özüçak"}]);
+      out.gm=await one("flirt_gm",[{role:"user",content:"Bir çay daha?"},{role:"assistant",speaker:"Narrator",narratorEvent:true,content:"*Buket's phone lights up on the table: SAMI.*"}]);
+      out.heat=await one("flirt_heat",[{role:"user",content:"*Onu kendime çekiyorum.* Buket…"}]);
+      out.multi=await one("flirt_multi",[{role:"user",content:"Buket, bu akşam çok güzel olmuşsun."}]);
+      return out; });
+    ok("all five payload kinds are covered", kindsOk.kinds==="gm,heat,multi,solo,text", kindsOk.kinds);
+    ok("the flirting theme is played in every kind", kindsOk.flirtThemes==="gm,heat,multi,solo,text", kindsOk.flirtThemes);
+    ok("the text version is a text thread", /Uyudun mu\?/.test(kindsOk.text)&&/text/i.test(kindsOk.text), kindsOk.text.slice(-600));
+    ok("the gamemaster version puts the beat in front of her", /phone lights up on the table: SAMI/.test(kindsOk.gm), kindsOk.gm.slice(-600));
+    ok("the heat version is built as a heat beat, at Emre's", /Emre's flat/.test(kindsOk.heat)&&kindsOk.heat!==kindsOk.multi, kindsOk.heat.slice(0,300));
+    ok("the several-characters version has Sami in the room", /Sami/.test(kindsOk.multi));
+
+    OR.calls=[];
+    OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
+      if(/reading the results of a whole test run AT ONCE/.test(all)) return JSON.stringify({score:6,summary:"s",patterns:[{pattern:"too stiff in daily talk",scenes:["Daily talk: fun and real"],cause:"x"}],
+        edits:[{item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-DRIFT-FIX",replace:"PE-ALL-FIX",why:"w",helps:["Daily talk: fun and real","Flirting by text, at night"],risks:"none"}]});
+      if(/instruction-following test/.test(all)){ const n=(all.match(/TURN \d+\\n/g)||[]).length||4; return JSON.stringify({turns:Array.from({length:n},()=>({verdict:"held",note:"n"})),drift_at:null,score:8,summary:"ok",edits:[]}); }
+      if(/BACKGROUND ENGINE/.test(all)) return JSON.stringify({verdict:"good",summary:"ok",problems:[],edits:[]});
+      const sys=String(((body.messages||[])[0]||{}).content||""); return /JSON/i.test(sys)?"{}":'"Tamam." *Gülümsüyor.*'; };
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_selreply",JSON.stringify(["daily_text","flirt_gm"])); localStorage.setItem("pe_v1_seleng",JSON.stringify(["comings"]));
+      localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); localStorage.setItem("pe_v1_engscript",JSON.stringify("")); document.querySelector("#engEndDay").checked=false; });
+    await pg.click('#rtabs button[data-r="tests"]');
+    const est=await pg.evaluate(()=>document.querySelector("#allEstimate").textContent);
+    ok("the estimate counts what is ticked", /2 reply scenes \(9 replies\) and 1 engine scene/.test(est), est);
+    await pg.evaluate(()=>__PE.runEverything());
+    const all=await pg.evaluate(()=>({dt:__PE.DR.results.daily_text,fg:__PE.DR.results.flirt_gm,eng:__PE.ENGRUN.byScene.comings,overall:__PE.ALL.overall,
+      box:(document.querySelector("#overallBox")||{}).textContent||""}));
+    ok("both reply scenes were played and analysed", all.dt&&all.dt.judge&&all.fg&&all.fg.judge&&all.fg.turns.some(t=>t.gm), JSON.stringify({dt:!!(all.dt&&all.dt.judge),fg:!!(all.fg&&all.fg.judge)}));
+    ok("the engine scene was played (its own cast) and analysed", !!(all.eng&&all.eng.calls.length&&Object.keys(all.eng.judge||{}).length), JSON.stringify(all.eng&&{n:all.eng.calls.length,j:Object.keys(all.eng.judge||{}).length}));
+    const together=OR.calls.find(c=>/AT ONCE/.test(JSON.stringify(c.body.messages)));
+    const tj=together?JSON.stringify(together.body.messages):"";
+    ok("then Claude read everything together: every scene, every engine verdict, real payloads", !!together&&/Daily talk by text/.test(tj)&&/Flirting at Emre's, and the world interrupts/.test(tj)&&/Engine scene: Comings and goings/.test(tj)&&/A REAL TEXT MESSAGES PAYLOAD/.test(tj), tj.slice(0,400));
+    ok("the combined verdict shows, with each edit's scenes", !!all.overall&&/Across all scenes/.test(all.box)&&/too stiff in daily talk/.test(all.box)&&/Helps: Daily talk/.test(all.box), all.box.slice(0,300));
+    ok("the combined edit applies", await pg.evaluate(()=>{ const b=document.querySelector('#overallBox .chg [data-a="apply"]'); if(!b||b.disabled) return false; b.click(); return /PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))); }));
 
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above

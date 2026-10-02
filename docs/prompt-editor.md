@@ -120,6 +120,32 @@ Each proposed edit returns `kind` (`remove` / `rewrite` / `add`) and `cause` wit
 shows the kind, the net change in characters and the cause. An `add` is marked in amber with a note to
 apply it only if nothing could be cut or rewritten instead.
 
+## One Tests tab, every payload kind
+
+Reply scenes and engine scenes live in one **Tests** tab. **Run everything selected** plays every ticked
+scene in one go, has Claude analyse each, and finishes with **the combined analysis**. Reply scenes are all
+ticked by default; engine scenes only the first, since each makes about a hundred calls. The estimate line
+counts what is ticked.
+
+Reply scenes are grouped by theme, and a theme is played in the payload kinds that suit it:
+
+| Theme | solo | several characters | gamemaster | text messages | heat |
+|---|---|---|---|---|---|
+| Flirting | alone at Emre's | in front of Sami | at Emre's, Sami calls / footsteps outside | at night, apart | in the middle of it |
+| After intimacy | the next day; some days on | dinner with Sami the next day | — | the morning after | — |
+| Daily talk | her living room | dinner with Sami | power cut, neighbours shouting | about the day | — |
+| Holding the line | the ten drift scenes | (environment) | — | — | — |
+
+A line in a scene is the player's, texted in a text scene (`textMsg`), or a gamemaster beat (`{gm:"…"}`),
+which goes into the transcript as a narrator event that the character reacts to.
+
+**The combined analysis** (`analyseTogether`) reads the whole run at once: every scene's exchange and
+verdict, every engine's verdict and problems, one real payload per kind, the editable items, and the
+engine prompts that had issues. It looks for patterns across scenes and tensions between them, for
+example resistance that holds after intimacy but goes stiff in daily talk. Its edits name the scenes they
+help and what they risk, so the prompts are tuned for every situation at once. It runs at the end of Run
+everything and of **Analyse all**.
+
 ## Drift tests
 
 The **Drift tests** tab runs ten scripted scenes against the current prompts. Every scene is played by

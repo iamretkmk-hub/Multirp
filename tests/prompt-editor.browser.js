@@ -38,7 +38,7 @@ const ROOT=path.resolve(__dirname,'..');
   await ctx.route(/openrouter\.ai/,async r=>{
     const url=r.request().url();
     if(/\/models/.test(url)) return r.fulfill({status:200,contentType:"application/json",
-      body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"}]})});
+      body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"},{id:"anthropic/claude-opus-5:batch"}]})});
     const body=JSON.parse(r.request().postData()||"{}");
     OR.calls.push({auth:r.request().headers()["authorization"]||"",body});
     const ms=OR.delay?OR.delay(body):0;
@@ -385,6 +385,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("no prompt edits are offered in the evaluation", ev.apply===0);
 
 
+    ok("a batch-only model (…:batch) is never offered or picked as the analyst", await pg.evaluate(()=>NET.models.every(m=>!/:batch$/.test(m))&&!/:batch/.test(analystModel())));
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});
     await sctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

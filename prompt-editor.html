@@ -1695,18 +1695,14 @@ function orKey(){ return lsGet("orkey","")||""; }
 function packModels(){ const set=S.settings||{}, d=(S.meta&&S.meta.settingsDef)||{};
   return [...new Set(["model","fallbackModel","mcModel","gmModel","memModel","playerNarrateModel","callModel"].map(k=>set[k]||d[k]).filter(Boolean))]; }
 function testModel(){ return lsGet("testmodel","")||((S.settings&&S.settings.model)||(S.meta&&S.meta.settingsDef.model)||""); }
-function analystModel(){
-  const saved=String(lsGet("analystmodel","")||"").replace(/:batch$/i,""); if(saved) return saved;
-  const cl=NET.models.filter(m=>/^anthropic\/claude-/.test(m)&&m.indexOf(":")<0);   // the plain model, no ":variant"
-  const pick=re=>cl.filter(m=>re.test(m)).sort().pop();
-  return pick(/opus/)||pick(/sonnet/)||cl.sort().pop()||"anthropic/claude-opus-4.5";
-}
 function smKeyHere(){ try{ const k=localStorage.getItem("sm_key"); return (k&&/^sk-/.test(k.replace(/^"|"$/g,"")))?k.replace(/^"|"$/g,""):""; }catch(e){ return ""; } }
 /* Who answers as the model under test: "or" = the user's own models on OpenRouter, sent by StoryMind's own
    request code; "claude" = Claude stands in (the only choice inside the Claude app, which cannot reach
    OpenRouter). */
 function testMode(){ const m=lsGet("testmode",""); if(m==="or"&&NET.ok!==false) return "or"; if(m==="claude") return "claude"; return NET.ok===false?"claude":"or"; }
-function claudeReachable(){ return !!(AI.sample||(NET.ok&&orKey())); }
+/* Analysis is Claude's job, here, through the Claude app only. OpenRouter plays the tests; it never analyses. */
+function claudeReachable(){ return !!AI.sample; }
+const ANALYSE_HERE="Analysis runs only in the editor inside Claude. Use Export results here, then Import results there.";
 function canTest(){ return testMode()==="claude"?claudeReachable():(NET.ok===true&&!!orKey()&&!!testModel()); }
 function testLabel(){ return testMode()==="claude"?"Claude (standing in for your model)":testModel(); }
 async function pushModelToEngine(){ if(!ENG.ready) return; try{ await engCall("setModel",{key:orKey(),model:testModel()}); }catch(e){} }
@@ -1723,38 +1719,27 @@ function modelBoxHTML(){
       ${sm&&sm!==k?`<button class="btn sm pmUseSm" type="button">Use StoryMind's key</button>`:""}</div>
     <div class="row"><input class="pmModel" type="text" list="pmModels" placeholder="model id, e.g. deepseek/deepseek-v4-pro" value="${esc(testModel())}" style="flex:1;min-width:200px"></div>
     <div class="stat">Each reply is written by StoryMind's own request for a roleplay reply: this model, with the temperature, token limit and thinking setting from your prompts file. The key stays in this browser.</div>`;
-  h+=`<div class="row" style="margin-top:4px"><b>Analyst</b><span class="chip ${AI.sample||(NET.ok&&k)?"ok":"bad"}"><span class="dot"></span>${AI.sample?"Claude (your Claude account)":(NET.ok&&k?"Claude on OpenRouter":"not connected")}</span></div>`;
-  if(!AI.sample&&NET.ok!==false) h+=`<div class="row"><input class="pmAnalyst" type="text" list="pmClaude" value="${esc(analystModel())}" style="flex:1;min-width:200px" title="The Claude model that analyses the replies"></div>`;
-  h+=`<datalist id="pmModels">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>
-      <datalist id="pmClaude">${NET.models.filter(m=>/^anthropic\//.test(m)).map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
+  h+=`<div class="row" style="margin-top:4px"><b>Analyst</b><span class="chip ${AI.sample?"ok":"bad"}"><span class="dot"></span>${AI.sample?"Claude, here (your Claude account)":"only in the editor inside Claude"}</span></div>`;
+  if(!AI.sample) h+=`<div class="stat">This page plays the tests. Claude analyses them in the editor inside the Claude app: <b>Export results</b> here, <b>Import results</b> there.</div>`;
+  h+=`<datalist id="pmModels">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
   return h;
 }
 function renderProvider(){
   ["#provBox","#driftModelBox"].forEach(sel=>{
     const b=$(sel); if(!b) return; b.innerHTML=modelBoxHTML();
-    const key=b.querySelector(".pmKey"), mod=b.querySelector(".pmModel"), an=b.querySelector(".pmAnalyst"), use=b.querySelector(".pmUseSm");
+    const key=b.querySelector(".pmKey"), mod=b.querySelector(".pmModel"), use=b.querySelector(".pmUseSm");
     if(key) key.onchange=e=>{ lsSet("orkey",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
     if(use) use.onclick=()=>{ lsSet("orkey",smKeyHere()); pushModelToEngine(); renderProvider(); toast("Using the key StoryMind keeps on this device"); };
     if(mod) mod.onchange=e=>{ lsSet("testmodel",e.target.value.trim()); pushModelToEngine(); renderProvider(); };
-    if(an) an.onchange=e=>{ lsSet("analystmodel",e.target.value.trim()); };
     b.querySelectorAll(".pmMode").forEach(r=>{ r.name="pmMode"+sel; r.onchange=e=>{ lsSet("testmode",e.target.value); renderProvider(); }; });
   });
 }
-/* The analyst. Inside Claude: the sample capability. Elsewhere: a Claude model on OpenRouter. */
+/* The analyst: Claude, through the Claude app (the sample capability). Never OpenRouter. */
 async function aiAsk(input,opts){
   opts=opts||{};
-  if(AI.sample){
-    const r=await AI.sample(input,{signal:opts.signal,onText:opts.onText,modelTier:opts.modelTier||"complex",cache:false});
-    return r.text;
-  }
-  const key=orKey(); if(!key||NET.ok===false) throw {code:"no_key",message:NET.ok===false?"Claude is not reachable from this page. Open the editor inside the Claude app to analyse.":"Add your OpenRouter key under Model under test, or open this editor inside Claude."};
-  const messages=typeof input==="string"?[{role:"user",content:input}]:input;
-  const r=await fetch("https://openrouter.ai/api/v1/chat/completions",{method:"POST",signal:opts.signal,
-    headers:{"Authorization":"Bearer "+key,"Content-Type":"application/json","X-Title":"StoryMind Prompt Editor"},
-    body:JSON.stringify({model:analystModel(),messages,max_tokens:opts.maxTokens||6000,temperature:opts.temperature==null?0.4:opts.temperature})});
-  if(!r.ok){ let t=""; try{t=(await r.json()).error.message;}catch(e){} throw {code:"http",message:"OpenRouter "+r.status+(t?": "+t:"")}; }
-  const j=await r.json(); const text=((j.choices||[])[0]||{}).message?.content||"";
-  opts.onText&&opts.onText({text}); return text;
+  if(!AI.sample) throw {code:"no_claude",message:ANALYSE_HERE};
+  const r=await AI.sample(input,{signal:opts.signal,onText:opts.onText,modelTier:opts.modelTier||"complex",cache:false});
+  opts.onText&&opts.onText({text:r.text}); return r.text;
 }
 function aiErr(e){
   const c=e&&e.code;
@@ -1827,7 +1812,7 @@ $("#ask").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrl
 /* Claude in the model's seat: the real message list through OpenRouter, or — inside the Claude app —
    the messages serialized for the sample capability, with the instruction to answer as that model. */
 async function claudeAsModel(messages,signal,tier){
-  if(!AI.sample) return aiAsk(messages.map(m=>({role:m.role,content:m.content})),{signal,maxTokens:2500,temperature:0.8});
+  if(!AI.sample) throw {code:"no_claude",message:"Claude can stand in for your model only inside the Claude app."};
   const input=`Below is the complete request an app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for, in the language and format it asks for (JSON when it asks for JSON), and nothing else: no preface, no notes, no quotation of the instructions.\n\n${payloadText({messages})}`;
   return aiAsk(input,{signal,modelTier:tier});
 }
@@ -2370,7 +2355,7 @@ async function runDriftScenes(list,inAll){
   /* the scenes are written against the sample story's facts */
   await useTestWorld();
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
-  const analyst=!inAll&&!!(AI.sample||(NET.ok&&orKey()));   // in a full run the analyst team reads them all at once afterwards
+  const analyst=!inAll&&!!AI.sample;   // in a full run the analyst team reads them all at once afterwards
   let done=0;
   for(const sc of list){
     $("#driftStat").textContent=`${testLabel()} is playing ${sc.title} (${done+1}/${list.length})…`;
@@ -2578,7 +2563,7 @@ ${sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c
 }
 async function analyseEngines(keys,inAll){
   if(ENGRUN.running||(ALL.running&&!inAll)) return;
-  if(!claudeReachable()){ toast("Claude is not reachable from this page. Open the editor inside the Claude app, or add an OpenRouter key."); return; }
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   ENGRUN.running=true; ENGRUN.ctl=ALL.ctl||new AbortController(); renderEng();
   const groups=engGroups().filter(g=>keys.indexOf(g.key)>=0&&g.calls.some(c=>c.output!=null));
   let n=0;
@@ -2751,13 +2736,13 @@ async function runEverything(){
     if(rs.length){ $("#allStat").textContent=`Reply scenes (${rs.length})…`; await runDriftScenes(rs,true); }
     for(let i=0;i<es.length;i++){ if(ALL.ctl.signal.aborted) break; $("#allStat").textContent=`Engine scene ${i+1}/${es.length}: ${es[i].label}…`; await runEngines(es[i].id,true); }
     if(!ALL.ctl.signal.aborted&&claudeReachable()) await analyseTeamAndOversee();
-    $("#allStat").textContent=ALL.ctl.signal.aborted?"Stopped.":"Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:"");
+    $("#allStat").textContent=ALL.ctl.signal.aborted?"Stopped.":!claudeReachable()?"Played. Export results, then Import results in the editor inside Claude to analyse.":"Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:"");
   }catch(e){ toast(aiErr(e),6000); }
   finally{ ALL.running=false; paintAllButtons(); renderDrift(); renderEng(); }
 }
 async function analyseEverything(){
   if(busyAll()) return;
-  if(!claudeReachable()){ toast("Claude is not reachable from this page"); return; }
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; ENGRUN.ctl=ALL.ctl; paintAllButtons();
   try{ await analyseTeamAndOversee(); if(!ALL.ctl.signal.aborted) $("#allStat").textContent="Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:""); }
   catch(e){ toast(aiErr(e),6000); }
@@ -2845,7 +2830,7 @@ function renderLlm(){
       ?`<div class="row"><span class="chip ok"><span class="dot"></span>Runs here, with Claude</span>${modeSel}<span class="sp"></span><button type="button" class="btn sm" id="btnLlmTiers">Add Claude's tiers to every setting</button></div><div class="stat">The candidates are Claude's own tiers (fast, standard, strongest): each plays the same scenes and engine calls through your Claude account, and Claude compares them blind. No OpenRouter key is needed. Roleplay compares the three tiers by default; add them to other settings with the button or the box. To compare your OpenRouter models instead, run this tab on your StoryMind site, <b>Export results</b>, and <b>Import results</b> here.</div>`
       :NET.ok===false
       ?`<div class="row"><span class="chip bad"><span class="dot"></span>No model reachable</span></div><div class="stat" style="color:var(--warn)">This page reaches neither OpenRouter nor Claude. Open it inside the Claude app, or on your StoryMind site with an OpenRouter key.</div>`
-      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span>${modeSel}<span class="stat">The key is set under Model under test, in the Tests or Claude tab. The comparison is written by ${AI.sample?"Claude (your Claude account)":esc(analystModel())}.</span></div>`; }
+      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span>${modeSel}<span class="stat">The key is set under Model under test, in the Tests or Claude tab. ${AI.sample?"Claude, here, writes the comparison.":"The candidates play here; Claude compares them in the editor inside Claude (Export results, then Import results there)."}</span></div>`; }
   const ms=$("#llmModeSel"); if(ms){ ms.value=lsGet("llmmode","auto"); ms.onchange=()=>{ lsSet("llmmode",ms.value); renderLlm(); }; }
   const tb=$("#btnLlmTiers"); if(tb) tb.onclick=()=>{ MODEL_FIELDS.forEach(d=>{ const a=LLM.cfg.cands[d.key]=LLM.cfg.cands[d.key]||[]; CLAUDE_TIERS.forEach(t=>{ if(a.indexOf(t.id)<0) a.push(t.id); }); }); llmSaveCfg(); renderLlm(); };
   const host=$("#llmFields"); if(!host) return;
@@ -2969,7 +2954,7 @@ async function runLlm(){
     }
     llmSaveRes(); renderLlmResults();
     if(claudeReachable()&&!LLM.ctl.signal.aborted) await compareLlm(true);
-    $("#llmStat").textContent=LLM.ctl.signal.aborted?"Stopped.":"Done.";
+    $("#llmStat").textContent=LLM.ctl.signal.aborted?"Stopped.":!claudeReachable()?"Played. Export results, then Import results in the editor inside Claude to compare.":"Done.";
   }catch(e){ toast("The evaluation stopped: "+aiErr(e),6000); }
   finally{ LLM.running=false; NET.allow=false; paintLlm(); renderLlmResults(); llmSaveRes(); }
 }
@@ -3009,7 +2994,7 @@ ${body}`;
 }
 async function compareLlm(inRun){
   if(!LLM.res){ toast("Run the evaluation first"); return; }
-  if(!claudeReachable()){ toast("Claude is not reachable from this page"); return; }
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   if(!inRun){ if(LLM.running) return; LLM.running=true; LLM.ctl=new AbortController(); paintLlm(); }
   try{
     for(const f of Object.keys(LLM.res.fields||{})){ const F=LLM.res.fields[f]; if(F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;

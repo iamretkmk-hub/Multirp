@@ -270,7 +270,7 @@ const {chromium}=require('playwright');
       return m.role==="assistant"&&m.name==="Burcu" ? true : JSON.stringify(m); }));
 
   console.log("\n[resistance ships on every turn outside heat]");
-  /* v150.5 — the ask gate (v62.1–v148.6) is gone at the player's request: their resistance_body judges for
+  /* v150.13 — the ask gate (v62.1–v148.6) is gone at the player's request: their resistance_body judges for
      itself whether anything is being asked, and they want it read on every turn. Heat still skips it, and the
      actions clause still needs a physical move to read. */
   ok("the block is no longer gated on an ask", await pg.evaluate(()=>

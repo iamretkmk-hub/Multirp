@@ -71,7 +71,7 @@ const ROOT=path.resolve(__dirname,'..');
       const on=await __PE.engCall('build',{kind:'solo',turn:{arriving:true,video:true,voice:true,afterHeat:true}});
       o.on=on.empties;
       return o; });
-    ["solo","multi","gm","text"].forEach(k=>ok("v150.5 — the resistance block is in the "+k+" payload", rich[k].resist===true, JSON.stringify(rich[k])));
+    ["solo","multi","gm","text"].forEach(k=>ok("v150.13 — the resistance block is in the "+k+" payload", rich[k].resist===true, JSON.stringify(rich[k])));
     ok("heat beats still leave it out", rich.heat.resist===false);
     const allowed=/^(others_present|player|after_heat|situation|watching_now|spoken_delivery|private_intent)(\/\/full)?$/;
     ["solo","multi","gm","text","heat"].forEach(k=>ok("only turn-dependent blocks are empty in "+k, rich[k].empties.every(e=>allowed.test(e)), rich[k].empties.join(" ")));

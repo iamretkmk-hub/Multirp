@@ -177,7 +177,8 @@ const {chromium}=require('playwright');
 
   console.log("\n[a generate-image icon under every reply]");
   const IB=await pg.evaluate(async()=>{
-    const c=curChat(); let called=null; const real=window.reIllustrate; window.reIllustrate=mid=>{ called=mid; };
+    // v150.9 — the icon opens the scene picker first (tests/img-scene-picker.browser.js)
+    const c=curChat(); let called=null; const real=window.pickSceneAndIllustrate; window.pickSceneAndIllustrate=mid=>{ called=mid; };
     c.messages=[{mid:"g1",role:"user",content:'"hi"',present:[]},
       {mid:"g2",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"hello"',present:[]},
       {mid:"g3",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:"a text",textMsg:true,textWith:"p_a",present:[]}];
@@ -187,13 +188,13 @@ const {chromium}=require('playwright');
     const sib=row&&row.querySelector('[data-dub]');
     const r={reply:!!btn,user:!!q("g1"),svg:!!(btn&&btn.querySelector('svg')),text:(btn&&btn.textContent.trim())||"",
       sameRow:!!sib, sameSize:!!(btn&&sib&&Math.abs(btn.getBoundingClientRect().height-sib.getBoundingClientRect().height)<1&&Math.abs(btn.getBoundingClientRect().top-sib.getBoundingClientRect().top)<1)};
-    if(btn)btn.click(); r.called=called; window.reIllustrate=real;
+    if(btn)btn.click(); r.called=called; window.pickSceneAndIllustrate=real;
     return r;
   });
   ok("every character reply has a generate-image icon in its action row", IB.reply===true && IB.sameRow===true, JSON.stringify(IB));
   ok("it is an icon only, the same size and line as the others", IB.svg===true && IB.text==="" && IB.sameSize===true, JSON.stringify(IB));
   ok("the player's own line has none", IB.user===false, JSON.stringify(IB));
-  ok("tapping it draws that reply's picture", IB.called==="g2", JSON.stringify(IB));
+  ok("tapping it asks which scene for that reply's picture", IB.called==="g2", JSON.stringify(IB));
 
   await pg.evaluate(()=>{ Object.assign(window,window.__real); });
   ok("no page errors", errs.length===0, errs.join(" | "));

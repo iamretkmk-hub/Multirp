@@ -341,7 +341,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     const t=tail();
     return {plain,hand:!!t.resistance,actions:/AN ASK IS NOT ONLY A SENTENCE/.test(String(t.resistance||""))};
   });
-  ok("v150.5 — a plain statement ships the rail too (the ask gate is gone)", r11.plain===true, JSON.stringify(r11));
+  ok("v150.13 — a plain statement ships the rail too (the ask gate is gone)", r11.plain===true, JSON.stringify(r11));
   ok("the player's hand on this character does, with the actions part", r11.hand===true && r11.actions===true, JSON.stringify(r11));
 
   /* ------------------------------------------------------------------------------------------ */

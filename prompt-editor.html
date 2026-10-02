@@ -1499,7 +1499,13 @@ function payloadText(p){
   return p.messages.map((m,i)=>`===== MESSAGE ${i+1} · ${m.role.toUpperCase()} =====\n${m.content}`).join("\n\n");
 }
 const CONTEXT=`You are helping the author of StoryMind, an adult roleplay app, write the prompts the app sends to language models. The app assembles each reply payload from a layout template ({{call//piece}} drops a named piece in, {{call//piece//full}} is the piece with its heading, [system]/[user] mark messages, {{call//dialogue_history}} is the transcript, {{if flag}}…{{endif}} and [[section]]…[[end]] are structure inside a piece, {{name}} values are filled by the app). Pieces ("fragments") are short fixed wordings the app wraps around live story data. The story language is usually Turkish; the instructions are English.
-Be direct and specific. Quote the exact words you would change. Keep every {{…}}, [[…]] and placeholder the text already uses unless the author asks otherwise, and never invent placeholder names.`;
+Be direct and specific. Quote the exact words you would change. Keep every {{…}}, [[…]] and placeholder the text already uses unless the author asks otherwise, and never invent placeholder names.
+
+HOW TO FIX — FIND THE CAUSE, THEN REMOVE OR CHANGE IT. NEVER FIX BY PILING ON RULES.
+1. Trace every problem to the exact words that produced it: an instruction pushing the wrong way, two pieces that contradict, a rule stated twice so it weighs double, an example the model copies, a heading that frames the material wrongly, a piece that should not be in the payload at all. Quote those words: they are the cause.
+2. Fix it there. In this order of preference: delete the words or the piece; rewrite or shorten them; merge duplicates into one; move a piece to where it belongs. Deleting a rule that over-steers is often the whole fix.
+3. Add a new instruction only when nothing in the text covers the gap at all, and say why removing or rewriting could not fix it. Never answer a failure with a new rule on top of the one that failed, and never add emphasis (IMPORTANT, NEVER, ALWAYS, capitals) to make an old rule louder.
+4. The text should come out the same length or shorter. Every added rule makes the model more careful, more repetitive and more likely to recite rules back.`;
 function itemContext(it){
   const v=itemVal(it), d=itemDef(it);
   let s=`THE OPEN ITEM: ${it.label} (${it.type==="frag"?"reply piece":it.type==="tpl"?"payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
@@ -1529,7 +1535,7 @@ $("#btnAsk").onclick=async()=>{
   $("#ask").value=""; addBubble("user",esc(q));
   let first=CONTEXT+"\n\n"+(it?itemContext(it):"No item is open.");
   if($("#askPayload").checked&&S.preview&&S.preview.messages) first+=`\n\nTHE FULL PAYLOAD THIS BUILDS (sample story):\n${payloadText(S.preview).slice(0,150000)}`;
-  first+=`\n\nWhen you propose a complete replacement for the open item, put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`;
+  first+=`\n\nWhen you propose a complete replacement for the open item, follow HOW TO FIX: cut and rewrite before you add, and say how much shorter or longer it comes out. Put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`;
   const turns=[{role:"user",content:first},{role:"assistant",content:"Understood. What would you like to change?"}].concat(S.chat).concat([{role:"user",content:q}]);
   const b=addBubble("ai","Thinking…"); setBusy(true); AI.ctl=new AbortController();
   try{
@@ -1587,10 +1593,10 @@ async function runReview(output){
 
 The roleplay model the author uses was given the payload below and wrote the reply under it. Review that reply as the prompt engineer: where did it fall short of what a great reply would be (voice, length, staying in character, repeating, echoing the other person, language, format, pacing, inventing facts, ignoring a rule), and which words in the PAYLOAD pushed it there or failed to prevent it? Also flag payload problems you noticed while answering: contradictions between pieces, rules stated twice, confusing point of view, wasted tokens.
 
-Then propose concrete edits to the text the author controls. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first.
+Then fix the causes, following HOW TO FIX above. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text, or empty to delete it. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first, removals and rewrites before any addition.
 
 Reply with ONLY this JSON:
-{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","find":"exact text","replace":"new text","why":"…"}]}
+{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
 
 ===== THE PAYLOAD =====
 ${payloadText(p).slice(0,160000)}
@@ -1620,7 +1626,13 @@ function editCard(ed){
     const it=itemFromRef(ed.item);
     const box=document.createElement("div"); box.className="chg";
     const found=it&&itemVal(it).indexOf(ed.find||"")>=0&&ed.find;
-    box.innerHTML=`<div class="tgt">${esc(ed.item)}${it?"":" · not found"}</div><div class="why">${esc(ed.why||"")}</div>
+    const kind=String(ed.kind||"").toLowerCase()||(String(ed.replace||"").trim()===""?"remove":String(ed.replace||"").length>String(ed.find||"").length*1.5?"add":"rewrite");
+    const delta=String(ed.replace||"").length-String(ed.find||"").length;
+    const kcls=kind==="remove"?"held":kind==="add"?"broke":"bent";
+    box.innerHTML=`<div class="tgt">${esc(ed.item)}${it?"":" · not found"} <span class="vd ${kcls}">${esc(kind)}</span> <span class="stat">${delta>0?"+":delta<0?"−":"±"}${Math.abs(delta)} chars</span></div>
+      ${ed.cause?`<div class="stat"><b>Cause:</b> ${esc(ed.cause)}</div>`:""}
+      <div class="why">${esc(ed.why||"")}</div>
+      ${kind==="add"?`<div class="stat" style="color:var(--warn)">This adds text. Apply it only if nothing in the payload could be cut or rewritten instead.</div>`:""}
       ${diffHTML(String(ed.find||""),String(ed.replace||""))}
       <div class="acts"><button class="btn sm" type="button" data-a="open" ${it?"":"disabled"}>Open</button><button class="btn sm pri" type="button" data-a="apply" ${found?"":"disabled"}>${found?"Apply":"Text not found"}</button></div>`;
     box.querySelector('[data-a="open"]').onclick=()=>{ if(it){ select(it); if(matchMedia("(max-width:980px)").matches) setView("edit"); } };
@@ -1844,10 +1856,10 @@ THE EXCHANGE:
 ${transcript}
 
 Judge each reply: "held" (fully in line), "bent" (gave some ground it should not have, or a smaller rule slipped), "broke" (did the failure the test is about). drift_at is the first turn that bent or broke, or null. score is 0–10 for how hard it was to drift (10 = never moved).
-Then name the words in the payload that let it drift, or failed to stop it, and propose at most 5 find-and-replace edits on ONE item each from the catalogue at the end. "find" must be copied EXACTLY from that item's current text; keep {{…}} and [[…]] markers intact. If it held throughout, propose edits only if something real can still be tightened.
+Then find the cause: the words in the payload that pushed it to drift, or the competing words that drowned out what should have held it (a drift is as often caused by a rule pulling the other way as by a missing one). Fix the causes following HOW TO FIX above, with at most 5 find-and-replace edits on ONE item each from the catalogue at the end. "find" must be copied EXACTLY from that item's current text; "replace" may be empty to delete; keep {{…}} and [[…]] markers intact. If it held throughout, propose only removals of text that did no work.
 
 Reply with ONLY this JSON:
-{"turns":[{"verdict":"held|bent|broke","note":"one short line"}],"drift_at":null,"score":10,"summary":"two sentences","edits":[{"item":"frag:key | prompt:key | tpl:kind","find":"exact text","replace":"new text","why":"…"}]}
+{"turns":[{"verdict":"held|bent|broke","note":"one short line"}],"drift_at":null,"score":10,"summary":"two sentences","edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
 
 ===== THE LAST PAYLOAD =====
 ${payload?payloadText(payload).slice(0,140000):"(not available)"}
@@ -1989,10 +2001,10 @@ MODEL THAT ANSWERED: ${ENGRUN.model||"(unknown)"}
 
 Judge the ANSWER against the prompt: does it keep the output contract exactly (format, JSON shape and field names, nothing outside it); is every claim supported by the input (no invented events, people, feelings or facts); does it follow the prompt's own rules and scope (who it is about, point of view, language, length); would the app's parser and the next engine get something useful? Then judge the PROMPT: where its wording let the answer go wrong, or is contradictory, ambiguous, redundant or wastes tokens.
 
-Propose at most 5 find-and-replace edits${gr.prompt?` on "prompt:${gr.prompt}"`:""}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); keep {{…}} placeholders intact. Never change the output contract's field names.
+Find the cause of each problem in the prompt's own words, then fix it following HOW TO FIX above, with at most 5 find-and-replace edits${gr.prompt?` on "prompt:${gr.prompt}"`:""}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); "replace" may be empty to delete; keep {{…}} placeholders intact. Never change the output contract's field names.
 
 Reply with ONLY this JSON:
-{"verdict":"good|issues|broken","summary":"two sentences","problems":[{"issue":"…","evidence":"short quote"}],"edits":[{"item":"prompt:key","find":"exact text","replace":"new text","why":"…"}]}
+{"verdict":"good|issues|broken","summary":"two sentences","problems":[{"issue":"…","evidence":"short quote"}],"edits":[{"item":"prompt:key","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
 
 ===== THE PROMPT TEMPLATE =====
 ${promptText?promptText.slice(0,30000):"(this call has no editable prompt template: judge the answer only, and propose no edits)"}

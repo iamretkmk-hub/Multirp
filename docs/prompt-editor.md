@@ -101,6 +101,20 @@ each scene, so it can also be handed to Claude in a conversation.
   against it and returns find/replace edits on named items (`frag:` / `prompt:` / `tpl:`). Each edit
   applies only if its `find` text is still present.
 
+## How Claude fixes things
+
+Every analysis (Ask Claude, Test & review, the drift tests, the engine tests) carries one method, in
+`CONTEXT`: **find the cause, then remove or change it; never fix by piling on rules.**
+1. Trace each problem to the exact words that produced it, and quote them as the cause.
+2. Fix it there, in this order: delete, rewrite or shorten, merge duplicates, move.
+3. Add an instruction only when nothing covers the gap, saying why cutting or rewriting could not fix it.
+   No new rule on top of one that failed, and no emphasis to make an old rule louder.
+4. The text should come out the same length or shorter.
+
+Each proposed edit returns `kind` (`remove` / `rewrite` / `add`) and `cause` with its find/replace. The card
+shows the kind, the net change in characters and the cause. An `add` is marked in amber with a note to
+apply it only if nothing could be cut or rewritten instead.
+
 ## Drift tests
 
 The **Drift tests** tab runs ten scripted scenes against the current prompts. Every scene is played by

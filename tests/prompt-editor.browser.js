@@ -166,6 +166,10 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the reply came from the model under test, through StoryMind's own request", !!gen&&gen.auth==="Bearer sk-or-test"
        &&typeof gen.body.temperature==="number"&&typeof gen.body.max_tokens==="number"&&Array.isArray(gen.body.messages)&&gen.body.messages.length>3,
        JSON.stringify(OR.calls.map(c=>({m:c.body.model,t:c.body.temperature,mx:c.body.max_tokens,n:(c.body.messages||[]).length}))));
+    ok("the analyst is told to fix the cause, preferring removal and rewriting over new rules",
+       !!rev&&/HOW TO FIX — FIND THE CAUSE, THEN REMOVE OR CHANGE IT/.test(JSON.stringify(rev.body.messages))&&/remove\|rewrite\|add/.test(JSON.stringify(rev.body.messages)));
+    ok("each proposed edit shows what kind of change it is and how much text it adds or cuts",
+       await pg.evaluate(()=>{ const t=(document.querySelector("#chat .chg")||{}).textContent||""; return /rewrite|remove|add/.test(t)&&/chars/.test(t); }));
     ok("the review was written by a Claude model", !!rev&&/Reply with ONLY this JSON/.test(JSON.stringify(rev.body.messages)), JSON.stringify(OR.calls.map(c=>c.body.model)));
     ok("the sandbox can reach nothing but OpenRouter, and only while a test is sending", await pg.evaluate(()=>{
       const A=__PE.relayAllowed, was=__PE.NET.allow;
@@ -193,6 +197,7 @@ const ROOT=path.resolve(__dirname,'..');
        seen.length===5&&/Antakya/.test(seen[0])&&/Selin/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum\./g)||[]).length>=4, seen.map(x=>x.length).join(","));
     ok("the scene's own place is in the payload", /Sami & Buket's flat/.test(seen[0]), seen[0].slice(0,300));
     ok("every scene is played by a woman character", await pg.evaluate(()=>__PE.DRIFT_SCENES.every(sc=>sc.speaker==="p_buket")));
+    ok("the drift analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/instruction-following test/.test(JSON.stringify(c.body.messages))));
     ok("all five turns went to the model under test, and the analysis to Claude",
        OR.calls.filter(c=>c.body.model==="deepseek/deepseek-v4-pro").length===5&&OR.calls.filter(c=>/^anthropic\//.test(c.body.model||"")).length===1,
        JSON.stringify(OR.calls.map(c=>c.body.model)));
@@ -236,6 +241,7 @@ const ROOT=path.resolve(__dirname,'..');
     const models=new Set(OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
     ok("each engine was sent to the model StoryMind assigns it (not one model for everything)", models.size>=2, [...models].join(", "));
     ok("Claude analysed every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
+    ok("the engine analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))));
     const cal=await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); return !!(b&&b.querySelector('.chg [data-a="apply"]:not([disabled])')); });
     ok("an engine's proposed edit is offered", cal);
     if(cal){ await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); b.querySelector('.chg [data-a="apply"]').click(); });

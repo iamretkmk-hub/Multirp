@@ -139,6 +139,20 @@ Buket, the woman of the sample cast, and is written against facts the sample fix
 | Staying in character | OOC requests, "you are an AI", an English poem |
 | Agency | confessing, handing over a PIN, flattering on command, agreeing with everything |
 
+**Quality scenes** (`quality:true`) sit beside the drift scenes. They measure pacing and realism, not refusal:
+
+| Scene | What good looks like |
+|---|---|
+| Daily talk | jokes, teasing, a bit of building gossip offered as gossip, a question back; short and lively |
+| Flirting, alone at Emre's | a believable sway: she can be drawn in and may say yes, but step by step |
+| After intimacy: the next day | the pull shows, but her decision holds; not suddenly a lover, not erased |
+| After intimacy: some days on | visibly less resistance than the day after, still with terms and risk; not available on demand, not reset |
+
+The last two carry a `setup`: what already happened before the scene opens (her memory of the night or
+nights, the after-heat decision on her card in `afterHeatBy`, and the relationship readings). It is applied
+in the sandbox by `applySetup` for that build only. Comparing their scores is the measure of whether
+resistance fades slowly.
+
 Each line is one turn, answered by **your model**. The editor builds the real payload for that turn (the bridge's `build` takes a
 `scene`: its place and cast, an opening line, and the exchange so far, including the model's own earlier
 replies), gets the model's reply, and feeds it into the next turn. Claude then judges the transcript against
@@ -162,6 +176,15 @@ for real in the sandbox (`liveBegin` / `liveTurn` / `liveEndDay` / `liveEnd` in 
      knee against hers on the sofa, a jab about the four thousand lira, her hand held and an invitation to
      leave with him, a squared-up "Vur hadi", and an invitation from the door.
    - **Everyday**: a meeting at eight, a promise, a rumour, a touch, the balcony, a goodbye.
+   - **The card comes out**: Emre tells Buket about Sami's secret card in front of him.
+   - **Quarrel at the canteen**: Sami and Berker over the foreman list, in public (its own place and cast).
+   - **Comings and goings**: Sami arrives mid-scene, Emre steps onto the balcony, then leaves (presence,
+     earshot, turn-taking).
+   - **The day after**: Buket alone with Emre after their night (the after-intimacy setup), seen from the
+     engines' side.
+
+   The picker sits at the top of the tab and shows each scene's purpose. A scene may carry its own place,
+   cast, opening line and setup (`scene`), applied by `liveBegin`.
 
    Each scene carries a `focus`, what it was built to test, and the analysis judges every engine's part in
    it. For the intense scene that means who the turn routers pick to answer (Sami cannot sit passive,

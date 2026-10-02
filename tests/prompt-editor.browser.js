@@ -453,6 +453,9 @@ const ROOT=path.resolve(__dirname,'..');
     const plays=le.tiers.filter(x=>!x.eval);
     ok("each tier played the scene through Claude, at its own tier", ["quick","default","complex"].every(t=>plays.filter(x=>x.tier===t).length===4), JSON.stringify(plays.map(x=>x.tier)));
     ok("and Claude compared them blind, naming the tiers again", le.tiers.some(x=>x.eval&&x.tier==="complex")&&/best: claude:complex/.test(le.html), le.html.slice(0,300));
+    const forced=await sp.evaluate(()=>{ NET.ok=true; localStorage.setItem("pe_v1_orkey",JSON.stringify("sk-or-test")); localStorage.setItem("pe_v1_llmmode",JSON.stringify("claude"));
+      __PE.LLM.cfg.cands={model:["x/rp-b"]}; const c=__PE.llmCands("model"); localStorage.setItem("pe_v1_llmmode",JSON.stringify("auto")); const auto=__PE.llmCands("model"); return {c,auto}; });
+    ok("with a key saved, 'Claude, here' still runs on Claude's tiers (and automatic picks OpenRouter only when it answers)", forced.c.join()==="claude:quick,claude:default,claude:complex"&&forced.auto.indexOf("x/rp-b")>=0, JSON.stringify(forced));
     errs.push(...sErrs);
     await sctx.close();
 

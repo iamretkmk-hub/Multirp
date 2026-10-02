@@ -1547,7 +1547,7 @@ function storyDb(){ return new Promise((res,rej)=>{ try{ const r=indexedDB.open(
 async function storyGet(){ try{ const db=await storyDb(); return await new Promise(res=>{ const q=db.transaction("kv").objectStore("kv").get("world"); q.onsuccess=()=>res(q.result||null); q.onerror=()=>res(null); }); }catch(e){ return null; } }
 async function storySet(w){ try{ const db=await storyDb(); await new Promise(res=>{ const t=db.transaction("kv","readwrite"); const st=t.objectStore("kv"); w?st.put(w,"world"):st.delete("world"); t.oncomplete=res; t.onerror=res; t.onabort=res; }); }catch(e){} }
 async function fetchStoryFile(){ try{ const r=await fetch("prompt-editor-world.json",{cache:"no-store"}); if(!r.ok) return null; const b=await r.json(); return b&&b.kind==="editor-world"?b:null; }catch(e){ return null; } }
-async function loadStory(){ STORY.w=(await storyGet())||(await fetchStoryFile()); return STORY.w; }
+async function loadStory(){ const w=(await storyGet())||(await fetchStoryFile()); if(!STORY.picked) STORY.w=w; return STORY.w; }
 function paintWorldSel(){
   const sel=$("#worldSel"); if(!sel) return;
   sel.innerHTML=(STORY.w?`<option value="story">Your story: ${esc(STORY.w.name||"")}</option>`:"")+`<option value="sample">Sample: Isdemir Lojmanları (short, made up)</option>`;
@@ -1571,7 +1571,7 @@ $("#fileWorld").addEventListener("change",async e=>{
   try{
     const b=JSON.parse(await f.text());
     if(!b||(b.app&&b.app!=="StoryMind")) throw new Error("Not a StoryMind file");
-    const w=b.kind==="editor-world"?b:slimWorld(b);
+    const w=b.kind==="editor-world"?b:slimWorld(b); STORY.picked=true;
     S.world=await engCall("loadWorld",w,60000);
     STORY.w=w; await storySet(w); paintWorldSel(); fillPreviewControls(); refreshPreview();
     const miss=["p_buket","p_sami","p_berk"].filter(id=>!w.collections.personas.some(p=>p.id===id));
@@ -1682,13 +1682,13 @@ const AI={sample:null,checked:false,ctl:null};
 const NET={ok:null,allow:false,models:[]};
 async function aiInit(){
   try{ if(window.claude&&claude.use){ AI.sample=await Promise.race([claude.use("sample"),new Promise(r=>setTimeout(()=>r(null),11000))]); } }catch(e){ AI.sample=null; }
-  AI.checked=true; renderProvider();
+  AI.checked=true; renderProvider(); if(S.rTab==="llm") renderLlm();
 }
 async function netProbe(){
   try{ const r=await fetch("https://openrouter.ai/api/v1/models",{cache:"no-store"}); if(!r.ok) throw new Error(r.status);
     const j=await r.json(); NET.models=(j.data||[]).map(m=>m.id).filter(Boolean).sort(); NET.ok=true; }
   catch(e){ NET.ok=false; }
-  renderProvider();
+  renderProvider(); if(S.rTab==="llm") renderLlm();
 }
 function orKey(){ return lsGet("orkey","")||""; }
 function packModels(){ const set=S.settings||{}, d=(S.meta&&S.meta.settingsDef)||{};
@@ -2818,13 +2818,16 @@ function llmSaveRes(){ if(!lsSet("llmres",LLM.res)){ const r=Object.assign({},LL
    same scenes and calls, and Claude compares them blind. */
 const CLAUDE_TIERS=[{id:"claude:quick",label:"Claude · fast tier"},{id:"claude:default",label:"Claude · standard tier"},{id:"claude:complex",label:"Claude · strongest tier"}];
 function isClaudeCand(m){ return /^claude:(quick|default|complex)$/.test(String(m||"")); }
-function llmHere(){ return NET.ok===false||!orKey(); }   // no OpenRouter: only Claude's tiers can run
-function llmRunnable(m){ return isClaudeCand(m)?!!AI.sample:(NET.ok!==false&&!!orKey()); }
+/* Where the candidates run. "auto": OpenRouter only once it has answered here AND a key is set; otherwise
+   Claude's tiers, here. A saved key or a slow probe never pulls the evaluation off Claude by itself. */
+function llmMode(){ const m=lsGet("llmmode","auto"); if(m==="claude"||m==="or") return m; return (NET.ok===true&&!!orKey())?"or":"claude"; }
+function llmHere(){ return llmMode()==="claude"; }
+function llmRunnable(m){ return isClaudeCand(m)?(!!AI.sample||!!(window.claude&&claude.use)):(llmMode()==="or"&&NET.ok!==false&&!!orKey()); }
 function candLabel(m){ const t=CLAUDE_TIERS.find(x=>x.id===m); return t?t.label:m; }
 function llmCands(f){
   const cur=effectiveModel(f), extra=(LLM.cfg.cands[f]||[]).filter(m=>m&&m!==cur);
   let all=[cur].concat(extra).filter(Boolean).filter(llmRunnable);
-  if(f==="model"&&llmHere()&&AI.sample&&!all.some(isClaudeCand)) all=CLAUDE_TIERS.map(x=>x.id);   // inside Claude: the tiers by default
+  if(f==="model"&&llmHere()&&!all.some(isClaudeCand)) all=CLAUDE_TIERS.map(x=>x.id);   // on Claude: the three tiers by default
   return all.length>1?all:[];
 }
 /* one answer from a candidate: Claude's tier through the Claude app, anything else through OpenRouter */
@@ -2836,11 +2839,13 @@ async function candComplete(messages,m,opts,signal){
 }
 function renderLlm(){
   const kb=$("#llmKeyBox");
-  if(kb){ kb.innerHTML=llmHere()&&AI.sample
-      ?`<div class="row"><span class="chip ok"><span class="dot"></span>Runs here, with Claude</span><span class="sp"></span><button type="button" class="btn sm" id="btnLlmTiers">Add Claude's tiers to every setting</button></div><div class="stat">${NET.ok===false?"OpenRouter cannot be reached from inside the Claude app":"No OpenRouter key is set"}, so the candidates are Claude's own tiers (fast, standard, strongest): each plays the same scenes and engine calls through your Claude account, and Claude compares them blind. Roleplay compares the three tiers by default; add them to other settings with the button or the box. To compare your OpenRouter models instead, run this tab on your StoryMind site, <b>Export results</b>, and <b>Import results</b> here.</div>`
+  const modeSel=`<label class="stat">Candidates run on <select id="llmModeSel"><option value="auto">automatic</option><option value="claude">Claude, here</option><option value="or"${NET.ok===false?" disabled":""}>OpenRouter${NET.ok===false?" (not reachable here)":""}</option></select></label>`;
+  if(kb){ kb.innerHTML=llmHere()&&(AI.sample||(window.claude&&claude.use))
+      ?`<div class="row"><span class="chip ok"><span class="dot"></span>Runs here, with Claude</span>${modeSel}<span class="sp"></span><button type="button" class="btn sm" id="btnLlmTiers">Add Claude's tiers to every setting</button></div><div class="stat">The candidates are Claude's own tiers (fast, standard, strongest): each plays the same scenes and engine calls through your Claude account, and Claude compares them blind. No OpenRouter key is needed. Roleplay compares the three tiers by default; add them to other settings with the button or the box. To compare your OpenRouter models instead, run this tab on your StoryMind site, <b>Export results</b>, and <b>Import results</b> here.</div>`
       :NET.ok===false
       ?`<div class="row"><span class="chip bad"><span class="dot"></span>No model reachable</span></div><div class="stat" style="color:var(--warn)">This page reaches neither OpenRouter nor Claude. Open it inside the Claude app, or on your StoryMind site with an OpenRouter key.</div>`
-      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span><span class="stat">The key is set under Model under test, in the Tests or Claude tab. The comparison is written by ${AI.sample?"Claude (your Claude account)":esc(analystModel())}.</span></div>`; }
+      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span>${modeSel}<span class="stat">The key is set under Model under test, in the Tests or Claude tab. The comparison is written by ${AI.sample?"Claude (your Claude account)":esc(analystModel())}.</span></div>`; }
+  const ms=$("#llmModeSel"); if(ms){ ms.value=lsGet("llmmode","auto"); ms.onchange=()=>{ lsSet("llmmode",ms.value); renderLlm(); }; }
   const tb=$("#btnLlmTiers"); if(tb) tb.onclick=()=>{ MODEL_FIELDS.forEach(d=>{ const a=LLM.cfg.cands[d.key]=LLM.cfg.cands[d.key]||[]; CLAUDE_TIERS.forEach(t=>{ if(a.indexOf(t.id)<0) a.push(t.id); }); }); llmSaveCfg(); renderLlm(); };
   const host=$("#llmFields"); if(!host) return;
   const list=[...new Set(CLAUDE_TIERS.map(x=>x.id).concat(packModels(),NET.models))];
@@ -2915,7 +2920,9 @@ async function llmPlayScene(sc,model){
 async function runLlm(){
   if(LLM.running) return;
   if(!ENG.ready){ toast("The engine has to be running"); return; }
-  if(llmHere()&&!AI.sample){ toast(NET.ok===false?"Neither OpenRouter nor Claude can be reached from this page":"Add your OpenRouter key under Model under test, or open the editor inside Claude",6000); return; }
+  if(llmHere()&&!AI.sample&&window.claude&&claude.use){ $("#llmStat").textContent="Connecting to Claude…"; await aiInit(); }
+  if(llmHere()&&!AI.sample){ toast(window.claude?"Claude did not answer. Reload the page and allow it to use Claude.":"Open the editor inside the Claude app, or pick OpenRouter with a key on your StoryMind site",7000); return; }
+  if(!llmHere()&&!orKey()){ toast("Add your OpenRouter key under Model under test, or switch Candidates run on to Claude",6000); return; }
   const rpC=llmCands("model"), engFields=MODEL_FIELDS.filter(d=>d.key!=="model"&&llmCands(d.key).length);
   if(!rpC.length&&!engFields.length){ toast("Add at least one model to compare"); return; }
   await useTestWorld();
@@ -3056,8 +3063,9 @@ async function afterEngine(hadDraft){
   ITEMS=allItems();
   await useStartPack(hadDraft);
   await loadStory();
-  S.world=STORY.w?await engCall("loadWorld",STORY.w,60000).catch(()=>null):null;
-  if(!S.world) S.world=await engCall("world").catch(()=>null);
+  /* a story picked while the editor was starting is already loaded: leave it */
+  if(!STORY.picked){ S.world=STORY.w?await engCall("loadWorld",STORY.w,60000).catch(()=>null):null;
+    if(!S.world) S.world=await engCall("world").catch(()=>null); }
   paintWorldSel();
   await engCall("apply",packForEngine()).catch(()=>{});
   fillPreviewControls();

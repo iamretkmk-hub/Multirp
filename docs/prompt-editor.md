@@ -236,6 +236,11 @@ edit, and its results carry no Apply buttons.
   contract, faithfulness, judgement and economy. Then an overall score, what each model is good and weak
   at, the best model and a one-line recommendation; names are put back afterwards.
 
+**Candidates run on** (automatic, Claude here, OpenRouter) picks where the candidates run. Automatic uses
+OpenRouter only when OpenRouter has answered from this page and a key is saved. Otherwise it uses
+Claude's tiers, so a key saved earlier never pulls the evaluation off Claude inside the Claude app. If
+Claude has not answered yet, the run connects to it first.
+
 **Inside Claude** (no OpenRouter), it runs there too. The candidates are Claude's own tiers (`claude:quick`,
 `claude:default`, `claude:complex`), played through the viewer's Claude account (`sample` with
 `modelTier`). Claude stands in for the model, exactly as in the Tests tab. Roleplay compares the three

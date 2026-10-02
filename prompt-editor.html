@@ -293,10 +293,11 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button class="btn sm" id="btnEngImport" type="button">Import results</button>
         <span class="stat" id="engStat"></span>
       </div>
-      <details class="msg" style="margin:10px 12px 0;padding:6px 10px"><summary class="stat" style="cursor:pointer">The scene that drives the engines (one player line per row; edit freely)</summary>
+      <details class="msg" style="margin:10px 12px 0;padding:6px 10px"><summary class="stat" style="cursor:pointer">The scene that drives the engines: <b id="engPresetName"></b> (one player line per row; edit freely)</summary>
         <textarea id="engScript" class="ed" style="min-height:150px;margin-top:6px" spellcheck="false"></textarea>
         <div class="row" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><label class="stat"><input type="checkbox" id="engEndDay" checked> end the day afterwards (diaries, relationships, goals, rumours, motives, the chronicle…)</label>
-        <button class="btn sm" id="btnEngScriptReset" type="button">Reset the scene</button></div>
+        <label class="stat">Scene <select id="engPreset"></select></label>
+        <button class="btn sm" id="btnEngScriptReset" type="button">Reset the lines</button></div>
       </details>
       <div class="empty" style="padding:10px 12px">StoryMind plays the sample story for real in its sandbox. Your lines are sent one by one, the cast answers, and every background engine the app fires is recorded with its exact payload, answered by the model under test, and its answer fed on to the next engine, the way it runs on the phone. Then Claude reads each engine's input and output against its prompt.</div>
       <div id="engList" class="msgs"></div>
@@ -1622,10 +1623,27 @@ function renderReview(r){
   (r.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
   if(!(r.edits||[]).length) el.insertAdjacentHTML("beforeend",`<div class="stat" style="margin-top:6px">No edits proposed.</div>`);
 }
+/* Applied edits are remembered (per browser), so a card that is rebuilt — every analysis re-renders its
+   list — still knows it was applied. Pressing Apply twice used to do nothing at best and, when the new
+   text contains the old (an append), apply it a second time. */
+const APPLIED=lsGet("applied",{});
+function editKey(ed){ return String(ed.item)+"\u0001"+String(ed.find||"")+"\u0001"+String(ed.replace||""); }
+function editState(ed,it){
+  if(!it||!ed.find) return "missing";
+  const v=itemVal(it), hasFind=v.indexOf(ed.find)>=0, rep=String(ed.replace||"");
+  const repIn=rep&&v.indexOf(rep)>=0;
+  if(APPLIED[editKey(ed)]){
+    // still in the text as applied (or the removal still holds)? then it is applied; if someone undid it by hand, offer it again
+    if(rep?repIn:!hasFind) return "applied";
+    delete APPLIED[editKey(ed)]; lsSet("applied",APPLIED);
+  }
+  // applied before this browser remembered it: the old words are gone and the new ones are there
+  if(!hasFind&&(rep?repIn:true)) return "applied";
+  return hasFind?"ready":"missing";
+}
 function editCard(ed){
     const it=itemFromRef(ed.item);
     const box=document.createElement("div"); box.className="chg";
-    const found=it&&itemVal(it).indexOf(ed.find||"")>=0&&ed.find;
     const kind=String(ed.kind||"").toLowerCase()||(String(ed.replace||"").trim()===""?"remove":String(ed.replace||"").length>String(ed.find||"").length*1.5?"add":"rewrite");
     const delta=String(ed.replace||"").length-String(ed.find||"").length;
     const kcls=kind==="remove"?"held":kind==="add"?"broke":"bent";
@@ -1634,11 +1652,28 @@ function editCard(ed){
       <div class="why">${esc(ed.why||"")}</div>
       ${kind==="add"?`<div class="stat" style="color:var(--warn)">This adds text. Apply it only if nothing in the payload could be cut or rewritten instead.</div>`:""}
       ${diffHTML(String(ed.find||""),String(ed.replace||""))}
-      <div class="acts"><button class="btn sm" type="button" data-a="open" ${it?"":"disabled"}>Open</button><button class="btn sm pri" type="button" data-a="apply" ${found?"":"disabled"}>${found?"Apply":"Text not found"}</button></div>`;
+      <div class="acts"><button class="btn sm" type="button" data-a="open" ${it?"":"disabled"}>Open</button><button class="btn sm pri" type="button" data-a="apply"></button><button class="btn sm" type="button" data-a="undo" hidden>Undo</button></div>`;
+    const btn=box.querySelector('[data-a="apply"]'), undo=box.querySelector('[data-a="undo"]');
+    const paint=()=>{ const st=editState(ed,it);
+      btn.disabled=st!=="ready"; btn.textContent=st==="applied"?"Applied":st==="ready"?"Apply":"Text not found";
+      box.classList.toggle("done",st==="applied");
+      undo.hidden=!(st==="applied"&&APPLIED[editKey(ed)]); };
     box.querySelector('[data-a="open"]').onclick=()=>{ if(it){ select(it); if(matchMedia("(max-width:980px)").matches) setView("edit"); } };
-    box.querySelector('[data-a="apply"]').onclick=()=>{ const v=itemVal(it); if(v.indexOf(ed.find)<0){ toast("That text has changed since the review"); return; }
-      setVal(it,v.replace(ed.find,ed.replace)); if(S.sel&&idOf(S.sel)===idOf(it)) $("#ed").value=itemVal(it); renderEditor(); renderList(); box.classList.add("done");
-      box.querySelector('[data-a="apply"]').disabled=true; box.querySelector('[data-a="apply"]').textContent="Applied"; toast("Applied to "+it.key+" — the payload is rebuilding"); };
+    btn.onclick=()=>{
+      if(editState(ed,it)!=="ready"){ paint(); return; }
+      const v=itemVal(it), at=v.indexOf(ed.find);
+      setVal(it,v.slice(0,at)+String(ed.replace||"")+v.slice(at+ed.find.length));
+      APPLIED[editKey(ed)]={at,t:Date.now()}; lsSet("applied",APPLIED);
+      if(S.sel&&idOf(S.sel)===idOf(it)) $("#ed").value=itemVal(it); renderEditor(); renderList(); paint();
+      toast("Applied to "+it.key+" — the payload is rebuilding"); };
+    undo.onclick=()=>{
+      const v=itemVal(it), rep=String(ed.replace||""), rec=APPLIED[editKey(ed)]||{};
+      let at=rep?v.indexOf(rep):(rec.at!=null?rec.at:-1);
+      if(at<0){ toast("The applied text has changed since; edit it by hand"); return; }
+      setVal(it,v.slice(0,at)+ed.find+v.slice(at+rep.length));
+      delete APPLIED[editKey(ed)]; lsSet("applied",APPLIED);
+      if(S.sel&&idOf(S.sel)===idOf(it)) $("#ed").value=itemVal(it); renderEditor(); renderList(); paint(); toast("Undone"); };
+    paint();
     return box;
 }
 async function testFlow(review){
@@ -1908,17 +1943,32 @@ $("#btnDriftStop").onclick=()=>{ DR.ctl&&DR.ctl.abort(); };
 /* ---------------- engine tests ----------------
    The background engines cannot be tested from a made-up payload: what they are handed is assembled
    from live state, and most of them read what an earlier engine wrote. So the app plays for real. */
-const ENGINE_SCRIPT_DEFAULT=[
-  "*Ceketimi askıya asıp ikisine de bakıyorum.* Akşamınız hayırlı olsun. Sami, yarın akşam sekizde kantinde buluşalım, şu parayı konuşalım.",
-  "Buket, sana söz veriyorum: bu iş bitince her şeyi ben anlatacağım, Sami değil.",
-  "Bu arada kantinde herkes Berker'in ustabaşı olacağını konuşuyor. Duydunuz mu?",
-  "*Buket'in elini kısa bir an tutup bırakıyorum.* Sen merak etme, olur bu iş.",
-  "Sami, gel balkona çıkalım, iki dakika konuşacağım seninle.",
-  "Tamam, ben kaçayım artık. Yarın sekizde, unutma Sami."
-].join("\n");
-const ENGRUN={running:false,ctl:null,calls:lsGet("engcalls",[]),judge:lsGet("engjudge",{}),model:lsGet("engmodel","")};
-function engSave(){ try{ lsSet("engcalls",ENGRUN.calls); lsSet("engjudge",ENGRUN.judge); lsSet("engmodel",ENGRUN.model); }catch(e){} }
-function engScript(){ const t=lsGet("engscript",""); return (t&&t.trim())?t:ENGINE_SCRIPT_DEFAULT; }
+/* Scenes that drive the engines. `focus` tells the analyst what the scene was built to test. */
+const ENGINE_SCENES=[
+  {id:"flirt",label:"Emre flirts with Buket in front of Sami (intense)",
+   lines:[
+    "*İçeri girer girmez gözüm Buket'te kalıyor.* Buket, bu akşam çok güzel olmuşsun. Sami, böyle bir kadını hak etmiyorsun, biliyorsun değil mi?",
+    "*Buket'in yanına, kanepeye oturuyorum; dizim dizine değiyor.* Gülüşün hâlâ aynı. Sami bunu fark ediyor mu acaba?",
+    "*Sami'ye dönüp gülümsüyorum.* Ne o, kıskandın mı? Dört bin lirayı ödeyemeyen adam karısına da sahip çıkamaz herhalde.",
+    "*Buket'in elini tutuyorum, bırakmıyorum.* Buket, benimle gel. Bu evde mutlu değilsin, ikimiz de biliyoruz.",
+    "*Sami ayağa kalkınca ben de kalkıyorum; yüz yüzeyiz.* Vur hadi. Vur da Buket görsün nasıl bir adam olduğunu.",
+    "*Kapıda dönüp Buket'e bakıyorum.* Ararsan açarım. Gece de olsa."],
+   focus:"Emre openly flirts with Buket in front of her husband Sami, humiliates Sami about the money he owes, takes her hand, asks her to leave with him, squares up to Sami and leaves an invitation. Judge realism under emotional intensity. Who do the turn routers pick to answer each line? Sami cannot sit passive while his wife is courted in front of him; Buket is addressed directly and must not be skipped; nobody speaks for anyone else. Are the reactions in proportion and in character (Sami's pride and shame, Buket's dryness, her rule about lies, her suspicion of Sami)? Does anyone fold or melt on the spot, or escalate beyond what happened? Does the presence tracker handle someone storming out and Emre leaving? Do the relationship readings move the right way (Sami toward Emre: trust and affection down, anger and agitation up; Buket: torn, not swept away)? Do the memories, the diary, the goals and the drives capture what happened without inventing? Does the gamemaster stay out of a scene that is already intense?"},
+  {id:"everyday",label:"Everyday: a plan, a promise, a rumour",
+   lines:[
+    "*Ceketimi askıya asıp ikisine de bakıyorum.* Akşamınız hayırlı olsun. Sami, yarın akşam sekizde kantinde buluşalım, şu parayı konuşalım.",
+    "Buket, sana söz veriyorum: bu iş bitince her şeyi ben anlatacağım, Sami değil.",
+    "Bu arada kantinde herkes Berker'in ustabaşı olacağını konuşuyor. Duydunuz mu?",
+    "*Buket'in elini kısa bir an tutup bırakıyorum.* Sen merak etme, olur bu iş.",
+    "Sami, gel balkona çıkalım, iki dakika konuşacağım seninle.",
+    "Tamam, ben kaçayım artık. Yarın sekizde, unutma Sami."],
+   focus:"An ordinary visit that should leave traces: a meeting tomorrow at eight at the canteen, a promise to Buket, a rumour about Berker, a brief touch, a move to the balcony, a goodbye. Check that the calendar, promise, rumour, presence and memory engines record exactly these and nothing invented."}
+];
+function engPreset(){ const id=lsGet("engpreset","flirt"); return ENGINE_SCENES.find(x=>x.id===id)||ENGINE_SCENES[0]; }
+const ENGINE_SCRIPT_DEFAULT=ENGINE_SCENES[0].lines.join("\n");
+const ENGRUN={running:false,ctl:null,calls:lsGet("engcalls",[]),judge:lsGet("engjudge",{}),model:lsGet("engmodel",""),focus:lsGet("engfocus",""),lines:lsGet("englines",[])};
+function engSave(){ try{ lsSet("engcalls",ENGRUN.calls); lsSet("engjudge",ENGRUN.judge); lsSet("engmodel",ENGRUN.model); lsSet("engfocus",ENGRUN.focus||""); lsSet("englines",ENGRUN.lines||[]); }catch(e){} }
+function engScript(){ const t=lsGet("engscript",""); return (t&&t.trim())?t:engPreset().lines.join("\n"); }
 function engGroupKey(c){ return (c.prompts&&c.prompts[0])||("dbg:"+String(c.dbg||"(unlabelled)").replace(/\s*\(.*$/,"").trim()); }
 function engGroups(){
   const g={};
@@ -1929,6 +1979,9 @@ function engGroups(){
 }
 function renderEng(){
   const ta=$("#engScript"); if(ta&&!ta.value) ta.value=engScript();
+  const ps=$("#engPreset"); if(ps&&!ps.options.length){ ps.innerHTML=ENGINE_SCENES.map(x=>`<option value="${x.id}">${esc(x.label)}</option>`).join(""); ps.value=engPreset().id;
+    ps.onchange=()=>{ lsSet("engpreset",ps.value); lsSet("engscript",""); $("#engScript").value=engPreset().lines.join("\n"); $("#engPresetName").textContent=engPreset().label; }; }
+  if($("#engPresetName")) $("#engPresetName").textContent=engPreset().label;
   const host=$("#engList"); if(!host) return;
   const groups=engGroups();
   host.innerHTML="";
@@ -1963,7 +2016,8 @@ async function runEngines(){
   const lines=($("#engScript").value||engScript()).split("\n").map(x=>x.trim()).filter(Boolean);
   lsSet("engscript",$("#engScript").value);
   if(!S.world||S.world.source!=="sample"){ try{ S.world=await engCall("loadWorld",null,60000); $("#worldSel").value="sample"; fillPreviewControls(); }catch(e){} }
-  ENGRUN.running=true; ENGRUN.ctl=new AbortController(); ENGRUN.calls=[]; ENGRUN.judge={}; ENGRUN.model=testLabel(); renderEng();
+  ENGRUN.running=true; ENGRUN.ctl=new AbortController(); ENGRUN.calls=[]; ENGRUN.judge={}; ENGRUN.model=testLabel();
+  ENGRUN.focus=engPreset().focus; ENGRUN.lines=lines; renderEng();
   const mode=testMode();
   NET.allow=(mode==="or");
   let poll=null;
@@ -1998,7 +2052,7 @@ You are reviewing one BACKGROUND ENGINE of the app — a model call the player n
 
 ENGINE: ${gr.label}${gr.prompt?` (prompt key "${gr.prompt}")`:""} — debug label "${gr.calls[0].dbg}"
 MODEL THAT ANSWERED: ${ENGRUN.model||"(unknown)"}
-
+${ENGRUN.focus?`\nWHAT THE SCENE WAS BUILT TO TEST (judge this engine's part in it):\n${ENGRUN.focus}\n`:""}${(ENGRUN.lines||[]).length?`\nTHE PLAYER'S LINES, IN ORDER:\n${ENGRUN.lines.map((l,i)=>(i+1)+". "+l).join("\n")}\n`:""}${/^Roleplay reply/.test(gr.calls[0].dbg||"")?"\nThis group is the characters' own replies: judge realism, proportion and character under this pressure, and whether the right person answered. Their wording comes from the reply pieces, not one prompt, so propose no edits here; name the pieces at fault instead.\n":""}
 Judge the ANSWER against the prompt: does it keep the output contract exactly (format, JSON shape and field names, nothing outside it); is every claim supported by the input (no invented events, people, feelings or facts); does it follow the prompt's own rules and scope (who it is about, point of view, language, length); would the app's parser and the next engine get something useful? Then judge the PROMPT: where its wording let the answer go wrong, or is contradictory, ambiguous, redundant or wastes tokens.
 
 Find the cause of each problem in the prompt's own words, then fix it following HOW TO FIX above, with at most 5 find-and-replace edits${gr.prompt?` on "prompt:${gr.prompt}"`:""}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); "replace" may be empty to delete; keep {{…}} placeholders intact. Never change the output contract's field names.
@@ -2034,17 +2088,17 @@ async function analyseEngines(keys){
 $("#btnEngRun").onclick=runEngines;
 $("#btnEngAnalyse").onclick=()=>analyseEngines(engGroups().map(g=>g.key));
 $("#btnEngStop").onclick=()=>{ ENGRUN.ctl&&ENGRUN.ctl.abort(); };
-$("#btnEngScriptReset").onclick=()=>{ $("#engScript").value=ENGINE_SCRIPT_DEFAULT; lsSet("engscript",""); };
+$("#btnEngScriptReset").onclick=()=>{ $("#engScript").value=engPreset().lines.join("\n"); lsSet("engscript",""); };
 $("#btnEngExport").onclick=async()=>{
   if(!ENGRUN.calls.length){ toast("Run the scene first"); return; }
-  const ok=await saveFile("storymind_engines_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"engine-results",date:Date.now(),model:ENGRUN.model,calls:ENGRUN.calls,judge:ENGRUN.judge}));
+  const ok=await saveFile("storymind_engines_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"engine-results",date:Date.now(),model:ENGRUN.model,focus:ENGRUN.focus||"",lines:ENGRUN.lines||[],calls:ENGRUN.calls,judge:ENGRUN.judge}));
   if(ok) toast("Results exported. Open them in the editor inside Claude with Import results");
 };
 $("#btnEngImport").onclick=()=>$("#fileEng").click();
 $("#fileEng").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="engine-results") throw new Error("Not an engine results file");
-    ENGRUN.calls=b.calls||[]; ENGRUN.judge=b.judge||{}; ENGRUN.model=b.model||""; engSave(); renderEng();
+    ENGRUN.calls=b.calls||[]; ENGRUN.judge=b.judge||{}; ENGRUN.model=b.model||""; ENGRUN.focus=b.focus||""; ENGRUN.lines=b.lines||[]; engSave(); renderEng();
     toast(`Imported ${ENGRUN.calls.length} calls${claudeReachable()?". Tap Analyse all to have Claude read them":""}`);
   }catch(err){ toast("Could not import: "+err.message,5000); }
 });
@@ -2094,7 +2148,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={S,ENG,NET,ENGRUN,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={S,ENG,NET,ENGRUN,ENGINE_SCENES,APPLIED,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

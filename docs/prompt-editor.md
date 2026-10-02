@@ -237,6 +237,11 @@ edit, and its results carry no Apply buttons.
   contract, faithfulness, judgement and economy. Then an overall score, what each model is good and weak
   at, the best model and a one-line recommendation; names are put back afterwards.
 
+**Compare again** and each setting's own **Compare** button retry a comparison that failed. That
+includes one carried in an imported file: results saved before this fix kept the failure where Compare
+again skipped it, and `llmMigrate` moves it out. A failed engine analysis is likewise not a verdict
+(`judgeFailed`): it keeps an **Analyse again** button and is analysed again by **Analyse all**.
+
 **Candidates run on** (automatic, Claude here, OpenRouter) picks where the candidates run. Automatic uses
 OpenRouter only when OpenRouter has answered from this page and a key is saved. Otherwise it uses
 Claude's tiers, so a key saved earlier never pulls the evaluation off Claude inside the Claude app. If

@@ -188,7 +188,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
 <body>
 
 <div class="top">
-  <div class="brand">Prompt Editor <small>for StoryMind</small></div>
+  <div class="brand">Prompt Editor <small>for StoryMind · build 2026-10-02c</small></div>
   <span class="chip" id="engChip" title="The StoryMind engine runs in a sealed sandbox in this page. It never sees your saved data."><span class="dot"></span><span id="engTxt">Engine: starting</span></span>
   <span class="stat" id="packStat">Shipped defaults</span>
   <button class="btn" id="btnImport" type="button">Open prompt export</button>
@@ -2263,7 +2263,7 @@ function renderDrift(){
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
     }else if(r&&r.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading the exchange…</div>`);
     if(r&&!j&&!r.judging&&driftComplete(sc,r)){
-      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude"; ab.disabled=busyAll();
+      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent=r.err?"Analyse again":"Analyse with Claude"; ab.disabled=busyAll()||!claudeReachable(); if(!claudeReachable()) ab.title=ANALYSE_HERE;
       ab.onclick=()=>analyseDrift([sc]); el.appendChild(ab);
     }
     el.querySelector("[data-run]").onclick=()=>runDriftScenes([sc]);
@@ -2486,12 +2486,14 @@ function renderEng(){
       el.insertAdjacentHTML("beforeend",`<div class="turnRow"><details><summary class="stat" style="cursor:pointer">Call ${c.id} · input ${fmtN(payloadText(c).length)} chars · ${c.ms!=null?(c.ms/1000).toFixed(1)+"s":"…"}</summary><pre style="white-space:pre-wrap;font:11px/1.45 var(--mono);max-height:340px;overflow:auto">${esc(payloadText(c))}</pre></details>
         <div class="rp">${c.error?`<span style="color:var(--danger)">${esc(c.error)}</span>`:c.output==null?'<span class="stat">waiting…</span>':esc(String(c.output).slice(0,1600))}</div></div>`);
     });
-    if(j){
+    const jf=judgeFailed(j);
+    if(jf) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">${esc(j.summary||"The analysis failed.")}</div>`);
+    if(j&&!jf){
       if(j.summary) el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div><b>Verdict.</b> ${esc(j.summary)}</div></div>`);
       if(Array.isArray(j.problems)&&j.problems.length) el.insertAdjacentHTML("beforeend",`<ul style="margin:0;padding-left:18px;font-size:12.5px">${j.problems.map(x=>`<li>${esc(x.issue||x)}${x.evidence?` <span class="stat">— “${esc(x.evidence)}”</span>`:""}</li>`).join("")}</ul>`);
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
     }else if(gr.calls.some(c=>c.output!=null)&&!busyAll()){
-      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent="Analyse with Claude";
+      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent=jf?"Analyse again":"Analyse with Claude"; ab.disabled=!claudeReachable(); if(!claudeReachable()) ab.title=ANALYSE_HERE;
       ab.onclick=()=>analyseEngines([gr.key]); el.appendChild(ab);
     }else if(ENGRUN.judging===gr.key||TEAM.busy.has(ENGRUN.cur+"|"+gr.key)) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading this engine…</div>`);
     host.appendChild(el);
@@ -2571,7 +2573,7 @@ async function analyseEngines(keys,inAll){
     if(ENGRUN.ctl.signal.aborted) break;
     n++; ENGRUN.judging=gr.key; $("#engStat").textContent=`Claude is analysing ${gr.label} (${n}/${groups.length})…`; renderEng();
     try{ ENGRUN.judge[gr.key]=await judgeEngine(gr); }
-    catch(e){ ENGRUN.judge[gr.key]={verdict:"issues",summary:"The analysis failed: "+aiErr(e),problems:[],edits:[]}; if(e&&(e.code==="cancelled"||e.code==="not_granted"))break; }
+    catch(e){ ENGRUN.judge[gr.key]={failed:true,verdict:"issues",summary:"The analysis failed: "+aiErr(e),problems:[],edits:[]}; if(e&&(e.code==="cancelled"||e.code==="not_granted"||e.code==="no_claude"))break; }
     engSave();
   }
   ENGRUN.judging=null; ENGRUN.running=false;
@@ -2624,9 +2626,9 @@ function overallInput(){
       r.turns.map((t,i)=>`${t.gm?"GM":"EMRE"} ${i+1}: ${t.user}\nBUKET: ${String(t.reply||"").slice(0,700)}${j.turns&&j.turns[i]?`\n  → ${j.turns[i].verdict}: ${j.turns[i].note||""}`:""}`).join("\n")+
       (j.summary?`\nSCENE VERDICT (${j.score!=null?j.score+"/10":"?"}): ${j.summary}`:""); }).join("\n\n");
   const engines=ENGINE_SCENES.filter(sc=>ENGRUN.byScene[sc.id]).map(sc=>{ const r=ENGRUN.byScene[sc.id];
-    const gs=engGroupsOf(r.calls).map(g=>{ const j=(r.judge||{})[g.key]; return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?" Problems: "+j.problems.map(x=>x.issue||x).join("; "):""):"not analysed"}`; }).join("\n");
+    const gs=engGroupsOf(r.calls).map(g=>{ const j0=(r.judge||{})[g.key], j=judgeFailed(j0)?null:j0; return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?" Problems: "+j.problems.map(x=>x.issue||x).join("; "):""):"not analysed"}`; }).join("\n");
     return `### Engine scene: ${sc.label}\n${gs}`; }).join("\n\n");
-  const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
+  const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
   const prompts=[...flagged].slice(0,8).map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,9000)}`).join("\n\n");
   const pays=Object.keys(kinds).map(k=>`===== A REAL ${KIND_SHORT[k].toUpperCase()} PAYLOAD =====\n${payloadText(kinds[k]).slice(0,18000)}`).join("\n\n");
   /* every edit an analyst proposed, with an id the overseer decides on */
@@ -2687,12 +2689,14 @@ function analystTasks(sig){
   DRIFT_SCENES.forEach(sc=>{ const r=DR.results[sc.id]; if(!r||r.judge||!driftComplete(sc,r)) return;
     tasks.push({key:"R|"+sc.id,label:sc.title,run:async()=>{ await analyseOne(sc); if(DR.results[sc.id].judge) tagEdits(DR.results[sc.id].judge.edits,"R:"+sc.id); }}); });
   ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r||!(r.calls||[]).length) return; r.judge=r.judge||{};
-    engGroupsOf(r.calls).forEach(g=>{ if(r.judge[g.key]||!g.calls.some(c=>c.output!=null)) return;
+    engGroupsOf(r.calls).forEach(g=>{ if((r.judge[g.key]&&!judgeFailed(r.judge[g.key]))||!g.calls.some(c=>c.output!=null)) return;
       tasks.push({key:sc.id+"|"+g.key,label:`${sc.label} · ${g.label}`,run:async()=>{
         const j=await judgeEngine(g,{model:r.model,focus:r.focus,lines:r.lines,signal:sig}); tagEdits(j.edits,"E:"+sc.id+":"+g.key);
         r.judge[g.key]=j; if(ENGRUN.cur===sc.id) ENGRUN.judge=r.judge; lsSet("engbyscene",ENGRUN.byScene); }}); }); });
   return tasks;
 }
+/* an analysis that failed is not a verdict (older results only carry the message) */
+function judgeFailed(j){ return !!(j&&(j.failed||/^The analysis failed/.test(j.summary||""))); }
 function tagEdits(edits,prefix){ (edits||[]).forEach((ed,i)=>{ if(ed&&!ed._id) ed._id=prefix+"#"+(i+1); }); }
 async function runTeam(sig){
   const tasks=analystTasks(sig); TEAM.busy.clear(); TEAM.done=0; TEAM.failed=0; TEAM.total=tasks.length; paintTeam();
@@ -2796,7 +2800,7 @@ const MODEL_FIELDS=[
 function fileModel(f){ return String((S.settings&&S.settings[f])||(S.meta&&S.meta.settingsDef[f])||"").trim(); }
 function effectiveModel(f,seen){ seen=seen||{}; if(seen[f]) return ""; seen[f]=1; const v=fileModel(f); if(v) return v; const d=MODEL_FIELDS.find(x=>x.key===f); return d&&d.fallback?effectiveModel(d.fallback,seen):""; }
 function effectiveModels(){ const o={}; MODEL_FIELDS.forEach(d=>{ const v=effectiveModel(d.key); if(v) o[d.key]=v; }); return o; }
-const LLM={running:false,ctl:null,cfg:lsGet("llmcfg",{cands:{},scenes:["daily","flirt","after1","flirt_text"],eng:"flirt",per:4}),res:lsGet("llmres",null)};
+const LLM={running:false,ctl:null,cfg:lsGet("llmcfg",{cands:{},scenes:["daily","flirt","after1","flirt_text"],eng:"flirt",per:4}),res:llmMigrate(lsGet("llmres",null))};
 function llmSaveCfg(){ lsSet("llmcfg",LLM.cfg); }
 function llmSaveRes(){ if(!lsSet("llmres",LLM.res)){ const r=Object.assign({},LLM.res); delete r.baseline; lsSet("llmres",r); } }
 /* Claude's own tiers can be candidates too ("claude:quick" and so on). They run through the Claude app, so
@@ -2876,9 +2880,11 @@ function renderLlmResults(){
           +`</tbody></table></div>`
           +rows.map(r=>`<div class="stat"><code>${esc(r.model)}</code> — <b>good at:</b> ${esc(r.good||"")}${r.weak?` · <b>weak at:</b> ${esc(r.weak)}`:""}</div>`).join(""); }
     }else if(F.error) h+=`<div class="stat" style="color:var(--danger)">${esc(F.error)}</div>`;
-    else h+=`<div class="stat">${F.judging?"Claude is comparing…":"Not compared yet."}</div>`;
+    else h+=`<div class="stat">${F.judging?"Claude is comparing…":F.cmpError?`<span style="color:var(--danger)">${esc(F.cmpError)}</span>`:"Not compared yet."}</div>`;
+    if(!F.error&&!F.judging&&F.models&&F.models.length>1) h+=`<div class="row" style="margin-top:4px"><button class="btn sm${v?"":" pri"}" type="button" data-cmp="${esc(f)}">${v?"Compare this setting again":"Compare with Claude"}</button>${claudeReachable()?"":` <span class="stat">only in the editor inside Claude</span>`}</div>`;
     h+=`<details class="turnRow"><summary class="stat" style="cursor:pointer">What each model wrote</summary>${llmSamplesHTML(f,F)}</details>`;
     el.innerHTML=h; host.appendChild(el);
+    const cb=el.querySelector("[data-cmp]"); if(cb){ cb.disabled=LLM.running||!claudeReachable(); cb.onclick=()=>compareLlm(false,f); }
   });
 }
 function llmSamplesHTML(f,F){
@@ -2992,15 +2998,18 @@ ${body}`;
   if(v.summary) labels.forEach((l,i)=>{ v.summary=String(v.summary).replace(new RegExp("\\bModel "+l+"\\b","g"),F.models[i]); });
   return v;
 }
-async function compareLlm(inRun){
+/* Results saved before v2 kept a failed comparison in F.error, which Compare again then skipped for good. */
+function llmMigrate(R){ Object.values((R&&R.fields)||{}).forEach(F=>{ if(F&&/^The comparison failed/.test(F.error||"")){ F.cmpError=F.error; F.error=null; } }); return R; }
+async function compareLlm(inRun,only){
   if(!LLM.res){ toast("Run the evaluation first"); return; }
   if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   if(!inRun){ if(LLM.running) return; LLM.running=true; LLM.ctl=new AbortController(); paintLlm(); }
   try{
-    for(const f of Object.keys(LLM.res.fields||{})){ const F=LLM.res.fields[f]; if(F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;
+    /* a failed comparison is tried again; only a setting that has nothing to compare is skipped */
+    for(const f of (only?[only]:Object.keys(LLM.res.fields||{}))){ const F=LLM.res.fields[f]; if(!F||F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;
       $("#llmStat").textContent=`Claude is comparing the models for ${(MODEL_FIELDS.find(x=>x.key===f)||{}).label||f}…`;
       F.judging=true; renderLlmResults();
-      try{ F.verdict=await judgeLlmField(f,F); F.error=null; }catch(e){ F.error="The comparison failed: "+aiErr(e); }
+      try{ F.verdict=await judgeLlmField(f,F); F.cmpError=null; }catch(e){ F.cmpError="The comparison failed: "+aiErr(e); if(e&&(e.code==="cancelled"||e.code==="not_granted"||e.code==="no_claude")){ F.judging=false; break; } }
       F.judging=false; llmSaveRes(); renderLlmResults(); }
   }finally{ if(!inRun){ LLM.running=false; paintLlm(); } $("#llmStat").textContent="Compared."; }
 }
@@ -3013,7 +3022,7 @@ $("#btnLlmExport").onclick=async()=>{ if(!LLM.res){ toast("Run the evaluation fi
 $("#btnLlmImport").onclick=()=>$("#fileLlm").click();
 $("#fileLlm").addEventListener("change",async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="llm-eval") throw new Error("Not an LLM evaluation file");
-    LLM.res=b.res; if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
+    LLM.res=llmMigrate(b.res); if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
     toast(claudeReachable()?"Imported. Tap Compare again to have Claude compare the models":"Imported"); }catch(err){ toast("Could not import: "+err.message,5000); } });
 
 /* ---------------- right tabs, narrow view ---------------- */

@@ -41,6 +41,8 @@ const ROOT=path.resolve(__dirname,'..');
       body:JSON.stringify({data:[{id:"deepseek/deepseek-v4-pro"},{id:"anthropic/claude-sonnet-4.5"},{id:"anthropic/claude-opus-4.5"},{id:"anthropic/claude-opus-5:batch"}]})});
     const body=JSON.parse(r.request().postData()||"{}");
     OR.calls.push({auth:r.request().headers()["authorization"]||"",body});
+    if(body.model==="x/think-only"&&!(body.reasoning&&body.reasoning.enabled)) return r.fulfill({status:400,contentType:"application/json",
+      body:JSON.stringify({error:{message:"Reasoning is mandatory for this endpoint and cannot be disabled.",code:400}})});
     const ms=OR.delay?OR.delay(body):0;
     OR.inflight=(OR.inflight||0)+1; if(ms) OR.peak=Math.max(OR.peak||0,OR.inflight);
     if(ms) await new Promise(res=>setTimeout(res,ms));
@@ -60,6 +62,15 @@ const ROOT=path.resolve(__dirname,'..');
   const installClaude=p=>p.evaluate(()=>{ const f=async(input,o)=>{ const t=typeof input==="string"?input:input.map(m=>m.content).join("\n\n"); const text=String(await window.__claudeAnswer(t)); o&&o.onText&&o.onText({text}); return {text,truncated:false}; };
       f.json=async(input,o)=>{ const t=await f(input,o); const m=String(t.text).match(/\{[\s\S]*\}/); return JSON.parse(m?m[0]:t.text); };
       AI.sample=f; renderProvider(); });
+  /* NanoGPT, stood in for the same way: its model list and a chat endpoint, every request recorded. */
+  const NANO={calls:[]};
+  await ctx.route(/nano-gpt\.com/,async r=>{
+    const url=r.request().url();
+    if(/\/models/.test(url)) return r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({data:[{id:"nano/rp-1"},{id:"nano/rp-2"}]})});
+    const body=JSON.parse(r.request().postData()||"{}");
+    NANO.calls.push({url,auth:r.request().headers()["authorization"]||"",body});
+    await r.fulfill({status:200,contentType:"application/json",body:JSON.stringify({choices:[{message:{role:"assistant",content:'"Nano burada." *Gülüyor.*'},finish_reason:"stop"}]})});
+  });
   const pg=await ctx.newPage();
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   let pass=0,fail=0;
@@ -387,9 +398,9 @@ const ROOT=path.resolve(__dirname,'..');
     const ui=await pg.evaluate(()=>({fields:document.querySelectorAll("#llmFields [data-f]").length,est:document.querySelector("#llmEstimate").textContent}));
     ok("the tab lists every setting with its candidates", ui.fields===mf.f.length, JSON.stringify(ui));
     await pg.evaluate(()=>__PE.runLlm());
-    const ev=await pg.evaluate(()=>{ const R=__PE.LLM.res; return {rp:R.fields.model,mem:R.fields.memModel,html:document.querySelector("#llmResults").textContent,apply:document.querySelectorAll("#llmResults [data-a=apply]").length}; });
+    const ev=await pg.evaluate(()=>{ const R=__PE.LLM.res; return {tm:testModel(),rp:R.fields.model,mem:R.fields.memModel,html:document.querySelector("#llmResults").textContent,apply:document.querySelectorAll("#llmResults [data-a=apply]").length}; });
     const rpModels=new Set(OR.calls.filter(c=>!/LANGUAGE MODELS/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
-    ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.daily_text["x/rp-b"].length===4&&ev.rp.runs.daily_text[mf.e.model].length===4, [...rpModels].join(", "));
+    ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.daily_text["x/rp-b"].length===4&&ev.rp.runs.daily_text[ev.tm].length===4, [...rpModels].join(", "));
     const mem=ev.mem; const __dbgBase=await pg.evaluate(()=>({b:__PE.LLM.res.baseline,mode:llmMode(),here:llmHere(),fields:Object.keys(__PE.LLM.res.fields),stat:document.querySelector("#llmStat").textContent}));
     ok("the memory setting's recorded calls were replayed with the candidate, on identical input", !!mem&&mem.calls.length>0&&mem.calls.every(c=>c.outs["x/mem-b"]!=null&&c.outs[mf.e.memModel]!=null),
        JSON.stringify({calls:mem&&mem.calls.map(c=>({dbg:c.dbg,m:Object.keys(c.outs)})),err:mem&&mem.error,base:__dbgBase}));
@@ -402,6 +413,50 @@ const ROOT=path.resolve(__dirname,'..');
 
 
     ok("a batch-only model (…:batch) is never offered as a model to test", await pg.evaluate(()=>NET.models.every(m=>!/:batch$/.test(m))));
+    console.log("\n[12b — NanoGPT: the model under test on NanoGPT, and NanoGPT candidates]");
+    await pg.click('#rtabs button[data-r="tests"]');
+    const nb=await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("nano")); localStorage.setItem("pe_v1_nanokey",JSON.stringify("nano-key-123"));
+      localStorage.setItem("pe_v1_testmodel_nano",JSON.stringify("nano/rp-1")); await nanoProbe(); renderProvider(); await pushModelToEngine();
+      return {mode:testMode(),can:canTest(),label:testLabel(),box:document.querySelector("#driftModelBox").textContent,list:[...document.querySelectorAll("#pmModels option")].map(o=>o.value)}; });
+    ok("NanoGPT is a choice for the model under test, with its own key and model list", nb.mode==="nano"&&nb.can&&/NanoGPT/.test(nb.label)&&/your model on NanoGPT/.test(nb.box)&&nb.list.indexOf("nano/rp-2")>=0, JSON.stringify(nb).slice(0,300));
+    NANO.calls=[]; const orBefore=OR.calls.filter(c=>!c.claude).length;
+    const nr=await pg.evaluate(async()=>{ await __PE.refreshPreview(); return await generateReply(__PE.S.preview); });
+    const nc=NANO.calls[0];
+    ok("a reply to the payload is sent to NanoGPT by StoryMind's own request, with the NanoGPT key and model", /Nano burada/.test(nr)&&!!nc&&/nano-gpt\.com\/api\/v1\/chat\/completions/.test(nc.url)&&nc.auth==="Bearer nano-key-123"&&nc.body.model==="nano/rp-1"&&!nc.body.provider&&!nc.body.reasoning&&OR.calls.filter(c=>!c.claude).length===orBefore,
+       JSON.stringify(nc&&{url:nc.url,auth:nc.auth,model:nc.body.model,keys:Object.keys(nc.body)}));
+    NANO.calls=[];
+    const nl=await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_llmmode",JSON.stringify("auto")); const L=__PE.LLM; L.cfg.cands={model:["nano:nano/rp-2","openrouter:x/rp-b"]}; L.cfg.scenes=["daily_text"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg));
+      return {c:__PE.llmCands("model")}; });
+    ok("LLM evaluation candidates can name their API (nano:…, openrouter:…)", nl.c.join()==="nano/rp-1,nano:nano/rp-2,openrouter:x/rp-b", JSON.stringify(nl));
+    const orN=OR.calls.filter(c=>!c.claude&&c.body.model==="x/rp-b").length;
+    await pg.evaluate(()=>__PE.runLlm());
+    ok("…and each one is sent to its own API", NANO.calls.filter(c=>c.body.model==="nano/rp-2").length===4&&NANO.calls.filter(c=>c.body.model==="nano/rp-1").length===4&&OR.calls.filter(c=>!c.claude&&c.body.model==="x/rp-b").length-orN===4,
+       JSON.stringify({nano:NANO.calls.map(c=>c.body.model),or:OR.calls.filter(c=>!c.claude).slice(-6).map(c=>c.body.model)}));
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); renderProvider(); });
+    const ll=await pg.evaluate(()=>({html:document.querySelector("#llmResults").textContent}));
+    const jin=OR.calls.filter(c=>c.claude&&/You are evaluating LANGUAGE MODELS/.test(JSON.stringify(c.body.messages))).pop();
+    ok("the comparison is told each model's measured response time, and scores speed", !!jin&&/MEASURED RESPONSE TIME/.test(jin.body.messages[0].content)&&/Model A: average \d/.test(jin.body.messages[0].content)&&/- speed \(/.test(jin.body.messages[0].content), jin?jin.body.messages[0].content.slice(0,200):"none");
+    ok("the results show each model's response time", /Response time/.test(ll.html)&&/avg/.test(ll.html)&&/time \(avg\)/.test(ll.html), ll.html.slice(0,300));
+
+    console.log("\n[12d — Claude never runs on a paid API from the editor]");
+    OR.calls=[];
+    const pc=await pg.evaluate(async()=>{ NET.allow=true; let err="";
+      try{ await __PE.engCall("complete",{messages:[{role:"user",content:"hi"}],model:"anthropic/claude-opus-4.5",prov:"or"},30000); }catch(e){ err=String(e.message||e); } NET.allow=false;
+      return {err,listed:NET.models.filter(m=>/claude|anthropic/i.test(m))}; });
+    ok("a Claude model is refused before anything is sent, and never listed", !!pc.err&&OR.calls.filter(c=>!c.claude).length===0&&pc.listed.length===0, JSON.stringify(pc));
+    console.log("\n[12c — models that only work with reasoning]");
+    OR.calls=[];
+    const th=await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testmodel",JSON.stringify("x/think-only")); await pushModelToEngine();
+      const out=await generateReply(__PE.S.preview); const out2=await generateReply(__PE.S.preview); return {out,out2}; });
+    const tc=OR.calls.filter(c=>c.body.model==="x/think-only");
+    ok("a model that refuses reasoning off is sent again with reasoning on, and remembered", tc.length===3&&tc[0].body.reasoning&&tc[0].body.reasoning.enabled===false&&tc[1].body.reasoning.enabled===true&&tc[2].body.reasoning.enabled===true&&!!th.out&&!!th.out2,
+       JSON.stringify(tc.map(c=>c.body.reasoning)));
+    OR.calls=[];
+    await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testmodel",JSON.stringify("deepseek/deepseek-v4-pro")); localStorage.setItem("pe_v1_testreasoning",JSON.stringify(true)); renderProvider(); await pushModelToEngine(); await generateReply(__PE.S.preview); });
+    const rc=OR.calls.filter(c=>!c.claude).pop();
+    ok("the thinking switch turns reasoning on for the model under test", !!rc&&rc.body.reasoning&&rc.body.reasoning.enabled===true, JSON.stringify(rc&&rc.body.reasoning));
+    await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testreasoning",JSON.stringify(false)); await pushModelToEngine(); });
+
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});
     await sctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

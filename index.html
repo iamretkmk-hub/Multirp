@@ -1404,7 +1404,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.14</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.15</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -11534,7 +11534,12 @@ async function chatCompletion(messages,model,opts={}){
      that agent owns. Auto (absent) keeps v37.6 behaviour exactly. */
   const fnKey = (typeof opts.fn==="string") ? opts.fn : "";
   const fnWant = fnKey ? fnReason(fnKey) : undefined;
-  const wantReasoning = (opts.reasoning===true)
+  /* (!) v150.15 — A MODEL THAT ONLY WORKS WITH REASONING. Thinking is off for every background call (and
+     for the reply unless switched on), which OpenRouter receives as reasoning {enabled:false}. A model
+     whose endpoint cannot turn reasoning off answers that with a 400 ("Reasoning is mandatory for this
+     endpoint and cannot be disabled"), so every engine on it failed. Such a model is remembered the
+     first time it says so (below) and gets reasoning ON from then on, whatever the switch says. */
+  const wantReasoning = _reasonOnly(_api.id,model) || (opts.reasoning===true)
     || (opts.reasoning!==false && (fnWant===true
         || (fnWant!==false && state.reasoningOn===true && opts.rp===true)));
   /* (!) The shape of "think about this" is NOT portable. OpenRouter takes a `reasoning` object
@@ -11698,6 +11703,16 @@ async function chatCompletion(messages,model,opts={}){
       await _wait(ra!=null?ra+Math.random()*250:_jitter(800*(attempt+1)));
       continue;
     }
+    /* v150.15 — the model refused because reasoning cannot be turned off: remember it, send the same
+       request again once with reasoning on (and room for the thinking), and keep it on for this model. */
+    if(!wantReasoning&&!body.__reasonRetry&&res.status>=400&&res.status<500&&_reasonRequiredMsg(_errSnippet(_got))){
+      _reasonOnlyAdd(_api.id,model);
+      if(_isOR) body.reasoning={enabled:true}; else { delete body.reasoning; if(!body.reasoning_effort) body.reasoning_effort="medium"; }
+      body.max_tokens=Math.max(+body.max_tokens||0,(+body.max_tokens||0)+2400,4400);
+      Object.defineProperty(body,"__reasonRetry",{value:true,enumerable:false});
+      dbgDone(entry,"error","HTTP "+res.status+_errSnippet(_got)+" — this model only works with reasoning; sent again with reasoning on");
+      attempt--; continue;
+    }
     dbgDone(entry,"error","HTTP "+res.status+_errSnippet(_got));throw{friendly:httpMsg(res.status,_api),status:res.status};
   }
   if(!res||!res.ok){dbgDone(entry,"error","HTTP "+lastStatus);throw{friendly:httpMsg(lastStatus||0,_api),status:lastStatus||0};}
@@ -11833,6 +11848,11 @@ function _retryAfterMs(res){
     const t=Date.parse(h); return isFinite(t)?Math.max(0,t-Date.now()):null;
   }catch(e){ return null; }
 }
+/* v150.15 — models that only answer with reasoning on, per provider, learned from their own refusals. */
+function _reasonRequiredMsg(m){ m=String(m||""); return /reason|think/i.test(m)&&/(mandatory|required|cannot be disabled|can't be disabled|must be enabled|always on|not supported when disabled|only supports)/i.test(m); }
+function _reasonOnlyList(){ try{ const v=JSON.parse(localStorage.getItem("sm_reasononly")||"[]"); return Array.isArray(v)?v:[]; }catch(e){ return []; } }
+function _reasonOnly(prov,model){ return !!model&&_reasonOnlyList().indexOf(prov+"|"+model)>=0; }
+function _reasonOnlyAdd(prov,model){ if(!model||_reasonOnly(prov,model)) return; const l=_reasonOnlyList(); l.push(prov+"|"+model); try{ localStorage.setItem("sm_reasononly",JSON.stringify(l.slice(-50))); }catch(e){} }
 function _errSnippet(g){
   try{ const m=g&&g.data&&g.data.error&&(g.data.error.message||g.data.error.code); return m?" — "+String(m).slice(0,200):""; }catch(e){ return ""; }
 }

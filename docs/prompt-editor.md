@@ -153,6 +153,21 @@ each scene, so it can also be handed to Claude in a conversation.
   against it and returns find/replace edits on named items (`frag:` / `prompt:` / `tpl:`). Each edit
   applies only if its `find` text is still present.
 
+**NanoGPT.** Model under test can be your model on OpenRouter, your model on **NanoGPT**, or Claude standing
+in. NanoGPT has its own key, model and model list (from `nano-gpt.com/api/v1/models`). The reply is sent
+by StoryMind's own request code with `opts.prov="nano"`, so it is built exactly as the phone builds it for
+a NanoGPT agent: no OpenRouter-only fields. Engine tests can send the background engines to NanoGPT too,
+with the prompts file's models (on by default); off sends them to OpenRouter. In the LLM evaluation, a
+candidate names its API: `nano:<id>` or `openrouter:<id>`. A plain id is on Model under test's API.
+
+**Thinking.** A switch turns reasoning on for the model under test's replies. A model that only works with
+reasoning needs no switch: StoryMind itself (v150.15) sends the request again with reasoning on when the
+model refuses "reasoning off", and remembers that model (`sm_reasononly`).
+
+**Claude never runs on a paid API.** Every request the sandbox makes passes `relayFetch`. A request naming
+an Anthropic or Claude model is refused there before anything is sent, whatever started it. Such models
+are also left out of the model lists. Claude runs only through the Claude app.
+
 ## How Claude fixes things
 
 Every analysis (Ask Claude, Test & review, the drift tests, the engine tests) carries one method, in
@@ -241,6 +256,10 @@ edit, and its results carry no Apply buttons.
 includes one carried in an imported file: results saved before this fix kept the failure where Compare
 again skipped it, and `llmMigrate` moves it out. A failed engine analysis is likewise not a verdict
 (`judgeFailed`): it keeps an **Analyse again** button and is analysed again by **Analyse all**.
+
+**Response time.** Every candidate's reply and replayed call is timed, from sending to the full answer.
+The results show each model's average and median, and the time per reply. Claude is given the measured
+times, scores **speed**, and weighs quality against speed in its recommendation.
 
 **Candidates run on** (automatic, Claude here, OpenRouter) picks where the candidates run. Automatic uses
 OpenRouter only when OpenRouter has answered from this page and a key is saved. Otherwise it uses

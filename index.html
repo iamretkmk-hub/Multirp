@@ -3879,6 +3879,14 @@ Write the moment in that pose: keep its arrangement and framing, put each person
     hint:"Put in front of the prompt the edit model receives when a pose preset picture is sent (after the face pictures). Placeholder: {{n}} (its number — always the last).",
     def:`Figure {{n}} is not a person: it is the pose reference for this scene. Take the pose, the body positions and the framing from it, and put the people from the figures before it into it, each with their own face. `},
 
+  /* v150.12 — A NEW SCENE TYPE IS A NEW POSITION. With the previous frame's whole prompt handed over as
+     continuity, the writer blended the old position into the new one. When the scene type changes, the
+     old prompt is not sent; only its clothing state is. */
+  x_img_type_changed:{label:"Image writer — the scene type has changed",json:false,
+    hint:"Sent to the image prompt writer when this picture's scene type differs from the previous frame's. The previous frame's prompt is NOT sent; only what each person had on carries over. Placeholders: {{from}} and {{to}} (the two scene types), {{clothing}} (the clothing state to keep).",
+    def:`THE SCENE HAS CHANGED — from "{{from}}" to "{{to}}". This is a new position, not a continuation of the last one: the previous frame's pose, body positions, who is where, the framing and the camera are all gone. Write them fresh from the scene type above and the latest exchange, and do not carry over a single phrase about pose or position from before.
+Carry over ONLY what each person has on (or has off): {{clothing}}`},
+
   /* v145.1 — SCENE VIDEO. The film button in a reply's action row turns the last stretch of the
      roleplay (one line per second of the configured clip length) into ONE reference-to-video clip.
      The people are sent as their own reference pictures and named by @token, the camera is POV or
@@ -29485,7 +29493,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"sceneLangRetry"},
     {kind:"prompt",promptKey:"narrateVerbatim"},
     {kind:"prompt",promptKey:"imgFoundation"},{kind:"prompt",promptKey:"imgFrameGuide"},{kind:"prompt",promptKey:"imgPovGuide"},{kind:"prompt",promptKey:"x_img_cast"},{kind:"prompt",promptKey:"x_img_cast_text"},
-    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},{kind:"prompt",promptKey:"x_img_pose_writer"},{kind:"prompt",promptKey:"x_img_pose_roster"},
+    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},{kind:"prompt",promptKey:"x_img_pose_writer"},{kind:"prompt",promptKey:"x_img_pose_roster"},{kind:"prompt",promptKey:"x_img_type_changed"},
     {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video Prompt Writer",desc:"Turns a still into ONE motion prompt for the clip. Receives the configured clip length, the shared video ruleset (mid-scene pacing, the facial/hands/body detail, the anatomy rules) and the routed position's own template.",blocks:[
@@ -39433,6 +39441,13 @@ function _imgContForFrame(text,labelOf){
        area, which is described that once.
    A person who was not in the previous picture still has their clothes described: the picture
    cannot carry what it never showed. */
+/* v150.12 — the clothing state of a written frame, without its pose: the comma-separated phrases of the
+   previous prompt that say what someone has on or off. Everything else (pose, position, framing,
+   camera, action) is left behind, so a new scene type starts from a clean position. */
+const _IMG_CLOTH_RE=/\b(naked|nude|topless|bottomless|undressed|bare(?:-chested|foot|footed)?|shirtless|clothed|dressed|wear(?:s|ing)?|outfit|cloth(?:es|ing)|garments?|shirt|t-shirt|blouse|tank top|crop top|camisole|sweater|cardigan|hoodie|jacket|coat|blazer|suit|vest|tie|dress|gown|skirt|trousers|pants|jeans|shorts|leggings|bra|panties|underwear|briefs|boxers|lingerie|thong|stockings|tights|socks|shoes|heels|boots|sneakers|sandals|robe|towel|bikini|swimsuit|pajamas|nightgown|uniform|coveralls|apron|scarf|hijab|belt|zip(?:per|ped)?|unbuttoned|buttoned|unzipped|pulled (?:up|down|aside)|half-dressed|sleeves?|collar|hem|neckline|fabric|silk|lace|leather|denim|cotton)\b/i;
+function _imgClothingClauses(t){
+  return String(t||"").split(/[,;.]\s*/).map(x=>x.trim()).filter(x=>x&&_IMG_CLOTH_RE.test(x)).slice(0,12).join(", ");
+}
 function _imgLocKey(chat){ return (chat&&chat.locationId)||("@"+String((chat&&chat.location)||"").trim().toLowerCase()); }
 // The picture this frame edits, or null when this frame is the base of a new place.
 function _imgChainPrev(chat,msgIdx){
@@ -39930,7 +39945,33 @@ async function illustrate(mid,replyText,force,opts){
       return "";
     };
     // v150.5 — when the previous picture itself goes along, it is the continuity; its old words are not sent
-    if(_cont&&_cont.t&&!_chain){ try{ prevPrompt=_imgContForFrame(_cont.t,_labelOf); }catch(e){ prevPrompt=""; } }
+    /* (!) v150.12 — A CHANGED SCENE TYPE STARTS A NEW POSITION. Reported: the previous position's prompt,
+       handed over as continuity, was blended into the new pose. The previous frame is the picture being
+       edited, or else this person's continuity frame; when its scene type is not this one, its prompt
+       is not sent — only its clothing state (or, for an edit, the picture's) carries over. */
+    let _typeBlock="";
+    {
+      const _pm=_chain?_chain.msg:(_cont&&_cont.mid?findMsg(_cont.mid):null);
+      const _pId=_pm&&_pm.imgRuleId, _pLb=_pm&&_pm.imgRule;
+      const _changed=!!(rule&&_pm&&(_pId&&rule.id?_pId!==rule.id:(_pLb&&_pLb!==(rule.label||""))));
+      if(_changed){
+        let _cl="";
+        if(_chain) _cl="exactly as the current scene picture shows it — the picture carries it. The latest exchange still wins where it changes a garment.";
+        else{
+          let _prev=""; try{ _prev=_cont&&_cont.t?_imgContForFrame(_cont.t,_labelOf):""; }catch(e){ _prev=""; }
+          let _c=_imgClothingClauses(_prev);
+          // the latest frame may not mention clothes at all: the most recent earlier picture in this scene that does
+          if(!_c&&chat){ for(let i=_msgIdx-1;i>=_sceneStart0&&i>=0;i--){ const m=chat.messages[i];
+            if(!m||m.travelBeat)break; if(m.imgState!=="done")continue;
+            const c2=_imgClothingClauses(m.imgCore||""); if(c2){ _c=c2; break; } } }
+          _cl=_c?`as the previous frame had it — ${_c}. The latest exchange still wins where it changes a garment.`
+                :"as this request and the latest exchange give it.";
+        }
+        _typeBlock=fillTpl(up("x_img_type_changed"),{from:_pLb||"the previous scene",to:(rule&&rule.label)||"this scene",clothing:_cl})+"\n\n";
+        try{ msg.imgTypeChanged={from:_pLb||"",to:(rule&&rule.label)||""}; }catch(e){}
+      }else{ try{ delete msg.imgTypeChanged; }catch(e){} }
+    }
+    if(_cont&&_cont.t&&!_chain&&!_typeBlock){ try{ prevPrompt=_imgContForFrame(_cont.t,_labelOf); }catch(e){ prevPrompt=""; } }
     try{ if(msg.imgMeta)msg.imgMeta.ids=(_inFrame.length?_inFrame.map(f=>f.id):[speaker&&speaker.id]).filter(x=>x&&x!=="__user__"); }catch(e){}
     const sceneSoFar=_winText(_inFrame.length?_inFrame:(speaker?[{name:speaker.name,id:speaker.id}]:[]));
     /* (!) v148.4 — and it is only called the lines "since that picture" when there was one. */
@@ -39942,7 +39983,8 @@ async function illustrate(mid,replyText,force,opts){
     const _lbl=x=>{ if(!_inFrame.length)return x.who; const f=_inFrame.find(f=>x.id==="__user__"?f.player:(x.id?f.id===x.id:f.name===x.who)); return f&&f.label!==f.name?`${x.who} (${f.label})`:x.who; };
     const _visualExchange=_roundShown.map(x=>`${_lbl(x)}: ${_imgVisualOnly(x.text)||"(speaks)"}`).join("\n");
     const usr=_castBlock+_editBlock+_perPerson+_playerDress+_dress+(_chain?"":_placeBlock)
-      +(_chain?"":prevPrompt?`CONTINUITY REFERENCE (the previous frame of this scene, already rewritten in THIS frame's labels — anyone no longer here has been taken out; for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; the LOCATION is yours to write and the block above is the authority on it). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
+      +_typeBlock
+      +(_chain||_typeBlock?"":prevPrompt?`CONTINUITY REFERENCE (the previous frame of this scene, already rewritten in THIS frame's labels — anyone no longer here has been taken out; for things the latest exchange does NOT change — e.g. an unchanged outfit or hairstyle; the LOCATION is yours to write and the block above is the authority on it). The latest exchange OVERRIDES this wherever they disagree:\n${prevPrompt}\n\n`:`(No previous image — describe the scene fresh.)\n\n`)
       +_window
       +`LATEST EXCHANGE (what just happened, in order since ${state.user||"the player"} last acted — the authority on the current moment; dialogue removed, only what can be seen):\n${_visualExchange}`;
     // v148.3 — a frame of several people needs room to describe each of them
@@ -40018,7 +40060,7 @@ async function illustrate(mid,replyText,force,opts){
       url=await _withRefPack(_pack,async()=>{
         if(rule){
           const u=await genImageForRule(rule,finalPrompt,baseNeg);
-          msg.imgRule=rule.label||"";
+          msg.imgRule=rule.label||""; msg.imgRuleId=rule.id||"";   // v150.12 — the id, to tell a changed scene type
           return u;
         }
         // No rules configured at all → use the global provider directly.

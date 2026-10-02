@@ -175,7 +175,8 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
      /the man in IMAGE 1 = Berker Özüçak/.test(B.usr)&&/the man in IMAGE 2 leans back in his chair/.test(Bc)&&/the man in IMAGE 1 holds a small coffee cup/.test(Bc), Bc);
   ok("what was said only about Burcu, who left, is taken out — no IMAGE 3 that does not exist", !/IMAGE 3/.test(Bc)&&!/coral/.test(Bc)&&!/\[\[/.test(Bc), Bc);
   ok("the block says it is in this frame's labels", /already rewritten in THIS frame's labels/.test(Bc), Bc.slice(0,300));
-  await pg.evaluate(()=>{ window.usesRefImage=()=>false; window.__rule={label:"Group",cast:"group",pov:false,promptStyle:""}; window.__out="a heavy-set man leans on the table"; });
+  // v150.12 — the same scene type, so the frame is a continuation (a changed type sends no continuity reference)
+  await pg.evaluate(()=>{ window.usesRefImage=()=>false; window.__rule=Object.assign({},window.__rule,{cast:"group",pov:false}); window.__out="a heavy-set man leans on the table"; });
   const C=await draw(scene({period:"Evening",present:["p_sami","p_berk"],keep:true})+push([{role:"assistant",speaker:"Sami Özüçak",speakerId:"p_sami",content:"*Masaya yaslanıyor.*"}]));
   const Cc=C.usr.slice(C.usr.lastIndexOf("CONTINUITY REFERENCE ("),C.usr.lastIndexOf("LATEST EXCHANGE ("));
   ok("a words-only frame reads it by name, never by IMAGE numbers it does not have", /Berker Özüçak sets his cup down/.test(Cc)&&/Sami Özüçak laughs/.test(Cc)&&!/IMAGE \d/.test(Cc), Cc);

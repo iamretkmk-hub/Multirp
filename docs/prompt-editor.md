@@ -146,6 +146,31 @@ example resistance that holds after intimacy but goes stiff in daily talk. Its e
 help and what they risk, so the prompts are tuned for every situation at once. It runs at the end of Run
 everything and of **Analyse all**.
 
+## LLM evaluation (a separate test: models, not prompts)
+
+The **LLM evaluation** tab compares models with the prompts held fixed. Nothing in it proposes a prompt
+edit, and its results carry no Apply buttons.
+
+- **Settings**: one entry per text-model setting in StoryMind's Settings, with the same names (Roleplay, Auto-RP
+  Player Narrator, Prompt Rewriter, Multi-Character Director, Memory & Daily Engines, Gossip &
+  offstage-intent, Rolling recap, Gamemaster, Character Generator, Authoring, Image/Video Router, Voice calls,
+  Speech-to-text fixer, Fallback). Each starts from the prompts file's model; a blank one follows its
+  fallback the way the app does. Add any number of candidates per setting.
+- **Roleplay**: every candidate plays the chosen reply scenes in full, each building its own conversation,
+  through the real payload and StoryMind's own roleplay request.
+- **Engines**: one engine scene is recorded once with the file's models. In the sandbox every text-model
+  setting is set to a tag naming itself (`pe-field:memModel`, `fieldModels`), so each recorded call knows
+  which setting chose its model, and the tag is swapped for the real model before sending. Each setting's
+  calls (a spread of different engines, up to *calls per setting*) are then replayed with every candidate
+  (`replay`): the same messages and the same request options.
+- **Comparison**: Claude compares the models per setting **blind** (Model A, B, C) and is told not to
+  suggest prompt changes. Roleplay is scored on character, realism, instructions and language; engines on
+  contract, faithfulness, judgement and economy. Then an overall score, what each model is good and weak
+  at, the best model and a one-line recommendation; names are put back afterwards.
+
+It needs OpenRouter, so inside the Claude app it can only analyse: run it on the StoryMind site, use
+**Export results**, then **Import results** in the editor inside Claude and press **Compare again**.
+
 ## Drift tests
 
 The **Drift tests** tab runs ten scripted scenes against the current prompts. Every scene is played by

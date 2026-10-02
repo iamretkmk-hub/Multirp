@@ -240,6 +240,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button type="button" data-r="payload" class="on">Full payload</button>
         <button type="button" data-r="claude">Claude</button>
         <button type="button" data-r="tests">Tests</button>
+        <button type="button" data-r="llm">LLM evaluation</button>
       </div>
       <span class="sp"></span>
       <span class="stat" id="plStat"></span>
@@ -300,6 +301,32 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       </details>
       <div id="engList" class="msgs"></div>
     </div>
+
+    <div id="rLlm" class="scroll" style="display:none;flex-direction:column">
+      <div class="provider" id="llmKeyBox"></div>
+      <div class="empty" style="padding:10px 12px"><b>Which model does which job best?</b> Your prompts stay exactly as they are; nothing here proposes prompt edits. For each model setting below, add the models you want to compare. The roleplay candidates play the chosen scenes in full, each building its own conversation. The engine settings are compared on identical input: one engine scene is recorded once, then every call of that setting is replayed with each candidate, sent the way StoryMind sends it. Claude then compares them blind and says what each model did well and which to use where.</div>
+      <div class="ctl">
+        <button class="btn sm pri" id="btnLlmRun" type="button">Run the evaluation</button>
+        <button class="btn sm" id="btnLlmAnalyse" type="button">Compare again</button>
+        <button class="btn sm" id="btnLlmStop" type="button" hidden>Stop</button>
+        <button class="btn sm" id="btnLlmExport" type="button">Export results</button>
+        <button class="btn sm" id="btnLlmImport" type="button">Import results</button>
+        <span class="stat" id="llmStat"></span>
+      </div>
+      <div class="stat" id="llmEstimate" style="padding:0 12px"></div>
+      <div class="ph" style="border-top:1px solid var(--border)"><h2>Model settings and candidates</h2></div>
+      <div id="llmFields" class="msgs"></div>
+      <div class="ph" style="border-top:1px solid var(--border)"><h2>What they are tested on</h2></div>
+      <div class="provider">
+        <div class="row"><b>Roleplay scenes</b><span class="stat">played in full by every roleplay candidate</span></div>
+        <div id="llmScenes" class="row" style="gap:4px 12px"></div>
+        <div class="row"><b>Engine scene</b><select id="llmEngScene" style="flex:1;min-width:200px;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:5px 6px"></select>
+          <label class="stat">calls per setting <input id="llmPerField" type="number" min="1" max="10" value="4" style="width:56px"></label></div>
+      </div>
+      <div class="ph" style="border-top:1px solid var(--border)"><h2>Results</h2></div>
+      <div id="llmResults" class="msgs"></div>
+    </div>
+    <input type="file" id="fileLlm" accept=".json,application/json" hidden>
 
     <div id="rClaude" style="display:none;flex:1;min-height:0;flex-direction:column">
       <div class="provider" id="provBox"></div>
@@ -787,13 +814,21 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     if(o.scene){ var ch=curChat(); if(ch){ if(o.scene.chat)Object.assign(ch,J(o.scene.chat)); if(o.scene.opener)ch.messages.push({mid:"lv0",role:"assistant",speaker:"Narrator",narratorEvent:true,present:(ch.presentIds||[]).slice(),content:o.scene.opener}); applySetup(ch,o.scene.setup); } }
     if(o.key)state.key=String(o.key); else if(!state.key)state.key="pe-claude";
     if(o.model)state.model=String(o.model);
+    /* Which model SETTING chose each call. Every text-model field is set to a tag naming itself, so the
+       call records its setting; the tag is then swapped for the real model (fieldModels: the file's
+       models, or a candidate's in an LLM evaluation) before anything is sent. */
+    LIVE.fieldModels=o.fieldModels||null;
+    if(LIVE.fieldModels){ LIVE.fieldKeep={}; Object.keys(LIVE.fieldModels).forEach(function(f){ LIVE.fieldKeep[f]=state[f]; state[f]="pe-field:"+f; }); }
     Object.assign(state,{mem:true,relOn:true,trackOn:true,calOn:true,promiseOn:true,gossipOn:true,intentOn:true,gmOn:true,sceneOn:true,routeOn:true,
       presenceOff:false,goalsCuratorOn:true,condenseOn:true,charQuestsOn:true,pulseOn:true,goalPursuitOn:true,textsOn:true,psycheOn:true,
       autoSpeak:false,narrMode:false,autoImg:false,imgMode:"off",streamReveal:false,suggestOn:false,voiceCheckOn:true});
     window.psycheEnsure=LIVE.realPsyche||window.__PE_realPsyche||window.psycheEnsure;
     window.chatCompletion=async function(messages,model,opts){
       opts=opts||{};
-      var rec={id:++LIVE.n,dbg:String(opts.dbg||""),fn:typeof opts.fn==="string"?opts.fn:"",rp:opts.rp===true,model:String(model||""),
+      var field=null, m=String(model||"");
+      if(m.indexOf("pe-field:")===0){ field=m.slice(9); model=(LIVE.fieldModels&&LIVE.fieldModels[field])||model; }
+      var rec={id:++LIVE.n,dbg:String(opts.dbg||""),fn:typeof opts.fn==="string"?opts.fn:"",rp:opts.rp===true,model:String(model||""),field:field,
+        opts:J({fn:opts.fn,rp:opts.rp,temp:opts.temp,max:opts.max,json:opts.json,reasoning:opts.reasoning,dbg:opts.dbg}),
         messages:J(messages),json:!!opts.json,at:Date.now()};
       rec.prompts=promptKeysFor(rec.messages,LIVE.ups.slice(-12));
       LIVE.calls.push(rec);LIVE.inflight++;LIVE.lastAt=Date.now();
@@ -827,12 +862,19 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     return {calls:LIVE.calls.length-from};
   }
   function liveCalls(o){ var since=(o&&o.since)||0; return {calls:LIVE?LIVE.calls.filter(function(c){return c.id>since;}):[],inflight:LIVE?LIVE.inflight:0}; }
+  /* Replay one recorded call with another model: the same messages and the same request options. */
+  async function replay(o){
+    if(!state.key)throw new Error("No OpenRouter key set.");
+    var r=await window.__PE_realCC(o.messages,o.model,Object.assign({},o.opts||{},{dbg:"Prompt editor — LLM evaluation"}));
+    return String(r==null?"":r);
+  }
   function liveEnd(){
+    if(LIVE&&LIVE.fieldKeep)Object.keys(LIVE.fieldKeep).forEach(function(f){state[f]=LIVE.fieldKeep[f];});
     if(LIVE){window.up=LIVE.origUp;window.chatCompletion=LIVE.origCC;window.uiConfirm=LIVE.origConfirm;window.uiChoose=LIVE.origChoose;
       window.psycheEnsure=async function(){return null;};state.key="";LIVE=null;}
     restoreBase();return true;
   }
-  var OPS={meta:meta,apply:apply,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
+  var OPS={meta:meta,apply:apply,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,replay:replay,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
   window.addEventListener("message",async function(ev){
     var d=ev.data;if(!d||d.pe!=="req")return;
     try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String((e&&(e.message||e.friendly))||e));}
@@ -2251,7 +2293,7 @@ async function runEngines(presetId,inAll){
   NET.allow=(mode==="or");
   let poll=null;
   try{
-    await engCall("liveBegin",{mode,key:mode==="or"?orKey():"",model:mode==="or"?testModel():"",scene:preset.scene||null});
+    await engCall("liveBegin",{mode,key:mode==="or"?orKey():"",model:mode==="or"?testModel():"",scene:preset.scene||null,fieldModels:effectiveModels()});
     poll=setInterval(async()=>{ try{ const r=await engCall("liveCalls",{since:0},5000); ENGRUN.calls=r.calls; renderEng(); }catch(e){} },1500);
     for(let i=0;i<lines.length;i++){
       if(ENGRUN.ctl.signal.aborted) break;
@@ -2450,10 +2492,221 @@ $("#fileDrift").addEventListener("change",async e=>{
   }catch(err){ toast("Could not import: "+err.message,5000); }
 });
 
+/* ---------------- LLM evaluation ----------------
+   A separate test from the prompt work: the prompts are held fixed and the MODELS are compared. One entry
+   per text-model setting in StoryMind's Settings (same names). Nothing here proposes a prompt edit. */
+const MODEL_FIELDS=[
+  {key:"model",label:"Roleplay (main character replies)"},
+  {key:"playerNarrateModel",label:"Auto-RP Player Narrator",fallback:"model"},
+  {key:"rewriter",label:"Prompt Rewriter"},
+  {key:"mcModel",label:"Multi-Character Director"},
+  {key:"memModel",label:"Memory & Daily Engines"},
+  {key:"gossipModel",label:"Gossip & offstage-intent",fallback:"memModel"},
+  {key:"recapModel",label:"Rolling recap (voice calls)",fallback:"memModel"},
+  {key:"gmModel",label:"Gamemaster, Scene Writer & Judges"},
+  {key:"bioModel",label:"Character Generator & Background Tasks"},
+  {key:"authorModel",label:"Authoring model (world & prompt building)",fallback:"bioModel"},
+  {key:"routerModel",label:"Image/Video Router"},
+  {key:"callModel",label:"Voice calls"},
+  {key:"sttFixModel",label:"Speech-to-text fixer",fallback:"callModel"},
+  {key:"fallbackModel",label:"Fallback model"}];
+function fileModel(f){ return String((S.settings&&S.settings[f])||(S.meta&&S.meta.settingsDef[f])||"").trim(); }
+function effectiveModel(f,seen){ seen=seen||{}; if(seen[f]) return ""; seen[f]=1; const v=fileModel(f); if(v) return v; const d=MODEL_FIELDS.find(x=>x.key===f); return d&&d.fallback?effectiveModel(d.fallback,seen):""; }
+function effectiveModels(){ const o={}; MODEL_FIELDS.forEach(d=>{ const v=effectiveModel(d.key); if(v) o[d.key]=v; }); return o; }
+const LLM={running:false,ctl:null,cfg:lsGet("llmcfg",{cands:{},scenes:["daily","flirt","after1","flirt_text"],eng:"flirt",per:4}),res:lsGet("llmres",null)};
+function llmSaveCfg(){ lsSet("llmcfg",LLM.cfg); }
+function llmSaveRes(){ if(!lsSet("llmres",LLM.res)){ const r=Object.assign({},LLM.res); delete r.baseline; lsSet("llmres",r); } }
+function llmCands(f){ const cur=effectiveModel(f); const extra=(LLM.cfg.cands[f]||[]).filter(m=>m&&m!==cur); return extra.length?[cur].concat(extra).filter(Boolean):[]; }
+function renderLlm(){
+  const kb=$("#llmKeyBox");
+  if(kb){ kb.innerHTML=NET.ok===false
+      ?`<div class="row"><span class="chip bad"><span class="dot"></span>OpenRouter not reachable</span></div><div class="stat" style="color:var(--warn)">Inside the Claude app this page cannot reach OpenRouter, so the models cannot be called from here. Run the evaluation from <b>prompt-editor.html</b> on your StoryMind site, use <b>Export results</b>, and open the file here with <b>Import results</b>: Claude compares the models.</div>`
+      :`<div class="row"><span class="chip ${orKey()?"ok":"bad"}"><span class="dot"></span>${orKey()?"OpenRouter key set":"no OpenRouter key"}</span><span class="stat">The key is set under Model under test, in the Tests or Claude tab. The comparison is written by ${AI.sample?"Claude (your Claude account)":esc(analystModel())}.</span></div>`; }
+  const host=$("#llmFields"); if(!host) return;
+  const list=[...new Set(packModels().concat(NET.models))];
+  host.innerHTML=MODEL_FIELDS.map(d=>{ const cur=effectiveModel(d.key), cands=LLM.cfg.cands[d.key]||[];
+    return `<div class="scene" data-f="${d.key}"><h3>${esc(d.label)} <span class="stat"><code>${d.key}</code></span></h3>
+      <div class="tests">From your prompts file: <code>${esc(cur||"(not set)")}</code>${!fileModel(d.key)&&cur?` <span class="stat">(blank there, so it uses ${esc(d.fallback)})</span>`:""}</div>
+      <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${cands.map(m=>`<span class="chip">${esc(m)} <button type="button" class="btn ghost sm" data-del="${esc(m)}" aria-label="Remove" style="padding:0 4px">×</button></span>`).join("")}
+        <input type="text" list="llmModelList" placeholder="add a model to compare…" style="flex:1;min-width:180px;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:4px 7px"><button type="button" class="btn sm" data-add>Add</button></div></div>`; }).join("")
+    +`<datalist id="llmModelList">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
+  host.querySelectorAll("[data-f]").forEach(el=>{ const f=el.dataset.f;
+    const add=()=>{ const inp=el.querySelector("input"), v=inp.value.trim(); if(!v) return; const a=LLM.cfg.cands[f]=LLM.cfg.cands[f]||[]; if(a.indexOf(v)<0&&v!==effectiveModel(f)) a.push(v); llmSaveCfg(); renderLlm(); };
+    el.querySelector("[data-add]").onclick=add; el.querySelector("input").onkeydown=e=>{ if(e.key==="Enter") add(); };
+    el.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{ LLM.cfg.cands[f]=(LLM.cfg.cands[f]||[]).filter(x=>x!==b.dataset.del); llmSaveCfg(); renderLlm(); }); });
+  const sc=$("#llmScenes"); sc.innerHTML=DRIFT_SCENES.filter(x=>x.quality||x.theme!=="Holding the line"||true).map(x=>`<label class="stat"><input type="checkbox" value="${x.id}" ${LLM.cfg.scenes.indexOf(x.id)>=0?"checked":""}> ${esc(x.title)} <span class="stat">(${esc(KIND_SHORT[x.kind])})</span></label>`).join("");
+  sc.querySelectorAll("input").forEach(i=>i.onchange=()=>{ LLM.cfg.scenes=[...sc.querySelectorAll("input:checked")].map(x=>x.value); llmSaveCfg(); llmEstimate(); });
+  const es=$("#llmEngScene"); es.innerHTML=`<option value="">(none: roleplay only)</option>`+ENGINE_SCENES.map(x=>`<option value="${x.id}">${esc(x.label)}</option>`).join(""); es.value=LLM.cfg.eng||"";
+  es.onchange=()=>{ LLM.cfg.eng=es.value; llmSaveCfg(); llmEstimate(); };
+  const per=$("#llmPerField"); per.value=LLM.cfg.per||4; per.onchange=()=>{ LLM.cfg.per=Math.max(1,Math.min(10,+per.value||4)); llmSaveCfg(); llmEstimate(); };
+  llmEstimate(); renderLlmResults(); paintLlm();
+}
+function llmEstimate(){
+  const el=$("#llmEstimate"); if(!el) return;
+  const rp=llmCands("model"), scenes=DRIFT_SCENES.filter(x=>LLM.cfg.scenes.indexOf(x.id)>=0), turns=scenes.reduce((a,x)=>a+x.lines.length,0);
+  const engF=MODEL_FIELDS.filter(d=>d.key!=="model"&&llmCands(d.key).length);
+  el.textContent=`Roleplay: ${rp.length?rp.length+" models × "+scenes.length+" scenes = "+(rp.length*turns)+" replies":"no candidates added"}. Engines: ${engF.length?engF.length+" setting"+(engF.length>1?"s":"")+" × up to "+(LLM.cfg.per||4)+" calls × their candidates, after one recorded scene (about 95 calls)":"no candidates added"}. Then one comparison per setting by Claude.`;
+}
+function paintLlm(){ ["#btnLlmRun","#btnLlmAnalyse","#btnLlmExport","#btnLlmImport"].forEach(x=>{ const e=$(x); if(e) e.disabled=LLM.running; }); const st=$("#btnLlmStop"); if(st) st.hidden=!LLM.running; }
+function renderLlmResults(){
+  const host=$("#llmResults"); if(!host) return;
+  const R=LLM.res; host.innerHTML="";
+  if(!R){ host.innerHTML=`<div class="empty">No evaluation yet.</div>`; return; }
+  Object.keys(R.fields||{}).forEach(f=>{
+    const d=MODEL_FIELDS.find(x=>x.key===f)||{label:f}, F=R.fields[f], v=F.verdict;
+    const el=document.createElement("div"); el.className="scene";
+    let h=`<h3>${esc(d.label)} <span class="stat"><code>${f}</code></span>${v&&v.best?`<span class="sp"></span><span class="vd held">best: ${esc(v.best)}</span>`:""}</h3>`;
+    if(v){
+      h+=`<div class="turnRow"><div><b>Verdict.</b> ${esc(v.summary||"")}</div>${v.recommend?`<div class="stat"><b>Use:</b> ${esc(v.recommend)}</div>`:""}</div>`;
+      const rows=(v.models||[]);
+      if(rows.length){ const crit=[...new Set(rows.flatMap(r=>Object.keys(r.scores||{})))];
+        h+=`<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12px;width:100%"><thead><tr><th style="text-align:left;padding:3px 6px">Model</th>${crit.map(c=>`<th style="padding:3px 6px">${esc(c)}</th>`).join("")}<th style="padding:3px 6px">overall</th></tr></thead><tbody>`
+          +rows.map(r=>`<tr style="border-top:1px solid var(--border)"><td style="padding:3px 6px"><code>${esc(r.model)}</code></td>${crit.map(c=>`<td style="text-align:center;padding:3px 6px;font-variant-numeric:tabular-nums">${r.scores&&r.scores[c]!=null?esc(r.scores[c]):"–"}</td>`).join("")}<td style="text-align:center;padding:3px 6px;font-weight:600">${r.overall!=null?esc(r.overall):"–"}</td></tr>`).join("")
+          +`</tbody></table></div>`
+          +rows.map(r=>`<div class="stat"><code>${esc(r.model)}</code> — <b>good at:</b> ${esc(r.good||"")}${r.weak?` · <b>weak at:</b> ${esc(r.weak)}`:""}</div>`).join(""); }
+    }else if(F.error) h+=`<div class="stat" style="color:var(--danger)">${esc(F.error)}</div>`;
+    else h+=`<div class="stat">${F.judging?"Claude is comparing…":"Not compared yet."}</div>`;
+    h+=`<details class="turnRow"><summary class="stat" style="cursor:pointer">What each model wrote</summary>${llmSamplesHTML(f,F)}</details>`;
+    el.innerHTML=h; host.appendChild(el);
+  });
+}
+function llmSamplesHTML(f,F){
+  if(F.kind==="reply") return Object.keys(F.runs||{}).map(sid=>{ const sc=DRIFT_SCENES.find(x=>x.id===sid)||{title:sid};
+    return `<div style="margin-top:6px"><b>${esc(sc.title)}</b>`+Object.keys(F.runs[sid]).map(m=>`<div class="stat" style="margin-top:4px"><code>${esc(m)}</code></div>`+F.runs[sid][m].map(t=>`<div class="turnRow"><div class="pl">${t.gm?"Gamemaster":"Emre"}: ${esc(t.user)}</div><div class="rp">${esc(t.reply==null?"…":t.reply)}</div></div>`).join("")).join("")+`</div>`; }).join("");
+  return (F.calls||[]).map(c=>`<div style="margin-top:6px"><b>${esc(c.dbg||"")}</b><details><summary class="stat" style="cursor:pointer">input (${fmtN(payloadText(c).length)} chars)</summary><pre style="white-space:pre-wrap;font:11px/1.45 var(--mono);max-height:300px;overflow:auto">${esc(payloadText(c))}</pre></details>`
+    +Object.keys(c.outs||{}).map(m=>`<div class="stat"><code>${esc(m)}</code></div><div class="rp" style="font-size:12px">${esc(String(c.outs[m]).slice(0,1500))}</div>`).join("")+`</div>`).join("");
+}
+async function llmPlayScene(sc,model){
+  const sp=S.world?S.world.cast.find(c=>c.id===sc.speaker):null, name=sp?sp.name:sc.speaker, hist=[], turns=[];
+  for(const ln of sc.lines){
+    if(LLM.ctl.signal.aborted) throw {code:"cancelled"};
+    const gm=ln&&typeof ln==="object"&&ln.gm, txt=sc.kind==="text";
+    if(gm) hist.push({role:"assistant",speaker:"Narrator",narratorEvent:true,content:String(ln.gm)});
+    else hist.push(Object.assign({role:"user",content:String(ln)},txt?{textMsg:true,textWith:sc.speaker,textWithName:name}:{}));
+    const t={user:gm?String(ln.gm):String(ln),gm:!!gm,reply:null}; turns.push(t);
+    const p=await engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,turns:hist.slice()}},30000);
+    NET.allow=true;
+    try{ t.reply=String(await engCall("complete",{messages:p.messages.map(m=>({role:m.role,content:m.content})),model},300000)||"").trim(); }
+    catch(e){ t.reply="(failed: "+(e.message||e)+")"; } finally{ NET.allow=false; }
+    hist.push(Object.assign({role:"assistant",speaker:name,speakerId:sc.speaker,content:t.reply},txt?{textMsg:true,textWith:sc.speaker,textWithName:name}:{}));
+    renderLlmResults();
+  }
+  return turns;
+}
+async function runLlm(){
+  if(LLM.running) return;
+  if(!ENG.ready){ toast("The engine has to be running"); return; }
+  if(NET.ok===false){ toast("OpenRouter is not reachable here. Run the evaluation on your StoryMind site, then import the results.",6000); return; }
+  if(!orKey()){ toast("Add your OpenRouter key under Model under test first",5000); return; }
+  const rpC=llmCands("model"), engFields=MODEL_FIELDS.filter(d=>d.key!=="model"&&llmCands(d.key).length);
+  if(!rpC.length&&!engFields.length){ toast("Add at least one model to compare"); return; }
+  if(!S.world||S.world.source!=="sample"){ try{ S.world=await engCall("loadWorld",null,60000); $("#worldSel").value="sample"; fillPreviewControls(); }catch(e){} }
+  LLM.running=true; LLM.ctl=new AbortController(); paintLlm();
+  await pushModelToEngine();   // the sandbox holds the key only once it is handed over
+  LLM.res={at:Date.now(),fields:{}}; const R=LLM.res;
+  try{
+    /* 1 · roleplay: each candidate plays every chosen scene in full */
+    if(rpC.length){
+      const F=R.fields.model={kind:"reply",models:rpC,runs:{}};
+      const scenes=DRIFT_SCENES.filter(x=>LLM.cfg.scenes.indexOf(x.id)>=0);
+      for(const sc of scenes){ F.runs[sc.id]={};
+        for(const m of rpC){ if(LLM.ctl.signal.aborted) break; $("#llmStat").textContent=`${m} is playing ${sc.title}…`; F.runs[sc.id][m]=[]; F.runs[sc.id][m]=await llmPlayScene(sc,m); llmSaveRes(); } }
+    }
+    /* 2 · engines: record one scene with the file's models, then replay each setting's calls with every candidate */
+    if(engFields.length&&LLM.cfg.eng&&!LLM.ctl.signal.aborted){
+      const preset=ENGINE_SCENES.find(x=>x.id===LLM.cfg.eng);
+      $("#llmStat").textContent=`Recording ${preset.label} with the models from your file…`;
+      NET.allow=true;
+      try{
+        await engCall("liveBegin",{mode:"or",key:orKey(),model:effectiveModel("model"),scene:preset.scene||null,fieldModels:effectiveModels()});
+        for(const ln of preset.lines){ if(LLM.ctl.signal.aborted) break; await engCall("liveTurn",{text:ln},300000); }
+        if(!LLM.ctl.signal.aborted) await engCall("liveEndDay",{},600000);
+        const rec=(await engCall("liveCalls",{since:0},10000)).calls; R.baseline={scene:preset.id,calls:rec.length};
+        for(const d of engFields){
+          if(LLM.ctl.signal.aborted) break;
+          /* a spread of this setting's calls: different engines first */
+          const mine=rec.filter(c=>c.field===d.key&&c.output!=null), seen=new Set(), pick=[];
+          mine.forEach(c=>{ const k=String(c.dbg).replace(/\s*[·(].*$/,""); if(!seen.has(k)&&pick.length<(LLM.cfg.per||4)){ seen.add(k); pick.push(c); } });
+          mine.forEach(c=>{ if(pick.length<(LLM.cfg.per||4)&&pick.indexOf(c)<0) pick.push(c); });
+          const F=R.fields[d.key]={kind:"engine",models:llmCands(d.key),calls:pick.map(c=>({id:c.id,dbg:c.dbg,messages:c.messages,opts:c.opts,outs:{[c.model]:c.output}}))};
+          if(!pick.length){ F.error="These scenes never called this setting, so it could not be compared."; continue; }
+          for(const c of F.calls) for(const m of F.models){ if(c.outs[m]!=null||LLM.ctl.signal.aborted) continue;
+            $("#llmStat").textContent=`${d.label}: ${m} on ${c.dbg}…`;
+            try{ c.outs[m]=await engCall("replay",{messages:c.messages,model:m,opts:c.opts},300000); }catch(e){ c.outs[m]="(failed: "+(e.message||e)+")"; }
+            renderLlmResults(); }
+          llmSaveRes();
+        }
+      }finally{ try{ await engCall("liveEnd",{},10000); }catch(e){} NET.allow=false; }
+    }
+    llmSaveRes(); renderLlmResults();
+    if(claudeReachable()&&!LLM.ctl.signal.aborted) await compareLlm(true);
+    $("#llmStat").textContent=LLM.ctl.signal.aborted?"Stopped.":"Done.";
+  }catch(e){ toast("The evaluation stopped: "+aiErr(e),6000); }
+  finally{ LLM.running=false; NET.allow=false; paintLlm(); renderLlmResults(); llmSaveRes(); }
+}
+/* Claude compares the models per setting, BLIND (Model A, B, C…), then the names are put back. */
+async function judgeLlmField(f,F){
+  const d=MODEL_FIELDS.find(x=>x.key===f)||{label:f};
+  const labels=F.models.map((m,i)=>String.fromCharCode(65+i)), name=l=>F.models[labels.indexOf(l)]||l;
+  let body="";
+  if(F.kind==="reply"){
+    body=Object.keys(F.runs||{}).map(sid=>{ const sc=DRIFT_SCENES.find(x=>x.id===sid)||{}; return `### SCENE: ${sc.title} [${KIND_SHORT[sc.kind]||""}]\nWHAT GOOD LOOKS LIKE: ${sc.pass||""}\nGROUND TRUTH: ${sc.facts||""}\n`
+      +F.models.map((m,i)=>`--- Model ${labels[i]} ---\n`+(F.runs[sid][m]||[]).map(t=>`${t.gm?"GAMEMASTER":"EMRE"}: ${t.user}\nBUKET: ${String(t.reply||"").slice(0,900)}`).join("\n")).join("\n"); }).join("\n\n");
+  }else{
+    body=(F.calls||[]).map((c,k)=>`### CALL ${k+1}: ${c.dbg}\n===== WHAT THE APP SENT (identical for every model) =====\n${payloadText(c).slice(0,22000)}\n`
+      +F.models.map((m,i)=>`--- Model ${labels[i]}'s answer ---\n${String(c.outs[m]==null?"(none)":c.outs[m]).slice(0,5000)}`).join("\n")).join("\n\n");
+  }
+  const input=`You are evaluating LANGUAGE MODELS for one job inside StoryMind, an adult roleplay app. The prompts are fixed and are NOT under review: do not suggest prompt changes. Judge only how well each model did this job with the same input.
+
+THE JOB: ${d.label} (setting "${f}")${F.kind==="reply"?" — writing the characters' replies in Turkish, in character, through the app's payload":" — a background engine whose answer the app parses and stores; follow its output contract exactly and stay faithful to the input"}.
+The models are anonymised as ${labels.map(l=>"Model "+l).join(", ")}.
+
+Score every model from 0 to 10 on each criterion that fits the job:
+${F.kind==="reply"?"- character (voice, consistency, personality)\n- realism (natural, specific, alive; pacing and proportion)\n- instructions (format, rules, stays in the fiction, never writes Emre)\n- language (natural Turkish)":"- contract (format and fields exactly as asked; parseable)\n- faithfulness (nothing invented; supported by the input)\n- judgement (the decision a careful person would make)\n- economy (no waste, no rambling)"}
+then an overall score, what each model is good at and weak at, and which model you would use for this job (cost and speed aside), with a one-line reason.
+
+Reply with ONLY this JSON:
+{"models":[{"label":"A","scores":{"…":7},"overall":7,"good":"…","weak":"…"}],"best":"A","recommend":"one line: which model for this setting and why","summary":"two or three sentences comparing them"}
+
+${body}`;
+  let v;
+  if(AI.sample) v=await AI.sample.json(input.slice(0,250000),{signal:LLM.ctl.signal,modelTier:"complex",cache:false});
+  else { const t=await aiAsk([{role:"user",content:input}],{signal:LLM.ctl.signal,maxTokens:4000,temperature:0.2}); const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The comparison did not come back as JSON."}; v=JSON.parse(m[0]); }
+  (v.models||[]).forEach(r=>{ r.model=name(String(r.label||"").replace(/^Model\s*/i,"")); });
+  if(v.best) v.best=name(String(v.best).replace(/^Model\s*/i,""));
+  if(v.recommend) labels.forEach((l,i)=>{ v.recommend=String(v.recommend).replace(new RegExp("\\bModel "+l+"\\b","g"),F.models[i]); });
+  if(v.summary) labels.forEach((l,i)=>{ v.summary=String(v.summary).replace(new RegExp("\\bModel "+l+"\\b","g"),F.models[i]); });
+  return v;
+}
+async function compareLlm(inRun){
+  if(!LLM.res){ toast("Run the evaluation first"); return; }
+  if(!claudeReachable()){ toast("Claude is not reachable from this page"); return; }
+  if(!inRun){ if(LLM.running) return; LLM.running=true; LLM.ctl=new AbortController(); paintLlm(); }
+  try{
+    for(const f of Object.keys(LLM.res.fields||{})){ const F=LLM.res.fields[f]; if(F.error||!F.models||F.models.length<2||LLM.ctl.signal.aborted) continue;
+      $("#llmStat").textContent=`Claude is comparing the models for ${(MODEL_FIELDS.find(x=>x.key===f)||{}).label||f}…`;
+      F.judging=true; renderLlmResults();
+      try{ F.verdict=await judgeLlmField(f,F); F.error=null; }catch(e){ F.error="The comparison failed: "+aiErr(e); }
+      F.judging=false; llmSaveRes(); renderLlmResults(); }
+  }finally{ if(!inRun){ LLM.running=false; paintLlm(); } $("#llmStat").textContent="Compared."; }
+}
+$("#btnLlmRun").onclick=runLlm;
+$("#btnLlmAnalyse").onclick=()=>compareLlm(false);
+$("#btnLlmStop").onclick=()=>{ LLM.ctl&&LLM.ctl.abort(); };
+$("#btnLlmExport").onclick=async()=>{ if(!LLM.res){ toast("Run the evaluation first"); return; }
+  const ok=await saveFile("storymind_llm_eval_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"llm-eval",date:Date.now(),cfg:LLM.cfg,res:LLM.res}));
+  if(ok) toast("Exported. Open it in the editor inside Claude with Import results to have Claude compare the models"); };
+$("#btnLlmImport").onclick=()=>$("#fileLlm").click();
+$("#fileLlm").addEventListener("change",async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return;
+  try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="llm-eval") throw new Error("Not an LLM evaluation file");
+    LLM.res=b.res; if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
+    toast(claudeReachable()?"Imported. Tap Compare again to have Claude compare the models":"Imported"); }catch(err){ toast("Could not import: "+err.message,5000); } });
+
 /* ---------------- right tabs, narrow view ---------------- */
 function setRTab(t){ S.rTab=t; $("#rtabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.r===t));
   $("#rPayload").style.display=t==="payload"?"flex":"none"; $("#rClaude").style.display=t==="claude"?"flex":"none";
   $("#rTests").style.display=t==="tests"?"flex":"none"; if(t==="tests"){ renderProvider(); renderDrift(); renderEng(); renderEstimate(); }
+  $("#rLlm").style.display=t==="llm"?"flex":"none"; if(t==="llm"){ renderLlm(); }
   if(matchMedia("(max-width:980px)").matches) setView("right"); }
 $("#rtabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setRTab(b.dataset.r); });
 function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===v)); }
@@ -2494,7 +2747,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={S,ENG,NET,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

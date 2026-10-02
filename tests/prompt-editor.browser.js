@@ -343,6 +343,34 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the combined verdict shows, with each edit's scenes", !!all.overall&&/Across all scenes/.test(all.box)&&/too stiff in daily talk/.test(all.box)&&/Helps: Daily talk/.test(all.box), all.box.slice(0,300));
     ok("the combined edit applies", await pg.evaluate(()=>{ const b=document.querySelector('#overallBox .chg [data-a="apply"]'); if(!b||b.disabled) return false; b.click(); return /PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))); }));
 
+    console.log("\n[12 — LLM evaluation: models compared on fixed prompts, no prompt edits]");
+    OR.calls=[];
+    OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
+      if(/You are evaluating LANGUAGE MODELS/.test(all)) return JSON.stringify({models:[{label:"A",scores:{realism:6},overall:6,good:"steady",weak:"flat"},{label:"B",scores:{realism:8},overall:8,good:"lively",weak:"long"}],
+        best:"B",recommend:"Model B: livelier and in character",summary:"Model A is safe; Model B is better."});
+      const sys=String(((body.messages||[])[0]||{}).content||""); return /JSON/i.test(sys)?"{}":'"Tamam." *Gülümsüyor.*'; };
+    const mf=await pg.evaluate(()=>{ const f=__PE.MODEL_FIELDS.map(x=>x.key); const e=__PE.effectiveModels(); return {f,e}; });
+    ok("one entry per text-model setting in StoryMind's Settings", ["model","mcModel","memModel","gmModel","rewriter","routerModel","bioModel","authorModel","gossipModel","playerNarrateModel","callModel"].every(k=>mf.f.indexOf(k)>=0), mf.f.join(","));
+    ok("each starts from the model in the prompts file (blank ones use their fallback)", !!mf.e.model&&!!mf.e.memModel&&mf.e.gossipModel===(mf.e.gossipModel||mf.e.memModel), JSON.stringify(mf.e).slice(0,300));
+    await pg.evaluate(()=>{ const L=__PE.LLM; L.cfg.cands={model:["x/rp-b"],memModel:["x/mem-b"]}; L.cfg.scenes=["daily_text"]; L.cfg.eng="comings"; L.cfg.per=2;
+      localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg)); });
+    await pg.click('#rtabs button[data-r="llm"]');
+    const ui=await pg.evaluate(()=>({fields:document.querySelectorAll("#llmFields [data-f]").length,est:document.querySelector("#llmEstimate").textContent}));
+    ok("the tab lists every setting with its candidates", ui.fields===mf.f.length, JSON.stringify(ui));
+    await pg.evaluate(()=>__PE.runLlm());
+    const ev=await pg.evaluate(()=>{ const R=__PE.LLM.res; return {rp:R.fields.model,mem:R.fields.memModel,html:document.querySelector("#llmResults").textContent,apply:document.querySelectorAll("#llmResults [data-a=apply]").length}; });
+    const rpModels=new Set(OR.calls.filter(c=>!/LANGUAGE MODELS/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
+    ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.daily_text["x/rp-b"].length===4&&ev.rp.runs.daily_text[mf.e.model].length===4, [...rpModels].join(", "));
+    const mem=ev.mem;
+    ok("the memory setting's recorded calls were replayed with the candidate, on identical input", !!mem&&mem.calls.length>0&&mem.calls.every(c=>c.outs["x/mem-b"]!=null&&c.outs[mf.e.memModel]!=null),
+       JSON.stringify(mem&&mem.calls.map(c=>({dbg:c.dbg,m:Object.keys(c.outs)}))));
+    const rep=OR.calls.find(c=>c.body.model==="x/mem-b"), orig=mem&&mem.calls[0];
+    ok("…sent with the same messages the app sent the original", !!rep&&!!orig&&JSON.stringify(rep.body.messages)===JSON.stringify(orig.messages.map(m=>({role:m.role,content:m.content})).concat([]))||(!!rep&&JSON.stringify(rep.body.messages).indexOf(String(orig.messages[0].content).slice(0,60).replace(/"/g,'\\"'))>=0));
+    const judge=OR.calls.filter(c=>/You are evaluating LANGUAGE MODELS/.test(JSON.stringify(c.body.messages)));
+    ok("Claude compared each setting blind, and was told not to touch the prompts", judge.length===2&&judge.every(c=>{ const t=JSON.stringify(c.body.messages); return /Model A/.test(t)&&/do not suggest prompt changes/.test(t)&&t.indexOf("x/rp-b")<0&&t.indexOf("x/mem-b")<0; }), judge.length);
+    ok("the verdict names the real models again, with a table and a recommendation", /best: x\/rp-b/.test(ev.html)&&/x\/rp-b: livelier/.test(ev.html)&&/good at:/.test(ev.html), ev.html.slice(0,400));
+    ok("no prompt edits are offered in the evaluation", ev.apply===0);
+
     console.log("\n[8 — served the way Claude serves it: the editor is index.html]");
     const actx=await b.newContext({viewport:{width:412,height:915}});   // a fresh browser: no draft from the steps above
     await actx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

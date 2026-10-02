@@ -124,14 +124,20 @@ const {chromium}=require('playwright');
   ok("the pose picture is the only picture sent — no face of Sami, Burcu or the player", JSON.stringify(P.images)==='["data:HUG"]', JSON.stringify(P.images));
   ok("the image model is told it is the pose reference", /^Figure 1 is the pose reference for this scene/.test(P.prompt), P.prompt.slice(0,300));
   ok("the writer is told a pose picture goes instead of the faces, and who is in the frame",
-     /POSE REFERENCE/.test(P.usr)&&/Sami, whose line this picture is for/.test(P.usr)&&/Burcu/.test(P.usr)&&!/PEOPLE IN THIS FRAME/.test(P.usr), P.usr.slice(0,800));
+     /POSE REFERENCE/.test(P.usr)&&/Sami \(man\), whose line this picture is for/.test(P.usr)&&/Burcu \(woman\)/.test(P.usr)&&/Burcu/.test(P.usr)&&!/PEOPLE IN THIS FRAME/.test(P.usr), P.usr.slice(0,800));
   ok("the clothes and the place are still described on this first picture", /WHERE THIS FRAME HAPPENS/.test(P.usr), P.usr.slice(0,1200));
   ok("the message records the pose used", P.pose==="r_hug", JSON.stringify(P.pose));
 
-  console.log("\n[4. the scene chain still applies]");
+  /* v150.10 — reported (debug export): a pose frame went out as the pose picture PLUS the previous scene
+     picture. The pose picture goes alone; the scene chain stands down for a pose frame. */
+  console.log("\n[4. a pose frame sends the pose picture alone — no previous picture]");
   const Q=await draw({line:"*He holds her tighter.*"});
-  ok("the pose picture first, the previous picture last, still no faces", JSON.stringify(Q.images)==='["data:HUG","https://out/1.png"]', JSON.stringify(Q.images));
-  ok("and the image model is told both", /Figure 1 is the pose reference/.test(Q.prompt)&&/Figure 2 is not a person: it is the current scene/.test(Q.prompt), Q.prompt.slice(0,500));
+  ok("only the pose picture, even with a previous picture in this place (the reported case)", JSON.stringify(Q.images)==='["data:HUG"]', JSON.stringify(Q.images));
+  ok("the image model is told only about the pose picture", /Figure 1 is the pose reference/.test(Q.prompt)&&!/Figure 2/.test(Q.prompt)&&!/current scene/.test(Q.prompt), Q.prompt.slice(0,500));
+  ok("and the writer gets no edit brief", !/EDITING THE CURRENT SCENE/.test(Q.usr)&&/POSE REFERENCE/.test(Q.usr), Q.usr.slice(0,600));
+  const Q2=await draw({rule:"r_talk",line:"*He lets go and sits up.*"});
+  ok("the next ordinary frame edits the pose frame's picture", Q2.images[Q2.images.length-1]==="https://out/2.png"&&Q2.images.indexOf("data:HUG")<0, JSON.stringify(Q2.images));
+  await pg.evaluate(()=>{ window.__rule=state.imgRules.find(r=>r.id==="r_hug"); });
 
   console.log("\n[5. no dedicated picture: the faces go as before]");
   const T=await draw({rule:"r_talk",line:"*He sits down.*"});
@@ -170,8 +176,8 @@ const {chromium}=require('playwright');
   ok("the roll is uniform (30000 rolls over three pictures)", RR.n.every(x=>x>9400&&x<10600), JSON.stringify(RR.n));
   ok("every picture is picked, about equally often", RR.pick.every(x=>x>850&&x<1150), JSON.stringify(RR.pick));
   ok("a single picture is always the one", RR.one===0);
-  ok("the picked picture is the one sent — first, alone, before the previous scene picture",
-     RR.imgs[0]==="data:H2"&&RR.imgs.indexOf("data:H0")<0&&RR.imgs.indexOf("data:H1")<0&&RR.imgs.indexOf("data:S1")<0&&RR.idx===2, JSON.stringify(RR));
+  ok("the picked picture is the one sent, alone",
+     JSON.stringify(RR.imgs)==='["data:H2"]'&&RR.imgs.indexOf("data:H0")<0&&RR.imgs.indexOf("data:H1")<0&&RR.imgs.indexOf("data:S1")<0&&RR.idx===2, JSON.stringify(RR));
 
   ok("the two pose prompts are registry prompts on the image writer's card", await pg.evaluate(()=>
      ["x_img_pose_writer","x_img_pose_roster"].every(k=>!!PROMPT_BY_KEY[k]&&!!K[k]&&ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey===k)))));

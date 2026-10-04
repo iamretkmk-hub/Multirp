@@ -339,7 +339,9 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
   console.log("\n[no intimate scene type for a frame with a minor in it]");
   const MN=await pg.evaluate(async()=>{
     const uni=state.universes[0];
-    if(!state.personas.some(p=>p.id==="p_nil")) state.personas.push({id:"p_nil",name:"Nil",universeId:uni.id,look:{subject:"Girl"},refs:["data:N1"],instructions:"x",personality:"x"});
+    // v150.13 — "Woman" here: a card set as a girl or a boy makes no picture at all (tests/img-child-block.browser.js);
+    // this section is the OTHER check — an age or description that isMinorChar reads — which narrows the menu.
+    if(!state.personas.some(p=>p.id==="p_nil")) state.personas.push({id:"p_nil",name:"Nil",universeId:uni.id,look:{subject:"Woman"},refs:["data:N1"],instructions:"x",personality:"x"});
     state.imgRules=DEFAULT_IMG_RULES.map(r=>({...r}));
     let seen=null; const keep=window.pickRule; window.pickRule=async(r,t)=>{ seen=(r||[]).map(x=>x.id); return (r||[])[0]; };
     const run=async(present)=>{ const c=curChat(); c.locationId="L_cafe"; c.subId="c2"; c.presentIds=present; c.subPos={}; present.forEach(id=>c.subPos[id]="c2");

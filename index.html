@@ -13999,6 +13999,16 @@ function _imgRuleIntimate(r){
 }
 function _imgIsMinor(p){ try{ return !!(p&&typeof isMinorChar==="function"&&isMinorChar(p)); }catch(e){ return false; } }
 function _imgSafeRules(rules){ return (rules||[]).filter(r=>!_imgRuleIntimate(r)); }
+/* v150.13 — GIRL OR BOY MEANS NO PICTURES. The card's man/woman/girl/boy field is the player's own
+   statement that this person is a child. A frame with such a person in it is not generated at all —
+   no scene picture, no clip, no portrait. This is on top of the check above (an age under 18 or a
+   child/teen description takes the intimate scene types off the menu), not instead of it. */
+function _imgChildSubject(p){
+  try{ if(!p)return false; const l=(typeof normalizeLook==="function")?normalizeLook(p.look):(p.look||{});
+    return /^(girl|boy)$/i.test(String((l&&l.subject)||"").trim()); }catch(e){ return false; }
+}
+function _imgPlayerChild(){ try{ return /^(girl|boy)$/i.test(String(state.userSubject||"").trim()); }catch(e){ return false; } }
+const IMG_CHILD_BLOCK_MSG="No pictures for this scene: someone in it is set as a girl or a boy.";
 async function pickRule(rules,prompt){
   const active=(rules||[]).filter(r=>r.enabled!==false);
   if(!active.length) return null;
@@ -24175,6 +24185,7 @@ async function generateProfilePic(){
   const look=lookProse(readLookEditor());
   const name=document.getElementById('peName').value.trim();
   if(!look){toast("Fill in the Appearance field first");return;}
+  if(_imgChildSubject({look:readLookEditor()})){ toast("No pictures are made for a character set as a girl or a boy."); return; }   // v150.13
   const instr=await askAiInstructions({
     title:"Generate profile picture",
     desc:"Add anything extra for the portrait — pose, expression, background, lighting, art style — or leave blank for a clean studio portrait from the appearance.",
@@ -34410,6 +34421,8 @@ function sceneHTML(m){
     return st ? _stickyHTML(st,`<span class="spin sm"></span> Illustrating…`,"",mid)
               : `<div class="scene loading"><div class="spin"></div>Illustrating the scene…</div>`;
   }
+  // v150.13 — a girl or a boy in the scene: a quiet note, no Retry (a retry would be refused the same way)
+  if(m.imgState==="blocked") return `<div class="desc" style="padding:6px 0">${esc(m.imgErr||IMG_CHILD_BLOCK_MSG)}</div>`;
   if(m.imgState==="error"){
     const st=_stickyImg(m);
     const retry=`<div class="sceneTools" style="padding:8px"><button class="btn sec small" onclick="reIllustrate('${escJs(mid)}')">${icon("warn")} Retry</button></div>`;
@@ -39654,6 +39667,11 @@ async function illustrate(mid,replyText,force,opts){
        several), and a one-person type still sends — and describes — them all (see _castRule below). */
     let _nearby=[];
     try{ _nearby=(inSceneCast(chat)||[]).filter(c=>c&&c.id&&isActiveChar(c)&&(!speaker||c.id!==speaker.id)); }catch(e){}
+    /* v150.13 — anyone in the scene set as a girl or a boy (the player included): no picture is made. */
+    if([speaker].concat(_nearby).some(_imgChildSubject)||_imgPlayerChild()){
+      msg.imgState="blocked"; msg.imgErr=IMG_CHILD_BLOCK_MSG; delete msg.img;
+      persistChats(); refreshBubble(mid); if(force)toast(IMG_CHILD_BLOCK_MSG); return;
+    }
 
     // ---- Where the scene is happening, so the setting is drawn correctly. ----
     let locLine="";
@@ -40266,6 +40284,9 @@ async function animateScene(mid){
     const _scenePrompt=(msg.imgCore||msg.imgPrompt||msg.content||"").trim();
     // (!) v148.4 — and no explicit shot setup for a still with a minor in it (its frame stamp, or the speaker)
     const _vMinor=((msg.imgMeta&&msg.imgMeta.ids)||[]).concat(msg.speakerId?[msg.speakerId]:[]).some(id=>_imgIsMinor(resolveChar(id,chat)));
+    // v150.13 — a girl or a boy in the still: no clip
+    if(((msg.imgMeta&&msg.imgMeta.ids)||[]).concat(msg.speakerId?[msg.speakerId]:[]).some(id=>_imgChildSubject(resolveChar(id,chat)))||_imgPlayerChild())
+      throw{friendly:IMG_CHILD_BLOCK_MSG};
     const _vidRule=await pickRule(_vMinor?_imgSafeRules(state.vidRules):state.vidRules,_scenePrompt);       // which POSITION this is
     const _isExplicit=!!(_vidRule&&_vidRule.explicit);
     const _sys=videoWriterSystem(_vidRule);
@@ -40487,6 +40508,8 @@ async function sceneVideo(mid){
        with a minor in it; this writer had no gate of its own. With anyone under 18 in the cast the writer is
        told, at the end where it binds hardest, that nothing sexual, suggestive or intimate may be in it. */
     const _svMinor=(cast.people||[]).some(p=>{ try{ return typeof isMinorChar==="function"&&isMinorChar(p); }catch(e){ return false; } });
+    // v150.13 — a girl or a boy in the stretch: no clip
+    if((cast.people||[]).some(_imgChildSubject)||_imgChildSubject(focal)||_imgPlayerChild()) throw{friendly:IMG_CHILD_BLOCK_MSG};
     const sys=fillTpl(up("x_scene_video_writer"),{user:state.user||"the player",seconds:String(sec),beats:String(blocks)})
       +(_svMinor?"\n\nHARD LIMIT — someone in this clip is a minor. Nothing sexual, suggestive, romantic-physical or intimate may appear or be implied: no nudity, no undressing, no kissing or caressing, no lingering on bodies. Everyone fully and ordinarily clothed; only everyday, non-romantic action. If the lines ask for more, show an innocent everyday moment instead.":"");
     const raw=await chatCompletion(epSend("x_scene_video_writer",sys,{
@@ -43141,6 +43164,7 @@ async function pgWritePrompt(){
   if(!state.key){toast("Add your API key in Settings first");return;}
   const rule=_pgRuleObj(); const actor=_pgActorObj();
   if(_imgIsMinor(actor)&&_imgRuleIntimate(rule)){ toast("That scene type is not available for this character"); return; }   // v148.4
+  if(_imgChildSubject(actor)){ toast(IMG_CHILD_BLOCK_MSG); return; }   // v150.13
   _pg.busy="write"; renderPlayground();
   try{
     const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
@@ -43195,6 +43219,7 @@ async function pgGenerate(){
   if(!(_pg.prompt||"").trim()){ await pgWritePrompt(); if(!(_pg.prompt||"").trim())return; }
   const rule=_pgRuleObj();
   if(_imgIsMinor(actor)&&_imgRuleIntimate(rule)){ toast("That scene type is not available for this character"); return; }   // v148.4
+  if(_imgChildSubject(actor)){ toast(IMG_CHILD_BLOCK_MSG); return; }   // v150.13
   _pg.busy="gen"; renderPlayground();
   try{
     // Deterministic tail — IDENTICAL to the roleplay pipeline: actor appearance, then the picked

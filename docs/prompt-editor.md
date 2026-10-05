@@ -348,6 +348,20 @@ layout. Their scene stays in its own kind.
 
    **Neither level proposes edits.** The kind's report is kept in `KA` (saved per browser, exported and
    imported with the results). Playing a scene on its own judges it and then re-evaluates its kind.
+2b. **Before → after** (`effect`, `checkEffect`): when an earlier run is on record, one turn compares the
+   two runs before the fixer writes anything. Every complete analysis keeps a snapshot of its run
+   (`runsnaps`, the last 3): each kind's payload without the transcript, the kinds' scores, reports and
+   reasoning, and each scene's scores. The turn gets:
+   - the edits applied between the runs;
+   - a line diff of each kind's payload (`payloadDiff`, `-` before, `+` after);
+   - the scores before → after, per kind, per criterion and per scene;
+   - both runs' kind reports.
+
+   It judges each edit (helped, hurt, mixed, none, unclear) and why. It lists the regressions and what to
+   keep, and proposes reverts for edits that hurt. Its verdict shows above the complete analysis as
+   **Before → after**, with the reverts as edit cards, and the fixer reads it under "What the last changes
+   did". The first run has nothing to compare with. A new test set, imported or played, clears the old
+   verdict.
 3. **The fixer**, one complete analysis (`overseer`, `analyseTogether`). **It gets no dialogues.** For each
    kind it gets two things:
    - **The kind's report** (`kindReport`): its reasoning, score, rubric, the judges' causes re-evaluated,

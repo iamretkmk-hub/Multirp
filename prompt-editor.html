@@ -442,7 +442,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   window.WebSocket=function(){throw new Error("offline (prompt editor sandbox)");};
   window.open=function(){return null;};
   window.alert=function(){};window.confirm=function(){return false;};window.prompt=function(){return null;};
-  window.addEventListener("error",function(e){try{parent.postMessage({pe:"log",level:"error",text:String(e.message||e)},"*");}catch(_){}});
+  window.addEventListener("error",function(e){try{parent.postMessage({pe:"log",level:"error",text:String(e.message||e)+(e.lineno?" (line "+e.lineno+")":"")},"*");}catch(_){}});
+  window.addEventListener("unhandledrejection",function(e){try{var r=e.reason;parent.postMessage({pe:"log",level:"error",text:"unhandled: "+String((r&&(r.message||r.friendly))||r)},"*");}catch(_){}});
+  try{parent.postMessage({pe:"stage",s:"the sandbox started"},"*");}catch(_){}
 })();
 </script>
 
@@ -1017,7 +1019,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var d=ev.data;if(!d||d.pe!=="req")return;
     try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String((e&&(e.message||e.friendly))||e));}
   });
+  try{parent.postMessage({pe:"stage",s:"StoryMind's code loaded, waiting for it to start"},"*");}catch(_){}
   waitBoot().then(function(){
+    var okBoot=false;try{okBoot=(typeof state!=="undefined")&&state&&Array.isArray(state.universes)&&typeof PROMPT_REGISTRY!=="undefined";}catch(e){}
+    parent.postMessage({pe:"stage",s:okBoot?"StoryMind started":"StoryMind did not finish starting within 20 s"},"*");
     try{if(typeof finishOnboard==="function"&&!store.get(K.onboarded,false))finishOnboard();}catch(e){}
     /* nothing in here may reach a model: every call answers empty, at once */
     window.__PE_realCC=chatCompletion;
@@ -1067,13 +1072,14 @@ const S={
 };
 
 /* ---------------- the engine (sandbox) ---------------- */
-const ENG={win:null,ready:false,seq:0,wait:new Map(),src:null,booting:null};
+const ENG={win:null,ready:false,seq:0,wait:new Map(),src:null,booting:null,stage:"",errors:[]};
 window.addEventListener("message",ev=>{
   const d=ev.data; if(!d||!d.pe) return;
   if(ev.source!==($("#engineFrame").contentWindow)) return;
   if(d.pe==="res"){const w=ENG.wait.get(d.id); if(w){ENG.wait.delete(d.id); d.err?w.rej(new Error(d.err)):w.res(d.ok);} }
   else if(d.pe==="ready"){ENG.ready=true; ENG.booting&&ENG.booting.res();}
-  else if(d.pe==="log"&&d.level==="error"){console.warn("[engine]",d.text);}
+  else if(d.pe==="log"&&d.level==="error"){console.warn("[engine]",d.text); if(ENG.errors.length<6) ENG.errors.push(String(d.text).slice(0,300)); }
+  else if(d.pe==="stage"){ ENG.stage=String(d.s||""); if(!ENG.ready) setEng("busy","Engine: "+ENG.stage); }
   else if(d.pe==="fetch") relayFetch(d);
   else if(d.pe==="llm") llmQueue.push(d), pumpLlm();
 });
@@ -1125,7 +1131,7 @@ async function findAppSource(){
   return null;
 }
 async function bootEngine(src){
-  ENG.ready=false; setEng("busy","Engine: starting");
+  ENG.ready=false; setEng("busy","Engine: starting"); ENG.stage="the sandbox did not start"; ENG.errors=[];
   ENG.src=src;
   const seed={};   // a fresh, empty StoryMind: nothing of the real app's data is reachable from here
   const shim="<script>window.__PE_SEED="+JSON.stringify(seed)+";<\/script><script>"+$("#shimSrc").textContent+"<\/script>";
@@ -1136,9 +1142,12 @@ async function bootEngine(src){
   const f=$("#engineFrame");
   const p=new Promise((res,rej)=>{ENG.booting={res,rej};});
   f.srcdoc=html;
-  const to=setTimeout(()=>ENG.booting&&ENG.booting.rej(new Error("timeout")),45000);
-  try{ await p; }finally{ clearTimeout(to); }
-  S.meta=await engCall("meta");
+  /* a slow phone can take a while to read 4.5 MB of StoryMind: wait up to two minutes, saying where it is */
+  const slow=setTimeout(()=>{ if(!ENG.ready) setEng("busy","Engine: still starting ("+(ENG.stage||"…")+")"); },30000);
+  const to=setTimeout(()=>ENG.booting&&ENG.booting.rej(new Error("It did not start within 2 minutes. Last step: "+(ENG.stage||"none"))),120000);
+  try{ await p; }finally{ clearTimeout(to); clearTimeout(slow); }
+  try{ S.meta=await engCall("meta"); }
+  catch(e){ throw new Error("StoryMind started but could not be read ("+(e.message||e)+"). Last step: "+(ENG.stage||"none")); }
   setEng("ok","Engine: "+(S.meta.appVersion||"ready"));
 }
 async function startEngine(){
@@ -1152,9 +1161,10 @@ async function startEngine(){
 function showNoEngine(why){
   $("#plOut").innerHTML=`<div class="empty"><b>The StoryMind engine could not be loaded here.</b><br>
     The editor reads the app's own code to know every default and to build payloads. Open this page from the same place as StoryMind
-    (next to <code>index.html</code>), or pick the StoryMind file by hand.${why?`<br><br><span class="stat">${esc(why)}</span>`:""}<br><br>
-    <button class="btn sm" type="button" id="btnPickApp">Pick StoryMind index.html…</button></div>`;
+    (next to <code>index.html</code>), or pick the StoryMind file by hand.${why?`<br><br><span class="stat"><b>Why:</b> ${esc(why)}</span>`:""}${ENG.errors.length?`<br><span class="stat"><b>Errors inside StoryMind:</b><br>${ENG.errors.map(esc).join("<br>")}</span>`:""}<br><br>
+    <button class="btn sm pri" type="button" id="btnRetryEng">Try again</button> <button class="btn sm" type="button" id="btnPickApp">Pick StoryMind index.html…</button></div>`;
   $("#btnPickApp").onclick=()=>$("#fileApp").click();
+  $("#btnRetryEng").onclick=async()=>{ if(await startEngine()){ await afterEngine(true); pushModelToEngine(); } };
   renderList(); renderEditor();
 }
 $("#fileApp").addEventListener("change",async e=>{

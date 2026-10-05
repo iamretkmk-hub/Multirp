@@ -3,7 +3,7 @@
    bypassing the scene selector."
    Checked:
      1. the Generate icon opens a picker: "Automatic" first, then every enabled scene type, with the
-        ones where someone in the scene holds pose pictures marked;
+        ones with pose pictures marked with how many;
      2. picking a scene type draws with exactly that type — the scene selector is never asked — and
         its pose picture is what is sent;
      3. "Automatic" goes through the scene selector as before;
@@ -29,7 +29,7 @@ const {chromium}=require('playwright');
                     {id:"r_off",label:"Switched off",when:"x",cast:"player",pov:false,promptStyle:"",enabled:false}];
     uni.locations=[{id:"L_cafe",name:"Vanadium Cafe",description:"A coffee bar.",residents:[],sublocations:[{id:"c1",name:"Entrance",entrance:true}]}];
     const mk=(id,n,subj,img,extra)=>Object.assign({id,name:n,universeId:uni.id,look:{subject:subj},image:img,instructions:"x",personality:"x"},extra||{});
-    state.personas=[mk("p_sami","Sami","Man","data:S1"),mk("p_burcu","Burcu","Woman","data:U1",{poseRefs:{r_hug:["data:HUG"]}})];
+    state.personas=[mk("p_sami","Sami","Man","data:S1"),mk("p_burcu","Burcu","Woman","data:U1")];
     state.user="Emre"; state.key="k"; state.autoImg=false; state.userSubject="Man";
     const c=curChat(); c.universeId=uni.id; state.curUniverse=uni.id;
     window.playerRefs=()=>["data:E1"]; window._playerRefHolder=()=>({look:{subject:"Man"}});
@@ -52,6 +52,8 @@ const {chromium}=require('playwright');
     c.imgPromptBy={}; c.imgWindowBy={}; c.lastImgRuleBy={}; c.imgContBy={};
     show('chat'); renderChat();
   });
+  // v150.16 — the pose picture is the scene type's own (Settings › Image), shared by every character
+  await pg.evaluate(async()=>{ await rulePoseAdd(state.imgRules.find(r=>r.id==="r_hug"),"data:HUG"); });
   await pg.waitForTimeout(300);
 
   console.log("\n[1. the Generate icon opens the scene picker]");
@@ -64,7 +66,7 @@ const {chromium}=require('playwright');
   });
   ok("tapping Generate opens the picker and draws nothing yet", P.btn&&P.open&&P.generated===0, JSON.stringify(P));
   ok("Automatic comes first, then every enabled scene type", JSON.stringify(P.rows.map(r=>r.id))==='["","r_talk","r_hug"]'&&/Automatic/.test(P.rows[0].t), JSON.stringify(P.rows));
-  ok("a scene type with a pose picture says whose", /Hug · pose picture: Burcu/.test(P.rows[2].t)&&!/pose picture/.test(P.rows[1].t), JSON.stringify(P.rows));
+  ok("a scene type with pose pictures says how many", /Hug · 1 pose picture/.test(P.rows[2].t)&&!/pose picture/.test(P.rows[1].t), JSON.stringify(P.rows));
 
   console.log("\n[2. a picked scene type skips the scene selector]");
   const H=await pg.evaluate(async()=>{

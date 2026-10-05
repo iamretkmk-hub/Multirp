@@ -113,7 +113,7 @@ const {chromium}=require('playwright');
   },o||{});
   const P=await draw({rule:"r_hug",roll:0});
   ok("a POV scene type: the speaker's face, then the scene type's pose picture last", P.state==="done"&&JSON.stringify(P.images)==='["data:S1","data:HUG0"]', JSON.stringify(P));
-  ok("the image model is told Figure 2 is the pose reference", /^The man in IMAGE 1 is Figure 1/.test(P.prompt)&&/Figure 2 is not a person: it is the pose reference/.test(P.prompt), P.prompt.slice(0,500));
+  ok("the image model is told Figure 2 is the pose reference", /^The man in IMAGE 1 is Figure 1/.test(P.prompt)&&/Figure 2 is the pose reference for this scene: textureless grey 3D figures/.test(P.prompt), P.prompt.slice(0,500));
   ok("the writer gets the pose block, by label", /POSE REFERENCE/.test(P.usr)&&/- the man in IMAGE 1 = Sami \(man\), whose line this picture is for \(picture 1\)/.test(P.usr)&&/Emre is the camera \(POV\)/.test(P.usr), P.usr.slice(0,800));
   ok("the debug log says which pose picture went", /sent Sami's face picture, then pose picture 1 of 2 last/.test(P.log), P.log);
   const Bu=await draw({rule:"r_hug",who:"Burcu",id:"p_burcu",line:"*She hugs him back.*",roll:1});
@@ -124,6 +124,49 @@ const {chromium}=require('playwright');
   const T=await draw({rule:"r_talk",line:"*He sits down.*"});
   ok("a scene type with no pose pictures sends the faces as before", T.images[0]==="data:S1"&&T.images.every(x=>!/HUG|BED|OLD/.test(x))&&T.pose===null, JSON.stringify(T.images));
   ok("and the debug log says why", /"Talking" has no pose pictures — face pictures sent/.test(T.log), T.log);
+
+  /* v150.18 — reported from a playground request: the scene type's pose picture was not sent (the face
+     went alone), the writer's instructions repeated themselves, and the grey 3D figures need replacing
+     with the real people, with real skin texture. */
+  console.log("\n[3b. the grey figures are replaced by the real people]");
+  ok("the image model is told to replace the grey figure with the speaker, as a real person",
+     /Figure 2 is the pose reference for this scene: textureless grey 3D figures, not people\. Replace the man in Figure 2 with the man in IMAGE 1 \(Figure 1\)/.test(P.prompt)&&/real skin texture/.test(P.prompt), P.prompt.slice(0,700));
+  ok("not POV: the woman and the man are both swapped in", /Replace the man in Figure 3 with the man in IMAGE 1 \(Figure 1\) and replace the man in Figure 3 with the man in IMAGE 2 \(Figure 2\)/.test(NP.prompt), NP.prompt.slice(0,700));
+  ok("the writer is told to begin with the replacement, as real people", /textureless grey 3D model/.test(P.usr)&&/real skin texture/.test(P.usr), P.usr.slice(0,900));
+
+  console.log("\n[3c. the playground sends the scene type's pose picture]");
+  const PG=await pg.evaluate(async()=>{
+    const out={};
+    for(const [rid,key] of [["r_bed","bed"],["r_hug","hug"]]){
+      _pg.actorId="p_sami"; _pg.ruleId=rid; _pg.refIds=[]; _pg.prompt="a man lies on a bed"; _pg.busy=null; window.__body=null;
+      const keep=window._poseRoll; window._poseRoll=()=>0;
+      await pgGenerate(); window._poseRoll=keep;
+      out[key]={images:(window.__body||{}).images||[],prompt:(window.__body||{}).prompt||""};
+    }
+    // the playground's writer gets the pose block in the same labels
+    let usr=""; const keepC=window.chatCompletion;
+    window.chatCompletion=async(m,mod,o)=>{ if(o&&o.dbg==="Playground image prompt writer")usr=m.filter(x=>x.role==="user").map(x=>x.content).join("\n"); return "x"; };
+    _pg.ruleId="r_bed"; _pg.busy=null; await pgWritePrompt(); window.chatCompletion=keepC;
+    out.usr=usr; return out;
+  });
+  ok("the playground, not POV: the actor's face, the player's, then the pose picture (the reported case)", JSON.stringify(PG.bed.images)==='["data:S1","data:E1","data:BED"]', JSON.stringify(PG.bed.images));
+  ok("the playground, POV: the actor's face, then the pose picture", JSON.stringify(PG.hug.images)==='["data:S1","data:HUG0"]', JSON.stringify(PG.hug.images));
+  ok("with the same swap instruction", /Replace the man in Figure 2 with the man in IMAGE 1 \(Figure 1\)/.test(PG.hug.prompt)&&/real skin texture/.test(PG.hug.prompt), PG.hug.prompt.slice(0,500));
+  ok("the playground's writer gets the pose block, by label", /POSE REFERENCE/.test(PG.usr)&&/- the man in IMAGE 1 = Sami \(man\)/.test(PG.usr)&&/- the man in IMAGE 2 = Emre \(the player\)/.test(PG.usr), PG.usr.slice(0,700));
+
+  console.log("\n[3d. the writer's instructions say each thing once]");
+  const W=await pg.evaluate(()=>{ const f=up("imgFoundation"), g=up("imgFrameGuide"), all=f+"\n"+g;
+    const n=(re)=>(all.match(re)||[]).length;
+    return {brackets:n(/No square brackets/g),names:n(/never by name/gi),oneLine:n(/comma-separated English line/g),f,g}; });
+  ok("one rule about brackets and lines, none of the writer's own rules repeated", W.brackets===1&&W.names===0&&W.oneLine===0, JSON.stringify({b:W.brackets,n:W.names,o:W.oneLine}));
+  // an unedited copy of the old texts, saved by an earlier build, is upgraded at boot
+  await pg.evaluate(()=>{
+    store.setRaw(K.imgFoundation,"# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated line of only what is physically VISIBLE in this one frame.\nNo square brackets, no \"|\", no line breaks — write the words you chose.");
+    store.setRaw(K.imgFrameGuide,"## THIS REQUEST\n- x\n- If there is NO scene-type block above, write a single comma-separated English line of what is visible this frame.");
+  });
+  await pg.reload(); await pg.waitForTimeout(2600);
+  const UP=await pg.evaluate(()=>({f:state.imgFoundation===DEFAULT_IMG_FOUNDATION,g:state.imgFrameGuide===DEFAULT_IMG_FRAME_GUIDE}));
+  ok("an old saved copy of either is upgraded to the new text", UP.f===true&&UP.g===true, JSON.stringify(UP));
 
   console.log("\n[4. one of them, at random, each equally likely]");
   const RR=await pg.evaluate(async()=>{

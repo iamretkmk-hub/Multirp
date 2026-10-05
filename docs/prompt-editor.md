@@ -268,7 +268,7 @@ Every analysis carries one method, in `CONTEXT`:
 plus the anchor for a move). A rebuilt card still reads **Applied** and cannot be applied twice.
 **Undo** puts the old text back. For a move, Undo restores the layout exactly.
 
-## Roleplay tests: twelve scenes, one rubric, one complete analysis
+## Roleplay tests: six sections, probes, a fixer per section and a reconciler
 
 The **Roleplay tests** tab tests the reply payloads. Engine tests have their own tab (below).
 
@@ -293,20 +293,25 @@ In the multi-character scenes her husband Sami answers every line too, since in 
 present character replies. Gamemaster beats (`{gm:"…"}`) go into the transcript as events, and the
 characters react to them.
 
-| # | Scene | Kind | What it presses on |
+The scenes are grouped into six **sections**, each testing one thing through one payload kind (`KINDS`):
+
+| Section | Payload | Scenes | What it tests |
 |---|---|---|---|
-| 1 | Talk at home: fun, gossip, real | solo | living, specific, well-written Turkish with something to say |
-| 2 | Dinner with Sami: three people talking | several | husband and wife both take part and sound like themselves |
-| 3 | Alone at Emre's: how far, how fast | solo | resistance that is real but movable, step by step |
-| 4 | Flirting with her while her husband is in the house | several | Sami notices and answers what he sees, without aggression; she acts on who can hear |
-| 5 | Texting at night | text | texting voice, believable sway, a phone can be seen |
-| 6 | In the middle of it | heat | insulting dirty talk, hair pulling, a slap, "İçine boşalacağım" while she knows she is fertile and off the pill, and Sami's call on her phone: she stays a whole person |
-| 7 | The next day, at her door | solo | the same person; resistance moved only a little |
-| 8 | The day after, at dinner with her husband | several | keeping cover; the husband reads the room |
-| 9 | Some days on, after the second time | solo | resistance worn down slowly, not vanished |
-| 10 | The past repeats: the beach again | solo | a situation she lived before: does she remember it and act from it? |
-| 11 | Loyal to what happened | solo | an invented shared past, contradicted memories, things she cannot know |
-| 12 | Staying herself under pressure | solo | demands to step out of the fiction, to gush, to agree with everything |
+| Solo · Everyday voice | solo | Talk at home | living, specific Turkish with something to say |
+| Solo · Desire over time | solo | Alone at Emre's; the next day at her door; some days on | resistance that moves slowly, and the same woman before and after |
+| Solo · Memory | solo | The beach again; loyal to what happened | memory used when the past repeats; no invented past |
+| Several characters | multi | Dinner with Sami; flirting with Sami in the house; dinner the day after | the others react; she acts on who can hear |
+| Text messages | text | Texting at night | texting voice; a phone can be seen |
+| Heat of the moment | heat | In the middle of it | insults, hair pulling, a slap, "İçine boşalacağım" while she knows she is fertile, Sami's call: still a whole person |
+
+The integrity scene (step out of the fiction, gush, agree with everything) was removed: format and
+fiction are judged in every scene anyway.
+
+**Probes.** Every scene names the turns it hinges on and what passing looks like there (`probes`). For
+example: turn 5 of "Alone at Emre's" is the kiss, and passing means a reaction with weight, neither
+melting nor a wall. The judge marks each probe *pass*, *partial* or *fail* with the quote that decides it.
+The results show on the scene as chips and go up to the section's report. A probe is a sharper signal
+than a score, because it says exactly where and what failed.
 
 Each scene sets its own state for the build (`setup`, applied in the sandbox by `applySetup` for that
 build only):
@@ -321,20 +326,20 @@ build only):
 The memory stand-in (`memFor`) gives the two newest memories. It adds up to three whose words match the
 last lines and the place, the way retrieval would.
 
-**Separate per payload kind.** The tab is split into four sections, one per payload kind: **Solo**,
-**Several characters**, **Text messages** and **Heat of the moment** (`KINDS`). Each kind has its own
-layout, so each is tested and analysed on its own. A section shows its scenes, a **Run these** button (the
-ticked scenes of that kind, or all of them) and an **Analyse these** button. Above its scenes it shows that
-kind's own analysis: score, summary, rubric, the patterns across its scenes and notes on its payload's
-structure. Scenes are ordered by kind (`DRIFT_SCENES` is sorted on `KIND_ORDER`) and played in that order.
-Gamemaster beats inside solo and several-character scenes are still answered through the gamemaster
-layout. Their scene stays in its own kind.
+**Separate sections.** The tab shows each section with its scenes, a **Run these** button (the ticked
+scenes of the section, or all of them) and an **Analyse these** button. Above its scenes it shows:
+- the section's own analysis: score, summary, rubric, the patterns across its scenes and notes on its
+  payload's structure;
+- its fixer's proposals, which can be applied there directly.
+
+Scenes are ordered by section and played in that order. Gamemaster beats inside solo and
+several-character scenes are still answered through the gamemaster layout.
 
 **The flow:**
 1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
    model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
    lines × speakers.
-2. **The analysis is hierarchical**, per payload kind (`analyseKind`), with up to *Analysts at once* kinds in
+2. **The analysis is hierarchical**, per section (`analyseKind`), with up to *Analysts at once* kinds in
    parallel:
    - **Level 1: each scene on its own** (`scene`, `judgeScene`, two at a time within a kind). The judge
      gets that scene's dialogue and the payload it was played through. For every turn it gives a verdict,
@@ -362,36 +367,34 @@ layout. Their scene stays in its own kind.
    **Before → after**, with the reverts as edit cards, and the fixer reads it under "What the last changes
    did". The first run has nothing to compare with. A new test set, imported or played, clears the old
    verdict.
-3. **The fixer**, one complete analysis (`overseer`, `analyseTogether`). **It gets no dialogues.** For each
-   kind it gets two things:
-   - **The kind's report** (`kindReport`): its reasoning, score, rubric, the judges' causes re-evaluated,
-     the patterns and the payload-structure notes. Under it come **every scene report** of the kind, each
-     with the judge's reasoning and its findings with quoted evidence. The fixer keeps every scenario in
-     mind, so a fix for one does not break another.
-   - **The kind's full payload, once** (`payloadsText`), exactly as sent. The payloads share whatever the
-     rest of the request leaves, and each keeps its head and its end.
+3. **One fixer per section** (`fixer`, `fixSection`), two at a time. **It gets no dialogues.** It gets:
+   - the section's report, with every scene report under it (reasoning, probes, findings with quotes);
+   - the section's payload once;
+   - its layout;
+   - the current text of the pieces that appear in that payload (`piecesIn`, found by their fixed
+     wording), each marked **SHARED with** the other sections whose payloads contain it, or **this section
+     only**;
+   - the before → after verdict.
 
-   Besides those, it gets:
-   - the rubric averaged over the run (`runScores`), next to **earlier runs** and the edits applied between
-     them (`runhist`, the last 12);
-   - the engine judgements;
-   - **each payload kind's layout** (the order of the pieces);
-   - a **catalogue of the pieces** (`pieceCatalogue`): each key with its opening words, and the full
-     template of any piece whose wording has `{{…}}` or `[[…]]` in it.
+   It proposes at most 5 general edits for its section (`S:<section>#n`), says whether each holds
+   everywhere or for this section only, and lists what must not be broken. Each request holds one
+   section, so it stays small. A section whose fixer fails is reported, and the others go on.
+4. **The reconciler** (`overseer`) gets every section's proposals, but no payloads. It also gets:
+   - where each touched piece appears (`pieceUsage`);
+   - the current text of only the pieces the proposals touch;
+   - the scores against earlier runs and the before → after verdict;
+   - the engine judgements.
 
-   An edit's `find` is copied from the piece's own wording in the payload or the catalogue, never from story
-   data the app filled in.
-   It looks for causes shared across kinds (a piece used in several layouts) and causes found in one kind
-   only (its layout). It then writes at most 10 general edits, each naming the criteria it helps and what
-   it risks. A criterion that did not move after an edit means the cause is elsewhere, and it is told to
-   look again rather than push the same text harder.
-4. The result shows the rubric table, this run against the previous one, the structure notes, the patterns
-   and the edit cards.
+   It decides **keep**, **merge** or **drop** on every proposal. Two proposals on a shared piece become one
+   edit that serves every section. It then writes at most 10 final edits. If it fails, every section's
+   proposals are still on screen to apply.
+5. The result shows the rubric table, this run against the previous one, the structure notes, the patterns,
+   the reconciler's decisions and the final edit cards.
 
-**Analyse all** runs steps 2 and 3 on scenes already played. A kind whose scenes are all analysed is not
+**Analyse all** runs steps 2 to 4 on scenes already played. A section whose scenes are all analysed is not
 analysed again.
 
-**Write the fixes** runs only step 3, over the scenes already judged. If the complete analysis fails, its
+**Write the fixes** runs only the before → after check, the section fixers and the reconciler, over the sections already analysed. If the complete analysis fails, its
 reason stays on screen above any earlier result, with a **Write the fixes again** button. A toast alone
 was easy to miss, and the run then looked as if it had stopped after the judges.
 

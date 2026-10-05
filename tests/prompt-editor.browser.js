@@ -388,6 +388,31 @@ const ROOT=path.resolve(__dirname,'..');
       const sc=__PE.CRITERIA.filter(c=>c.rotation).length; return {one,off:testRotation().length,crit:sc}; });
     ok("one model, or none, is no rotation", ro.one===0&&ro.off===0&&ro.crit===1, JSON.stringify(ro));
 
+    console.log("\n[11c — a long run still fits one request to Claude, and a failed fixing step can be run again]");
+    const fit=await pg.evaluate(async()=>{ const P=__PE, long="Şöyle düşünüyorum, ağabeyciğim: gülüşün öğleden beri aklımdan çıkmıyor, işte böyle. ".repeat(40);
+      const keep=JSON.stringify(P.DR.results), keepO=P.ALL.overall;
+      P.DRIFT_SCENES.forEach(sc=>{ const sp=(sc.speakers||[sc.speaker]);
+        P.DR.results[sc.id]={at:Date.now(),model:"m",payload:null,turns:sc.lines.map(l=>({user:typeof l==="string"?l:l.gm,gm:typeof l!=="string",reply:long,replies:sp.map(id=>({id,name:id,text:long}))})),
+          judge:{score:5,summary:"s",criteria:{turkish:{score:5,note:"n",evidence:"e"}},turns:sc.lines.map(()=>({verdict:"weak",note:"n"})),findings:[{criterion:"turkish",turn:1,problem:"p",evidence:"e",cause:"c"}]}}; });
+      const huge=P.apBuild("overseer",{scenes:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),pieces:P.overallInput().pieces,layouts:P.overallInput().layouts,payload:"ğ".repeat(60000),scores:"x"});
+      const rawBytes=P.apBytes("Şöyle düşünüyorum ğüşıöç. ".repeat(9000))+P.apBytes("ğ".repeat(60000)), hugeOk=P.apBytes(huge)<=P.AP_CAP&&/Reply with ONLY this JSON/.test(huge)&&/===== tpl:solo =====/.test(huge)&&/cut here to fit/.test(huge);
+      let sent=null, calls=0; const orig=AI.sample.json;
+      AI.sample.json=async(input)=>{ calls++; sent=input; if(calls===1) throw {code:"prompt_too_large",message:"too big"}; return {score:6,summary:"PE-FIXED",criteria:{},patterns:[],structure:[],edits:[]}; };
+      await P.writeFixesAlone();
+      const failBox=(document.querySelector("#overallBox")||{}).textContent||"", btn=document.querySelector("#overallBox [data-refix]");
+      const first=sent; btn&&btn.click(); for(let i=0;i<50&&!(P.ALL.overall&&P.ALL.overall.summary==="PE-FIXED");i++) await new Promise(r=>setTimeout(r,100));
+      const okBox=(document.querySelector("#overallBox")||{}).textContent||"";
+      AI.sample.json=orig;
+      const eng=P.apBuild("engfinal",{scenes:"ş".repeat(150000),prompts:"ğ".repeat(150000),applied:""});
+      const res={rawBytes,hugeOk,bytes:P.apBytes(first),cap:P.AP_CAP,titles:P.DRIFT_SCENES.every(sc=>first.indexOf(sc.title)>=0),json:/Reply with ONLY this JSON/.test(first),solo:/===== tpl:solo =====/.test(first),
+        failBox:/The complete analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed:/PE-FIXED/.test(okBox),calls,engBytes:P.apBytes(eng),engJson:/Reply with ONLY this JSON/.test(eng)&&/cut here to fit/.test(eng)};
+      P.DR.results=JSON.parse(keep); P.ALL.overall=keepO; return res; });
+    ok("a complete analysis whose data is far over the limit is cut to fit, keeping the instructions, the layouts and the reply format", fit.rawBytes>fit.cap&&fit.hugeOk, JSON.stringify({raw:fit.rawBytes,cap:fit.cap,ok:fit.hugeOk}));
+    ok("…and the complete analysis sent to Claude stays under it, with every scene, the layouts and the reply format", fit.bytes<=fit.cap&&fit.titles&&fit.json&&fit.solo, JSON.stringify({bytes:fit.bytes,titles:fit.titles,json:fit.json,solo:fit.solo}));
+    ok("a failed fixing step stays on screen with its reason and a button to write the fixes again", fit.failBox, JSON.stringify(fit));
+    ok("…which runs only the complete analysis and shows its fixes", fit.fixed&&fit.calls===2, JSON.stringify({fixed:fit.fixed,calls:fit.calls}));
+    ok("the complete engine analysis is fitted the same way", fit.engBytes<=fit.cap&&fit.engJson, JSON.stringify({b:fit.engBytes,j:fit.engJson}));
+
     console.log("\n[12 — LLM evaluation: models compared on fixed prompts, no prompt edits]");
     OR.calls=[];
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);

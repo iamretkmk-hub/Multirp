@@ -276,6 +276,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       <div class="ctl">
         <button class="btn sm pri" id="btnAll" type="button">Run everything selected</button>
         <button class="btn sm" id="btnAllAnalyse" type="button">Analyse all</button>
+        <button class="btn sm" id="btnAllFix" type="button" title="Run only the complete analysis over the scenes already judged">Write the fixes</button>
         <button class="btn sm" id="btnAllStop" type="button" hidden>Stop</button>
         <button class="btn sm" id="btnAllExport" type="button">Export results</button>
         <button class="btn sm" id="btnAllImport" type="button">Import results</button>
@@ -1873,7 +1874,8 @@ function aiErr(e){
   const c=e&&e.code;
   if(c==="not_granted") return "Claude was not allowed to answer here. Reload and allow it to use Claude.";
   if(c==="rate_limited") return "Too many requests in a row. Wait a minute and try again.";
-  if(c==="prompt_too_large") return "That is too much text for one request. Turn off “include the full payload”, or untick dialogue.";
+  if(c==="prompt_too_large") return "That is too much text for one request to Claude (256 KB at most). Turn off “include the full payload”, or analyse fewer scenes at once.";
+  if(c==="invalid_json") return "Claude's answer was cut short or was not valid JSON. Try again; if it keeps failing, analyse fewer scenes at once.";
   if(c==="cancelled") return "Stopped.";
   return (e&&e.message)||String(e);
 }
@@ -1908,7 +1910,7 @@ THE FULL PAYLOAD THIS BUILDS (sample story):
 {{payload}}{{/payload}}
 
 When you propose a complete replacement for the open item, follow HOW TO FIX: cut and rewrite before you add, and say how much shorter or longer it comes out. Put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`},
- {id:"review",label:"Test & review (one reply against its payload)",desc:"After your model answers the payload in the Claude tab.",
+ {id:"review",fit:["payload","catalogue"],label:"Test & review (one reply against its payload)",desc:"After your model answers the payload in the Claude tab.",
   vars:{context:"the method",payload:"the payload that was sent",reply:"what the model wrote",catalogue:"the items Claude may edit, with ids"},
   def:`{{context}}
 
@@ -1927,7 +1929,7 @@ Reply with ONLY this JSON:
 
 ===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
 {{catalogue}}`},
- {id:"scene",label:"Scene judge (one scene, no fixes)",desc:"One judge per scene in the Tests tab. It scores the rubric and reports findings with evidence and the suspected cause; it proposes no edits. The fixes come from the complete analysis.",
+ {id:"scene",fit:["payload","exchange"],label:"Scene judge (one scene, no fixes)",desc:"One judge per scene in the Tests tab. It scores the rubric and reports findings with evidence and the suspected cause; it proposes no edits. The fixes come from the complete analysis.",
   vars:{context:"the method",title:"the scene's title",tests:"what it tests",kind:"the payload kind, described",facts:"the scene's ground truth",expect:"what a good result looks like",criteria:"the rubric, with the criteria this scene presses on marked",rotation:"the models the replies rotated between (empty without rotation)",exchange:"every turn: the player's line (or gamemaster beat) and each character's reply",payload:"the last payload sent (one speaker)",applied:"edits you applied after this scene was played (empty when none)"},
   def:`{{context}}
 
@@ -1987,7 +1989,7 @@ CHANGES APPLIED TO THIS PROMPT SINCE THE SCENE WAS PLAYED:
 {{applied}}{{/applied}}
 
 {{calls}}`},
- {id:"overseer",label:"The complete analysis (every scene, then the fixes)",desc:"Reads every scene and engine judgement, the scores against earlier runs, the whole payload structure and every piece, and writes the fixes for the prompts as a whole.",
+ {id:"overseer",fit:["payload","prompts","engines","history","scenes","pieces","layouts"],label:"The complete analysis (every scene, then the fixes)",desc:"Reads every scene and engine judgement, the scores against earlier runs, the whole payload structure and every piece, and writes the fixes for the prompts as a whole.",
   vars:{context:"the method",scenes:"every scene: the exchange, the rubric scores, the findings",scores:"the rubric averaged over this run, next to earlier runs",history:"earlier runs and the edits applied between them",engines:"every engine judgement",layouts:"each payload kind's layout (the order of the pieces)",pieces:"the current full text of the base instruction, the format rules and every piece",prompts:"engine prompts that had problems (exact text)",payload:"one real payload, filled",applied:"edits applied after these tests ran",rotation:"with model rotation: each model's replies, speed and length (empty without rotation)"},
   def:`{{context}}
 
@@ -2035,7 +2037,7 @@ Also judge how they go along together: do they read as one character and one sto
 {{/prompts}}
 ===== ONE REAL PAYLOAD, FILLED =====
 {{payload}}`},
- {id:"engfinal",label:"The complete engine analysis (every engine scene, then the fixes)",desc:"Reads every engine judgement across the engine scenes, with each scene's purpose and script, and writes the fixes to the engine prompts.",
+ {id:"engfinal",fit:["prompts","scenes"],label:"The complete engine analysis (every engine scene, then the fixes)",desc:"Reads every engine judgement across the engine scenes, with each scene's purpose and script, and writes the fixes to the engine prompts.",
   vars:{context:"the method",scenes:"every engine scene: its purpose, its script and each engine's judgement",prompts:"the current text of every engine prompt that ran",applied:"edits applied after these tests ran"},
   def:`{{context}}
 
@@ -2101,8 +2103,28 @@ function apFill(tpl,vars){
   return t.replace(/\{\{([a-z_]+)\}\}/g,(m,k)=>(k in vars)?String(vars[k]==null||vars[k]===true||vars[k]===false?"":vars[k]):m);
 }
 /* the prompt, filled: the method goes in as {{context}} */
+/* Claude takes at most 256 KiB of text per request (UTF-8 bytes: a Turkish letter can take two), and refuses
+   anything larger (prompt_too_large). apBuild keeps every request under AP_CAP, leaving room for what the
+   platform adds: when the filled prompt is too big it shortens the data, in the template's "fit" order
+   (most expendable first; otherwise the largest first), keeping the head and the tail of each and marking
+   the cut. The instructions themselves are never cut. */
+const AP_CAP=225000;
+const UTF8=new TextEncoder();
+function apBytes(t){ return UTF8.encode(String(t)).length; }
+function cutMiddle(t,bytes){ t=String(t); const n=apBytes(t); if(n<=bytes) return t;
+  const keep=Math.max(0,Math.floor(t.length*bytes/n)-80), head=Math.floor(keep*0.65);
+  return t.slice(0,head)+"\n[… "+Math.round((n-bytes)/1024)+" KB cut here to fit Claude's input limit …]\n"+t.slice(t.length-(keep-head)); }
 function apBuild(id,vars){ const d=AP_DEFS.find(x=>x.id===id)||{vars:{}}, blank={}; Object.keys(d.vars).forEach(k=>blank[k]="");   // a declared name with no data reads as empty
-  const out=apFill(apText(id),Object.assign(blank,{context:apText("context")},vars||{})); AP_LAST[id]={text:out,at:Date.now()}; return out; }
+  const v=Object.assign(blank,{context:apText("context")},vars||{});
+  let out=apFill(apText(id),v);
+  for(let round=0;round<6&&apBytes(out)>AP_CAP;round++){
+    let over=apBytes(out)-AP_CAP+2048;
+    const big=Object.keys(v).filter(k=>k!=="context"&&typeof v[k]==="string"&&apBytes(v[k])>3000);
+    const order=(d.fit||[]).filter(k=>big.indexOf(k)>=0).concat(big.filter(k=>(d.fit||[]).indexOf(k)<0).sort((a,b)=>apBytes(v[b])-apBytes(v[a])));
+    for(const k of order){ if(over<=0) break; const n=apBytes(v[k]), cut=Math.min(over,n-2000); if(cut<=0) continue; v[k]=cutMiddle(v[k],n-cut); over-=cut; }
+    out=apFill(apText(id),v);
+  }
+  AP_LAST[id]={text:out,at:Date.now()}; return out; }
 function itemContext(it){
   const v=itemVal(it), d=itemDef(it);
   let s=`THE OPEN ITEM: ${it.label} (${it.type==="frag"?"reply piece":it.type==="tpl"?"payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
@@ -2948,7 +2970,7 @@ $("#btnEngScriptReset").onclick=()=>{ $("#engScript").value=engLinesText(engPres
 const ALL={running:false,ctl:null,overall:lsGet("overall",null)};
 function paintAllButtons(){
   const b=busyAll();
-  ["#btnAll","#btnAllAnalyse","#btnAllExport","#btnAllImport","#btnEngRun","#btnEngAnalyse","#btnEngAll","#btnEngAllAnalyse"].forEach(x=>{ const el=$(x); if(el) el.disabled=b; });
+  ["#btnAll","#btnAllAnalyse","#btnAllFix","#btnAllExport","#btnAllImport","#btnEngRun","#btnEngAnalyse","#btnEngAll","#btnEngAllAnalyse"].forEach(x=>{ const el=$(x); if(el) el.disabled=b; });
   const st=$("#btnAllStop"); if(st) st.hidden=!(ALL.running||DR.running); const es=$("#btnEngStop"); if(es) es.hidden=!(ENGALL.running||ENGRUN.running);
 }
 function renderEstimate(){
@@ -2964,6 +2986,9 @@ function renderOverall(){
   let host=$("#overallBox");
   if(!host){ host=document.createElement("div"); host.id="overallBox"; host.className="msgs"; const anchor=$("#allEstimate"); anchor&&anchor.insertAdjacentElement("afterend",host); }
   const o=ALL.overall; host.innerHTML="";
+  if(ALL.err){ const e=document.createElement("div"); e.className="scene";
+    e.innerHTML=`<h3>The complete analysis failed</h3><div class="turnRow"><div>${esc(ALL.err)}${o?" The analysis below is the previous one.":""}</div></div><div class="acts"><button class="btn sm pri" type="button" data-refix>Write the fixes again</button></div>`;
+    e.querySelector("[data-refix]").onclick=writeFixesAlone; host.appendChild(e); }
   if(!o){ return; }
   const el=document.createElement("div"); el.className="scene";
   el.innerHTML=`<h3>Complete analysis ${typeof o.score==="number"?`<span class="score">${o.score}/10</span>`:""}<span class="sp"></span><span class="stat">${esc(o.model||"")}${o.at?" · "+esc(new Date(o.at).toLocaleString()):""}</span> <button class="btn sm" type="button" data-clear-overall>Clear</button></h3>
@@ -2982,12 +3007,12 @@ function renderOverall(){
 }
 /* What the combined analysis reads: every scene's exchange and verdict, every engine's verdict and
    problems, one real payload per kind, the editable items, and the engine prompts that had issues. */
-function overallInput(){
+function overallInput(maxLen){
   const kinds={};
   const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]&&driftComplete(sc,DR.results[sc.id])).map(sc=>{ const r=DR.results[sc.id], j=r.judge||{};
     if(r.payload&&!kinds[sc.kind]) kinds[sc.kind]=r.payload;
     const crit=j.criteria?Object.keys(j.criteria).map(k=>{ const x=j.criteria[k], v=typeof x==="object"&&x?x.score:x; return v==null?null:`${k} ${v}${x&&x.note?" ("+x.note+")":""}`; }).filter(Boolean).join("; "):"";
-    return `### ${sc.title} [${KIND_SHORT[sc.kind]}; presses on: ${(sc.focus||[]).join(", ")}]\nTESTS: ${sc.tests}\nGOOD LOOKS LIKE: ${sc.expect||sc.pass||""}\n`+exchangeText(sc,r.turns,700)+
+    return `### ${sc.title} [${KIND_SHORT[sc.kind]}; presses on: ${(sc.focus||[]).join(", ")}]\nTESTS: ${sc.tests}\nGOOD LOOKS LIKE: ${sc.expect||sc.pass||""}\n`+exchangeText(sc,r.turns,maxLen||700)+
       (j.turns?"\nTURN VERDICTS: "+j.turns.map((v,i)=>`${i+1} ${v.verdict}${v.note?" ("+v.note+")":""}`).join("; "):"")+
       (crit?`\nRUBRIC: ${crit}`:"")+(j.summary?`\nJUDGE (${j.score!=null?j.score+"/10":"?"}): ${j.summary}`:"")+
       (Array.isArray(j.findings)&&j.findings.length?"\nFINDINGS:\n"+j.findings.map(f=>`- [${f.criterion||"?"}${f.turn?" t"+f.turn:""}] ${f.problem||""}${f.evidence?` — “${f.evidence}”`:""}${f.cause?` — cause: ${f.cause}`:""}`).join("\n"):""); }).join("\n\n");
@@ -3012,15 +3037,17 @@ function historyText(){
     return `RUN ${new Date(x.at).toLocaleString()} · ${x.model||""} · overall ${x.score!=null?x.score:"?"}\n  rubric: ${Object.keys(x.scores||{}).map(k=>k+" "+x.scores[k]).join(", ")}${applied.length?`\n  edits applied after it:\n${appliedText(applied).split("\n").map(l=>"  "+l).join("\n")}`:""}`; }).join("\n");
 }
 async function analyseTogether(){
-  const x=overallInput();
+  let x=overallInput();
   if(!x.scenes&&!x.engines){ toast("Run some scenes first"); return null; }
+  /* a long run: shorten each reply quoted in the scenes before anything is cut */
+  for(const ml of [450,300,200]){ if(apBytes(x.scenes)+apBytes(x.pieces)+apBytes(x.layouts)<AP_CAP-40000) break; x=overallInput(ml); }
   const since=Math.min(...DRIFT_SCENES.map(sc=>DR.results[sc.id]&&DR.results[sc.id].at).filter(Boolean).concat(Object.values(ENGRUN.byScene).map(r=>r&&r.at).filter(Boolean)),Date.now());
   const cur=runScores(), h=runHistory(), prev=h.length?h[h.length-1].scores:null;
-  const input=apBuild("overseer",{scenes:x.scenes.slice(0,110000),scores:scoresText(cur,prev),history:historyText(),engines:x.engines.slice(0,25000),layouts:x.layouts,
-    pieces:x.pieces.slice(0,90000),prompts:x.prompts||"",payload:x.payload,applied:appliedText(appliedSince(since)),rotation:rotationText()});
+  const input=apBuild("overseer",{scenes:x.scenes,scores:scoresText(cur,prev),history:historyText(),engines:x.engines.slice(0,25000),layouts:x.layouts,
+    pieces:x.pieces,prompts:x.prompts||"",payload:x.payload,applied:appliedText(appliedSince(since)),rotation:rotationText()});
   const sig=ALL.ctl?ALL.ctl.signal:undefined;
   let o;
-  if(AI.sample) o=await AI.sample.json(input.slice(0,320000),{signal:sig,modelTier:"complex",cache:false});
+  if(AI.sample) o=await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false});
   else { const t=await aiAsk([{role:"user",content:input}],{signal:sig,maxTokens:8000,temperature:0.2}); const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The complete analysis did not come back as JSON."}; o=JSON.parse(m[0]); }
   const rots=[...new Set(DRIFT_SCENES.map(sc=>rotOf(sc).join(" → ")).filter(Boolean))];
   o.model=rots.length?"rotating "+rots.join(" / "):testLabel(); o.at=Date.now(); o.scores=cur; o.prevScores=prev; ALL.overall=o; lsSet("overall",o);
@@ -3035,14 +3062,15 @@ function engOverallInput(){
     const gs=engGroupsOf(r.calls).map(g=>{ if(g.prompt) used.add(g.prompt); const j0=(r.judge||{})[g.key], j=judgeFailed(j0)?null:j0;
       return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}, ${g.calls.length} call${g.calls.length>1?"s":""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?"\n    problems: "+j.problems.map(x=>(x.issue||x)+(x.evidence?` — “${x.evidence}”`:"")+(x.cause?` [cause: ${x.cause}]`:"")).join("; "):""):"not judged"}`; }).join("\n");
     return `### ${sc.label}\nPURPOSE: ${sc.focus}\nAIMED AT: ${sc.checks||""}\nSCRIPT:\n${(r.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n")}\nENGINES:\n${gs}`; }).join("\n\n");
-  const prompts=[...used].map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,12000)}`).join("\n\n");
+  const bad=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(r) Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good") engGroupsOf(r.calls).forEach(g=>{ if(g.key===k&&g.prompt) bad.add(g.prompt); }); }); });
+  const prompts=[...used].sort((a,b)=>(bad.has(b)?1:0)-(bad.has(a)?1:0)).map(k=>`===== prompt:${k} =====${bad.has(k)?" (had problems)":""}\n${itemVal({type:"prompt",key:k}).slice(0,12000)}`).join("\n\n");
   return {scenes,prompts};
 }
 async function analyseEnginesTogether(){
   const x=engOverallInput(); if(!x.scenes){ toast("Run some engine scenes first"); return null; }
   const since=Math.min(...Object.values(ENGRUN.byScene).map(r=>r&&r.at).filter(Boolean),Date.now());
-  const input=apBuild("engfinal",{scenes:x.scenes.slice(0,120000),prompts:x.prompts.slice(0,150000),applied:appliedText(appliedSince(since))});
-  const o=await AI.sample.json(input.slice(0,320000),{signal:ENGALL.ctl&&ENGALL.ctl.signal,modelTier:"complex",cache:false});
+  const input=apBuild("engfinal",{scenes:x.scenes,prompts:x.prompts,applied:appliedText(appliedSince(since))});
+  const o=await AI.sample.json(input,{signal:ENGALL.ctl&&ENGALL.ctl.signal,modelTier:"complex",cache:false});
   o.at=Date.now(); o.model=testLabel(); ENGALL.overall=o; lsSet("engoverall",o); renderEngOverall(); return o;
 }
 function renderEngOverall(){
@@ -3076,8 +3104,10 @@ async function judgeAndAnalyseEngines(inRun){
   if(!inRun){ if(busyAll()) return; ENGALL.running=true; ENGALL.ctl=new AbortController(); ALL.ctl=ENGALL.ctl; paintAllButtons(); }
   try{
     await runTeam(ENGALL.ctl.signal,"engine");
-    if(!ENGALL.ctl.signal.aborted){ $("#engAllStat").textContent="The complete engine analysis is reading every engine together…"; await analyseEnginesTogether(); $("#engAllStat").textContent="Done."; }
-  }catch(e){ toast("The engine analysis failed: "+aiErr(e),6000); }
+    if(!ENGALL.ctl.signal.aborted){ $("#engAllStat").textContent="The complete engine analysis is reading every engine together…"; ENGALL.err=null;
+      try{ await analyseEnginesTogether(); $("#engAllStat").textContent="Done."; }
+      catch(e){ if(e&&e.code==="cancelled") throw e; ENGALL.err=aiErr(e); $("#engAllStat").textContent="The complete engine analysis failed: "+ENGALL.err+" Press “Judge all, then analyse” to try it again; judged engines are not judged twice."; } }
+  }catch(e){ if(!(e&&e.code==="cancelled")) toast("The engine analysis failed: "+aiErr(e),8000); }
   finally{ if(!inRun){ ENGALL.running=false; paintAllButtons(); renderEng(); } }
 }
 $("#btnEngAll").onclick=runEngineTests;
@@ -3136,7 +3166,21 @@ async function analyseTeamAndOversee(which){
   await runTeam(sig,which||"reply");
   if(sig.aborted) return;
   const el=$("#allStat"); if(el) el.textContent=`The complete analysis is reading all ${TEAM.total||"the"} judgements together…`;
-  try{ await analyseTogether(); }catch(e){ toast("The complete analysis failed: "+aiErr(e),6000); }
+  await writeFixes();
+}
+/* the fixing step on its own: the complete analysis over what is already played and judged */
+async function writeFixes(){
+  ALL.err=null; renderOverall();
+  try{ return await analyseTogether(); }
+  catch(e){ if(e&&e.code==="cancelled") return null; ALL.err=aiErr(e); renderOverall(); toast("The complete analysis failed: "+ALL.err,8000); return null; }
+}
+async function writeFixesAlone(){
+  if(busyAll()) return;
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
+  ALL.running=true; ALL.ctl=new AbortController(); paintAllButtons();
+  const el=$("#allStat"); if(el) el.textContent="The complete analysis is reading every scene and judgement together…";
+  try{ const o=await writeFixes(); if(el) el.textContent=o?"Done."+(o.score!=null?` Across all scenes: ${o.score}/10.`:""):ALL.ctl.signal.aborted?"Stopped.":"The complete analysis failed. See below."; }
+  finally{ ALL.running=false; paintAllButtons(); }
 }
 async function runEverything(){
   if(busyAll()) return;
@@ -3166,6 +3210,7 @@ async function analyseEverything(){
 $("#btnAll").onclick=runEverything;
 { const ts=$("#teamSize"); if(ts){ ts.value=teamSize(); ts.onchange=()=>{ lsSet("teamsize",Math.max(1,Math.min(8,+ts.value||3))); ts.value=teamSize(); }; } }
 $("#btnAllAnalyse").onclick=analyseEverything;
+$("#btnAllFix").onclick=writeFixesAlone;
 $("#btnAllStop").onclick=()=>{ [ALL.ctl,DR.ctl,ENGRUN.ctl].forEach(c=>{ try{ c&&c.abort(); }catch(e){} }); };
 $("#btnSelAllReply").onclick=()=>{ lsSet("selreply",DRIFT_SCENES.map(x=>x.id)); renderDrift(); renderEstimate(); };
 $("#btnSelNoReply").onclick=()=>{ lsSet("selreply",[]); renderDrift(); renderEstimate(); };
@@ -3523,7 +3568,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

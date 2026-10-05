@@ -342,7 +342,24 @@ last lines and the place, the way retrieval would.
 4. The result shows the rubric table, this run against the previous one, the structure notes, the patterns
    and the edit cards.
 
-**Analyse all** runs steps 2 and 3 on scenes already played. **Import results** of a full test set replaces
+**Analyse all** runs steps 2 and 3 on scenes already played.
+
+**Write the fixes** runs only step 3, over the scenes already judged. If the complete analysis fails, its
+reason stays on screen above any earlier result, with a **Write the fixes again** button. A toast alone
+was easy to miss, and the run then looked as if it had stopped after the judges.
+
+**Claude's input limit.** One request to Claude takes at most 256 KiB of text, counted in UTF-8 bytes
+(a Turkish letter can take two), and a larger one is refused (`prompt_too_large`). A full run of twelve
+scenes with the pieces, the layouts and the engine prompts used to go over that, so the judges finished
+and the fixing step was refused.
+- `apBuild` keeps every request under `AP_CAP` (225,000 bytes).
+- When a request is too big, it shortens the data in the template's `fit` order, most expendable first:
+  for the complete analysis that is the sample payload, then the engine prompts, engines, history,
+  scenes, pieces and layouts.
+- Each cut keeps the head and the tail of the text and marks the cut. The instructions and the reply
+  format are never cut.
+- Before cutting anything, the complete analysis first quotes each reply shorter.
+- The engine prompts that had problems go first, so a cut falls on the healthy ones. **Import results** of a full test set replaces
 every earlier result, and the old complete analysis goes with them. **Clear** removes it by hand.
 
 **Your story as the data.** **Use my own story…** loads a StoryMind backup in place of the sample:

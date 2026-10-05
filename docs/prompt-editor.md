@@ -424,6 +424,22 @@ with **Apply** and **Undo**, and the block itself is hidden. The conversation is
 (`disc_rp`, `disc_eng`), and the oldest exchanges are dropped when it would exceed one request. A new
 complete analysis starts a new conversation; **Clear the conversation** starts one by hand.
 
+**One request at a time.** Every analysis call to Claude goes through one queue (`claudeJson`, `CQ`):
+- **One at a time.** Scenes, sections and engines are analysed one by one, so they no longer pile up into
+  "too many requests".
+- **Rate limits.** A rate-limited call waits and tries again, up to four times.
+- **Cut-off answers.** An answer that was cut off or was not JSON is asked again once, with the
+  instruction to answer much shorter.
+- **Compact answers.** The judges are asked for one-line notes, at most six findings and short reasoning.
+- **No transcript twice.** Judges and fixers get the payload without the transcript (`instrText`), since
+  the dialogue is given separately.
+
+**The fixer runs right after its section's analysis.** When a section has been analysed (scenes judged
+one by one, then re-evaluated), its fixer runs straight away with that analysis, and its proposals
+appear in the section. The complete analysis reuses those fresh proposals instead of running the
+fixers again, and only the reconciler is left. When a scene cannot be judged, the section says which
+one and why, and **Analyse again** retries it.
+
 **Claude's input limit.** One request to Claude takes at most 256 KiB of text, counted in UTF-8 bytes
 (a Turkish letter can take two), and a larger one is refused (`prompt_too_large`). A full run of twelve
 scenes with the pieces, the layouts and the engine prompts used to go over that, so the judges finished

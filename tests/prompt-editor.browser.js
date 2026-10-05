@@ -223,6 +223,7 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const msgs=body.messages||[]; const last=String((msgs.slice(-1)[0]||{}).content||"");
       if(SCENE_RX.test(last)) return SCENE(last);
       if(KIND_RX.test(last)) return KIND(last);
+      if(/You are the FIXER for ONE test section/.test(last)) return JSON.stringify({summary:"PE-SEC9",edits:[],keep:[]});
       seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
     await pg.click('#rtabs button[data-r="tests"]');
     const sc9=await pg.evaluate(()=>({n:__PE.DRIFT_SCENES.length,ids:__PE.DRIFT_SCENES.map(x=>x.id),kinds:[...new Set(__PE.DRIFT_SCENES.map(x=>x.kind))].sort().join(","),
@@ -280,7 +281,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("an exported run imports, with its kind's Analyse button", imp9.n===4&&imp9.btn, JSON.stringify(imp9));
     OR.calls=[];
     await pg.evaluate(()=>__PE.analyseKinds(["solo_memory"]));
-    ok("judging sends it to Claude only (the scene, then its kind), never back to the model", OR.calls.length===2&&OR.calls.every(c=>c.claude)
+    ok("judging sends it to Claude only (the scene, then its section, then the section's fixer), never back to the model", OR.calls.length===3&&OR.calls.every(c=>c.claude)&&/FIXER for ONE test section/.test(OR.calls[2].body.messages[0].content)
        &&await pg.evaluate(()=>!!__PE.DR.results.memory_truth.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
     console.log("\n[10 — engine tests: their own tab, purpose-built scenes, scripted exchanges]");
@@ -352,7 +353,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("Fix this prompt runs that engine prompt's fixer only", !!efk&&efc.length===1&&new RegExp("FIXER for ONE ENGINE PROMPT of the app: [^\\n]*\\(prompt:"+efk+"\\)").test(efc[0]), efk+" | "+efc.map(x=>x.slice(0,120)).join(" | "));
     const ef2=await pg.evaluate(async()=>{ const P=__PE, orig=AI.sample.json; let n=0, effIn="";
       lsSet("engsnaps",[]);
-      AI.sample.json=async(input,o)=>{ if(/ENGINE RECONCILER/.test(input)){ n++; if(n===1) throw {code:"invalid_json",message:"cut"}; return {score:7,summary:"PE-ENG-FIXED",edits:[]}; }
+      AI.sample.json=async(input,o)=>{ if(/ENGINE RECONCILER/.test(input)){ n++; if(n===1) throw {code:"prompt_too_large",message:"too big"}; return {score:7,summary:"PE-ENG-FIXED",edits:[]}; }
         if(/WHAT THE LAST CHANGES DID to the BACKGROUND ENGINES/.test(input)){ effIn=input; return {summary:"PE-ENG-EFFECT",edits:[],regressions:[],keep:[],revert:[]}; }
         return orig(input,o); };
       await P.writeEngFixesAlone();
@@ -363,7 +364,7 @@ const ROOT=path.resolve(__dirname,'..');
       const key=Object.keys(P.engSnaps()[0].prompts)[0], it=P.findItem("prompt:"+key), old=P.itemVal(it); P.setVal(it,old+"\nPE-ENG-NEWLINE"); APPLIED["pe-eng"]={t:Date.now(),item:"prompt:"+key,find:"x",replace:"PE-ENG-NEWLINE"};
       Object.values(P.ENGRUN.byScene).forEach(r=>{ r.at=Date.now()+1000; if(r.report) r.report.at=Date.now()+2000; });
       await P.writeEngFixesAlone();
-      const res={failBox:/The engine analysis failed/.test(failBox)&&/cut short/.test(failBox)&&!!btn,fixed,snaps1,effIn:/^\+ PE-ENG-NEWLINE/m.test(effIn)&&/Plans|Comings|scene/i.test(effIn),effBox:/PE-ENG-EFFECT/.test((document.querySelector("#engOverallBox")||{}).textContent||"")};
+      const res={failBox:/The engine analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed,snaps1,effIn:/^\+ PE-ENG-NEWLINE/m.test(effIn)&&/Plans|Comings|scene/i.test(effIn),effBox:/PE-ENG-EFFECT/.test((document.querySelector("#engOverallBox")||{}).textContent||"")};
       P.setVal(it,old); delete APPLIED["pe-eng"]; AI.sample.json=orig; return res; });
     ok("a failed engine analysis stays on screen, and Write the fixes again runs it", ef2.failBox&&ef2.fixed, JSON.stringify(ef2));
     ok("the next engine run is compared with the earlier one first (prompt diff, outcomes, verdicts), and the verdict shows", ef2.snaps1===1&&ef2.effIn&&ef2.effBox, JSON.stringify(ef2));
@@ -390,7 +391,7 @@ const ROOT=path.resolve(__dirname,'..');
       box:(document.querySelector("#overallBox")||{}).textContent||""}));
     OR.delay=null;
     ok("both scenes were played and judged, and no engine scene ran with them", all.tn&&all.tn.judge&&all.dn&&all.dn.judge&&all.engRan===1, JSON.stringify({tn:!!(all.tn&&all.tn.judge),dn:!!(all.dn&&all.dn.judge),eng:all.engRan}));
-    ok("the two payload kinds (text, several characters) are analysed at the same time, one analyst each", OR.peak>=2, OR.peak);
+    ok("the analysis runs one request at a time (no pile-up into rate limits)", OR.peak===1, OR.peak);
     const kc=OR.calls.filter(c=>c.claude&&KIND_RX.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     const sc11=OR.calls.filter(c=>c.claude&&SCENE_RX.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     ok("each scene was judged on its own first, with its dialogue", sc11.length===2&&sc11.every(t=>/^TURN 1$/m.test(t))&&sc11.some(t=>/THE SCENE: Texting at night/.test(t))&&sc11.some(t=>/THE SCENE: Dinner with Sami/.test(t)), sc11.length);
@@ -399,7 +400,7 @@ const ROOT=path.resolve(__dirname,'..');
     const fin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft=fin?fin.body.messages[0].content:"";
     const fx11=OR.calls.filter(c=>c.claude&&/You are the FIXER for ONE test section/.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     const fxT=fx11.find(x=>/## SECTION: Text messages/.test(x))||"", fxM=fx11.find(x=>/## SECTION: Several characters/.test(x))||"";
-    ok("each section has its own fixer: its report with the reasoning, its payload once, its pieces, no dialogue", !!fxT&&!!fxM&&[fxT,fxM].every(x=>(x.match(/MESSAGE 1 · SYSTEM/g)||[]).length===1&&/THE JUDGE'S REASONING: PE-SCENE-REASONING/.test(x)&&/THE SECTION'S REASONING|THE KIND'S REASONING: PE-KIND-REASONING/.test(x)&&/===== THE PIECES IN THIS PAYLOAD/.test(x)&&/(SHARED with: |this section only)/.test(x)&&!/^TURN \d+$/m.test(x))
+    ok("each section has its own fixer: its report with the reasoning, its payload once, its pieces, no dialogue", !!fxT&&!!fxM&&[fxT,fxM].every(x=>(x.match(/===== THE PAYLOAD \(as sent/g)||[]).length===1&&/===== SYSTEM =====/.test(x)&&/THE JUDGE'S REASONING: PE-SCENE-REASONING/.test(x)&&/THE SECTION'S REASONING|THE KIND'S REASONING: PE-KIND-REASONING/.test(x)&&/===== THE PIECES IN THIS PAYLOAD/.test(x)&&/(SHARED with: |this section only)/.test(x)&&!/^TURN \d+$/m.test(x))
        &&/### SCENE text_night/.test(fxT)&&!/### SCENE dinner/.test(fxT), (fxT||"none").slice(0,200)+" | "+fx11.length);
     ok("the reconciler gets every section's proposals and where each piece is used, but no payload and no dialogue", !!fin&&/===== EVERY SECTION'S PROPOSALS/.test(ft)&&/S:text#1 frag:style_header/.test(ft)&&/S:multi#1/.test(ft)&&/PE-SEC-KEEP/.test(ft)
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
@@ -515,6 +516,18 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the fixer reads what the last changes did", /WHAT THE LAST CHANGES DID[\s\S]*PE-EFFECT-SUMMARY/.test(fxt)&&/PE-EFFECT-REGRESSION/.test(fxt), fxt.slice(0,200));
     ok("the verdict shows above the complete analysis, with a revert you can apply", ef.effect&&ef.box&&ef.revert&&ef.reverted&&ef.snaps===2, JSON.stringify(ef));
 
+    console.log("\n[11f — every analysis call is queued one at a time, retried when rate-limited, and asked again shorter when cut off]");
+    const q=await pg.evaluate(async()=>{ const P=__PE, orig=AI.sample.json; let peak=0, active=0; const seen=[]; P.CQ.rlWait=50;
+      let rl=0;
+      AI.sample.json=async(input)=>{ active++; peak=Math.max(peak,active); seen.push(input); await new Promise(r=>setTimeout(r,30)); active--;
+        if(/RL-TEST/.test(input)&&rl++<1) throw {code:"rate_limited",message:"slow"};
+        if(/CUT-TEST/.test(input)&&!/your previous answer was cut off/.test(input)) throw {code:"invalid_json",message:"cut"};
+        return {ok:true}; };
+      const r=await Promise.all([P.claudeJson("A RL-TEST",{}),P.claudeJson("B CUT-TEST",{}),P.claudeJson("C",{})]);
+      AI.sample.json=orig; P.CQ.rlWait=0;
+      return {peak,ok:r.every(x=>x&&x.ok),n:seen.length,shorter:seen.some(x=>/CUT-TEST[\s\S]*Answer again, much shorter/.test(x))}; });
+    ok("one Claude request at a time, a rate limit waits and retries, a cut-off answer is asked again shorter", q.peak===1&&q.ok&&q.n===5&&q.shorter, JSON.stringify(q));
+
     console.log("\n[11c — a long run still fits one request to Claude, and a failed fixing step can be run again]");
     const fit=await pg.evaluate(async()=>{ const P=__PE, long="Şöyle düşünüyorum, ağabeyciğim: gülüşün öğleden beri aklımdan çıkmıyor, işte böyle. ".repeat(40);
       const keep=JSON.stringify(P.DR.results), keepO=P.ALL.overall;
@@ -535,7 +548,7 @@ const ROOT=path.resolve(__dirname,'..');
       AI.sample.json=orig;
       const eng=P.apBuild("engfinal",{reports:"ş".repeat(150000),proposals:"ğ".repeat(150000),applied:""});
       const secs=P.KINDS.filter(kd=>P.KA[kd.k]&&P.KA[kd.k].at);
-      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&fixIns.length===2*secs.length&&secs.every(kd=>fixIns.some(x=>x.indexOf("## SECTION: "+kd.label)>=0)),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
+      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&secs.every(kd=>first.indexOf("## "+kd.label+" (tpl:")>=0),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
         failBox:/The complete analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed:/PE-FIXED/.test(okBox),calls,engBytes:P.apBytes(eng),engJson:/Reply with ONLY this JSON/.test(eng)&&/cut here to fit/.test(eng)};
       P.DR.results=JSON.parse(keep); P.ALL.overall=keepO; return res; });
     ok("a section fixer whose data is far over the limit is cut to fit, keeping the instructions, the layout and the reply format", fit.rawBytes>fit.cap&&fit.hugeOk, JSON.stringify({raw:fit.rawBytes,cap:fit.cap,ok:fit.hugeOk}));

@@ -274,7 +274,7 @@ The **Roleplay tests** tab tests the reply payloads. Engine tests have their own
 
 | Criterion | What it means |
 |---|---|
-| Natural Turkish | idiomatic, in her register; no translated English, broken suffixes or mixed languages |
+| Natural Turkish | what a native of her age and mood would actually say there: word choice, register, idiom, sense in context, realism, spoken rhythm; then grammar and suffixes. Findings quote the wrong words and give the native alternative |
 | Meaningful content | every sentence says something; topics move; no filler or repetition |
 | Consistent character | the same person throughout, including during and after sex |
 | Believable pacing of desire | real resistance a good approach can move, shaped by what already happened |

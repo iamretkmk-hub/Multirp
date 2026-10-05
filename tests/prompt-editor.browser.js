@@ -217,7 +217,7 @@ const ROOT=path.resolve(__dirname,'..');
     const KIND_RX=/You are ANALYSING one PAYLOAD KIND/;
     const KIND=(text,extra)=>{ const parts=String(text).split(/^### SCENE /m).slice(1);
       const scenes=parts.map(b=>{ const id=b.slice(0,b.indexOf(":")).trim(), body=b.split("===== ONE PAYLOAD OF THIS KIND")[0]; const j=JSON.parse(JUDGE((body.match(/^TURN \d+$/gm)||[]).length)); j.id=id; if(extra) extra(j); return j; });
-      return JSON.stringify({score:6,summary:"PE-KIND-SUMMARY the memory slips across this kind",criteria:{memory:{score:4,note:"slips"},turkish:{score:6,note:"calques"}},scenes,
+      return JSON.stringify({score:6,summary:"PE-KIND-SUMMARY the memory slips across this kind",reasoning:"PE-KIND-REASONING the memory piece invites agreement",criteria:{memory:{score:4,note:"slips"},turkish:{score:6,note:"calques"}},scenes,
         patterns:[{criterion:"memory",pattern:"PE-KIND-PATTERN goes along with invented pasts",scenes:scenes.map(x=>x.id),cause:"frag:rp_memory"}],payload_notes:["PE-KIND-NOTE the memories sit far from the reply"]}); };
     OR.answer=body=>{ const msgs=body.messages||[]; const last=String((msgs.slice(-1)[0]||{}).content||"");
       if(KIND_RX.test(last)) return KIND(last);
@@ -346,10 +346,12 @@ const ROOT=path.resolve(__dirname,'..');
     ok("each kind's analyst gets its own payload once, and only its own scenes", kc.length===2&&kc.every(t=>(t.match(/===== ONE PAYLOAD OF THIS KIND/g)||[]).length===1)
        &&kc.some(t=>/Text messages — /.test(t)&&/### SCENE text_night/.test(t)&&!/### SCENE dinner/.test(t))&&kc.some(t=>/Several characters — /.test(t)&&/### SCENE dinner/.test(t)&&!/### SCENE text_night/.test(t)), kc.map(t=>t.slice(0,120)).join(" | "));
     const fin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft=fin?fin.body.messages[0].content:"";
-    ok("the complete analysis reads each kind's analysis and scenes, with no payload repeated", !!fin&&/## PAYLOAD KIND: Text messages/.test(ft)&&/## PAYLOAD KIND: Several characters/.test(ft)&&/PE-KIND-PATTERN/.test(ft)&&/PE-KIND-NOTE/.test(ft)
-       &&!/ONE PAYLOAD OF THIS KIND|ONE REAL PAYLOAD/.test(ft), ft.slice(0,300));
-    ok("the complete analysis reads every scene, the rubric, the layouts and the full text of every piece", !!fin&&/Texting at night/.test(ft)&&/Dinner with Sami/.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)
-       &&/===== tpl:solo =====/.test(ft)&&/===== frag:style_header =====/.test(ft)&&/"move"/.test(ft), ft.slice(0,300));
+    const rep11=ft.slice(ft.indexOf("===== THE REPORTS"),ft.indexOf("===== THE ENGINES")), pay11=ft.slice(ft.indexOf("===== THE FULL PAYLOADS"));
+    ok("the fixer reads each kind's report with the analyst's reasoning, and no dialogue", /## PAYLOAD KIND: Text messages/.test(rep11)&&/## PAYLOAD KIND: Several characters/.test(rep11)&&/THE ANALYST'S REASONING: PE-KIND-REASONING/.test(rep11)&&/PE-KIND-PATTERN/.test(rep11)&&/PE-KIND-NOTE/.test(rep11)&&/accepts an invented past/.test(rep11)
+       &&!/^TURN \d+$/m.test(ft)&&!/Gülümsüyor/.test(rep11), rep11.slice(0,400));
+    ok("…and each kind's full payload once, at the end", (pay11.match(/===== PAYLOAD: Text messages \(tpl:text/g)||[]).length===1&&(pay11.match(/===== PAYLOAD: Several characters \(tpl:multi/g)||[]).length===1&&(pay11.match(/===== PAYLOAD: /g)||[]).length===(pay11.match(/===== PAYLOAD: [^\n]*tpl:(solo|multi|text|heat)/g)||[]).length&&/MESSAGE 1 · SYSTEM/.test(pay11), pay11.slice(0,300));
+    ok("the fixer reads every scene's findings, the rubric, the layouts and the catalogue of pieces", !!fin&&/Texting at night/.test(ft)&&/Dinner with Sami/.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)
+       &&/===== tpl:solo =====/.test(ft)&&/frag:style_header — /.test(ft)&&/"move"/.test(ft), ft.slice(0,300));
     ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
     const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
       b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
@@ -406,7 +408,7 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const t=String(((body.messages||[])[0]||{}).content||"");
       if(/You are discussing the fixes for the roleplay prompts/.test(t)){
         if(/Second question/.test(t)) return "PE-CHAT-SECOND It is applied; nothing more to change.";
-        const at=t.indexOf("===== frag:style_header ====="), f=at<0?"":(t.slice(at).split("\n").slice(1).find(l=>l.trim().length>=25)||"").trim().slice(0,40);
+        const at=t.indexOf("frag:style_header — <<<"), f=at<0?"":t.slice(at+23).split("\n")[0].trim().slice(0,30);
         return "PE-CHAT-ANSWER Edit 2 is broader than it needs to be; here is a narrower one.\n```edits\n"+JSON.stringify([{item:"frag:style_header",kind:"rewrite",find:f,replace:f+" PE-CHAT-FIX",cause:"c",why:"narrower"}])+"\n```"; }
       return /JSON/i.test(t)?"{}":'"Tamam."'; };
     const dc=await pg.evaluate(async()=>{ const P=__PE;
@@ -420,7 +422,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {panel,answer:/PE-CHAT-ANSWER/.test(txt),card:!!card,shownBlock,applied,n:P.DISC.rp.length,second:/PE-CHAT-SECOND/.test(document.querySelector('#overallBox [data-disc="rp"]').textContent)}; });
     const dcalls=OR.calls.filter(c=>c.claude&&/You are discussing the fixes/.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     ok("a conversation sits under the complete analysis", dc.panel&&dc.answer, JSON.stringify(dc));
-    ok("Claude is given the analysis with each edit's state, the layouts and the current text of every piece", dcalls.length===2&&/PROPOSED EDITS:\n1\. \[missing\] frag:style_header/.test(dcalls[0])&&/===== tpl:solo =====/.test(dcalls[0])&&/===== frag:style_header =====/.test(dcalls[0])&&/Make edit 2 smaller/.test(dcalls[0]), (dcalls[0]||"").slice(0,300));
+    ok("Claude is given the analysis with each edit's state, the reports, the payloads, the layouts and the catalogue, not the dialogues", dcalls.length===2&&/PROPOSED EDITS:\n1\. \[missing\] frag:style_header/.test(dcalls[0])&&/===== tpl:solo =====/.test(dcalls[0])&&/frag:style_header — /.test(dcalls[0])&&/===== THE REPORTS, ONE PER PAYLOAD KIND/.test(dcalls[0])&&/===== PAYLOAD: /.test(dcalls[0])&&!/^TURN \d+$/m.test(dcalls[0])&&/Make edit 2 smaller/.test(dcalls[0]), (dcalls[0]||"").slice(0,300));
     ok("an edit Claude proposes in the chat becomes an edit card, and applies", dc.card&&!dc.shownBlock&&dc.applied, JSON.stringify(dc));
     ok("the next message carries the conversation so far and sees what was just applied", /PE-CHAT-ANSWER/.test(dcalls[1]||"")&&/EDITS APPLIED SO FAR[\s\S]*PE-CHAT-FIX/.test(dcalls[1]||"")&&dc.second&&dc.n===4, (dcalls[1]||"").slice(0,200));
     const dcl=await pg.evaluate(()=>{ __PE.ALL.overall=null; renderOverall(); setOverall({score:5,summary:"new",edits:[]}); return __PE.DISC.rp.length; });
@@ -432,7 +434,7 @@ const ROOT=path.resolve(__dirname,'..');
       P.DRIFT_SCENES.forEach(sc=>{ const sp=(sc.speakers||[sc.speaker]);
         P.DR.results[sc.id]={at:Date.now(),model:"m",payload:null,turns:sc.lines.map(l=>({user:typeof l==="string"?l:l.gm,gm:typeof l!=="string",reply:long,replies:sp.map(id=>({id,name:id,text:long}))})),
           judge:{score:5,summary:"s",criteria:{turkish:{score:5,note:"n",evidence:"e"}},turns:sc.lines.map(()=>({verdict:"weak",note:"n"})),findings:[{criterion:"turkish",turn:1,problem:"p",evidence:"e",cause:"c"}]}}; });
-      const huge=P.apBuild("overseer",{scenes:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),pieces:P.overallInput().pieces,layouts:P.overallInput().layouts,payload:"ğ".repeat(60000),scores:"x"});
+      const huge=P.apBuild("overseer",{reports:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),catalogue:P.overallInput().catalogue,layouts:P.overallInput().layouts,payloads:"ğ".repeat(60000),scores:"x"});
       const rawBytes=P.apBytes("Şöyle düşünüyorum ğüşıöç. ".repeat(9000))+P.apBytes("ğ".repeat(60000)), hugeOk=P.apBytes(huge)<=P.AP_CAP&&/Reply with ONLY this JSON/.test(huge)&&/===== tpl:solo =====/.test(huge)&&/cut here to fit/.test(huge);
       let sent=null, calls=0; const orig=AI.sample.json;
       AI.sample.json=async(input)=>{ calls++; sent=input; if(calls===1) throw {code:"prompt_too_large",message:"too big"}; return {score:6,summary:"PE-FIXED",criteria:{},patterns:[],structure:[],edits:[]}; };

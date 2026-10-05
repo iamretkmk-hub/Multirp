@@ -344,16 +344,24 @@ layout. Their scene stays in its own kind.
    **It proposes no edits.** Each scene's part becomes that scene's judgement, and the kind's part is kept
    in `KA` (saved per browser, exported and imported with the results). Playing a scene on its own
    analyses its kind afterwards.
-3. **One complete analysis** (`overseer`, `analyseTogether`) reads the whole run. **No payload is
-   repeated in it**; it reads the layouts and the pieces instead. Its input is:
-   - each payload kind's analysis (score, summary, rubric, patterns, payload structure), then that kind's
-     scenes with their judgements and shortened exchanges;
+3. **The fixer**, one complete analysis (`overseer`, `analyseTogether`). **It gets no dialogues.** For each
+   kind it gets two things:
+   - **The kind's report** (`kindReport`): the analyst's **reasoning** (written for a fixer who will not see
+     the dialogues), the score, rubric, patterns and payload-structure notes, and each scene's score,
+     summary and findings with their quoted evidence and cause.
+   - **The kind's full payload, once** (`payloadsText`), exactly as sent. The payloads share whatever the
+     rest of the request leaves, and each keeps its head and its end.
+
+   Besides those, it gets:
    - the rubric averaged over the run (`runScores`), next to **earlier runs** and the edits applied between
      them (`runhist`, the last 12);
    - the engine judgements;
    - **each payload kind's layout** (the order of the pieces);
-   - the current full text of every piece.
+   - a **catalogue of the pieces** (`pieceCatalogue`): each key with its opening words, and the full
+     template of any piece whose wording has `{{…}}` or `[[…]]` in it.
 
+   An edit's `find` is copied from the piece's own wording in the payload or the catalogue, never from story
+   data the app filled in.
    It looks for causes shared across kinds (a piece used in several layouts) and causes found in one kind
    only (its layout). It then writes at most 10 general edits, each naming the criteria it helps and what
    it risks. A criterion that did not move after an edit means the cause is elsewhere, and it is told to
@@ -375,10 +383,16 @@ Claude: **Discuss these fixes with Claude**. Use it to:
 - point at a reply you did not like;
 - request something new.
 
-Every message rebuilds the opening (`discuss`). It holds the complete analysis with each proposed edit's
-state (ready, applied, already changed, missing), each payload kind's analysis, every edit applied so far,
-the scenes, the layouts and the current text of every piece (for the engines: every engine prompt that
-ran). Claude therefore never quotes words that are gone.
+Every message rebuilds the opening (`discuss`). It holds the same input as the fixer, with no dialogues:
+- the complete analysis, with each proposed edit's state (ready, applied, already changed, missing);
+- every edit applied so far;
+- each kind's report;
+- each kind's full payload;
+- the layouts;
+- the current catalogue.
+
+For the engines, it holds each engine scene's judgements and every engine prompt that ran. Claude
+therefore never quotes words that are gone.
 
 When you ask for a change, Claude puts the edits in an `edits` block. They show as ordinary edit cards
 with **Apply** and **Undo**, and the block itself is hidden. The conversation is kept in this browser

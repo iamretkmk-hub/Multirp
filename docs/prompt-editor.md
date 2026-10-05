@@ -391,6 +391,9 @@ several-character scenes are still answered through the gamemaster layout.
 5. The result shows the rubric table, this run against the previous one, the structure notes, the patterns,
    the reconciler's decisions and the final edit cards.
 
+**Fix this section** runs one section's fixer only. Its proposals show in its section with Apply; the
+reconciler is not run.
+
 **Analyse all** runs steps 2 to 4 on scenes already played. A section whose scenes are all analysed is not
 analysed again.
 
@@ -521,15 +524,39 @@ Each scene carries a `focus` (its purpose and expected outcome) and `checks` (th
 A scene can set its own place, cast, opening line and story state, such as gamemaster cadence, the
 off-screen pulse or End Day.
 
-**The flow.**
+**The flow** follows the same hierarchy as the roleplay side:
 1. **Run the selected engine scenes** plays every ticked scene.
-2. **Judge all, then analyse** has an engine judge (`engine`) read each engine's calls. The judge knows the
-   scene's purpose and which lines were scripted. It reports problems with evidence and the cause, and
-   proposes no fixes.
-3. **One complete engine analysis** (`engfinal`) reads every scene's purpose, script and judgements, with
-   the current text of every engine prompt that ran. For each scene it reports whether the known outcome
-   was reached (*right* / *partly* / *wrong*), and it judges the quality of generated content. It then
-   writes at most 10 general edits to `prompt:<key>`, never renaming a field the app parses.
+2. **E1 · each engine judged on its own** (`engine`), per scene. The judge knows the scene's purpose and
+   which lines were scripted, reads that engine's real calls, and reports its verdict, problems and
+   reasoning. It proposes no fixes.
+3. **E2 · each scene re-evaluates its engines' judgements** (`engscene`, `engSceneReport`). It gets the
+   judgements, not the calls, and writes the scene's report:
+   - the outcome against the known result (*right* / *partly* / *wrong*);
+   - each judge's cause, confirmed, corrected or rejected;
+   - the quality of generated content (gamemaster beats, off-screen events, diaries).
+
+   The report shows in the scene list.
+4. **Before → after for the engines** (`engeffect`, `checkEngEffect`): when an earlier engine run is on
+   record (`engsnaps`), one turn checks what the last changes did. It gets the edits applied in between,
+   a diff of each engine prompt that changed, and each scene's outcome and each engine's verdict before →
+   after. Its verdict, with reverts, shows above the engine analysis.
+5. **E3 · one fixer per engine prompt that had problems** (`engfixer`, `fixEnginePrompt`), two at a
+   time. It gets the prompt's current text, every judgement of it across the scenes, the reports of the
+   scenes it ran in, and one real call (what the app sent, what the model answered). It proposes up to 4
+   edits (`P:<key>#n`) and never renames a field the app parses. Its proposals can be applied directly
+   from **Each engine prompt's fixer**.
+6. **E4 · the engine reconciler** (`engfinal`) gets every scene report and every prompt fixer's
+   proposals, but no calls. It checks that the engines that feed each other still agree, keeps, merges or
+   drops each proposal, and writes the final edits.
+
+**Judge all, then analyse** runs steps 2 to 6. **Write the fixes** runs steps 3 to 6 over what is already
+judged. A failure stays on screen with **Write the fixes again**. **Fix this prompt**, on a judged engine or
+in the fixers list, runs that one prompt's fixer only.
+
+**Export results** and **Import results** in the engine tab move a whole engine test set between browsers
+(`kind: "engine-test-results"`): the calls and judgements of every scene, the scene reports, the prompt
+fixers and the engine analysis. An import replaces the engine results that were there. The Roleplay
+tests' Export also carries the engine runs, and the engine tab imports those too.
 
 **Play only this scene** and **Analyse it** remain for one scene at a time. Its lines can be edited, and
 **Reset the lines** restores the script. Results export and import with the roleplay results.

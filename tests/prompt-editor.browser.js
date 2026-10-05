@@ -288,7 +288,10 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
       if(/You are JUDGING one BACKGROUND ENGINE/.test(all)){ const k=(all.match(/prompt key \\"([A-Za-z0-9_]+)\\"/)||[])[1]||"";
         return JSON.stringify({verdict:k==="memBuild"?"issues":"good",summary:"s",problems:k==="memBuild"?[{issue:"kept the maybe",evidence:"belki",cause:"no rule on changed plans"}]:[]}); }
-      if(/COMPLETE ANALYSIS of the BACKGROUND ENGINES/.test(all)){ const c0=String(body.messages[0].content), at=c0.indexOf("===== prompt:memBuild ====="), f=at<0?"":(c0.slice(at).split("\n").slice(1).find(l=>l.trim().length>=30)||"").trim().slice(0,50);
+      if(/RE-EVALUATING the engine judgements of ONE ENGINE SCENE/.test(all)) return JSON.stringify({outcome:"partly",summary:"PE-ENG-SCENE the maybe stuck",reasoning:"PE-ENG-SCENE-REASONING memBuild kept the maybe",engines:[{engine:"memBuild",verdict:"issues",cause:"confirmed"}]});
+      if(/You are the FIXER for ONE ENGINE PROMPT/.test(all)){ const c0=String(body.messages[0].content), at=c0.indexOf("===== THE PROMPT (current text) ====="), f=at<0?"":(c0.slice(at).split("\n").slice(1).find(l=>l.trim().length>=30)||"").trim().slice(0,50);
+        return JSON.stringify({summary:"PE-ENG-FIXER keeps the maybe",keep:["PE-ENG-KEEP"],edits:[{item:"prompt:memBuild",kind:"rewrite",find:f,replace:f+" PE-ENGINE-FIX",cause:"c",why:"w",helps:["memBuild"]}]}); }
+      if(/COMPLETE ANALYSIS of the BACKGROUND ENGINES/.test(all)){ const c1=String(body.messages[0].content), mm=c1.match(/P:memBuild#1 prompt:memBuild \(rewrite\) find «([^»]*)»/), f=mm?mm[1]:"";
         return JSON.stringify({score:6,summary:"plans mostly right",scenes:[{scene:"Plans that change their mind (meetings and promises)",outcome:"partly",note:"the maybe stuck"}],patterns:[{engine:"memBuild",pattern:"keeps a maybe",cause:"c"}],
           edits:[{item:"prompt:memBuild",kind:"rewrite",find:f,replace:f+" PE-ENGINE-FIX",cause:"c",why:"w",helps:["memBuild"]}]}); }
       const sys=String(((body.messages||[])[0]||{}).content||"");
@@ -314,7 +317,13 @@ const ROOT=path.resolve(__dirname,'..');
     ok("each engine is judged knowing the scene's purpose and that the script is known", ej&&/WHAT THE SCENE WAS BUILT TO TEST/.test(ejt)&&/recorded as agreed only from the moment Sami says yes/.test(ejt)&&/Lines with a character's name were scripted/.test(ejt)&&/Do not propose fixes/.test(ejt));
     ok("Claude judged every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
     const efin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of the BACKGROUND ENGINES/.test(c.body.messages[0].content));
-    ok("then one complete engine analysis reads every scene's purpose, script and judgements, with the prompts' text", !!efin&&/PURPOSE:/.test(efin.body.messages[0].content)&&/===== prompt:memBuild =====/.test(efin.body.messages[0].content));
+    const esr=OR.calls.find(c=>c.claude&&/RE-EVALUATING the engine judgements of ONE ENGINE SCENE/.test(c.body.messages[0].content)), esrt=esr?esr.body.messages[0].content:"";
+    const efx=OR.calls.find(c=>c.claude&&/You are the FIXER for ONE ENGINE PROMPT/.test(c.body.messages[0].content)), efxt=efx?efx.body.messages[0].content:"";
+    ok("E2: the scene re-evaluates its engines' judgements against its purpose and script, without the calls", !!esr&&/WHAT THE SCENE WAS BUILT TO TEST/.test(esrt)&&/Bakarız abi, belki/.test(esrt)&&/kept the maybe/.test(esrt)&&!/WHAT THE APP SENT/.test(esrt), esrt.slice(0,200));
+    ok("E3: a fixer for the prompt with problems: its text, its judgements, the scene's report, one real call", !!efx&&/prompt:memBuild/.test(efxt)&&/===== THE PROMPT \(current text\) =====/.test(efxt)&&/kept the maybe/.test(efxt)&&/OUTCOME: PARTLY — PE-ENG-SCENE/.test(efxt)&&/THE SCENE'S REASONING: PE-ENG-SCENE-REASONING/.test(efxt)&&/WHAT THE APP SENT/.test(efxt), efxt.slice(0,200));
+    ok("E4: the engine reconciler reads the scene reports and every prompt fixer's proposals, not the calls", !!efin&&/PURPOSE:/.test(efin.body.messages[0].content)&&/P:memBuild#1 prompt:memBuild/.test(efin.body.messages[0].content)&&/PE-ENG-KEEP/.test(efin.body.messages[0].content)&&!/WHAT THE APP SENT/.test(efin.body.messages[0].content));
+    const esh=await pg.evaluate(()=>({list:(document.querySelector("#engScenes")||{}).textContent||"",fx:(document.querySelector("#engFixers")||{}).textContent||""}));
+    ok("the scene's report shows in the scene list, and the prompt fixer's proposals in the engine analysis", /PE-ENG-SCENE the maybe stuck/.test(esh.list)&&/PE-ENG-FIXER/.test(esh.fx), JSON.stringify(esh).slice(0,300));
     ok("its verdict and its edits show in the engine tab", /Complete engine analysis/.test(er.box)&&/the maybe stuck/.test(er.box), er.box.slice(0,300));
     const eap=await pg.evaluate(()=>{ const b=document.querySelector('#engOverallBox .chg [data-a="apply"]'); if(!b||b.disabled) return {ok:false,b:!!b,t:b&&b.textContent,card:((document.querySelector('#engOverallBox .chg')||{}).textContent||"").slice(0,300),ed:JSON.stringify((__PE.ENGALL.overall||{}).edits||null).slice(0,300)}; b.click(); return {ok:/PE-ENGINE-FIX/.test(__PE.itemVal(__PE.findItem("prompt:memBuild")))}; });
     ok("and its edit applies to the engine's prompt", eap.ok, JSON.stringify(eap));
@@ -327,6 +336,37 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
     ok("with Claude standing in, every call (reply, engines, judges) went to Claude", OR.calls.length>3&&OR.calls.every(c=>c.claude), JSON.stringify([...new Set(OR.calls.map(c=>c.body.model))]));
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); document.querySelector("#engEndDay").checked=true; });
+
+    console.log("\n[10c — engine results: export and import, a failure that stays on screen, before → after]");
+    const exportedEng=await pg.evaluate(()=>JSON.stringify({app:"StoryMind",kind:"engine-test-results",date:Date.now(),engines:__PE.ENGRUN.byScene,fixers:__PE.EFX,overall:__PE.ENGALL.overall}));
+    const eb=await pg.evaluate(()=>({exp:!!document.querySelector("#btnEngExport"),imp:!!document.querySelector("#btnEngImport"),fix:!!document.querySelector("#btnEngFix")}));
+    await pg.evaluate(()=>{ __PE.ENGRUN.byScene={}; Object.keys(__PE.EFX).forEach(k=>delete __PE.EFX[k]); __PE.ENGALL.overall=null; });
+    await pg.setInputFiles('#fileEng',{name:"storymind_engine_tests.json",mimeType:"application/json",buffer:Buffer.from(exportedEng)});
+    await pg.waitForTimeout(500);
+    const ei=await pg.evaluate(()=>({scenes:Object.keys(__PE.ENGRUN.byScene),fixers:Object.keys(__PE.EFX),overall:!!__PE.ENGALL.overall,box:(document.querySelector("#engOverallBox")||{}).textContent||""}));
+    ok("the engine tab has its own Export results, Import results and Write the fixes", eb.exp&&eb.imp&&eb.fix, JSON.stringify(eb));
+    ok("an exported engine run imports with its judgements, prompt fixers and analysis", ei.scenes.indexOf("plans")>=0&&ei.fixers.indexOf("memBuild")>=0&&ei.overall&&/Complete engine analysis/.test(ei.box)&&/PE-ENG-FIXER/.test(ei.box), JSON.stringify(ei).slice(0,300));
+    OR.calls=[];
+    const efk=await pg.evaluate(async()=>{ const b=document.querySelector("#engList [data-efix]"); if(!b) return null; const k=b.dataset.efix; b.click(); for(let i=0;i<80&&!(__PE.EFX[k]&&__PE.EFX[k].at&&!__PE.EFX[k].running);i++) await new Promise(r=>setTimeout(r,100)); await new Promise(r=>setTimeout(r,200)); return k; });
+    const efc=OR.calls.filter(c=>c.claude).map(c=>c.body.messages[0].content);
+    ok("Fix this prompt runs that engine prompt's fixer only", !!efk&&efc.length===1&&new RegExp("FIXER for ONE ENGINE PROMPT of the app: [^\\n]*\\(prompt:"+efk+"\\)").test(efc[0]), efk+" | "+efc.map(x=>x.slice(0,120)).join(" | "));
+    const ef2=await pg.evaluate(async()=>{ const P=__PE, orig=AI.sample.json; let n=0, effIn="";
+      lsSet("engsnaps",[]);
+      AI.sample.json=async(input,o)=>{ if(/ENGINE RECONCILER/.test(input)){ n++; if(n===1) throw {code:"invalid_json",message:"cut"}; return {score:7,summary:"PE-ENG-FIXED",edits:[]}; }
+        if(/WHAT THE LAST CHANGES DID to the BACKGROUND ENGINES/.test(input)){ effIn=input; return {summary:"PE-ENG-EFFECT",edits:[],regressions:[],keep:[],revert:[]}; }
+        return orig(input,o); };
+      await P.writeEngFixesAlone();
+      const failBox=(document.querySelector("#engOverallBox")||{}).textContent||"", btn=document.querySelector("#engOverallBox [data-refix]");
+      btn&&btn.click(); for(let i=0;i<60&&!(P.ENGALL.overall&&P.ENGALL.overall.summary==="PE-ENG-FIXED");i++) await new Promise(r=>setTimeout(r,100));
+      const fixed=P.ENGALL.overall&&P.ENGALL.overall.summary==="PE-ENG-FIXED", snaps1=P.engSnaps().length;
+      /* a later run, after an edit to the prompt */
+      const key=Object.keys(P.engSnaps()[0].prompts)[0], it=P.findItem("prompt:"+key), old=P.itemVal(it); P.setVal(it,old+"\nPE-ENG-NEWLINE"); APPLIED["pe-eng"]={t:Date.now(),item:"prompt:"+key,find:"x",replace:"PE-ENG-NEWLINE"};
+      Object.values(P.ENGRUN.byScene).forEach(r=>{ r.at=Date.now()+1000; if(r.report) r.report.at=Date.now()+2000; });
+      await P.writeEngFixesAlone();
+      const res={failBox:/The engine analysis failed/.test(failBox)&&/cut short/.test(failBox)&&!!btn,fixed,snaps1,effIn:/^\+ PE-ENG-NEWLINE/m.test(effIn)&&/Plans|Comings|scene/i.test(effIn),effBox:/PE-ENG-EFFECT/.test((document.querySelector("#engOverallBox")||{}).textContent||"")};
+      P.setVal(it,old); delete APPLIED["pe-eng"]; AI.sample.json=orig; return res; });
+    ok("a failed engine analysis stays on screen, and Write the fixes again runs it", ef2.failBox&&ef2.fixed, JSON.stringify(ef2));
+    ok("the next engine run is compared with the earlier one first (prompt diff, outcomes, verdicts), and the verdict shows", ef2.snaps1===1&&ef2.effIn&&ef2.effBox, JSON.stringify(ef2));
 
     console.log("\n[11 — one roleplay run, then one complete analysis that may move pieces]");
     OR.calls=[];
@@ -365,6 +405,10 @@ const ROOT=path.resolve(__dirname,'..');
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
     ok("each section shows its own fixer's proposals, to apply even if the reconciler fails", /This section's fixer proposed 1 edit: PE-SEC-SUMMARY/.test(sec11), sec11.slice(0,300));
+    OR.calls=[];
+    await pg.evaluate(async()=>{ const b=document.querySelector("#kind_text [data-kfix]"); b.click(); for(let i=0;i<50&&__PE.ALL.running!==false;i++) await new Promise(r=>setTimeout(r,100)); await new Promise(r=>setTimeout(r,200)); });
+    const kfx=OR.calls.filter(c=>c.claude).map(c=>c.body.messages[0].content);
+    ok("Fix this section runs that section's fixer only", kfx.length===1&&/You are the FIXER for ONE test section of the author's roleplay model: Text messages/.test(kfx[0]), kfx.map(x=>x.slice(0,80)).join(" | "));
     ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
     const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
       b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
@@ -489,7 +533,7 @@ const ROOT=path.resolve(__dirname,'..');
       const first=sent; btn&&btn.click(); for(let i=0;i<50&&!(P.ALL.overall&&P.ALL.overall.summary==="PE-FIXED");i++) await new Promise(r=>setTimeout(r,100));
       const okBox=(document.querySelector("#overallBox")||{}).textContent||"";
       AI.sample.json=orig;
-      const eng=P.apBuild("engfinal",{scenes:"ş".repeat(150000),prompts:"ğ".repeat(150000),applied:""});
+      const eng=P.apBuild("engfinal",{reports:"ş".repeat(150000),proposals:"ğ".repeat(150000),applied:""});
       const secs=P.KINDS.filter(kd=>P.KA[kd.k]&&P.KA[kd.k].at);
       const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&fixIns.length===2*secs.length&&secs.every(kd=>fixIns.some(x=>x.indexOf("## SECTION: "+kd.label)>=0)),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
         failBox:/The complete analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed:/PE-FIXED/.test(okBox),calls,engBytes:P.apBytes(eng),engJson:/Reply with ONLY this JSON/.test(eng)&&/cut here to fit/.test(eng)};
@@ -582,7 +626,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engfinal,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,discuss,compare,standin", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

@@ -197,8 +197,8 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the reply came from the model under test, through StoryMind's own request", !!gen&&gen.auth==="Bearer sk-or-test"
        &&typeof gen.body.temperature==="number"&&typeof gen.body.max_tokens==="number"&&Array.isArray(gen.body.messages)&&gen.body.messages.length>3,
        JSON.stringify(OR.calls.map(c=>({m:c.body.model,t:c.body.temperature,mx:c.body.max_tokens,n:(c.body.messages||[]).length}))));
-    ok("the analyst is told to fix the cause, preferring removal and rewriting over new rules",
-       !!rev&&/HOW TO FIX — FIND THE CAUSE, THEN REMOVE OR CHANGE IT/.test(JSON.stringify(rev.body.messages))&&/remove\|rewrite\|add/.test(JSON.stringify(rev.body.messages)));
+    ok("the analyst is told to find the cause, then take the best fix (remove, rewrite, move or add)",
+       !!rev&&/HOW TO FIX — CAUSE FIRST, THEN THE BEST FIX/.test(JSON.stringify(rev.body.messages))&&/MOVE a piece/.test(JSON.stringify(rev.body.messages))&&/remove\|rewrite\|add/.test(JSON.stringify(rev.body.messages)));
     ok("each proposed edit shows what kind of change it is and how much text it adds or cuts",
        await pg.evaluate(()=>{ const t=(document.querySelector("#chat .chg")||{}).textContent||""; return /rewrite|remove|add/.test(t)&&/chars/.test(t); }));
     ok("the review was written by a Claude model", !!rev&&/Reply with ONLY this JSON/.test(JSON.stringify(rev.body.messages)), JSON.stringify(OR.calls.map(c=>c.body.model)));
@@ -209,179 +209,184 @@ const ROOT=path.resolve(__dirname,'..');
         lookalike:A("https://openrouter.ai.evil.example/api/v1/x"),plain:A("http://openrouter.ai/api/v1/x")};
       __PE.NET.allow=was; return !r.idle&&r.or&&!r.other&&!r.lookalike&&!r.plain; }));
 
-    console.log("\n[9 — drift tests: ten scripted scenes, every turn through the real payload]");
+    console.log("\n[9 — roleplay scenes: fewer, sharper, every turn through the real payload; judges score, they do not fix]");
     const seen=[]; OR.calls=[];
+    const JUDGE=n=>JSON.stringify({turns:Array.from({length:n},(_,i)=>({verdict:i===1?"weak":"good",note:"t"+(i+1)})),
+      criteria:{turkish:{score:6,note:"calques",evidence:"x"},memory:{score:4,note:"forgot",evidence:"y"},self:{score:8,note:"ok",evidence:"z"}},score:6,summary:"Held mostly; the memory slipped.",
+      findings:[{criterion:"memory",turn:2,problem:"accepts an invented past",evidence:"Evet hatırlıyorum",cause:"frag:rp_memory says 'go along with the player'"}]});
     OR.answer=body=>{ const msgs=body.messages||[]; const last=String((msgs.slice(-1)[0]||{}).content||"");
-      if(/instruction-following test/.test(last)){
-        const n=(last.match(/^TURN \d+$/gm)||[]).length;
-        return JSON.stringify({turns:Array.from({length:n},(_,i)=>({verdict:i===2?"bent":"held",note:"t"+(i+1)})),drift_at:3,score:7,
-          summary:"Held, then gave ground on turn 3.",edits:[{item:"frag:style_header",find:"PE-REVIEWED",replace:"PE-DRIFT-FIX",why:"t"}]});
-      }
+      if(/You are JUDGING one test scene/.test(last)) return JUDGE((last.match(/^TURN \d+$/gm)||[]).length);
       seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
     await pg.click('#rtabs button[data-r="tests"]');
-    const nScenes=await pg.evaluate(()=>__PE.DRIFT_SCENES.length);
-    ok("there are twenty-three reply scenes", nScenes===23, nScenes);
-    const solo4=await pg.evaluate(async()=>{
-      const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
-      for(const id of ["daily","flirt","after1","after2"]){ const sc=by(id);
-        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:[{role:"user",content:sc.lines[0]}]}});
-        out[id]={t:p.messages.map(m=>m.content).join("\n"),speaker:p.speaker,quality:!!sc.quality}; }
+    const sc9=await pg.evaluate(()=>({n:__PE.DRIFT_SCENES.length,ids:__PE.DRIFT_SCENES.map(x=>x.id),kinds:[...new Set(__PE.DRIFT_SCENES.map(x=>x.kind))].sort().join(","),
+      multi:__PE.DRIFT_SCENES.filter(x=>(x.speakers||[]).length>1).map(x=>x.id),focus:__PE.DRIFT_SCENES.every(x=>Array.isArray(x.focus)&&x.focus.length),
+      crit:__PE.CRITERIA.map(c=>c.id).join(",")}));
+    ok("twelve sharper scenes instead of twenty-three", sc9.n===12, sc9.ids.join(","));
+    ok("solo, several characters, text and heat are all played (gamemaster beats get the gamemaster payload)", sc9.kinds==="heat,multi,solo,text", sc9.kinds);
+    ok("in the several-character scenes the husband answers too", sc9.multi.join()==="dinner,flirt_husband,after_dinner", sc9.multi.join());
+    ok("one rubric for every scene, each naming what it presses on", sc9.focus&&sc9.crit==="turkish,meaning,character,pacing,self,surroundings,others,memory,agency,rules,blend", sc9.crit);
+    const b9=await pg.evaluate(async()=>{ const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
+      for(const id of ["daily","flirt_alone","heat","after_nextday","after_days","memory_echo"]){ const sc=by(id);
+        const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:[{role:"user",content:typeof sc.lines[0]==="string"?sc.lines[0]:"x"}]}});
+        out[id]=p.messages.map(m=>m.content).join("\n"); }
       return out; });
-    ok("the new scenes are quality scenes played by Buket", ["daily","flirt","after1","after2"].every(k=>solo4[k].quality&&/Buket/.test(solo4[k].speaker)));
-    ok("flirting happens at Emre's house", /Emre's House/.test(solo4.flirt.t), solo4.flirt.t.slice(0,400));
-    ok("the day after: her memory of the night and her decision are in the payload",
-       /I ended up in his bed/.test(solo4.after1.t)&&/the one full surrender/.test(solo4.after1.t), solo4.after1.t.slice(-2500));
-    ok("some days on: both nights and her softer terms are in the payload, not the first decision",
-       /It happened again, on day nine/.test(solo4.after2.t)&&/on your terms/.test(solo4.after2.t)&&!/the one full surrender/.test(solo4.after2.t), solo4.after2.t.slice(-2500));
-    ok("the setup does not leak into other scenes", !/ended up in his bed/.test(solo4.daily.t));
-    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
-    const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
-    ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns));
+    ok("seduction happens at Emre's house", /Emre's House/.test(b9.flirt_alone), b9.flirt_alone.slice(0,300));
+    ok("in the heat scene she knows she is fertile and off the pill", /fertile days/.test(b9.heat)&&/stopped taking the pill/.test(b9.heat)&&!/one full surrender/.test(b9.heat), b9.heat.slice(-1500));
+    ok("the day after: her memory of it and her own decision are in the payload", /I ended up in his bed/.test(b9.after_nextday)&&/the one full surrender/.test(b9.after_nextday));
+    ok("some days on: both times and her softer terms, not the first decision", /on day nine/.test(b9.after_days)&&/on your terms/.test(b9.after_days)&&!/the one full surrender/.test(b9.after_days));
+    ok("when the past repeats, the memory of the first time is retrieved", /touched my waist/.test(b9.memory_echo)&&/Palmera/.test(b9.memory_echo), b9.memory_echo.slice(-1500));
+    ok("no scene's setup leaks into another", !/ended up in his bed|fertile days/.test(b9.daily));
+    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES.find(x=>x.id==="memory_truth")]));
+    const d=await pg.evaluate(()=>({r:__PE.DR.results.memory_truth,html:document.querySelector("#dr_memory_truth").textContent}));
+    ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===4&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns).slice(0,300));
     ok("each turn was built from the real payload, with the earlier replies in the transcript",
-       seen.length===5&&/Palmera'da seninle şamandıraya/.test(seen[0])&&/kırmızı mayoyu/.test(seen[1])&&/Buket/.test(seen[0])&&(seen[4].match(/Hatırlamıyorum\./g)||[]).length>=4, seen.map(x=>x.length).join(","));
-    ok("the scene's own place is in the payload", /Big Özüçak's House/.test(seen[0]), seen[0].slice(0,300));
-    ok("every scene is played by a woman character", await pg.evaluate(()=>__PE.DRIFT_SCENES.every(sc=>sc.speaker==="p_buket")));
-    ok("the drift analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/instruction-following test/.test(JSON.stringify(c.body.messages))));
-    ok("all five turns went to the model under test, and the analysis to Claude",
-       OR.calls.filter(c=>c.body.model==="deepseek/deepseek-v4-pro").length===5&&OR.calls.filter(c=>/^anthropic\//.test(c.body.model||"")).length===1,
-       JSON.stringify(OR.calls.map(c=>c.body.model)));
-    ok("the judge's verdicts and the drift turn are shown", /drifted at turn 3/.test(d.html)&&/7\/10/.test(d.html)&&/bent/.test(d.html), d.html.slice(0,400));
-    await pg.click('#dr_past .chg [data-a="apply"]');
-    ok("its edit applies to the named piece", await pg.evaluate(()=>/PE-DRIFT-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header")))));
-    const ap=await pg.evaluate(()=>{
-      const once=__PE.itemVal(__PE.findItem("frag:style_header"));
-      __PE.DR.results.past.judge=JSON.parse(JSON.stringify(__PE.DR.results.past.judge));   // a fresh analysis render
-      document.querySelector('#rtabs button[data-r="tests"]').click();
-      const b=document.querySelector('#dr_past .chg [data-a="apply"]');
-      const label=b.textContent, dis=b.disabled; b.click();
-      const twice=__PE.itemVal(__PE.findItem("frag:style_header"));
-      return {label,dis,same:once===twice,count:(twice.match(/PE-DRIFT-FIX/g)||[]).length,undo:!document.querySelector('#dr_past .chg [data-a="undo"]').hidden}; });
-    ok("after the list is rebuilt, an applied edit still reads Applied and cannot be applied twice", ap.label==="Applied"&&ap.dis&&ap.same&&ap.count===1, JSON.stringify(ap));
-    ok("…and offers Undo", ap.undo===true);
-    await pg.click('#dr_past .chg [data-a="undo"]');
-    const un=await pg.evaluate(()=>({v:__PE.itemVal(__PE.findItem("frag:style_header")),b:document.querySelector('#dr_past .chg [data-a="apply"]').textContent}));
-    ok("Undo puts the old words back and the edit can be applied again", /PE-REVIEWED/.test(un.v)&&!/PE-DRIFT-FIX/.test(un.v)&&un.b==="Apply", JSON.stringify({b:un.b,tail:un.v.slice(-80)}));
-    await pg.click('#dr_past .chg [data-a="apply"]');
+       seen.length===4&&/şamandıraya/.test(seen[0])&&/keşke evli olmasaydım/.test(seen[1])&&(seen[3].match(/Hatırlamıyorum\./g)||[]).length>=3, seen.map(x=>x.length).join(","));
+    ok("the scene's own place is in the payload", /Big Özüçak's House/.test(seen[0]));
+    const jin9=OR.calls.find(c=>c.claude&&/You are JUDGING one test scene/.test(c.body.messages[0].content)), jt9=jin9?jin9.body.messages[0].content:"";
+    ok("Turkish is judged as a native would say it (words, register, sense in context, realism), not only grammar", /not as a grammar check/.test(jt9)&&/word choice/.test(jt9)&&/sense in context/.test(jt9)&&/what a native would say instead/.test(jt9)&&/the word a Turk would pick/.test(jt9), jt9.slice(0,200));
+    ok("the judge scores the rubric (★ marks what the scene presses on) and is told not to fix", /★ memory/.test(jt9)&&/Do not propose fixes/.test(jt9)&&/HOW TO FIX — CAUSE FIRST, THEN THE BEST FIX/.test(jt9)&&/MOVE a piece/.test(jt9), jt9.slice(0,300));
+    ok("its scores, findings and likely causes are shown, and no edit is offered on the scene", /Memory 4/.test(d.html)&&/accepts an invented past/.test(d.html)&&/likely cause/.test(d.html)
+       &&await pg.evaluate(()=>!document.querySelector("#dr_memory_truth .chg")), d.html.slice(0,500));
+    OR.calls=[]; seen.length=0;
+    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES.find(x=>x.id==="flirt_husband")]));
+    const fh=await pg.evaluate(()=>__PE.DR.results.flirt_husband);
+    const rpCalls=OR.calls.filter(c=>!c.claude).map(c=>c.body.messages.map(m=>m.content).join("\n"));
+    ok("several characters: each line is answered by Buket, then by Sami", fh.turns.length===6&&fh.turns.every(t=>t.replies.length===2&&t.replies[0].id==="p_buket"&&t.replies[1].id==="p_sami"), JSON.stringify(fh.turns.map(t=>(t.replies||[]).map(x=>x.id))));
+    ok("…Sami's payload is his own and already holds Buket's reply to the same line", rpCalls.length===12&&/You are Sami/.test(rpCalls[1])&&(rpCalls[1].match(/Hatırlamıyorum/g)||[]).length>=1, rpCalls.length);
+    ok("…and a gamemaster beat is answered through the gamemaster payload", fh.turns[2].gm&&(fh.turns[2].kinds||[]).indexOf("gm")>=0);
 
-    console.log("\n[9b — results travel: export here, import and analyse elsewhere]");
-    const exported=await pg.evaluate(()=>{ const r=__PE.DR.results.past; return JSON.stringify({app:"StoryMind",kind:"drift-results",date:Date.now(),
-      scenes:[{id:"past",title:"x",model:r.model,turns:r.turns,payload:r.payload,judge:null}]}); });
+    console.log("\n[9b — results travel: export here, import and judge elsewhere]");
+    const exported=await pg.evaluate(()=>{ const r=__PE.DR.results.memory_truth; return JSON.stringify({app:"StoryMind",kind:"drift-results",date:Date.now(),
+      scenes:[{id:"memory_truth",title:"x",model:r.model,turns:r.turns,payload:r.payload,judge:null}]}); });
     await pg.evaluate(()=>{ __PE.DR.results={}; });
     await pg.setInputFiles("#fileDrift",{name:"drift.json",mimeType:"application/json",buffer:Buffer.from(exported)});
     await pg.waitForTimeout(400);
-    const imp9=await pg.evaluate(()=>({n:(__PE.DR.results.past||{}).turns&&__PE.DR.results.past.turns.length,btn:!!document.querySelector("#dr_past button.pri")}));
-    ok("an exported run imports, with an Analyse button", imp9.n===5&&imp9.btn, JSON.stringify(imp9));
+    const imp9=await pg.evaluate(()=>({n:(__PE.DR.results.memory_truth||{}).turns&&__PE.DR.results.memory_truth.turns.length,btn:!!document.querySelector("#dr_memory_truth button.pri")}));
+    ok("an exported run imports, with a Judge button", imp9.n===4&&imp9.btn, JSON.stringify(imp9));
     OR.calls=[];
-    await pg.evaluate(()=>__PE.analyseDrift([__PE.DRIFT_SCENES[0]]));
-    ok("Analyse sends it to Claude only, never back to the model", OR.calls.length===1&&/^anthropic\//.test(OR.calls[0].body.model)
-       &&await pg.evaluate(()=>!!__PE.DR.results.past.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
+    await pg.evaluate(()=>__PE.analyseDrift([__PE.DRIFT_SCENES.find(x=>x.id==="memory_truth")]));
+    ok("judging sends it to Claude only, never back to the model", OR.calls.length===1&&OR.calls[0].claude
+       &&await pg.evaluate(()=>!!__PE.DR.results.memory_truth.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
-    console.log("\n[10 — engine tests: the app plays for real, every background engine is recorded]");
+    console.log("\n[10 — engine tests: their own tab, purpose-built scenes, scripted exchanges]");
     OR.calls=[];
-    const memFind=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("prompt:memBuild")).split("\n").find(l=>l.trim().length>30).trim().slice(0,40));
-    OR.answer=(f=>body=>{ const all=JSON.stringify(body.messages||[]);
-      if(/BACKGROUND ENGINE of the app/.test(all)){
-        const k=(all.match(/prompt key \\"([A-Za-z0-9_]+)\\"/)||[])[1]||"";
-        return JSON.stringify({verdict:k==="memBuild"?"issues":"good",summary:"s",problems:[],edits:k==="memBuild"?[{item:"prompt:memBuild",find:f,replace:f+" PE-ENGINE-FIX",why:"t"}]:[]}); }
+    OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
+      if(/You are JUDGING one BACKGROUND ENGINE/.test(all)){ const k=(all.match(/prompt key \\"([A-Za-z0-9_]+)\\"/)||[])[1]||"";
+        return JSON.stringify({verdict:k==="memBuild"?"issues":"good",summary:"s",problems:k==="memBuild"?[{issue:"kept the maybe",evidence:"belki",cause:"no rule on changed plans"}]:[]}); }
+      if(/COMPLETE ANALYSIS of the BACKGROUND ENGINES/.test(all)){ const c0=String(body.messages[0].content), at=c0.indexOf("===== prompt:memBuild ====="), f=at<0?"":(c0.slice(at).split("\n").slice(1).find(l=>l.trim().length>=30)||"").trim().slice(0,50);
+        return JSON.stringify({score:6,summary:"plans mostly right",scenes:[{scene:"Plans that change their mind (meetings and promises)",outcome:"partly",note:"the maybe stuck"}],patterns:[{engine:"memBuild",pattern:"keeps a maybe",cause:"c"}],
+          edits:[{item:"prompt:memBuild",kind:"rewrite",find:f,replace:f+" PE-ENGINE-FIX",cause:"c",why:"w",helps:["memBuild"]}]}); }
       const sys=String(((body.messages||[])[0]||{}).content||"");
-      return /JSON/i.test(sys)?"{}":'"Tamam." *Başını sallıyor.*'; })(memFind);
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); });
-    await pg.click('#rtabs button[data-r="tests"]');
-    await pg.evaluate(()=>__PE.runEngines());
-    await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
-    const er=await pg.evaluate(()=>({groups:__PE.engGroups().map(g=>({k:g.key,n:g.calls.length,m:g.calls[0].model,err:g.calls.filter(c=>c.error).length})),
-      judged:Object.keys(__PE.ENGRUN.judge).length,rest:__PE.S.world&&__PE.S.world.source}));
+      return /JSON/i.test(sys)?"{}":'"Tamam." *Başını sallıyor.*'; };
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); localStorage.setItem("pe_v1_seleng",JSON.stringify(["plans"])); localStorage.setItem("pe_v1_engpreset",JSON.stringify("plans")); localStorage.setItem("pe_v1_engscript",JSON.stringify("")); });
+    await pg.click('#rtabs button[data-r="eng"]');
+    const ui10=await pg.evaluate(()=>({tab:getComputedStyle(document.querySelector("#rEngT")).display,inTests:!!document.querySelector("#rTests #engList"),n:__PE.ENGINE_SCENES.length,
+      script:document.querySelector("#engScript").value}));
+    ok("engine tests have their own tab, apart from the roleplay tests", ui10.tab==="flex"&&!ui10.inTests&&ui10.n===8, JSON.stringify({tab:ui10.tab,inTests:ui10.inTests,n:ui10.n}));
+    ok("the lines read as a script: the player, the characters' scripted replies, gamemaster beats", /^Emre: Cumartesi akşamı/m.test(ui10.script)&&/^Sami: Bakarız abi, belki/m.test(ui10.script)&&/^Buket: Dur, şimdi hatırladım/m.test(ui10.script), ui10.script.slice(0,300));
+    await pg.evaluate(()=>__PE.runEngineTests());
+    await pg.waitForFunction(()=>!__PE.ENGALL.running,null,{timeout:400000});
+    const er=await pg.evaluate(()=>({groups:__PE.engGroups().map(g=>({k:g.key,n:g.calls.length,err:g.calls.filter(c=>c.error).length})),judged:Object.keys(__PE.ENGRUN.judge).length,
+      ins:__PE.ENGRUN.calls.map(c=>c.messages.map(m=>m.content).join("\n")),rp:__PE.ENGRUN.calls.filter(c=>c.rp).length,
+      box:(document.querySelector("#engOverallBox")||{}).textContent||""}));
     const keys=er.groups.map(g=>g.k);
-    ok("a played scene plus End Day fires the background engines (≥15 of them)", er.groups.length>=15, keys.join(" "));
-    ["memEval","memBuild","relPrompt","daySummaryPrompt","goalsCurator","presencePrompt","routerChar","chronicler"].forEach(k=>
-      ok("…including "+k, keys.indexOf(k)>=0, keys.join(" ")));
+    ok("the scripted exchanges and End Day fire the background engines", er.groups.length>=10, keys.join(" "));
+    ["memBuild","relPrompt","daySummaryPrompt","goalsCurator"].forEach(k=>ok("…including "+k, keys.indexOf(k)>=0, keys.join(" ")));
     ok("no engine call failed", er.groups.every(g=>g.err===0), JSON.stringify(er.groups.filter(g=>g.err)));
-    const models=new Set(OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
-    ok("each engine was sent to the model StoryMind assigns it (not one model for everything)", models.size>=2, [...models].join(", "));
-    ok("Claude analysed every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
-    ok("the engine scene picker is visible at the top of the tab, not folded away", await pg.evaluate(()=>{ const sel=document.querySelector("#engPreset");
-      return !!sel&&!sel.closest("details")&&sel.options.length===6&&/Sami/.test(document.querySelector("#engPresetFocus").textContent); }));
-    ok("the intense scene is the default: Emre flirts with Buket in front of Sami", await pg.evaluate(()=>__PE.ENGRUN.lines.length===6&&/Buket/.test(__PE.ENGRUN.lines[0])&&/Vur hadi/.test(__PE.ENGRUN.lines[4])));
-    ok("its purpose reaches the analysis (who the routers pick, realism under intensity)", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /BACKGROUND ENGINE/.test(t)&&/WHAT THE SCENE WAS BUILT TO TEST/.test(t)&&/turn routers pick/.test(t)&&/Vur hadi/.test(t); }));
-    ok("the characters' replies are analysed for realism, with no edits proposed against them", OR.calls.some(c=>{ const t=JSON.stringify(c.body.messages); return /judge realism, proportion and character under this pressure/.test(t); }));
-    ok("the engine analysis carries the same method", OR.calls.some(c=>/HOW TO FIX — FIND THE CAUSE/.test(JSON.stringify(c.body.messages))&&/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))));
-    const cal=await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); return !!(b&&b.querySelector('.chg [data-a="apply"]:not([disabled])')); });
-    ok("an engine's proposed edit is offered", cal);
-    if(cal){ await pg.evaluate(()=>{ const b=[...document.querySelectorAll("#engList .scene")].find(x=>/memBuild/.test(x.textContent)); b.querySelector('.chg [data-a="apply"]').click(); });
-      ok("and applies to that engine's prompt", await pg.evaluate(()=>/PE-ENGINE-FIX/.test(__PE.itemVal(__PE.findItem("prompt:memBuild"))))); }
+    ok("the engines read the scripted words exactly (the maybe, the no, the yes, the cancelled lift)", er.ins.some(t=>/Bakarız abi, belki/.test(t)&&/Tamam be abi, ikna ettin/.test(t)&&/Gelemem, kusura bakma/.test(t)), er.ins.length);
+    ok("only the last, unscripted line was answered by your model", er.rp>=1&&er.rp<=3, er.rp);
+    const ej=OR.calls.find(c=>c.claude&&/You are JUDGING one BACKGROUND ENGINE/.test(c.body.messages[0].content)), ejt=ej?ej.body.messages[0].content:"";
+    ok("each engine is judged knowing the scene's purpose and that the script is known", ej&&/WHAT THE SCENE WAS BUILT TO TEST/.test(ejt)&&/recorded as agreed only from the moment Sami says yes/.test(ejt)&&/Lines with a character's name were scripted/.test(ejt)&&/Do not propose fixes/.test(ejt));
+    ok("Claude judged every engine", er.judged===er.groups.length, er.judged+" of "+er.groups.length);
+    const efin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of the BACKGROUND ENGINES/.test(c.body.messages[0].content));
+    ok("then one complete engine analysis reads every scene's purpose, script and judgements, with the prompts' text", !!efin&&/PURPOSE:/.test(efin.body.messages[0].content)&&/===== prompt:memBuild =====/.test(efin.body.messages[0].content));
+    ok("its verdict and its edits show in the engine tab", /Complete engine analysis/.test(er.box)&&/the maybe stuck/.test(er.box), er.box.slice(0,300));
+    const eap=await pg.evaluate(()=>{ const b=document.querySelector('#engOverallBox .chg [data-a="apply"]'); if(!b||b.disabled) return {ok:false,b:!!b,t:b&&b.textContent,card:((document.querySelector('#engOverallBox .chg')||{}).textContent||"").slice(0,300),ed:JSON.stringify((__PE.ENGALL.overall||{}).edits||null).slice(0,300)}; b.click(); return {ok:/PE-ENGINE-FIX/.test(__PE.itemVal(__PE.findItem("prompt:memBuild")))}; });
+    ok("and its edit applies to the engine's prompt", eap.ok, JSON.stringify(eap));
     ok("the sandbox is back to the untouched sample afterwards", await pg.evaluate(async()=>{ const p=await __PE.engCall("build",{kind:"solo"}); return p.messages.filter(m=>m.hist).length>=3; }));
-
-    console.log("\n[10a — an engine scene with its own place and cast plays there]");
-    OR.calls=[];
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_engpreset",JSON.stringify("canteen")); localStorage.setItem("pe_v1_engscript",JSON.stringify(""));
-      const sel=document.querySelector("#engPreset"); sel.value="canteen"; sel.dispatchEvent(new Event("change")); document.querySelector("#engEndDay").checked=false;
-      document.querySelector("#engScript").value=__PE.ENGINE_SCENES.find(x=>x.id==="canteen").lines.slice(0,2).join("\n"); });
-    await pg.evaluate(()=>__PE.runEngines());
-    await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
-    const cant=OR.calls.filter(c=>!/BACKGROUND ENGINE/.test(JSON.stringify(c.body.messages))).map(c=>JSON.stringify(c.body.messages)).join(" ");
-    ok("the canteen scene is played at the canteen, with Sami and Berker", /Worker Canteen|Isdemir/.test(cant)&&/Berker/.test(cant)&&/Sami/.test(cant), cant.slice(0,300));
-    ok("its focus reaches the analysis", OR.calls.some(c=>/Two brothers set against each other in public/.test(JSON.stringify(c.body.messages))));
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); document.querySelector("#engEndDay").checked=true; });
 
     console.log("\n[10b — Claude stands in: every call goes to Claude]");
     OR.calls=[];
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("claude")); });
-    await pg.evaluate(()=>{ document.querySelector("#engEndDay").checked=false; document.querySelector("#engScript").value="Merhaba Buket."; __PE.analyseEngines=__PE.analyseEngines; });
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("claude")); document.querySelector("#engEndDay").checked=false; document.querySelector("#engScript").value="Emre: Merhaba Buket."; });
     await pg.evaluate(()=>__PE.runEngines());
     await pg.waitForFunction(()=>!__PE.ENGRUN.running,null,{timeout:300000});
-    const cm=new Set(OR.calls.map(c=>c.body.model));
-    ok("with Claude standing in, every call (reply, engines, analysis) went to a Claude model", OR.calls.length>3&&[...cm].every(m=>/^anthropic\//.test(m)), [...cm].join(", "));
+    ok("with Claude standing in, every call (reply, engines, judges) went to Claude", OR.calls.length>3&&OR.calls.every(c=>c.claude), JSON.stringify([...new Set(OR.calls.map(c=>c.body.model))]));
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); document.querySelector("#engEndDay").checked=true; });
 
-    console.log("\n[11 — one run: every payload kind, each scene shaped to it, then everything analysed together]");
-    const kindsOk=await pg.evaluate(async()=>{
-      const S=__PE.DRIFT_SCENES, by=id=>S.find(x=>x.id===id), out={};
-      const one=async(id,turns)=>{ const sc=by(id); const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,turns}}); return p.messages.map(m=>m.content).join("\n"); };
-      out.kinds=[...new Set(S.map(x=>x.kind))].sort().join(",");
-      out.flirtThemes=S.filter(x=>x.theme==="Flirting").map(x=>x.kind).sort().join(",");
-      out.text=await one("flirt_text",[{role:"user",content:"Uyudun mu?",textMsg:true,textWith:"p_buket",textWithName:"Buket Özüçak"}]);
-      out.gm=await one("flirt_gm",[{role:"user",content:"Bir çay daha?"},{role:"assistant",speaker:"Narrator",narratorEvent:true,content:"*Buket's phone lights up on the table: SAMI.*"}]);
-      out.heat=await one("flirt_heat",[{role:"user",content:"*Onu kendime çekiyorum.* Buket…"}]);
-      out.multi=await one("flirt_multi",[{role:"user",content:"Buket, bu akşam çok güzel olmuşsun."}]);
-      return out; });
-    ok("all five payload kinds are covered", kindsOk.kinds==="gm,heat,multi,solo,text", kindsOk.kinds);
-    ok("the flirting theme is played in every kind", kindsOk.flirtThemes==="gm,heat,multi,solo,text", kindsOk.flirtThemes);
-    ok("the text version is a text thread", /Uyudun mu\?/.test(kindsOk.text)&&/text/i.test(kindsOk.text), kindsOk.text.slice(-600));
-    ok("the gamemaster version puts the beat in front of her", /phone lights up on the table: SAMI/.test(kindsOk.gm), kindsOk.gm.slice(-600));
-    ok("the heat version is built as a heat beat, at Emre's", /Emre's House/.test(kindsOk.heat)&&kindsOk.heat!==kindsOk.multi, kindsOk.heat.slice(0,300));
-    ok("the several-characters version has Sami in the room", /Sami/.test(kindsOk.multi));
-
+    console.log("\n[11 — one roleplay run, then one complete analysis that may move pieces]");
     OR.calls=[];
-    OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);
-      if(/reading the results of a whole test run AT ONCE/.test(all)) return JSON.stringify({score:6,summary:"s",patterns:[{pattern:"too stiff in daily talk",scenes:["Daily talk: fun and real"],cause:"x"}],
-        decisions:[{id:"R:flirt_gm#1",verdict:"drop",why:"helps one scene, stiffens daily talk"}],
-        edits:[{item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-DRIFT-FIX",replace:"PE-ALL-FIX",why:"w",helps:["Daily talk: fun and real","Flirting by text, at night"],risks:"none"}]});
-      if(/instruction-following test/.test(all)){ const n=(all.match(/TURN \d+\\n/g)||[]).length||4;
-        const ed=/Flirting at Emre's, and the world interrupts/.test(all)?[{item:"frag:style_header",kind:"add",cause:"c",find:"PE-DRIFT-FIX",replace:"PE-DRIFT-FIX ONLY-ONE-SCENE",why:"w"}]:[];
-        return JSON.stringify({turns:Array.from({length:n},()=>({verdict:"held",note:"n"})),drift_at:null,score:8,summary:"ok",edits:ed}); }
-      if(/BACKGROUND ENGINE/.test(all)) return JSON.stringify({verdict:"good",summary:"ok",problems:[],edits:[]});
+    const soloTpl=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("tpl:solo")));
+    OR.answer=body=>{ const all=JSON.stringify(body.messages||[]), first=String(((body.messages||[])[0]||{}).content||"");
+      if(/COMPLETE ANALYSIS of a test run/.test(first)) return JSON.stringify({score:6,summary:"s",criteria:{memory:4},patterns:[{criterion:"memory",pattern:"the past is buried",scenes:["Loyal to what happened"],cause:"x"}],
+        structure:["The trackers sit far from the reply"],
+        edits:[{item:"tpl:solo",kind:"move",find:"{{call//trackers//full}}",before:"{{call//drives//full}}",cause:"buried",why:"nearer the reply",helps:["self"],risks:"none"},
+               {item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-REVIEWED",replace:"PE-ALL-FIX",why:"w",helps:["turkish","meaning"],risks:"none"}]});
+      if(/You are JUDGING one test scene/.test(first)) return JUDGE((first.match(/^TURN \d+$/gm)||[]).length);
       const sys=String(((body.messages||[])[0]||{}).content||""); return /JSON/i.test(sys)?"{}":'"Tamam." *Gülümsüyor.*'; };
-    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_selreply",JSON.stringify(["daily_text","flirt_gm"])); localStorage.setItem("pe_v1_seleng",JSON.stringify(["comings"]));
-      localStorage.setItem("pe_v1_engpreset",JSON.stringify("flirt")); localStorage.setItem("pe_v1_engscript",JSON.stringify("")); document.querySelector("#engEndDay").checked=false; });
+    await pg.evaluate(()=>{ localStorage.setItem("pe_v1_selreply",JSON.stringify(["text_night","dinner"])); });
     await pg.click('#rtabs button[data-r="tests"]');
-    OR.peak=0; OR.delay=body=>/instruction-following test|BACKGROUND ENGINE/.test(JSON.stringify(body.messages||[]))?400:0;
+    OR.peak=0; OR.delay=body=>/You are JUDGING/.test(JSON.stringify(body.messages||[]))?400:0;
     const est=await pg.evaluate(()=>document.querySelector("#allEstimate").textContent);
-    ok("the estimate counts what is ticked", /2 reply scenes \(9 replies\) and 1 engine scene/.test(est), est);
+    ok("the estimate counts the replies of every speaker", /2 scenes \(12 replies\)/.test(est), est);
     await pg.evaluate(()=>__PE.runEverything());
-    const all=await pg.evaluate(()=>({dt:__PE.DR.results.daily_text,fg:__PE.DR.results.flirt_gm,eng:__PE.ENGRUN.byScene.comings,overall:__PE.ALL.overall,
+    const all=await pg.evaluate(()=>({tn:__PE.DR.results.text_night,dn:__PE.DR.results.dinner,overall:__PE.ALL.overall,engRan:Object.keys(__PE.ENGRUN.byScene).length,
       box:(document.querySelector("#overallBox")||{}).textContent||""}));
-    ok("both reply scenes were played and analysed", all.dt&&all.dt.judge&&all.fg&&all.fg.judge&&all.fg.turns.some(t=>t.gm), JSON.stringify({dt:!!(all.dt&&all.dt.judge),fg:!!(all.fg&&all.fg.judge)}));
-    ok("the engine scene was played (its own cast) and analysed", !!(all.eng&&all.eng.calls.length&&Object.keys(all.eng.judge||{}).length), JSON.stringify(all.eng&&{n:all.eng.calls.length,j:Object.keys(all.eng.judge||{}).length}));
-    const together=OR.calls.find(c=>/AT ONCE/.test(JSON.stringify(c.body.messages)));
-    const tj=together?JSON.stringify(together.body.messages):"";
-    ok("then Claude read everything together: every scene, every engine verdict, real payloads", !!together&&/Daily talk by text/.test(tj)&&/Flirting at Emre's, and the world interrupts/.test(tj)&&/Engine scene: Comings and goings/.test(tj)&&/A REAL TEXT MESSAGES PAYLOAD/.test(tj), tj.slice(0,400));
-    ok("the combined verdict shows, with each edit's scenes", !!all.overall&&/Across all scenes/.test(all.box)&&/too stiff in daily talk/.test(all.box)&&/Helps: Daily talk/.test(all.box), all.box.slice(0,300));
     OR.delay=null;
-    ok("the analysts read the scenes and engines at the same time", OR.peak>=2, OR.peak);
-    ok("the overseer was handed every analyst edit by id", /\[R:flirt_gm#1\]/.test(tj)&&/OVERSEER/.test(tj), (tj.match(/.{0,80}R:flirt_gm.{0,80}/)||[""])[0]);
-    const od=await pg.evaluate(()=>({box:(document.querySelector("#overallBox")||{}).textContent||"",card:(document.querySelector("#dr_flirt_gm")||{}).textContent||""}));
-    ok("its decisions show, on the run and on the analyst's own edit", /1 dropped/.test(od.box)&&/Overseer: dropped helps one scene/.test(od.card), od.card.slice(-400));
-    ok("the combined edit applies", await pg.evaluate(()=>{ const b=document.querySelector('#overallBox .chg [data-a="apply"]'); if(!b||b.disabled) return false; b.click(); return /PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))); }));
+    ok("both scenes were played and judged, and no engine scene ran with them", all.tn&&all.tn.judge&&all.dn&&all.dn.judge&&all.engRan===1, JSON.stringify({tn:!!(all.tn&&all.tn.judge),dn:!!(all.dn&&all.dn.judge),eng:all.engRan}));
+    ok("the judges read the scenes at the same time", OR.peak>=2, OR.peak);
+    const fin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft=fin?fin.body.messages[0].content:"";
+    ok("the complete analysis reads every scene, the rubric, the layouts and the full text of every piece", !!fin&&/Texting at night/.test(ft)&&/Dinner with Sami/.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)
+       &&/===== tpl:solo =====/.test(ft)&&/===== frag:style_header =====/.test(ft)&&/"move"/.test(ft), ft.slice(0,300));
+    ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
+    const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
+      b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
+      return {ok:true,i,j,label:b.textContent,undo:!c.querySelector('[data-a="undo"]').hidden}; });
+    ok("a move edit takes the line out and puts it right before the named one", mv.ok&&mv.i===mv.j-1&&mv.label==="Applied"&&mv.undo, JSON.stringify(mv));
+    const mvu=await pg.evaluate(soloTpl=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/Moves/.test(x.textContent)); c.querySelector('[data-a="undo"]').click(); return __PE.itemVal(__PE.findItem("tpl:solo"))===soloTpl; },soloTpl);
+    ok("…and Undo puts the layout back exactly", mvu);
+    ok("a rewrite edit applies once, and survives the list being rebuilt", await pg.evaluate(()=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return false; b.click();
+      __PE.renderEstimate(); const b2=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)).querySelector('[data-a="apply"]');
+      return b2.textContent==="Applied"&&b2.disabled&&(__PE.itemVal(__PE.findItem("frag:style_header")).match(/PE-ALL-FIX/g)||[]).length===1; }));
+    OR.calls=[];
+    await pg.evaluate(()=>__PE.analyseEverything());
+    const fin2=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft2=fin2?fin2.body.messages[0].content:"";
+    ok("the next analysis sees the earlier run and the edits applied since", /EARLIER RUNS/.test(ft2)&&/edits applied after it/.test(ft2)&&/PE-ALL-FIX/.test(ft2)&&/previous run 4/.test(ft2), ft2.slice(ft2.indexOf("EARLIER RUNS"),ft2.indexOf("EARLIER RUNS")+600));
+    const hist=await pg.evaluate(()=>({h:JSON.parse(localStorage.getItem("pe_v1_runhist")||"[]").length,box:(document.querySelector("#overallBox")||{}).textContent||""}));
+    ok("each run is kept, and the table shows the change from the previous run", hist.h>=2&&/previous/.test(hist.box), JSON.stringify({h:hist.h}));
+
+    const beforeImp=await pg.evaluate(()=>!!__PE.ALL.overall&&!!document.querySelector("#overallBox .scene"));
+    const mtImp=await pg.evaluate(()=>__PE.DR.results.memory_truth);
+    const set2Imp={app:"StoryMind",kind:"test-results",date:Date.now(),scenes:[{id:"daily",title:"x",model:"m",at:Date.now(),turns:[{user:"a",reply:"b"}],payload:null,judge:null},Object.assign({id:"memory_truth",title:"Loyal"},mtImp)],engines:{}};
+    await pg.setInputFiles('#fileDrift',{name:"storymind_tests_new.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(set2Imp))});
+    await pg.waitForTimeout(500);
+    const afterImp=await pg.evaluate(()=>({overall:__PE.ALL.overall,box:!!document.querySelector("#overallBox .scene"),ids:Object.keys(__PE.DR.results),eng:Object.keys(__PE.ENGRUN.byScene)}));
+    ok("importing a new test set replaces the old results and clears the old complete analysis", beforeImp&&afterImp.overall===null&&!afterImp.box&&afterImp.ids.join()==="daily,memory_truth"&&afterImp.eng.length===0, JSON.stringify(afterImp).slice(0,300));
+
+    console.log("\n[11b — model rotation: two models take turns on the roleplay replies, and the analysis judges how they go together]");
+    OR.calls=[];
+    OR.answer=body=>{ const first=String(((body.messages||[])[0]||{}).content||"");
+      if(/COMPLETE ANALYSIS of a test run/.test(first)) return JSON.stringify({score:6,summary:"s",criteria:{blend:5},patterns:[],structure:[],edits:[],
+        rotation:{blend:"PE-BLEND the second model is wordier",models:[{model:"x/rp-a",good:"terse",weak:"flat"},{model:"x/rp-b",good:"warm",weak:"long"}],keep:"keep both"}});
+      if(/You are JUDGING one test scene/.test(first)){ const j=JSON.parse(JUDGE((first.match(/^TURN \d+$/gm)||[]).length)); j.criteria.blend={score:5,note:"jumps",evidence:"x"}; return JSON.stringify(j); }
+      return /JSON/i.test(first)?"{}":'"Tamam." *Gülümsüyor.*'; };
+    const rb=await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testmode",JSON.stringify("or")); localStorage.setItem("pe_v1_testrotation_or",JSON.stringify("x/rp-a, x/rp-b")); renderProvider();
+      return {rot:testRotation(),box:document.querySelector("#driftModelBox").textContent,label:testLabel()}; });
+    ok("a rotation of two or more models can be set for the model under test", rb.rot.join()==="x/rp-a,x/rp-b"&&/Rotation on/.test(rb.box)&&/rotating x\/rp-a → x\/rp-b/.test(rb.label), JSON.stringify(rb).slice(0,300));
+    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES.find(x=>x.id==="text_night")]));
+    const rr=await pg.evaluate(()=>{ const r=__PE.DR.results.text_night; return {models:r.turns.map(t=>t.replies[0].model),rotation:r.rotation,chips:[...document.querySelectorAll("#dr_text_night .rp .chip")].map(c=>c.textContent)}; });
+    const sent=OR.calls.filter(c=>!c.claude).map(c=>c.body.model);
+    ok("each reply goes to the next model in turn, starting from the first", sent.join()==="x/rp-a,x/rp-b,x/rp-a,x/rp-b"&&rr.models.join()===sent.join(), JSON.stringify({sent,models:rr.models}));
+    ok("each reply shows the model that wrote it", rr.chips.join()==="x/rp-a,x/rp-b,x/rp-a,x/rp-b", rr.chips.join());
+    const jr=OR.calls.find(c=>c.claude&&/You are JUDGING one test scene/.test(c.body.messages[0].content)), jrt=jr?jr.body.messages[0].content:"";
+    ok("the judge sees which model wrote each reply and scores how the models go together", /MODEL ROTATION: the replies rotate between these models: x\/rp-a, x\/rp-b/.test(jrt)&&/\[model: x\/rp-b\]/.test(jrt)&&/blend — Rotating models go together/.test(jrt), jrt.slice(0,200));
+    await pg.evaluate(()=>__PE.analyseTogether());
+    const orr=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ort=orr?orr.body.messages[0].content:"";
+    ok("the complete analysis is told about the rotation, with each model's replies and speed", /===== MODEL ROTATION =====/.test(ort)&&/- x\/rp-b: 2 replies, average/.test(ort)&&/how they go along together/.test(ort), ort.slice(ort.indexOf("MODEL ROTATION")-20,ort.indexOf("MODEL ROTATION")+400));
+    const ob=await pg.evaluate(()=>({box:(document.querySelector("#overallBox")||{}).textContent||"",model:__PE.ALL.overall.model}));
+    ok("its verdict on the rotation is shown, with the rubric's blend row", /Model rotation\./.test(ob.box)&&/PE-BLEND/.test(ob.box)&&/Rotating models go together/.test(ob.box)&&/rotating x\/rp-a → x\/rp-b/.test(ob.model), ob.box.slice(0,300));
+    const ro=await pg.evaluate(()=>{ localStorage.setItem("pe_v1_testrotation_or",JSON.stringify("x/rp-a")); const one=testRotation().length; localStorage.setItem("pe_v1_testrotation_or",JSON.stringify("")); renderProvider();
+      const sc=__PE.CRITERIA.filter(c=>c.rotation).length; return {one,off:testRotation().length,crit:sc}; });
+    ok("one model, or none, is no rotation", ro.one===0&&ro.off===0&&ro.crit===1, JSON.stringify(ro));
 
     console.log("\n[12 — LLM evaluation: models compared on fixed prompts, no prompt edits]");
     OR.calls=[];
@@ -392,7 +397,7 @@ const ROOT=path.resolve(__dirname,'..');
     const mf=await pg.evaluate(()=>{ const f=__PE.MODEL_FIELDS.map(x=>x.key); const e=__PE.effectiveModels(); return {f,e}; });
     ok("one entry per text-model setting in StoryMind's Settings", ["model","mcModel","memModel","gmModel","rewriter","routerModel","bioModel","authorModel","gossipModel","playerNarrateModel","callModel"].every(k=>mf.f.indexOf(k)>=0), mf.f.join(","));
     ok("each starts from the model in the prompts file (blank ones use their fallback)", !!mf.e.model&&!!mf.e.memModel&&mf.e.gossipModel===(mf.e.gossipModel||mf.e.memModel), JSON.stringify(mf.e).slice(0,300));
-    await pg.evaluate(()=>{ const L=__PE.LLM; L.cfg.cands={model:["x/rp-b"],memModel:["x/mem-b"]}; L.cfg.scenes=["daily_text"]; L.cfg.eng="comings"; L.cfg.per=2;
+    await pg.evaluate(()=>{ const L=__PE.LLM; L.cfg.cands={model:["x/rp-b"],memModel:["x/mem-b"]}; L.cfg.scenes=["text_night"]; L.cfg.eng="comings"; L.cfg.per=2;
       localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg)); });
     await pg.click('#rtabs button[data-r="llm"]');
     const ui=await pg.evaluate(()=>({fields:document.querySelectorAll("#llmFields [data-f]").length,est:document.querySelector("#llmEstimate").textContent}));
@@ -400,7 +405,7 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.evaluate(()=>__PE.runLlm());
     const ev=await pg.evaluate(()=>{ const R=__PE.LLM.res; return {tm:testModel(),rp:R.fields.model,mem:R.fields.memModel,html:document.querySelector("#llmResults").textContent,apply:document.querySelectorAll("#llmResults [data-a=apply]").length}; });
     const rpModels=new Set(OR.calls.filter(c=>!/LANGUAGE MODELS/.test(JSON.stringify(c.body.messages))).map(c=>c.body.model));
-    ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.daily_text["x/rp-b"].length===4&&ev.rp.runs.daily_text[ev.tm].length===4, [...rpModels].join(", "));
+    ok("the roleplay candidate played the scene itself", rpModels.has("x/rp-b")&&ev.rp&&ev.rp.runs.text_night["x/rp-b"].length===4&&ev.rp.runs.text_night[ev.tm].length===4, [...rpModels].join(", "));
     const mem=ev.mem; const __dbgBase=await pg.evaluate(()=>({b:__PE.LLM.res.baseline,mode:llmMode(),here:llmHere(),fields:Object.keys(__PE.LLM.res.fields),stat:document.querySelector("#llmStat").textContent}));
     ok("the memory setting's recorded calls were replayed with the candidate, on identical input", !!mem&&mem.calls.length>0&&mem.calls.every(c=>c.outs["x/mem-b"]!=null&&c.outs[mf.e.memModel]!=null),
        JSON.stringify({calls:mem&&mem.calls.map(c=>({dbg:c.dbg,m:Object.keys(c.outs)})),err:mem&&mem.error,base:__dbgBase}));
@@ -425,7 +430,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("a reply to the payload is sent to NanoGPT by StoryMind's own request, with the NanoGPT key and model", /Nano burada/.test(nr)&&!!nc&&/nano-gpt\.com\/api\/v1\/chat\/completions/.test(nc.url)&&nc.auth==="Bearer nano-key-123"&&nc.body.model==="nano/rp-1"&&!nc.body.provider&&!nc.body.reasoning&&OR.calls.filter(c=>!c.claude).length===orBefore,
        JSON.stringify(nc&&{url:nc.url,auth:nc.auth,model:nc.body.model,keys:Object.keys(nc.body)}));
     NANO.calls=[];
-    const nl=await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_llmmode",JSON.stringify("auto")); const L=__PE.LLM; L.cfg.cands={model:["nano:nano/rp-2","openrouter:x/rp-b"]}; L.cfg.scenes=["daily_text"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg));
+    const nl=await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_llmmode",JSON.stringify("auto")); const L=__PE.LLM; L.cfg.cands={model:["nano:nano/rp-2","openrouter:x/rp-b"]}; L.cfg.scenes=["text_night"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg));
       return {c:__PE.llmCands("model")}; });
     ok("LLM evaluation candidates can name their API (nano:…, openrouter:…)", nl.c.join()==="nano/rp-1,nano:nano/rp-2,openrouter:x/rp-b", JSON.stringify(nl));
     const orN=OR.calls.filter(c=>!c.claude&&c.body.model==="x/rp-b").length;
@@ -456,6 +461,45 @@ const ROOT=path.resolve(__dirname,'..');
     const rc=OR.calls.filter(c=>!c.claude).pop();
     ok("the thinking switch turns reasoning on for the model under test", !!rc&&rc.body.reasoning&&rc.body.reasoning.enabled===true, JSON.stringify(rc&&rc.body.reasoning));
     await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testreasoning",JSON.stringify(false)); await pushModelToEngine(); });
+
+    console.log("\n[15 — the analyst prompts: shown, editable, used15]");
+    const apx=await pg.evaluate(()=>{ const P=__PE;
+      const base={context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",expect:"e",criteria:"C",exchange:"E",payload:"PL",rotation:""};
+      const sc=P.apFill(P.apText("scene"),Object.assign({},base,{applied:""})), sc2=P.apFill(P.apText("scene"),Object.assign({},base,{applied:"- frag:x: «a» → «b»"}));
+      const rv=P.apFill(P.apText("review"),{context:"CTX",payload:"PL",reply:"R",catalogue:"C"});
+      return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
+        noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THIS SCENE WAS PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(title|exchange|payload|criteria)\}\}/.test(sc+sc2),
+        keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, engine, complete analyses, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,engine,overseer,engfinal,compare,standin", apx.ids.join());
+    ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
+    await pg.click('#rtabs button[data-r="ap"]');
+    await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="scene"] textarea'); ta.value=ta.value.replace("You are JUDGING one test scene","PE-AP-EDIT You are JUDGING one test scene"); ta.dispatchEvent(new Event("input")); });
+    await pg.waitForTimeout(700);
+    OR.calls=[];
+    await pg.evaluate(async()=>{ const sc=__PE.DRIFT_SCENES.find(x=>x.id==="memory_truth"); __PE.DR.results[sc.id].judge=null; await __PE.analyseDrift([sc]); });
+    const used15=OR.calls.find(c=>c.claude&&/You are JUDGING one test scene/.test(c.body.messages[0].content));
+    const ui15=await pg.evaluate(()=>{ __PE.renderAp(); const el=document.querySelector('#apList [data-ap="scene"]'); return {chip:/edited/.test(el.querySelector("h3").textContent),last:el.querySelector("pre").textContent}; });
+    ok("an edit is used by the next analysis, and the exact text sent is shown", !!used15&&/PE-AP-EDIT/.test(used15.body.messages[0].content)&&ui15.chip&&/PE-AP-EDIT/.test(ui15.last)&&/HOW TO FIX/.test(ui15.last), JSON.stringify({used15:!!used15,chip:ui15.chip}));
+    const rs15=await pg.evaluate(()=>{ document.querySelector('#apList [data-ap="scene"] [data-reset]').click(); return !/PE-AP-EDIT/.test(__PE.apText("scene")); });
+    ok("Reset brings the shipped prompt back", rs15);
+
+    console.log("\n[16 — the order on screen, and edits applied since a test ran]");
+    const ord16=await pg.evaluate(()=>{ __PE.renderAp&&0; const dom=[...document.querySelectorAll("#driftList .scene")].map(e=>e.id.replace(/^dr_/,""));
+      return {arr:__PE.DRIFT_SCENES.map(x=>x.id),dom,first:__PE.DRIFT_SCENES[0].theme}; });
+    ok("scenes are played and analysed in the order the Tests tab numbers them", ord16.first==="Daily life"&&(ord16.dom.length===0||ord16.dom.join()===ord16.arr.join()), JSON.stringify({first:ord16.arr.slice(0,3),dom:ord16.dom.slice(0,3)}));
+    OR.calls=[];
+    const ap16=await pg.evaluate(async()=>{ const P=__PE, sc=P.DRIFT_SCENES.find(x=>x.id==="memory_truth"), r=P.DR.results[sc.id];
+      const it=P.findItem("frag:style_header"), v=P.itemVal(it), old=v.slice(0,40);
+      P.setVal(it,"PE-NEW-WORDING "+v.slice(40));
+      const k="frag:style_header\u0001"+old+"\u0001PE-NEW-WORDING ";
+      APPLIED[k]={at:0,t:Date.now(),item:"frag:style_header",find:old,replace:"PE-NEW-WORDING "}; lsSet("applied",APPLIED);
+      r.at=Date.now()-60000; r.judge=null; await P.analyseDrift([sc]);
+      const stale={item:"frag:style_header",kind:"rewrite",find:old,replace:"x",why:"w"};
+      return {state:editState(stale,it)}; });
+    const sin16=OR.calls.find(c=>c.claude&&/You are JUDGING one test scene/.test(c.body.messages[0].content));
+    const st16=sin16?sin16.body.messages[0].content:"";
+    ok("the judge is told which edits were applied after the scene was played", /CHANGES APPLIED SINCE THIS SCENE WAS PLAYED/.test(st16)&&/PE-NEW-WORDING/.test(st16), st16.slice(-1500));
+    ok("an edit quoting words that were already changed says so, not 'Text not found'", ap16.state==="superseded", JSON.stringify(ap16));
 
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});
@@ -498,13 +542,13 @@ const ROOT=path.resolve(__dirname,'..');
     const sw=await sp.evaluate(()=>({sel:document.querySelector("#worldSel").value,opts:[...document.querySelectorAll("#worldSel option")].map(o=>o.textContent),name:__PE.STORY.w&&__PE.STORY.w.name}));
     ok("a loaded backup becomes the story every payload and test uses", sw.sel==="story"&&/Your story: Test Lojman/.test(sw.opts.join("|")), JSON.stringify(sw));
     const bs=await sp.evaluate(async()=>{ const by=id=>__PE.DRIFT_SCENES.find(x=>x.id===id), out={};
-      for(const id of ["past","after1"]){ const sc=by(id);
+      for(const id of ["memory_truth","after_nextday"]){ const sc=by(id);
         const p=await __PE.engCall("build",{kind:sc.kind,speakerId:sc.speaker,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:[{role:"user",content:sc.lines[0]}]}});
         out[id]=p.messages.map(m=>m.content).join("\n"); }
       return out; });
-    ok("a scene set before day 6 is rewound: no memory of it, no decision after it", /EARLYMARK/.test(bs.past)&&!/AFTERMARK/.test(bs.past)&&!/SEALED_DECISION/.test(bs.past), JSON.stringify({e:/EARLYMARK/.test(bs.past),a:/AFTERMARK/.test(bs.past),s:/SEALED_DECISION/.test(bs.past)}));
-    ok("the day after uses the story's own memory and decision, not the sample's stand-in", /AFTERMARK/.test(bs.after1)&&/SEALED_DECISION/.test(bs.after1)&&!/ended up in his bed/.test(bs.after1), JSON.stringify({a:/AFTERMARK/.test(bs.after1),s:/SEALED_DECISION/.test(bs.after1),e:/ended up in his bed/.test(bs.after1)}));
-    ok("pieces the story never produced are filled from its facts (scenario, a condensed past)", /başhekim/.test(bs.past)&&/The first days:/.test(bs.past), bs.past.slice(0,600));
+    ok("a scene set before day 6 is rewound: no memory of it, no decision after it", /EARLYMARK/.test(bs.memory_truth)&&!/AFTERMARK/.test(bs.memory_truth)&&!/SEALED_DECISION/.test(bs.memory_truth), JSON.stringify({e:/EARLYMARK/.test(bs.memory_truth),a:/AFTERMARK/.test(bs.memory_truth),s:/SEALED_DECISION/.test(bs.memory_truth)}));
+    ok("the day after uses the story's own memory and decision, not the sample's stand-in", /AFTERMARK/.test(bs.after_nextday)&&/SEALED_DECISION/.test(bs.after_nextday)&&!/ended up in his bed/.test(bs.after_nextday), JSON.stringify({a:/AFTERMARK/.test(bs.after_nextday),s:/SEALED_DECISION/.test(bs.after_nextday),e:/ended up in his bed/.test(bs.after_nextday)}));
+    ok("pieces the story never produced are filled from its facts (scenario, a condensed past)", /başhekim/.test(bs.memory_truth)&&/The first days:/.test(bs.memory_truth), bs.memory_truth.slice(0,600));
     await sp.reload();
     await sp.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.world,null,{timeout:90000});
     ok("the story is kept in this browser across a reload", await sp.evaluate(()=>__PE.S.world.source==="story"&&__PE.STORY.w&&__PE.STORY.w.name==="Test Lojman"));
@@ -516,7 +560,7 @@ const ROOT=path.resolve(__dirname,'..');
       f.json=async(input,o)=>{ window.__tiers.push({tier:o&&o.modelTier,eval:true});
         return {models:[{label:"A",scores:{realism:6},overall:6,good:"quick",weak:"thin"},{label:"B",scores:{realism:7},overall:7,good:"steady",weak:"plain"},{label:"C",scores:{realism:9},overall:9,good:"alive",weak:"slow"}],best:"C",recommend:"Model C: the most alive",summary:"Model C wins."}; };
       AI.sample=f; NET.ok=false;
-      const L=__PE.LLM; L.cfg.cands={}; L.cfg.scenes=["daily_text"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg)); });
+      const L=__PE.LLM; L.cfg.cands={}; L.cfg.scenes=["text_night"]; L.cfg.eng=""; localStorage.setItem("pe_v1_llmcfg",JSON.stringify(L.cfg)); });
     await sp.click('#rtabs button[data-r="llm"]');
     const here=await sp.evaluate(()=>({c:__PE.llmCands("model"),box:document.querySelector("#llmKeyBox").textContent}));
     ok("without OpenRouter the roleplay setting compares Claude's three tiers", here.c.join()==="claude:quick,claude:default,claude:complex"&&/Runs here, with Claude/.test(here.box), JSON.stringify(here));

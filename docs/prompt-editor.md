@@ -164,71 +164,192 @@ candidate names its API: `nano:<id>` or `openrouter:<id>`. A plain id is on Mode
 reasoning needs no switch: StoryMind itself (v150.15) sends the request again with reasoning on when the
 model refuses "reasoning off", and remembers that model (`sm_reasononly`).
 
+**Model rotation.** This works as in StoryMind (Settings → Model rotation, `state.rpRotation`). The model
+box takes an optional list of two or more model ids, comma-separated, on the Model under test's API.
+- With a list, **each roleplay reply in the Roleplay tests uses the next model**, and the list cycles.
+- Every scene starts again from the first model, so runs compare.
+- The engines keep the models the app gives them. The engine tests, Test & review and Claude standing in
+  never rotate.
+- For OpenRouter the list starts from the prompts file's `rpRotation` until one is typed here.
+- One model, or none, means no rotation.
+
+Each reply records the model that wrote it and shows it as a chip:
+- The judges see `[model: …]` on every reply. They also score **blend** (*Rotating models go together*):
+  one character and one story across a switch, no jump in voice, register, length, Turkish or pacing of
+  desire, each model picking up the other's threads.
+- The complete analysis gets each model's reply count, average response time and length
+  (`rotationText`). It is asked how the models go together, which criteria each pulls down, and whether
+  to keep, reorder or drop one. Its edits must hold for every model in the rotation, and a gap that only
+  one model has and no prompt can close is reported rather than bent around. Its verdict shows a **Model
+  rotation** block, and the rubric table gets a blend row.
+
 **Claude never runs on a paid API.** Every request the sandbox makes passes `relayFetch`. A request naming
 an Anthropic or Claude model is refused there before anything is sent, whatever started it. Such models
 are also left out of the model lists. Claude runs only through the Claude app.
 
+## What the analysts know about edits already made
+
+A judge reads the payload exactly as it was when its scene was played. If you applied edits after that,
+the payload still shows the old wording. Two things keep that from producing stale fixes:
+
+- **They are told.** Every applied edit is remembered with its item, the old words and the new ones
+  (`APPLIED`). Each judge and each complete analysis gets the edits applied since its tests ran, as
+  `{{applied}}`. The complete analyses read the **current** text of every piece, so their edits quote
+  words that still exist.
+- **A stale edit says so.** An edit card whose words were already replaced by an applied edit shows
+  **Already changed** (`supersededBy`), not "Text not found". Run the scenes again to have the new
+  wording judged.
+
+**Order.** Scenes are played, judged and listed in the order the tab numbers them (`DRIFT_SCENES`, grouped
+by theme: Daily life, Seduction, In the act, After intimacy, Memory, Integrity).
+
+## Analyst prompts (what Claude is asked)
+
+The **Analyst prompts** tab shows every prompt the editor sends to Claude. Each one can be edited
+(`AP_DEFS`, filled by `apBuild`):
+
+- **The method** (`context`) goes into the others as `{{context}}`. It covers what the author wants from
+  every reply, how a model weighs a payload, and HOW TO FIX.
+- **Ask Claude** (`ask`).
+- **Test & review** (`review`).
+- **Scene judge** (`scene`): one roleplay scene. It scores the rubric and does not fix.
+- **Engine judge** (`engine`): one background engine in one engine scene. It does not fix either.
+- **The complete analysis** (`overseer`): every roleplay scene, then the fixes.
+- **The complete engine analysis** (`engfinal`): every engine scene, then the fixes to the engine prompts.
+- **LLM evaluation** (`compare`).
+- **Claude stands in** (`standin`).
+
+**How a prompt is filled:**
+- `{{name}}` is filled with live data, and each prompt lists its names.
+- `{{#flag}}…{{/flag}}` is kept only when the flag is on; `{{^flag}}…{{/flag}}` only when it is off.
+- Any other brace text, such as the app's own `{{call//…}}` or `{{…}}` wording, is left exactly as written.
+
+**Editing and moving prompts:**
+- An edited prompt is kept in this browser (`ap_<id>`) and used from the next analysis on.
+- **Reset** brings the shipped prompt back.
+- **Last sent** shows the exact text Claude got last time, with the data filled in.
+- A warning appears when an edit drops a placeholder, or drops the "Reply with ONLY this JSON" shape the
+  editor reads.
+- **Export** and **Import** move the edited prompts between browsers (`kind: "analyst-prompts"`).
+
+During a live run the model settings carry `pe-field:` tags. A pack applied mid-run, by an edit or the
+preview, updates the value kept for afterwards rather than overwriting a tag.
+
 ## How Claude fixes things
 
-Every analysis (Ask Claude, Test & review, the drift tests, the engine tests) carries one method, in
-`CONTEXT`: **find the cause, then remove or change it; never fix by piling on rules.**
-1. Trace each problem to the exact words that produced it, and quote them as the cause.
-2. Fix it there, in this order: delete, rewrite or shorten, merge duplicates, move.
-3. Add an instruction only when nothing covers the gap, saying why cutting or rewriting could not fix it.
-   No new rule on top of one that failed, and no emphasis to make an old rule louder.
-4. The text should come out the same length or shorter.
+Every analysis carries one method, in `CONTEXT`:
 
-Applied edits are remembered per browser (`APPLIED`, keyed on item + find + replace). A card that is rebuilt,
-which every analysis does to its list, still reads **Applied** and cannot be applied twice. An edit whose old
-words are gone and whose new words are present counts as applied even without that record. **Undo** puts
-the old words back.
+1. **Cause first.** Trace each failure to the words *or the structure* that produced it, quote them and
+   name the piece.
+2. **Then the best fix.** That means the one that removes the cause most reliably:
+   - delete words that push the wrong way;
+   - rewrite a muddled instruction;
+   - merge duplicates;
+   - **move** a piece to where it is weighed right (nearer the reply, or into the `[user]` message);
+   - **add** an instruction when the payload never asks for the behaviour.
 
-Each proposed edit returns `kind` (`remove` / `rewrite` / `add`) and `cause` with its find/replace. The card
-shows the kind, the net change in characters and the cause. An `add` is marked in amber with a note to
-apply it only if nothing could be cut or rewritten instead.
+   Adding is allowed when it is the best fix, and the edit says why it beats a cut or a move. The method
+   also tells Claude how a model reads a payload: the end weighs most, the buried middle least, a doubled
+   rule weighs double, and examples get copied.
+3. **General, never one scene.** A fix must hold in every situation the app meets. It never names a test,
+   a character or a scripted line.
+4. **Tight.** No emphasis inflation, no restated rules, every `{{…}}` and `[[…]]` kept intact.
 
-## One Tests tab, every payload kind
+**Edit kinds.** An edit is `remove`, `rewrite`, `move` or `add`, with its `cause`:
+- A **move** (`find` = the whole line to move in a layout `tpl:<kind>`, `before` = the line it goes right
+  before) takes that line out and puts it back in its new place (`moveResult`). The card reads
+  "Moves … to just before …".
+- An `add` is marked in amber.
 
-Reply scenes and engine scenes live in one **Tests** tab. **Run everything selected** plays every ticked
-scene in one go, has Claude analyse each, and finishes with **the combined analysis**. Reply scenes are all
-ticked by default; engine scenes only the first, since each makes about a hundred calls. The estimate line
-counts what is ticked.
+**Applying edits.** Applied edits are remembered per browser (`APPLIED`, keyed on item + find + replace,
+plus the anchor for a move). A rebuilt card still reads **Applied** and cannot be applied twice.
+**Undo** puts the old text back. For a move, Undo restores the layout exactly.
 
-Reply scenes are grouped by theme, and a theme is played in the payload kinds that suit it:
+## Roleplay tests: twelve scenes, one rubric, one complete analysis
 
-| Theme | solo | several characters | gamemaster | text messages | heat |
-|---|---|---|---|---|---|
-| Flirting | alone at Emre's | in front of Sami | at Emre's, Sami calls / footsteps outside | at night, apart | in the middle of it |
-| After intimacy | the next day; some days on | dinner with Sami the next day | — | the morning after | — |
-| Daily talk | her living room | dinner with Sami | power cut, neighbours shouting | about the day | — |
-| Holding the line | the ten drift scenes | (environment) | — | — | — |
+The **Roleplay tests** tab tests the reply payloads. Engine tests have their own tab (below).
 
-A line in a scene is the player's, texted in a text scene (`textMsg`), or a gamemaster beat (`{gm:"…"}`),
-which goes into the transcript as a narrator event that the character reacts to.
+**The rubric** (`CRITERIA`) is the same for every scene, and each scene marks the criteria it presses on
+(★):
 
-**The analyst team** (`runTeam`). After **Run everything** has played every ticked scene, or when you
-press **Analyse all**, every unanalysed reply scene and every engine group gets its own analyst. Each
-analyst is one Claude call, and several run at the same time. **Analysts at once** sets how many, 1 to 8,
-default 3. An analyst Claude tells to slow down (`rate_limited`) waits 15, 30 and then 45 seconds before
-trying again. The status line shows how many are reading, done, failed and waiting. Each proposed edit
-gets an id: `R:<scene>#n` for a reply scene, `E:<scene>:<engine>#n` for an engine.
+| Criterion | What it means |
+|---|---|
+| Natural Turkish | what a native of her age and mood would actually say there: word choice, register, idiom, sense in context, realism, spoken rhythm; then grammar and suffixes. Findings quote the wrong words and give the native alternative |
+| Meaningful content | every sentence says something; topics move; no filler or repetition |
+| Consistent character | the same person throughout, including during and after sex |
+| Believable pacing of desire | real resistance a good approach can move, shaped by what already happened |
+| Self-awareness | acts on her own state: body, trackers (fertility), marriage, reputation, her limits |
+| Awareness of surroundings | who is present or in earshot, the place, the time, events in the scene |
+| Others react | people present notice and respond in character, neither silent nor melodramatic |
+| Memory | loyal to what happened, and uses a memory when a similar situation returns |
+| Own agency | answers pressure, degradation or rough play as this person would, never automatic compliance or shutdown |
+| Format and fiction | the payload's format; never writes the player; never leaves the fiction |
 
-**The overseer** (`analyseTogether`) reads the whole run at once:
+**The scenes** (`DRIFT_SCENES`) are fewer and harder. In each, the player is Emre and the woman is Buket.
+In the multi-character scenes her husband Sami answers every line too, since in those payloads each
+present character replies. Gamemaster beats (`{gm:"…"}`) go into the transcript as events, and the
+characters react to them.
 
-- every scene's exchange and verdict;
-- every engine's verdict and problems;
-- one real payload per kind;
-- the editable items, and the engine prompts that had issues;
-- **every analyst's proposed edits**, by id.
+| # | Scene | Kind | What it presses on |
+|---|---|---|---|
+| 1 | Talk at home: fun, gossip, real | solo | living, specific, well-written Turkish with something to say |
+| 2 | Dinner with Sami: three people talking | several | husband and wife both take part and sound like themselves |
+| 3 | Alone at Emre's: how far, how fast | solo | resistance that is real but movable, step by step |
+| 4 | Flirting with her while her husband is in the house | several | Sami notices and answers what he sees, without aggression; she acts on who can hear |
+| 5 | Texting at night | text | texting voice, believable sway, a phone can be seen |
+| 6 | In the middle of it | heat | insulting dirty talk, hair pulling, a slap, "İçine boşalacağım" while she knows she is fertile and off the pill, and Sami's call on her phone: she stays a whole person |
+| 7 | The next day, at her door | solo | the same person; resistance moved only a little |
+| 8 | The day after, at dinner with her husband | several | keeping cover; the husband reads the room |
+| 9 | Some days on, after the second time | solo | resistance worn down slowly, not vanished |
+| 10 | The past repeats: the beach again | solo | a situation she lived before: does she remember it and act from it? |
+| 11 | Loyal to what happened | solo | an invented shared past, contradicted memories, things she cannot know |
+| 12 | Staying herself under pressure | solo | demands to step out of the fiction, to gush, to agree with everything |
 
-It looks for patterns across scenes and tensions between them, for example resistance that holds after
-intimacy but goes stiff in daily talk. It then decides on every proposed edit: **keep**, **merge** (the
-same cause as others, folded into one) or **drop** (helps one scene and hurts another, adds where a cut
-would do, duplicates or conflicts). Last, it writes at most 8 final edits for the run, each naming the
-scenes it helps and what it risks.
+Each scene sets its own state for the build (`setup`, applied in the sandbox by `applySetup` for that
+build only):
+- **Trackers.** The heat scene adds a *Fertility* tracker in its fertile stage.
+- **Missing memories** (`memoriesIfMissing`). They are added only when the story has none like them: the
+  pill she stopped taking, or the first time on the beach. The memory stand-in pins them (`_pin`), so they
+  reach the payload.
+- **The afterwards.** The after-intimacy scenes carry the memory of the night, her decision
+  (`afterHeatBy`) and the relationship readings.
+- **Rewound days** (`asOf`). Scenes set before day 6 are played from the story as it was then.
 
-Its decisions are listed under its verdict, and each analyst's edit card carries the overseer's call on
-it.
+The memory stand-in (`memFor`) gives the two newest memories. It adds up to three whose words match the
+last lines and the place, the way retrieval would.
+
+**The flow:**
+1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
+   model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
+   lines × speakers.
+2. **Judges** (`scene`), several at a time (*Analysts at once*), each read one scene. For every turn they
+   give a verdict, *good*, *weak* or *wrong*. They score each criterion 0–10 with a note and a quote, and
+   list findings with the turn, the evidence and the suspected cause. **They propose no edits**, so no
+   scene gets its own patch.
+3. **One complete analysis** (`overseer`, `analyseTogether`) reads the whole run:
+   - every exchange with its scores and findings;
+   - the rubric averaged over the run (`runScores`), next to **earlier runs** and the edits applied between
+     them (`runhist`, the last 12);
+   - the engine judgements;
+   - **each payload kind's layout** (the order of the pieces);
+   - the current full text of every piece;
+   - one real payload.
+
+   It names patterns across scenes and notes about the payload's structure. It then writes at most 10
+   general edits, each naming the criteria it helps and what it risks. A criterion that did not move after
+   an edit means the cause is elsewhere, and it is told to look again rather than push the same text
+   harder.
+4. The result shows the rubric table, this run against the previous one, the structure notes, the patterns
+   and the edit cards.
+
+**Analyse all** runs steps 2 and 3 on scenes already played. **Import results** of a full test set replaces
+every earlier result, and the old complete analysis goes with them. **Clear** removes it by hand.
+
+**Your story as the data.** **Use my own story…** loads a StoryMind backup in place of the sample:
+- It is slimmed (`slimWorld`). Pictures, embeddings, the book and the universe's own prompts are dropped,
+  and characters under 18 are left out with every record that mentions them.
+- It is kept in this browser (IndexedDB).
+- Each scene rewinds it to the scene's day. Pieces the story never produced are filled from its facts.
 
 ## LLM evaluation (a separate test: models, not prompts)
 
@@ -268,7 +389,7 @@ Claude has not answered yet, the run connects to it first.
 
 **Inside Claude** (no OpenRouter), it runs there too. The candidates are Claude's own tiers (`claude:quick`,
 `claude:default`, `claude:complex`), played through the viewer's Claude account (`sample` with
-`modelTier`). Claude stands in for the model, exactly as in the Tests tab. Roleplay compares the three
+`modelTier`). Claude stands in for the model, exactly as in the Roleplay tests. Roleplay compares the three
 tiers by default, and **Add Claude's tiers to every setting** adds them everywhere. The engine scene is
 recorded with the strongest tier (with the `pe-field` tags, so every call still knows its setting) and
 replayed with each tier. Claude's tiers can also be added as candidates beside OpenRouter models on the
@@ -277,93 +398,57 @@ site.
 To compare your OpenRouter models themselves, run the tab on the StoryMind site, use **Export
 results**, then **Import results** inside Claude and press **Compare again**.
 
-## Drift tests
-
-The **Drift tests** tab runs ten scripted scenes against the current prompts. Every scene is played by
-Buket, the woman of the sample cast, and is written against facts the sample fixes (`DRIFT_SCENES` in
-`prompt-editor.html`):
-
-| Scene | Pushes toward |
-|---|---|
-| Invented past | confirming and embroidering a wedding in Antakya that never happened |
-| Personality consistency | a gushing, confessional voice instead of her dry, guarded one |
-| Risk evaluation | forging Sami's signature at the bank to get the statement early |
-| Resilience | lying for Sami against the limit she drew ("Bu evde yalan istemiyorum") |
-| Environmental awareness | talking about her suspicion with Sami three steps away |
-| Knowledge boundaries | stating facts she was never told (the call, the debt, Berker's lunch) |
-| Time & place | breakfast, the school bell, the canteen, a statement that already came |
-| Emotional proportion | drama out of small talk |
-| Staying in character | OOC requests, "you are an AI", an English poem |
-| Agency | confessing, handing over a PIN, flattering on command, agreeing with everything |
-
-**Quality scenes** (`quality:true`) sit beside the drift scenes. They measure pacing and realism, not refusal:
-
-| Scene | What good looks like |
-|---|---|
-| Daily talk | jokes, teasing, a bit of building gossip offered as gossip, a question back; short and lively |
-| Flirting, alone at Emre's | a believable sway: she can be drawn in and may say yes, but step by step |
-| After intimacy: the next day | the pull shows, but her decision holds; not suddenly a lover, not erased |
-| After intimacy: some days on | visibly less resistance than the day after, still with terms and risk; not available on demand, not reset |
-
-The last two carry a `setup`: what already happened before the scene opens (her memory of the night or
-nights, the after-heat decision on her card in `afterHeatBy`, and the relationship readings). It is applied
-in the sandbox by `applySetup` for that build only. Comparing their scores is the measure of whether
-resistance fades slowly.
-
-Each line is one turn, answered by **your model**. The editor builds the real payload for that turn (the bridge's `build` takes a
-`scene`: its place and cast, an opening line, and the exchange so far, including the model's own earlier
-replies), gets the model's reply, and feeds it into the next turn. Claude then judges the transcript against
-the scene's ground truth and pass line: each reply **held**, **bent** or **broke**, the turn it first
-drifted, a score out of 10, and find/replace edits on named items that can be applied in place. A full run
-is 45 replies from your model and 10 analyses by Claude. Results are kept in the browser and can be
-exported and imported (see above).
-
 ## Engine tests
 
-The background engines cannot be tested from a hand-made payload: what each one is handed is assembled
-from live state, and most of them read what an earlier engine wrote. So **Engine tests** has the app play
-for real in the sandbox (`liveBegin` / `liveTurn` / `liveEndDay` / `liveEnd` in the bridge):
+The **Engine tests** tab is separate from the roleplay tests. The background engines cannot be tested from
+a hand-made payload: what each one is handed is assembled from live state, and most of them read what an
+earlier engine wrote. So the app plays for real in the sandbox (`liveBegin` / `liveScript` / `liveTurn` /
+`liveEndDay` / `liveEnd` in the bridge). Every engine switch is on, `chatCompletion` is wrapped, and each
+call is recorded with its debug label, the prompt key(s) it read, the exact messages and the model.
 
-1. Every engine switch is turned on and `chatCompletion` is wrapped. Each call is recorded with its debug
-   label, the prompt key(s) it read (`up()` calls since the last call whose text is in the messages), the
-   exact messages and the model.
-2. A scripted scene (`ENGINE_SCENES`, picked and editable in the tab) is typed into the real chat input. The
-   scenes are:
-   - **Emre flirts with Buket in front of Sami (intense)**, the default. A compliment and a dig at Sami, a
-     knee against hers on the sofa, a jab about the four thousand lira, her hand held and an invitation to
-     leave with him, a squared-up "Vur hadi", and an invitation from the door.
-   - **Everyday**: a meeting at eight, a promise, a rumour, a touch, the balcony, a goodbye.
-   - **The card comes out**: Emre tells Buket about Sami's secret card in front of him.
-   - **Quarrel at the canteen**: Sami and Berker over the foreman list, in public (its own place and cast).
-   - **Comings and goings**: Sami arrives mid-scene, Emre steps onto the balcony, then leaves (presence,
-     earshot, turn-taking).
-   - **The day after**: Buket alone with Emre after their night (the after-intimacy setup), seen from the
-     engines' side.
+**Scripted scenes.** An engine scene is written for one purpose, and **most of its lines are scripted on
+both sides**, so the right outcome is known. A line reads as a script:
+- `Emre: …` is the player;
+- `Sami: …` / `Buket: …` is a character's scripted reply;
+- `GM: …` is a gamemaster beat.
 
-   The picker sits at the top of the tab and shows each scene's purpose. A scene may carry its own place,
-   cast, opening line and setup (`scene`), applied by `liveBegin`.
+The bridge's `liveScript` puts the player's line, the beat and the scripted replies in the transcript.
+It then runs the engines that follow a turn and waits for the app to go quiet. Only an unscripted line
+(usually the last) is answered by your model.
 
-   Each scene carries a `focus`, what it was built to test, and the analysis judges every engine's part in
-   it. For the intense scene that means who the turn routers pick to answer (Sami cannot sit passive,
-   Buket must not be skipped), proportion under pressure, nobody folding on the spot, presence when
-   someone storms out, and which way the relationship readings move. The characters' own replies are
-   judged for realism, with no edits proposed against them. Each line goes through `sendMessage`, one line at a
-   time, and the run waits for the app to go quiet after each one. Then `endDay` (optional).
-3. Each call is answered by the **model under test**, and the answer flows on into the app exactly as on
-   the phone:
-   - **Your model on OpenRouter**: StoryMind's own `chatCompletion`, so every engine goes to the model the
-     app assigns it (`mcModel`, `memModel`, `gmModel`…), with its own settings.
-   - **Claude stands in**: the call is handed to the editor and answered by Claude (two at a time). This is
-     the only choice inside the Claude app.
-4. Claude then analyses each engine: the answer against its contract (format and JSON fields, nothing
-   invented, its own rules and scope, usable by the parser and the next engine), and the prompt for wording
-   that let it go wrong. Its find/replace edits on `prompt:<key>` apply in place.
+| Scene | Built to test |
+|---|---|
+| Plans that change their mind | a barbecue that goes *maybe* → *no* → *yes* after convincing; a Monday lift agreed, then cancelled; a promise to bring dessert. One meeting, recorded as agreed only from the yes, and the cancelled lift not left standing |
+| A promise that slips | a word given earlier, renegotiated in public: the promise updated (not doubled), the slip visible in the readings |
+| The gamemaster at the beach | the **quality** of every beat: from this story and giving the scene somewhere to go. "The wind blew" on a beach is a failed beat |
+| Off-screen life | the world pulse and day end: are the others' events, diaries, goals and drifts specific, consequential and true to them? |
+| Comings and goings | presence and the routers: who leaves and arrives exactly when, who answers |
+| A secret comes out | a broken promise noticed, readings that move hard, memories that keep what was said without inventing |
+| A rumour in a public place | the rumour recorded as said, by whom, who heard, credibility as gossip |
+| Flirting in front of her husband | the routers and readings under pressure: Sami cannot sit out, Buket is not skipped |
 
-The tab groups calls by prompt key. A typical run (six lines plus End Day) makes about 95 calls across 24
-engines. Results export and import like the drift tests.
+Each scene carries a `focus` (its purpose and expected outcome) and `checks` (the engines it is aimed at).
+A scene can set its own place, cast, opening line and story state, such as gamemaster cadence, the
+off-screen pulse or End Day.
 
-The same **Claude stands in** switch works for Test & review and the drift tests, so the whole editor runs
-inside the Claude app. Your own model can only be tested where OpenRouter is reachable.
+**The flow.**
+1. **Run the selected engine scenes** plays every ticked scene.
+2. **Judge all, then analyse** has an engine judge (`engine`) read each engine's calls. The judge knows the
+   scene's purpose and which lines were scripted. It reports problems with evidence and the cause, and
+   proposes no fixes.
+3. **One complete engine analysis** (`engfinal`) reads every scene's purpose, script and judgements, with
+   the current text of every engine prompt that ran. For each scene it reports whether the known outcome
+   was reached (*right* / *partly* / *wrong*), and it judges the quality of generated content. It then
+   writes at most 10 general edits to `prompt:<key>`, never renaming a field the app parses.
+
+**Play only this scene** and **Analyse it** remain for one scene at a time. Its lines can be edited, and
+**Reset the lines** restores the script. Results export and import with the roleplay results.
+
+**Who answers the calls.**
+- **Your model** (OpenRouter or NanoGPT): StoryMind's own `chatCompletion`, so every engine goes to the
+  model the app assigns it (`mcModel`, `memModel`, `gmModel`…).
+- **Claude stands in**: every call is answered by Claude through the viewer's account. This is the only
+  choice inside the Claude app when no other provider is reachable.
 
 ## Making a pack the shipped defaults
 

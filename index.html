@@ -13129,6 +13129,7 @@ async function generateVideo(prompt,imageUrl,opts){
     // v150.17 — the position's reference video, the clip's only video here (@video1)
     if(opts.motionRef) body.reference_videos=[opts.motionRef];
     body.prompt=normalizeRefTokens(body.prompt,{image:imgs.length,video:(body.reference_videos||[]).length,audio:0});
+    if(opts.motionRef) body.prompt=_vidEnsureMotionToken(body.prompt,"@video1");   // v150.20
   }else if(vidSupportsRefs(model)){
     await ensureRefUrls();
     const host=async list=>{
@@ -13163,6 +13164,8 @@ async function generateVideo(prompt,imageUrl,opts){
       image:(body.reference_images||[]).length,
       video:(body.reference_videos||[]).length,
       audio:(body.reference_audios||[]).length});
+    // v150.20 — the position's video is the last reference video: make sure the prompt names it
+    if(opts.motionRef&&rv.length&&rv[rv.length-1]===opts.motionRef) body.prompt=_vidEnsureMotionToken(body.prompt,"@video"+rv.length);
   }
 
   const label="Video generation"+(rule&&rule.label?" \u00b7 "+rule.label:"")+" \u00b7 "+body.duration+"s";
@@ -23856,6 +23859,17 @@ async function uploadRuleMotions(rule,box){
   toast(added?`${added} reference video${added===1?"":"s"} added${skipped?` · ${skipped} skipped (over 50 MB or not a video)`:""}`:"Nothing was added");
 }
 function vidMotionBlock(token){ return fillTpl(up("x_vid_motion_ref"),{token}); }
+// The @token a position's video takes when the reference library is sent too: after the library's own videos.
+function vidMotionToken(){ let lib=0; try{ lib=Math.min(vidRefs().video.length,REF_LIMITS.video-1); }catch(e){ lib=0; } return "@video"+(lib+1); }
+/* (!) v150.20 — the model follows a reference video ONLY when the prompt names it. The writer is asked to,
+   but a writer can leave it out (or the prompt can be hand-edited), and then the video rides along unused.
+   So the request itself makes sure: when the position's video is attached and its token is missing, the
+   line that names it is added. */
+function _vidEnsureMotionToken(prompt,token){
+  const p=String(prompt||"");
+  if(!token||new RegExp(token.replace("@","@\\s*")+"(?!\\d)","i").test(p))return p;
+  return p.replace(/\s+$/,"")+"\n\nThe motion, its rhythm and the body positions follow "+token+".";
+}
 /* The editor strip for one scene type: every picture with an ×, then a dashed ＋ tile while there is room. */
 async function renderRulePoses(rule,box){
   if(!rule||!box)return;
@@ -40357,7 +40371,7 @@ async function animateScene(mid){
     let _motion={url:"",idx:-1,of:0,id:""};
     if(vidSupportsRefs()&&_vidRule&&ruleMotionIds(_vidRule).length) _motion=await ruleMotionPick(_vidRule,setStat);
     let _motionToken="";
-    if(_motion.url){ let lib=0; try{ lib=Math.min(vidRefs().video.length,REF_LIMITS.video-1); }catch(e){ lib=0; } _motionToken="@video"+(lib+1); }
+    if(_motion.url)_motionToken=vidMotionToken();
     const _sys=videoWriterSystem(_vidRule,{motionToken:_motionToken});
     const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Video motion prompt writer"});
     const vidPrompt=injectRuleKeywords(motion.trim().replace(/^["']|["']$/g,""),_vidRule);
@@ -43772,7 +43786,8 @@ async function i2vWritePrompt(){
   try{
     const _isExplicit=!!(rule&&rule.explicit);
     const lastRec=_i2vLastRec();
-    const _sys=videoWriterSystem(rule,{endPrompt:lastRec?(lastRec.prompt||""):""});
+    // v150.20 — a position with reference videos: the writer is told the token one of them will take
+    const _sys=videoWriterSystem(rule,{endPrompt:lastRec?(lastRec.prompt||""):"",motionToken:(vidSupportsRefs()&&rule&&ruleMotionIds(rule).length)?vidMotionToken():""});
     const out=await chatCompletion(epSend("x_playground_video_prompt_writ",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(rec.prompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Playground video prompt writer"});
     _i2v.prompt=out.trim().replace(/^["']|["']$/g,"");
   }catch(err){ toast(""+(err&&err.friendly||"Couldn't write the prompt")); }
@@ -43841,8 +43856,12 @@ async function i2vGenerate(){
   _i2v.busy="gen"; _i2v.lastFrameId=null; renderImg2Video();
   try{
     const out={};
+    /* (!) v150.20 — REPORTED: the playground's image→video never sent the position's reference video; only
+       Animate and the scene video button had been taught to. One of them, at random, as in those two. */
+    let _motion={url:""};
+    if(vidSupportsRefs()&&rule&&ruleMotionIds(rule).length) _motion=await ruleMotionPick(rule,t=>{ const e=document.getElementById('i2vStat'); if(e)e.textContent=t; });
     const videoUrl=await generateVideo(injectRuleKeywords(_i2v.prompt.trim(),rule),rec.url,
-      {rule,endImage:lastRec?lastRec.url:null,out});
+      {rule,endImage:lastRec?lastRec.url:null,out,motionRef:_motion.url||""});
     const vrec={id:"vid_"+Date.now(),url:videoUrl,prompt:_i2v.prompt.trim(),character:rec.character||"",
                 characterId:rec.characterId||null,universeId:rec.universeId||null,date:Date.now(),playground:true};
     state.videos.push(vrec); captureGalleryMedia(vrec);

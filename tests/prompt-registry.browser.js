@@ -160,7 +160,8 @@ const {chromium}=require('playwright');
         "n",
         "from","to","clothing",
         "token",
-        "swap"]);                 // v150.18 — x_img_pose_roster: who replaces which grey figure, filled by editPrompt                // v150.17 — x_vid_motion_ref: the reference video's @token, filled by animateScene / sceneVideo // v150.12 — x_img_type_changed: the two scene types and the clothing to keep, filled by illustrate                    // v150.5 — x_img_edit_roster_*: the number of the scene picture, filled by editPrompt
+        "swap",
+        "bodies"]);               // v150.21 — x_body_block: each person's Body field, filled by bodyBlock                 // v150.18 — x_img_pose_roster: who replaces which grey figure, filled by editPrompt                // v150.17 — x_vid_motion_ref: the reference video's @token, filled by animateScene / sceneVideo // v150.12 — x_img_type_changed: the two scene types and the clothing to keep, filled by illustrate                    // v150.5 — x_img_edit_roster_*: the number of the scene picture, filled by editPrompt
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{
         (String(X_ENGINE_PROMPTS[k].def).match(/\{\{(\w+)\}\}/g)||[]).forEach(t=>{

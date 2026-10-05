@@ -397,7 +397,8 @@ const {chromium}=require('playwright');
       // v140.1 — and the player's outfit block after the cast
       // v148.3 — and the per-person block (what each one is doing and wearing) after the cast
       // v150.5 — the scene-chain edit block after the cast; the place is left out when the previous picture carries it
-      return /const usr=(_castBlock\+)?(_editBlock\+)?(_perPerson\+)?(_playerDress\+)?_dress\+(_placeBlock|\(_chain\?"":_placeBlock\))/.test(src) ? true : "the place block is not wired in"; })());
+      // v150.21 — each person's Body block after the cast
+      return /const usr=(_castBlock\+)?(_bodyBlk\+)?(_editBlock\+)?(_perPerson\+)?(_playerDress\+)?_dress\+(_placeBlock|\(_chain\?"":_placeBlock\))/.test(src) ? true : "the place block is not wired in"; })());
   ok("the continuity note no longer claims the location is automatic", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       return !/IGNORE any location\/setting\/lighting in it, those are added automatically/.test(src)

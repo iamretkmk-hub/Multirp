@@ -107,6 +107,39 @@ const {chromium}=require('playwright');
   });
   ok("with no position holding videos: nothing is routed and nothing changes", V2.routed===0&&!V2.rv&&!/MOTION REFERENCE/.test(V2.sys), JSON.stringify(V2).slice(0,300));
 
+  /* v150.20 — reported: "videos are not getting the assigned video as @video1". The playground's image→video
+     never sent the position's video, and a writer that left the token out left the video unused. */
+  console.log("\n[3b. the playground's image → video, and a prompt that forgets the token]");
+  const I=await pg.evaluate(async()=>{
+    state.images.push({id:"img_t1",url:"https://cdn/still2.png",prompt:"the woman leans in",character:"Ayla"});
+    _i2v.imgId="img_t1"; _i2v.ruleId="rv_doggy"; _i2v.lastImgId=null; _i2v.busy=null;
+    // the writer gets the token…
+    window.__sys=[]; const keepC=window.chatCompletion;
+    window.chatCompletion=async(m,mod,o)=>{ if(o&&o.dbg==="Playground video prompt writer"){ window.__sys.push((m.find(x=>x.role==="system")||{}).content||""); return "0-5s: she moves slowly."; } return keepC(m,mod,o); };
+    await i2vWritePrompt(); window.chatCompletion=keepC;
+    const sys=window.__sys[0]||"", written=_i2v.prompt;
+    // …and even with a prompt that never names it, the request does
+    window.__bodies=[]; _i2v.busy=null; await i2vGenerate();
+    const b=window.__bodies[0]||{};
+    return {sys,written,rv:b.reference_videos||[],prompt:b.prompt||""};
+  });
+  ok("the playground's video writer is told the position's token", /## MOTION REFERENCE/.test(I.sys)&&/@video1 is a reference video made for this position/.test(I.sys), I.sys.slice(-400));
+  ok("the playground sends the position's video (the reported case)", I.rv.length===1&&/motion/.test(I.rv[0]), JSON.stringify(I.rv));
+  ok("a prompt without the token gets the line that names it", !/@video1/.test(I.written)&&/follow @video1\./.test(I.prompt), I.prompt);
+  const N=await pg.evaluate(async()=>{
+    // Animate with a writer that forgets the token
+    const keepC=window.chatCompletion;
+    window.chatCompletion=async(m,mod,o)=>{ if(o&&o.dbg==="Video motion prompt writer")return "0-5s: she turns toward the lens."; return keepC(m,mod,o); };
+    window.__route="rv_doggy"; window.__bodies=[]; curChat().messages[1].vidState=null;
+    await animateScene("a1"); window.chatCompletion=keepC;
+    const b=window.__bodies[0]||{};
+    // a prompt that already names it is left alone
+    const once=_vidEnsureMotionToken("the motion follows @video1 throughout","@video1");
+    return {prompt:b.prompt||"",rv:b.reference_videos||[],once};
+  });
+  ok("Animate: a writer that forgot the token — the request still names the position's video", N.rv.length===1&&/follow @video1\./.test(N.prompt), N.prompt);
+  ok("a prompt that already names it is not changed", N.once==="the motion follows @video1 throughout", N.once);
+
   console.log("\n[4. one of them, at random]");
   const R=await pg.evaluate(async()=>{
     const r={id:"rr",motionRefs:[]}; for(let i=0;i<3;i++)await ruleMotionAdd(r,new Blob([new Uint8Array(8).fill(i)],{type:"video/mp4"}));

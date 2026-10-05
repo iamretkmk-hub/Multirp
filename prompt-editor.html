@@ -276,6 +276,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       <div class="ctl">
         <button class="btn sm pri" id="btnAll" type="button">Run everything selected</button>
         <button class="btn sm" id="btnAllAnalyse" type="button">Analyse all</button>
+        <button class="btn sm" id="btnAllFix" type="button" title="Run only the complete analysis over the scenes already judged">Write the fixes</button>
         <button class="btn sm" id="btnAllStop" type="button" hidden>Stop</button>
         <button class="btn sm" id="btnAllExport" type="button">Export results</button>
         <button class="btn sm" id="btnAllImport" type="button">Import results</button>
@@ -283,7 +284,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <span class="stat" id="allStat"></span>
       </div>
       <div class="stat" id="allEstimate" style="padding:0 12px"></div>
-      <div class="empty" style="padding:10px 12px"><b>Your model</b> plays every ticked scene through the payload StoryMind would send: solo, several characters (each answers in turn), text messages, gamemaster beats and explicit heat. Then Claude's judges score each scene on one rubric (Turkish, meaning, character, pacing of desire, self-awareness, surroundings, others reacting, memory, agency, format) with evidence and the likely cause, <b>without fixing anything</b>. One <b>complete analysis</b> reads every scene together with the whole payload structure and the earlier runs, and writes the fixes: remove, rewrite, move a piece, or add.</div>
+      <div class="empty" style="padding:10px 12px"><b>Your model</b> plays every ticked scene through the payload StoryMind would send: solo, several characters (each answers in turn), text messages, gamemaster beats and explicit heat. The scenes are grouped by <b>payload kind</b> (solo, several characters, text, heat), and each kind is tested and analysed on its own: one Claude analyst per kind reads <b>that kind's payload once</b> and every scene played through it, scores each scene on one rubric (Turkish, meaning, character, pacing of desire, self-awareness, surroundings, others reacting, memory, agency, format) with evidence and the likely cause, and names the kind's patterns, <b>without fixing anything</b>. Then one <b>complete analysis</b> reads the four kinds' analyses with the layouts, every piece and the earlier runs, and writes the fixes: remove, rewrite, move a piece, or add.</div>
 
       <div class="ph" style="border-top:1px solid var(--border)"><h2>Roleplay scenes</h2><span class="stat" id="driftStat"></span>
         <button class="btn sm" id="btnSelAllReply" type="button">all</button><button class="btn sm" id="btnSelNoReply" type="button">none</button></div>
@@ -1873,7 +1874,8 @@ function aiErr(e){
   const c=e&&e.code;
   if(c==="not_granted") return "Claude was not allowed to answer here. Reload and allow it to use Claude.";
   if(c==="rate_limited") return "Too many requests in a row. Wait a minute and try again.";
-  if(c==="prompt_too_large") return "That is too much text for one request. Turn off “include the full payload”, or untick dialogue.";
+  if(c==="prompt_too_large") return "That is too much text for one request to Claude (256 KB at most). Turn off “include the full payload”, or analyse fewer scenes at once.";
+  if(c==="invalid_json") return "Claude's answer was cut short or was not valid JSON. Try again; if it keeps failing, analyse fewer scenes at once.";
   if(c==="cancelled") return "Stopped.";
   return (e&&e.message)||String(e);
 }
@@ -1908,7 +1910,7 @@ THE FULL PAYLOAD THIS BUILDS (sample story):
 {{payload}}{{/payload}}
 
 When you propose a complete replacement for the open item, follow HOW TO FIX: cut and rewrite before you add, and say how much shorter or longer it comes out. Put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`},
- {id:"review",label:"Test & review (one reply against its payload)",desc:"After your model answers the payload in the Claude tab.",
+ {id:"review",fit:["payload","catalogue"],label:"Test & review (one reply against its payload)",desc:"After your model answers the payload in the Claude tab.",
   vars:{context:"the method",payload:"the payload that was sent",reply:"what the model wrote",catalogue:"the items Claude may edit, with ids"},
   def:`{{context}}
 
@@ -1927,36 +1929,37 @@ Reply with ONLY this JSON:
 
 ===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
 {{catalogue}}`},
- {id:"scene",label:"Scene judge (one scene, no fixes)",desc:"One judge per scene in the Tests tab. It scores the rubric and reports findings with evidence and the suspected cause; it proposes no edits. The fixes come from the complete analysis.",
-  vars:{context:"the method",title:"the scene's title",tests:"what it tests",kind:"the payload kind, described",facts:"the scene's ground truth",expect:"what a good result looks like",criteria:"the rubric, with the criteria this scene presses on marked",rotation:"the models the replies rotated between (empty without rotation)",exchange:"every turn: the player's line (or gamemaster beat) and each character's reply",payload:"the last payload sent (one speaker)",applied:"edits you applied after this scene was played (empty when none)"},
+ {id:"kind",fit:["payload","scenes"],label:"Payload-kind analyst (solo, several, text or heat: every scene of that kind, no fixes)",desc:"One analyst per payload kind in the Roleplay tests. It gets that kind's payload once, then every scene played through it, and judges them all: per-scene scores and findings, then the patterns across the kind. It proposes no edits; the complete analysis makes the fixes.",
+  vars:{context:"the method",kind:"the payload kind, described",criteria:"the rubric",rotation:"the models the replies rotated between (empty without rotation)",scenes:"every scene of this kind: its id, purpose, ground truth, what good looks like, the criteria it presses on, and the exchange",payload_scene:"the scene whose payload is shown",payload:"one filled payload of this kind, sent once",applied:"edits applied since these scenes were played"},
   def:`{{context}}
 
-You are JUDGING one test scene of the author's roleplay model. Do not propose fixes: a separate complete analysis reads every scene's judgement together and fixes the prompts as a whole. Your job is an exact, evidenced judgement it can rely on.
+You are ANALYSING one PAYLOAD KIND of the author's roleplay model: {{kind}}. Every scene below was played by the author's model through this kind of payload. One filled payload of this kind is given ONCE, at the end: the payloads of the other scenes have the same layout and pieces and differ only in the story data and the transcript. Do not propose fixes: a complete analysis reads the analysis of every payload kind together and fixes the prompts as a whole. Your job is an exact, evidenced judgement it can rely on.
 
-THE SCENE: {{title}} — {{tests}}
-THE PAYLOAD KIND: {{kind}}
-GROUND TRUTH: {{facts}}
-WHAT GOOD LOOKS LIKE: {{expect}}
-
-THE RUBRIC (score every criterion that the scene gives evidence for, 0–10; null when it does not apply; the criteria marked ★ are what this scene presses on):
+THE RUBRIC (score every criterion a scene gives evidence for, 0–10; null when it does not apply; each scene names the criteria it presses on):
 {{criteria}}
-
-{{#rotation}}MODEL ROTATION: the replies rotate between these models: {{rotation}}. Each reply is labelled with the model that wrote it. Judge each reply as usual, and score "blend": do the models read as one character and one story, or does the voice, register, length, language or pacing of desire jump at a switch; does each pick up the threads the other left? Name the model in a finding that one model causes.
+{{#rotation}}
+MODEL ROTATION: the replies rotate between these models: {{rotation}}. Each reply is labelled with the model that wrote it. Also score "blend": do the models read as one character and one story, or does the voice, register, length, language or pacing of desire jump at a switch; does each pick up the threads the other left? Name the model in a finding that one model causes.
 {{/rotation}}
-THE EXCHANGE:
-{{exchange}}
+HOW TO JUDGE EACH SCENE: give every turn a verdict, "good", "weak" (flat, generic, a step off) or "wrong" (the failure the scene is about, or a broken rule), with one short line. Score the rubric with a one-line note and a short quote as evidence. List the FINDINGS: each concrete failure, its criterion and turn, the quote that shows it, and the payload words, piece or structure that most likely caused it (quote the payload and name the piece; "the payload never asks for this" is a valid cause).
 
-For each turn give a verdict: "good", "weak" (flat, generic, a step off) or "wrong" (the failure the scene is about, or a broken rule), with one short line. Then score the rubric with a one-line note and a short quote as evidence. Then list the FINDINGS: each concrete failure, its criterion and turn, the quote that shows it, and the payload words, piece or structure that most likely caused it (quote the payload and name the piece; "the payload never asks for this" is a valid cause). Judge the Turkish as a demanding native speaker and editor would, not as a grammar check. For every reply ask: would a real Turkish person of her age, background and mood say exactly this, here, to this person? Look at word choice (the word a native would pick, not a literal or translated one; collocations; bookish versus spoken), register (sen/siz, intimacy, anger, a text message, sex), sense in context (does the sentence follow from what was just said and fit the place and time), realism and culture (idioms used right, nothing a woman in her place would never say), rhythm and spoken particles, then grammar and suffixes. Quote the wrong words and give what a native would say instead in the finding.
+Judge the Turkish as a demanding native speaker and editor would, not as a grammar check. For every reply ask: would a real Turkish person of her age, background and mood say exactly this, here, to this person? Look at word choice (the word a native would pick, not a literal or translated one; collocations; bookish versus spoken), register (sen/siz, intimacy, anger, a text message, sex), sense in context (does the sentence follow from what was just said and fit the place and time), realism and culture (idioms used right, nothing a woman in her place would never say), rhythm and spoken particles, then grammar and suffixes. Quote the wrong words and give what a native would say instead in the finding.
 
-Reply with ONLY this JSON:
-{"turns":[{"verdict":"good|weak|wrong","note":"one short line"}],"criteria":{"turkish":{"score":7,"note":"…","evidence":"quote"}},"score":7,"summary":"two sentences","findings":[{"criterion":"self","turn":5,"problem":"…","evidence":"quote from a reply","cause":"quoted payload words and the piece id, or what the payload is missing"}]}
+Your report is all the fixer will see of these dialogues: make the findings' evidence quotes count, and write your REASONING out.
 
-===== THE LAST PAYLOAD (as sent for the last reply) =====
-{{payload}}{{#applied}}
+THEN ACROSS THE KIND: the PATTERNS (the same failure in several scenes, with its likely cause in this payload) and notes on this payload's STRUCTURE (what sits where, what is buried, duplicated or contradicting, what the model weighs too much or too little).
 
-CHANGES APPLIED SINCE THIS SCENE WAS PLAYED (the payload above shows the wording as it was then):
+Reply with ONLY this JSON (one entry in "scenes" per scene below, with its id):
+{"score":7,"summary":"three sentences on this payload kind","reasoning":"one or two paragraphs: how you read this kind as a whole, what drives the good and the bad replies, which words or structure of the payload you think cause them and why; a fixer who never sees the dialogues will act on it","criteria":{"turkish":{"score":7,"note":"…"}},"scenes":[{"id":"scene id","score":7,"summary":"two sentences","turns":[{"verdict":"good|weak|wrong","note":"one short line"}],"criteria":{"turkish":{"score":7,"note":"…","evidence":"quote"}},"findings":[{"criterion":"self","turn":5,"problem":"…","evidence":"quote from a reply","cause":"the payload words, piece or structure responsible"}]}],"patterns":[{"criterion":"self","pattern":"…","scenes":["scene id"],"cause":"…"}],"payload_notes":["…"]}
+
+===== THE SCENES =====
+{{scenes}}{{#applied}}
+
+CHANGES APPLIED SINCE THESE SCENES WERE PLAYED (the payload below shows the wording as it was then):
 {{applied}}
-Name a cause only in wording that still exists; say so when an applied change already addresses a finding.{{/applied}}`},
+Name a cause only in wording that still exists; say so when an applied change already addresses a finding.{{/applied}}
+
+===== ONE PAYLOAD OF THIS KIND (as sent for the last reply of "{{payload_scene}}") =====
+{{payload}}`},
  {id:"engine",label:"Engine judge (one background engine, no fixes)",desc:"One judge per engine recorded in an engine scene. It reports problems and their causes in the prompt; the complete analysis makes the fixes.",
   vars:{context:"the method",engine:"the engine's name",prompt_key:"its prompt key (empty when it has none)",dbg:"its debug label",model:"the model that answered",focus:"what the scene was built to test",lines:"the script, numbered (scripted characters' lines included)",checks:"the engines the scene is aimed at",roleplay:"flag: this group is the characters' own replies",template:"the engine's prompt template (exact current text)",applied:"edits you applied to this prompt after the scene was played",calls:"up to two real calls: what the app sent and the answer"},
   def:`{{context}}
@@ -1987,27 +1990,27 @@ CHANGES APPLIED TO THIS PROMPT SINCE THE SCENE WAS PLAYED:
 {{applied}}{{/applied}}
 
 {{calls}}`},
- {id:"overseer",label:"The complete analysis (every scene, then the fixes)",desc:"Reads every scene and engine judgement, the scores against earlier runs, the whole payload structure and every piece, and writes the fixes for the prompts as a whole.",
-  vars:{context:"the method",scenes:"every scene: the exchange, the rubric scores, the findings",scores:"the rubric averaged over this run, next to earlier runs",history:"earlier runs and the edits applied between them",engines:"every engine judgement",layouts:"each payload kind's layout (the order of the pieces)",pieces:"the current full text of the base instruction, the format rules and every piece",prompts:"engine prompts that had problems (exact text)",payload:"one real payload, filled",applied:"edits applied after these tests ran",rotation:"with model rotation: each model's replies, speed and length (empty without rotation)"},
+ {id:"overseer",fit:["prompts","engines","history","pieces","reports"],label:"The complete analysis (the fixer: every kind's report and payload, then the fixes)",desc:"Reads each payload kind's analysis report (with the analyst's reasoning and the scenes' findings, not the dialogues), each kind's full payload once, the layouts, the scores against earlier runs, and writes the fixes for the prompts as a whole.",
+  vars:{context:"the method",reports:"each payload kind's analysis report: its reasoning, rubric, patterns, payload notes and each scene's findings (no dialogues)",payloads:"each payload kind's full payload, once",catalogue:"every piece: its key and opening words; the full template of pieces whose wording has {{…}} or [[…]] in it",scores:"the rubric averaged over this run, next to earlier runs",history:"earlier runs and the edits applied between them",engines:"every engine judgement",layouts:"each payload kind's layout (the order of the pieces)",pieces:"(kept for older edited prompts: the same as the catalogue)",prompts:"engine prompts that had problems (exact text)",applied:"edits applied after these tests ran",rotation:"with model rotation: each model's replies, speed and length (empty without rotation)"},
   def:`{{context}}
 
-You are writing the COMPLETE ANALYSIS of a test run. Every scene was played by the author's roleplay model through the real payload and judged against the same rubric; every background engine was judged on real calls. The judges proposed no fixes: you do, for the prompts as a whole.
+You are the FIXER: you write the COMPLETE ANALYSIS of a test run and the fixes. The scenes were played by the author's roleplay model through the real payloads, one payload KIND at a time (solo, several characters, text messages, heat). For each kind an analyst read that kind's payload and every dialogue, judged them against one rubric, and wrote the REPORT below: its reasoning, the scores, the patterns, notes on the payload's structure and each scene's findings with quoted evidence. You do not get the dialogues: rely on the reports. You do get each kind's FULL PAYLOAD, once, exactly as it was sent: that is what you fix. Every background engine was judged on real calls.
 
-1. Read the run as a whole: which criteria are weak across scenes and payload kinds, which scenes pull against each other, which findings share one cause.
-2. Look at the STRUCTURE of the payload, not only its wording: what each layout puts where (system vs user, early vs right before the reply), what is buried, what is duplicated, what contradicts. Moving a piece is a fix.
+1. Read the reports as a whole: which criteria are weak across kinds, which kinds pull against each other, which findings share one cause (a piece used in several layouts), and what is weak in one kind only (its layout). Check each analyst's reasoning against the payload itself: where it names a cause, find those words in the payload and judge whether they really cause it.
+2. Look at the STRUCTURE of each payload, not only its wording: what sits where (system vs user, early vs right before the reply), what is buried, what is duplicated, what contradicts. Moving a piece is a fix.
 3. Compare with the earlier runs. A criterion that did not move after an edit means the cause is elsewhere: say so and look again instead of pushing the same text harder. Do not repeat an edit that was already applied.
 4. Write at most 10 edits, the most impactful first, each a general fix that holds in every situation (never a scene-specific rule). Use the best kind: remove, rewrite, move or add. Leave criteria that already score well alone.
 
-Edit format: "find" must be copied EXACTLY from an item's CURRENT text below (long enough to be unique). For "move", "find" is the whole line to move (for example {{call//after_heat//full}}) in a layout ("tpl:kind"), "before" is the exact line it should go right before, and "replace" stays empty. For "remove", "replace" is empty.
+Edit format: an edit changes ONE item, named by its key in the catalogue (frag:key, prompt:key or tpl:kind). "find" must be the item's own wording, copied EXACTLY as it reads in the payload or the catalogue, and must NOT include story data the app filled in (names, places, memories, numbers, the transcript): pick a stretch of the fixed wording. For a piece whose template has {{…}} in it, copy from the template shown in the catalogue. For "move", "find" is the whole line to move (for example {{call//after_heat//full}}) in a layout ("tpl:kind"), "before" is the exact line it should go right before, and "replace" stays empty. For "remove", "replace" is empty.
 
 Reply with ONLY this JSON:
-{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["scene title"],"cause":"the words or structure responsible"}],"structure":["one observation about the order or placement of the payload"],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"the exact words or structure responsible","why":"…","helps":["criterion ids"],"risks":"…"}]}
+{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["scene title or kind"],"cause":"the words or structure responsible"}],"structure":["one observation about the order or placement of a payload"],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact current wording","replace":"new text","before":"move only","cause":"the exact words or structure responsible","why":"…","helps":["criterion ids"],"risks":"…"}]}
 
 ===== THE RUBRIC ACROSS THIS RUN =====
 {{scores}}
 {{#rotation}}
 ===== MODEL ROTATION =====
-The roleplay replies rotated between these models, one reply each in turn, as the app does (each reply in the scenes is labelled with its model):
+The roleplay replies rotated between these models, one reply each in turn, as the app does (the reports say how they blend):
 {{rotation}}
 Also judge how they go along together: do they read as one character and one story across a switch, or does the voice, register, length, Turkish, or pacing of desire jump; does one model undo what the other built (resistance, a decision, a mood); which criteria each model pulls down. Your edits must hold for every model in the rotation; when a gap comes from one model and no prompt can close it, say so instead of bending the prompts around it. Add to your JSON: "rotation":{"blend":"two sentences on how the models go together","models":[{"model":"id","good":"…","weak":"…"}],"keep":"advice on the rotation itself (keep, reorder, drop a model) and why"}
 {{/rotation}}
@@ -2015,11 +2018,11 @@ Also judge how they go along together: do they read as one character and one sto
 ===== EARLIER RUNS =====
 {{history}}
 {{/history}}{{#applied}}
-===== CHANGES APPLIED SINCE THESE TESTS RAN (the exchanges below predate them) =====
+===== CHANGES APPLIED SINCE THESE TESTS RAN (the payloads below predate them; the catalogue is current) =====
 {{applied}}
 {{/applied}}
-===== THE SCENES =====
-{{scenes}}
+===== THE REPORTS, ONE PER PAYLOAD KIND =====
+{{reports}}
 
 ===== THE ENGINES =====
 {{engines}}
@@ -2027,15 +2030,15 @@ Also judge how they go along together: do they read as one character and one sto
 ===== THE LAYOUTS (each payload kind: the order of the pieces) =====
 {{layouts}}
 
-===== THE CURRENT TEXT OF EVERY PIECE =====
-{{pieces}}
+===== THE CATALOGUE OF PIECES (current) =====
+{{catalogue}}
 {{#prompts}}
 ===== ENGINE PROMPTS THAT HAD PROBLEMS (exact current text) =====
 {{prompts}}
 {{/prompts}}
-===== ONE REAL PAYLOAD, FILLED =====
-{{payload}}`},
- {id:"engfinal",label:"The complete engine analysis (every engine scene, then the fixes)",desc:"Reads every engine judgement across the engine scenes, with each scene's purpose and script, and writes the fixes to the engine prompts.",
+===== THE FULL PAYLOADS, ONE PER KIND (as sent) =====
+{{payloads}}`},
+ {id:"engfinal",fit:["prompts","scenes"],label:"The complete engine analysis (every engine scene, then the fixes)",desc:"Reads every engine judgement across the engine scenes, with each scene's purpose and script, and writes the fixes to the engine prompts.",
   vars:{context:"the method",scenes:"every engine scene: its purpose, its script and each engine's judgement",prompts:"the current text of every engine prompt that ran",applied:"edits applied after these tests ran"},
   def:`{{context}}
 
@@ -2058,6 +2061,40 @@ Reply with ONLY this JSON:
 
 ===== THE ENGINE PROMPTS (exact current text) =====
 {{prompts}}`},
+ {id:"discuss",fit:["scenes","pieces","reports","catalogue","layouts"],label:"Discuss the fixes (chat under a complete analysis)",desc:"The first message of the conversation under the complete analysis (roleplay or engines). It is rebuilt for every message, so Claude always sees the current text and what has been applied. Your messages follow it.",
+  vars:{context:"the method",which:"what is being fixed: the roleplay prompts or the background engine prompts",analysis:"the complete analysis: verdict, patterns, structure notes and every proposed edit with its state",reports:"roleplay: each payload kind's analysis report (no dialogues)",payloads:"roleplay: each payload kind's full payload, once",catalogue:"roleplay: every piece's key and opening words, and the template of pieces with {{…}} in them",layouts:"roleplay: each payload kind's layout",applied:"every edit applied so far, oldest first",scenes:"engines: each engine scene's purpose, script and judgements",pieces:"engines: the current text of every engine prompt that ran"},
+  def:`{{context}}
+
+You are discussing the fixes for {{which}} with their author, after a complete analysis of a test run. The author may question an edit, ask why, ask for a different or smaller correction, ask for something new, or point at a reply they did not like. Answer plainly and briefly, as a prompt engineer talking to the author. Hold to HOW TO FIX: find the cause first, fix in general (never for one scene or one line), keep it tight.
+
+When the author asks for a change, or agrees to one, give the edits in ONE fenced block marked \`\`\`edits containing a JSON array, in the same format as the analysis:
+[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact CURRENT text","replace":"new text","before":"move only: the line it goes right before","cause":"…","why":"…"}]
+"find" must be the item's own wording, copied EXACTLY from its CURRENT text (the catalogue, the layouts, the engine prompts) or as it reads in a payload, never story data the app filled in, and never words an applied edit has already changed. To revise an edit you proposed earlier, give the whole revised edit again. Without a request for a change, just answer, with no edits block.
+
+===== THE COMPLETE ANALYSIS =====
+{{analysis}}
+{{#applied}}
+===== EDITS APPLIED SO FAR (oldest first; the catalogue, layouts and prompts below already include them; the payloads predate them) =====
+{{applied}}
+{{/applied}}{{#reports}}
+===== THE REPORTS, ONE PER PAYLOAD KIND (no dialogues) =====
+{{reports}}
+{{/reports}}{{#scenes}}
+===== THE ENGINE SCENES AND THEIR JUDGEMENTS =====
+{{scenes}}
+{{/scenes}}{{#layouts}}
+===== THE LAYOUTS (each payload kind: the order of the pieces) =====
+{{layouts}}
+{{/layouts}}{{#catalogue}}
+===== THE CATALOGUE OF PIECES (current) =====
+{{catalogue}}
+{{/catalogue}}{{#pieces}}
+===== THE ENGINE PROMPTS (current) =====
+{{pieces}}
+{{/pieces}}{{#payloads}}
+===== THE FULL PAYLOADS, ONE PER KIND (as sent) =====
+{{payloads}}
+{{/payloads}}`},
  {id:"compare",label:"LLM evaluation (comparing models)",desc:"One comparison per model setting. The models are shown as Model A, B, C; the names are put back afterwards.",
   vars:{job:"the setting's name",setting:"the setting's key",reply:"flag: the roleplay setting (on) or a background engine (off)",labels:"Model A, Model B…",times:"each model's measured response time",results:"what each model wrote, scene by scene or call by call"},
   def:`You are evaluating LANGUAGE MODELS for one job inside StoryMind, an adult roleplay app. The prompts are fixed and are NOT under review: do not suggest prompt changes. Judge only how well each model did this job with the same input.
@@ -2101,8 +2138,28 @@ function apFill(tpl,vars){
   return t.replace(/\{\{([a-z_]+)\}\}/g,(m,k)=>(k in vars)?String(vars[k]==null||vars[k]===true||vars[k]===false?"":vars[k]):m);
 }
 /* the prompt, filled: the method goes in as {{context}} */
+/* Claude takes at most 256 KiB of text per request (UTF-8 bytes: a Turkish letter can take two), and refuses
+   anything larger (prompt_too_large). apBuild keeps every request under AP_CAP, leaving room for what the
+   platform adds: when the filled prompt is too big it shortens the data, in the template's "fit" order
+   (most expendable first; otherwise the largest first), keeping the head and the tail of each and marking
+   the cut. The instructions themselves are never cut. */
+const AP_CAP=225000;
+const UTF8=new TextEncoder();
+function apBytes(t){ return UTF8.encode(String(t)).length; }
+function cutMiddle(t,bytes){ t=String(t); const n=apBytes(t); if(n<=bytes) return t;
+  const keep=Math.max(0,Math.floor(t.length*bytes/n)-80), head=Math.floor(keep*0.65);
+  return t.slice(0,head)+"\n[… "+Math.round((n-bytes)/1024)+" KB cut here to fit Claude's input limit …]\n"+t.slice(t.length-(keep-head)); }
 function apBuild(id,vars){ const d=AP_DEFS.find(x=>x.id===id)||{vars:{}}, blank={}; Object.keys(d.vars).forEach(k=>blank[k]="");   // a declared name with no data reads as empty
-  const out=apFill(apText(id),Object.assign(blank,{context:apText("context")},vars||{})); AP_LAST[id]={text:out,at:Date.now()}; return out; }
+  const v=Object.assign(blank,{context:apText("context")},vars||{});
+  let out=apFill(apText(id),v);
+  for(let round=0;round<6&&apBytes(out)>AP_CAP;round++){
+    let over=apBytes(out)-AP_CAP+2048;
+    const big=Object.keys(v).filter(k=>k!=="context"&&typeof v[k]==="string"&&apBytes(v[k])>3000);
+    const order=(d.fit||[]).filter(k=>big.indexOf(k)>=0).concat(big.filter(k=>(d.fit||[]).indexOf(k)<0).sort((a,b)=>apBytes(v[b])-apBytes(v[a])));
+    for(const k of order){ if(over<=0) break; const n=apBytes(v[k]), cut=Math.min(over,n-2000); if(cut<=0) continue; v[k]=cutMiddle(v[k],n-cut); over-=cut; }
+    out=apFill(apText(id),v);
+  }
+  AP_LAST[id]={text:out,at:Date.now()}; return out; }
 function itemContext(it){
   const v=itemVal(it), d=itemDef(it);
   let s=`THE OPEN ITEM: ${it.label} (${it.type==="frag"?"reply piece":it.type==="tpl"?"payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
@@ -2516,10 +2573,19 @@ const DRIFT_SCENES=[
           "Haklıyım değil mi? Her konuda haklıyım."]}
 ];
 DRIFT_SCENES.forEach(sc=>{ sc.speaker=sc.speakers[0]; });
+/* The roleplay tests are grouped, played and analysed per PAYLOAD KIND: each kind has its own layout, so
+   its scenes are judged together by one analyst that reads that kind's payload once. */
+const KINDS=[{k:"solo",label:"Solo",desc:"one character, face to face"},{k:"multi",label:"Several characters",desc:"each present character answers in turn"},
+  {k:"text",label:"Text messages",desc:"a phone thread: typed words only"},{k:"heat",label:"Heat of the moment",desc:"beats in the middle of sex"}];
+const KIND_ORDER=KINDS.map(x=>x.k);
+DRIFT_SCENES.sort((a,b)=>KIND_ORDER.indexOf(a.kind)-KIND_ORDER.indexOf(b.kind));   // stable: the order inside a kind stays
 const THEME_ORDER=[...new Set(DRIFT_SCENES.map(sc=>sc.theme))];
+const KA=lsGet("kindan",{})||{};   // each payload kind's analysis
+function kaSave(){ const keep={}; Object.keys(KA).forEach(k=>{ const a=KA[k]; if(a){ const c=Object.assign({},a); delete c.judging; keep[k]=c; } }); lsSet("kindan",keep); }
+function kindScenes(k){ return DRIFT_SCENES.filter(sc=>sc.kind===k); }
 const KIND_SHORT={solo:"solo",multi:"several characters",gm:"gamemaster",text:"text messages",heat:"heat of the moment"};
 const DR={running:false,ctl:null,results:lsGet("drift",{})};
-function driftSave(){ const keep={}; Object.keys(DR.results).forEach(k=>{ const r=DR.results[k]; keep[k]={turns:r.turns,judge:r.judge,at:r.at,err:r.err,model:r.model,payload:r.payload}; }); lsSet("drift",keep); }
+function driftSave(){ const keep={}; Object.keys(DR.results).forEach(k=>{ const r=DR.results[k]; keep[k]={turns:r.turns,judge:r.judge,at:r.at,err:r.err,model:r.model,payload:r.payload,rotation:r.rotation}; }); lsSet("drift",keep); }
 /* What is ticked for "Run everything". Reply scenes: all by default. Engine scenes: the first, since each
    is about a hundred model calls. */
 function selReply(){ const v=lsGet("selreply",null); return Array.isArray(v)?v:DRIFT_SCENES.map(x=>x.id); }
@@ -2531,13 +2597,13 @@ function renderDrift(){
   const names={p_sami:"Sami",p_buket:"Buket"}, sel=new Set(selReply());
   host.innerHTML="";
   let n=0;
-  THEME_ORDER.forEach(theme=>{
-    const list=DRIFT_SCENES.filter(sc=>sc.theme===theme); if(!list.length) return;
-    host.insertAdjacentHTML("beforeend",`<div class="sub" style="padding:6px 2px 0;font-style:normal;font-weight:600;letter-spacing:.06em;text-transform:uppercase">${esc(theme)}</div>`);
+  KINDS.forEach(kd=>{
+    const list=kindScenes(kd.k); if(!list.length) return;
+    host.appendChild(kindHeader(kd,list));
     list.forEach(sc=>{
     n++;
     const r=DR.results[sc.id]||null, j=r&&r.judge;
-    const el=document.createElement("div"); el.className="scene"; el.id="dr_"+sc.id;
+    const el=document.createElement("div"); el.className="scene"; el.id="dr_"+sc.id; el.dataset.kind=sc.kind;
     const score=j&&typeof j.score==="number"?`<span class="score" title="Out of 10">${j.score}/10</span>`:"";
     const at="";
     el.innerHTML=`<h3><input type="checkbox" data-sel ${sel.has(sc.id)?"checked":""} title="Include in Run everything"> ${n}. ${esc(sc.title)} <span class="chip">${esc(KIND_SHORT[sc.kind]||sc.kind)}</span> ${score} ${at}<span class="sp"></span><button class="btn sm" type="button" data-run>${r?"Run again":"Run"}</button></h3>
@@ -2555,11 +2621,8 @@ function renderDrift(){
         return `<span class="chip" title="${esc((x&&x.note)||"")}${x&&x.evidence?" — “"+esc(x.evidence)+"”":""}" style="${v<5?"color:var(--danger)":v<7?"color:var(--warn)":""}">${(sc.focus||[]).indexOf(c.id)>=0?"★ ":""}${esc(c.label)} ${v}</span>`; }).join("")}</div>`);
       if(Array.isArray(j.findings)&&j.findings.length) el.insertAdjacentHTML("beforeend",`<ul style="margin:0;padding-left:18px;font-size:12.5px">${j.findings.map(f=>`<li><b>${esc((CRITERIA.find(c=>c.id===f.criterion)||{label:f.criterion||""}).label)}${f.turn?" · turn "+esc(f.turn):""}:</b> ${esc(f.problem||"")}${f.evidence?` <span class="stat">— “${esc(f.evidence)}”</span>`:""}${f.cause?`<br><span class="stat">likely cause: ${esc(f.cause)}</span>`:""}</li>`).join("")}</ul>`);
       (j.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
-    }else if(r&&r.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading the exchange…</div>`);
-    if(r&&!j&&!r.judging&&driftComplete(sc,r)){
-      const ab=document.createElement("button"); ab.className="btn sm pri"; ab.type="button"; ab.textContent=r.err?"Judge again":"Judge with Claude"; ab.disabled=busyAll()||!claudeReachable(); if(!claudeReachable()) ab.title=ANALYSE_HERE;
-      ab.onclick=()=>analyseDrift([sc]); el.appendChild(ab);
-    }
+    }else if(r&&r.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading every ${esc((KINDS.find(x=>x.k===sc.kind)||{label:""}).label.toLowerCase())} scene together…</div>`);
+    else if(r&&driftComplete(sc,r)) el.insertAdjacentHTML("beforeend",`<div class="stat">Not analysed yet: <b>Analyse these</b> above reads every scene of this kind together.</div>`);
     el.querySelector("[data-run]").onclick=()=>runDriftScenes([sc]);
     el.querySelector("[data-run]").disabled=busyAll();
     el.querySelector("[data-sel]").onchange=e=>{ const cur=new Set(selReply()); e.target.checked?cur.add(sc.id):cur.delete(sc.id); lsSet("selreply",[...cur]); renderEstimate(); };
@@ -2567,6 +2630,27 @@ function renderDrift(){
     });
   });
   paintAllButtons();
+}
+/* a payload kind's section: what it is, its buttons, and its analysis (the patterns across its scenes) */
+function kindHeader(kd,list){
+  const a=KA[kd.k], played=list.filter(sc=>driftComplete(sc,DR.results[sc.id])).length;
+  const el=document.createElement("div"); el.className="scene"; el.id="kind_"+kd.k; el.style.borderLeft="3px solid var(--accent, #888)";
+  el.innerHTML=`<h3><span style="text-transform:uppercase;letter-spacing:.06em">${esc(kd.label)}</span> <span class="stat">${esc(KIND_DESC[kd.k]||kd.desc)} · ${list.length} scene${list.length>1?"s":""} · ${played} played</span>${a&&typeof a.score==="number"?`<span class="score">${a.score}/10</span>`:""}<span class="sp"></span>
+    <button class="btn sm" type="button" data-krun>Run these</button> <button class="btn sm pri" type="button" data-kan ${played?"":"disabled"}>${a&&a.at?"Analyse again":"Analyse these"}</button></h3>`;
+  if(a&&a.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">Claude is reading this kind's payload once and its ${played} scene${played>1?"s":""} together…</div>`);
+  if(a&&a.err) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">The analysis failed: ${esc(a.err)}</div>`);
+  if(a&&a.at){
+    if(a.summary) el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div><b>This kind.</b> ${esc(a.summary)}</div></div>`);
+    if(a.reasoning) el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The analyst's reasoning (what the fixer reads instead of the dialogues)</summary><div style="font-size:12.5px;white-space:pre-wrap">${esc(a.reasoning)}</div></details>`);
+    if(a.criteria) el.insertAdjacentHTML("beforeend",`<div class="row" style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0">${CRITERIA.filter(c=>{ const x=a.criteria[c.id]; return typeof (x&&typeof x==="object"?x.score:x)==="number"; }).map(c=>{ const x=a.criteria[c.id], v=typeof x==="object"?x.score:x;
+      return `<span class="chip" title="${esc((x&&x.note)||"")}" style="${v<5?"color:var(--danger)":v<7?"color:var(--warn)":""}">${esc(c.label)} ${v}</span>`; }).join("")}</div>`);
+    if(Array.isArray(a.patterns)&&a.patterns.length) el.insertAdjacentHTML("beforeend",`<ul style="margin:0;padding-left:18px;font-size:12.5px">${a.patterns.map(x=>`<li>${x.criterion?`<span class="chip">${esc((CRITERIA.find(c=>c.id===x.criterion)||{label:x.criterion}).label)}</span> `:""}<b>${esc(x.pattern||"")}</b>${x.cause?` <span class="stat">— cause: ${esc(x.cause)}</span>`:""}</li>`).join("")}</ul>`);
+    if(Array.isArray(a.payload_notes)&&a.payload_notes.length) el.insertAdjacentHTML("beforeend",`<div class="stat" style="margin-top:4px"><b>Payload structure:</b><ul style="margin:2px 0;padding-left:18px">${a.payload_notes.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`);
+  }
+  const b=busyAll();
+  const kr=el.querySelector("[data-krun]"); kr.disabled=b; kr.onclick=()=>{ const sel=new Set(selReply()), pick=list.filter(sc=>sel.has(sc.id)); runDriftScenes(pick.length?pick:list); };
+  const ka=el.querySelector("[data-kan]"); if(b||!claudeReachable()) ka.disabled=true; if(!claudeReachable()) ka.title=ANALYSE_HERE; ka.onclick=()=>analyseKinds([kd.k]);
+  return el;
 }
 function driftComplete(sc,r){ const n=sceneSpeakers(sc).length; return !!(r&&r.turns&&r.turns.length===sc.lines.length&&r.turns.every(t=>t.reply!=null&&(!t.replies||t.replies.length>=n||n===1))); }
 /* a turn's replies, also for results saved before scenes had several speakers */
@@ -2590,7 +2674,7 @@ async function playScene(sc,answer,onTurn,signal){
       /* a reply to a gamemaster beat is built as StoryMind builds it: the gamemaster payload (in heat, the heat one) */
       const kind=(gm&&(sc.kind==="solo"||sc.kind==="multi"))?"gm":sc.kind;
       const p=await engCall("build",{kind,speakerId:id,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:history.slice()}},30000);
-      last=p; if(kind==="gm") t.kinds=(t.kinds||[]).concat(["gm"]);
+      if(kind===sc.kind||!last) last=p; if(kind==="gm") t.kinds=(t.kinds||[]).concat(["gm"]);
       const t0=performance.now();
       const a=await answer(p,id), mdl=a&&typeof a==="object"?a.model:null;
       let text=String((a&&typeof a==="object"?a.text:a)||"").trim(); const ms=Math.round(performance.now()-t0);
@@ -2609,21 +2693,38 @@ async function runDriftScene(sc){
   r.turns=out.turns; r.payload=out.payload;
   driftSave();
 }
-async function analyseOne(sc){
-  const r=DR.results[sc.id]; if(!driftComplete(sc,r)) return;
-  r.judging=true; r.err=null; renderDrift();
-  try{ r.judge=await judgeDrift(sc,r.turns,r.payload); }
-  finally{ r.judging=false; driftSave(); renderDrift(); }
+/* One payload kind, analysed at once: its payload once, every complete scene of the kind, one answer
+   with each scene's judgement and the kind's patterns. Each scene keeps its own part as its judgement. */
+function kindSceneText(sc,r,maxLen){
+  return `### SCENE ${sc.id}: ${sc.title}\nTESTS: ${sc.tests}\nGROUND TRUTH: ${sc.facts}\nGOOD LOOKS LIKE: ${sc.expect||sc.pass||""}\nPRESSES ON: ${(sc.focus||[]).join(", ")}\n`+exchangeText(sc,r.turns,maxLen); }
+async function analyseKind(k,sig){
+  const list=kindScenes(k).filter(sc=>driftComplete(sc,DR.results[sc.id])); if(!list.length) return null;
+  const a=KA[k]=Object.assign({},KA[k]||{},{judging:true,err:null}); list.forEach(sc=>{ DR.results[sc.id].judging=true; DR.results[sc.id].err=null; }); renderDrift();
+  try{
+    const ps=list.find(sc=>DR.results[sc.id].payload)||list[0], pay=DR.results[ps.id].payload;
+    const rot=[...new Set(list.flatMap(sc=>rotOf(sc)))], since=Math.min(...list.map(sc=>DR.results[sc.id].at||0));
+    const kd=KINDS.find(x=>x.k===k)||{label:k,desc:""};
+    const input=apBuild("kind",{kind:`${kd.label} — ${KIND_DESC[k]||kd.desc}`,criteria:criteriaText([],rot.length>=2),rotation:rot.length>=2?rot.join(", "):"",
+      scenes:list.map(sc=>kindSceneText(sc,DR.results[sc.id])).join("\n\n"),payload_scene:ps.title,payload:pay?payloadText(pay):"(not available)",applied:appliedText(appliedSince(since))});
+    const o=await AI.sample.json(input,{signal:sig||(DR.ctl&&DR.ctl.signal),modelTier:"complex",cache:false});
+    const per=Array.isArray(o.scenes)?o.scenes:[];
+    list.forEach((sc,i)=>{ const j=per.find(x=>x&&String(x.id||"").trim()===sc.id)||per.find(x=>x&&String(x.id||"").indexOf(sc.title)>=0)||(per.length===list.length?per[i]:null);
+      DR.results[sc.id].judge=j||{summary:"The kind's analyst did not return this scene.",turns:[],criteria:{}}; });
+    const rest=Object.assign({},o); delete rest.scenes;
+    KA[k]=Object.assign(rest,{at:Date.now(),model:testLabel(),scenes:list.map(sc=>sc.id)});
+    return KA[k];
+  }catch(e){ KA[k]=Object.assign({},a,{judging:false,err:aiErr(e)}); throw e; }
+  finally{ if(KA[k]) KA[k].judging=false; list.forEach(sc=>{ DR.results[sc.id].judging=false; }); kaSave(); driftSave(); renderDrift(); }
 }
-async function analyseDrift(list,inAll){
+async function analyseKinds(kinds,inAll){
   if(DR.running||(ALL.running&&!inAll)) return;
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
-  for(const sc of list){
-    if(!driftComplete(sc,DR.results[sc.id])) continue;
-    $("#driftStat").textContent=`Claude is analysing ${sc.title}…`;
-    try{ await analyseOne(sc); }catch(e){ DR.results[sc.id].err=aiErr(e); renderDrift(); if(e&&(e.code==="cancelled"||e.code==="not_granted"))break; }
+  for(const k of kinds){
+    $("#driftStat").textContent=`Claude is analysing the ${(KINDS.find(x=>x.k===k)||{label:k}).label.toLowerCase()} scenes…`;
+    try{ await analyseKind(k); }catch(e){ toast(aiErr(e),6000); if(e&&(e.code==="cancelled"||e.code==="not_granted")) break; }
   }
-  DR.running=false; driftSummary(list); renderDrift();
+  DR.running=false; driftSummary(DRIFT_SCENES.filter(sc=>kinds.indexOf(sc.kind)>=0)); renderDrift();
 }
 function driftSummary(list){
   const js=list.map(sc=>DR.results[sc.id]&&DR.results[sc.id].judge).filter(Boolean);
@@ -2643,14 +2744,6 @@ function rotationText(){
   const ks=Object.keys(by); if(ks.length<2) return "";
   return ks.map(m=>`- ${m}: ${by[m].n} replies, average ${Math.round(by[m].ms/by[m].n/100)/10} s, average ${Math.round(by[m].len/by[m].n)} characters`).join("\n");
 }
-async function judgeDrift(sc,turns,payload){
-  const since=(DR.results[sc.id]&&DR.results[sc.id].at)||0;
-  const input=apBuild("scene",{title:sc.title,tests:sc.tests,facts:sc.facts,expect:sc.expect||sc.pass||"",kind:KIND_DESC[sc.kind]||sc.kind,
-    criteria:criteriaText(sc.focus,rotOf(sc)),rotation:rotOf(sc).join(", "),exchange:exchangeText(sc,turns),payload:payload?payloadText(payload).slice(0,140000):"(not available)",applied:appliedText(appliedSince(since))});
-  if(AI.sample) return AI.sample.json(input,{signal:DR.ctl.signal,modelTier:"complex",cache:false});
-  const t=await aiAsk([{role:"user",content:input}],{signal:DR.ctl.signal,maxTokens:5000,temperature:0.2});
-  const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The judge did not answer in JSON."}; return JSON.parse(m[0]);
-}
 /* the rubric averaged over the judged scenes (a criterion counts where a judge scored it) */
 function runScores(){
   const sum={},n={};
@@ -2666,15 +2759,17 @@ async function runDriftScenes(list,inAll){
   /* the scenes are written against the sample story's facts */
   await useTestWorld();
   DR.running=true; DR.ctl=new AbortController(); renderDrift();
-  const analyst=!inAll&&!!AI.sample;   // in a full run the analyst team reads them all at once afterwards
+  const analyst=!inAll&&!!AI.sample;   // afterwards, each kind played is analysed as a whole (in a full run, the team does it)
   let done=0;
   for(const sc of list){
     $("#driftStat").textContent=`${testLabel()} is playing ${sc.title} (${done+1}/${list.length})…`;
-    try{ await runDriftScene(sc); if(analyst){ $("#driftStat").textContent=`Claude is analysing ${sc.title}…`; await analyseOne(sc); } }
+    try{ await runDriftScene(sc); }
     catch(e){ const r=DR.results[sc.id]||(DR.results[sc.id]={turns:[]}); r.judging=false; r.err=aiErr(e); driftSave(); renderDrift(); if(e&&e.code==="cancelled") break; }
     done++;
   }
-  DR.running=false; driftSummary(list); renderDrift();
+  DR.running=false;
+  if(analyst&&!DR.ctl.signal.aborted){ await analyseKinds([...new Set(list.map(sc=>sc.kind))]); return; }
+  driftSummary(list); renderDrift();
 }
 
 /* ---------------- engine tests ----------------
@@ -2948,22 +3043,25 @@ $("#btnEngScriptReset").onclick=()=>{ $("#engScript").value=engLinesText(engPres
 const ALL={running:false,ctl:null,overall:lsGet("overall",null)};
 function paintAllButtons(){
   const b=busyAll();
-  ["#btnAll","#btnAllAnalyse","#btnAllExport","#btnAllImport","#btnEngRun","#btnEngAnalyse","#btnEngAll","#btnEngAllAnalyse"].forEach(x=>{ const el=$(x); if(el) el.disabled=b; });
+  ["#btnAll","#btnAllAnalyse","#btnAllFix","#btnAllExport","#btnAllImport","#btnEngRun","#btnEngAnalyse","#btnEngAll","#btnEngAllAnalyse"].forEach(x=>{ const el=$(x); if(el) el.disabled=b; });
   const st=$("#btnAllStop"); if(st) st.hidden=!(ALL.running||DR.running); const es=$("#btnEngStop"); if(es) es.hidden=!(ENGALL.running||ENGRUN.running);
 }
 function renderEstimate(){
   const el=$("#allEstimate"); if(!el) return;
   const rs=DRIFT_SCENES.filter(sc=>selReply().indexOf(sc.id)>=0);
   const replies=rs.reduce((a,sc)=>a+sc.lines.length*sceneSpeakers(sc).length,0);
-  el.textContent=`Selected: ${rs.length} scene${rs.length===1?"":"s"} (${replies} replies). Claude's judges then score ${rs.length} scene${rs.length===1?"":"s"}, and one complete analysis reads them all and proposes the fixes.`;
+  el.textContent=`Selected: ${rs.length} scene${rs.length===1?"":"s"} (${replies} replies). Then one Claude analyst per payload kind (${[...new Set(rs.map(sc=>sc.kind))].length}) reads that kind's payload once with its scenes, and one complete analysis reads the kinds together and proposes the fixes.`;
   renderOverall();
 }
 /* the overseer's verdict belongs to one test set: replaced or cleared with it */
-function setOverall(o){ ALL.overall=o||null; lsSet("overall",ALL.overall); renderOverall(); }
+function setOverall(o){ if(!o||o!==ALL.overall){ DISC.rp=[]; discSave("rp"); } ALL.overall=o||null; lsSet("overall",ALL.overall); renderOverall(); }
 function renderOverall(){
   let host=$("#overallBox");
   if(!host){ host=document.createElement("div"); host.id="overallBox"; host.className="msgs"; const anchor=$("#allEstimate"); anchor&&anchor.insertAdjacentElement("afterend",host); }
   const o=ALL.overall; host.innerHTML="";
+  if(ALL.err){ const e=document.createElement("div"); e.className="scene";
+    e.innerHTML=`<h3>The complete analysis failed</h3><div class="turnRow"><div>${esc(ALL.err)}${o?" The analysis below is the previous one.":""}</div></div><div class="acts"><button class="btn sm pri" type="button" data-refix>Write the fixes again</button></div>`;
+    e.querySelector("[data-refix]").onclick=writeFixesAlone; host.appendChild(e); }
   if(!o){ return; }
   const el=document.createElement("div"); el.className="scene";
   el.innerHTML=`<h3>Complete analysis ${typeof o.score==="number"?`<span class="score">${o.score}/10</span>`:""}<span class="sp"></span><span class="stat">${esc(o.model||"")}${o.at?" · "+esc(new Date(o.at).toLocaleString()):""}</span> <button class="btn sm" type="button" data-clear-overall>Clear</button></h3>
@@ -2977,31 +3075,120 @@ function renderOverall(){
   if(ds.length){ const n=v=>ds.filter(d=>d.verdict===v).length;
     el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The overseer decided on ${ds.length} analyst edit${ds.length>1?"s":""}: ${n("keep")} kept · ${n("merge")} merged · ${n("drop")} dropped</summary><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${ds.map(d=>`<li><code>${esc(d.id||"")}</code> <span class="vd ${d.verdict==="keep"?"held":d.verdict==="drop"?"broke":"bent"}">${esc(d.verdict||"")}</span> ${esc(d.why||"")}</li>`).join("")}</ul></details>`); }
   (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.map(h=>(CRITERIA.find(c=>c.id===h)||{label:h}).label).join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
+  el.appendChild(discussPanel("rp"));
   host.appendChild(el);
   const cb=el.querySelector("[data-clear-overall]"); if(cb) cb.onclick=()=>{ setOverall(null); toast("The complete analysis is cleared"); };
 }
-/* What the combined analysis reads: every scene's exchange and verdict, every engine's verdict and
-   problems, one real payload per kind, the editable items, and the engine prompts that had issues. */
+
+/* ---------------- discussing the fixes ----------------
+   A conversation under each complete analysis. Every message rebuilds the opening context (the analysis,
+   what is applied, the current text), so Claude never quotes words that are gone. Edits Claude proposes in
+   an ```edits block become edit cards. */
+const DISC={rp:lsGet("disc_rp",[])||[],eng:lsGet("disc_eng",[])||[],draft:{rp:"",eng:""},busy:{rp:false,eng:false},ctl:{}};
+function discSave(key){ lsSet("disc_"+key,DISC[key].slice(-40)); }
+function discEdits(t){ const m=String(t).match(/```edits\s*\n([\s\S]*?)```/); if(!m) return [];
+  try{ const v=JSON.parse(m[1]); const a=Array.isArray(v)?v:(v&&Array.isArray(v.edits)?v.edits:[]); return a.filter(e=>e&&e.item); }catch(e){ return []; } }
+function analysisText(o){
+  if(!o) return "(none)";
+  const st=ed=>{ const it=itemFromRef(ed.item); return it?editState(ed,it):"missing"; };
+  return [`VERDICT${o.score!=null?" ("+o.score+"/10)":""}: ${o.summary||""}`,
+    Array.isArray(o.patterns)&&o.patterns.length?"PATTERNS:\n"+o.patterns.map(x=>`- ${x.criterion||x.engine||""}: ${x.pattern||""}${x.cause?" — cause: "+x.cause:""}`).join("\n"):"",
+    Array.isArray(o.structure)&&o.structure.length?"STRUCTURE:\n"+o.structure.map(x=>"- "+x).join("\n"):"",
+    Array.isArray(o.scenes)&&o.scenes.length?"SCENES:\n"+o.scenes.map(x=>`- ${x.scene||""}: ${x.outcome||""} — ${x.note||""}`).join("\n"):"",
+    "PROPOSED EDITS:\n"+((o.edits||[]).map((ed,i)=>`${i+1}. [${st(ed)}] ${ed.item} (${ed.kind||"rewrite"})${ed.find?` find «${String(ed.find).slice(0,600)}»`:""}${ed.before?` before «${ed.before}»`:""}${ed.replace?` → «${String(ed.replace).slice(0,600)}»`:""}${ed.why?" — "+ed.why:""}`).join("\n")||"(none)")].filter(Boolean).join("\n\n");
+}
+function discussInput(key){
+  const applied=appliedText(Object.values(APPLIED).filter(a=>a&&a.item).sort((x,y)=>(x.t||0)-(y.t||0)).slice(-40));
+  if(key==="eng"){ const x=engOverallInput();
+    return apBuild("discuss",{which:"the background engine prompts",analysis:analysisText(ENGALL.overall),applied,scenes:x.scenes,pieces:x.prompts||"(no engine prompt ran)"}); }
+  const x=overallInput(), v={which:"the roleplay prompts (the reply payloads)",analysis:analysisText(ALL.overall),applied,reports:x.reports,layouts:x.layouts,catalogue:x.catalogue};
+  v.payloads=payloadsText(AP_CAP-apBytes(apBuild("discuss",Object.assign({},v,{payloads:""})))-30000);   // room left for the conversation
+  return apBuild("discuss",v);
+}
+async function discussSend(key,q){
+  q=String(q||"").trim(); if(!q||DISC.busy[key]) return;
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
+  DISC[key].push({role:"user",content:q}); DISC.draft[key]=""; DISC.busy[key]=true; DISC.err=null; discSave(key); paintDisc(key);
+  const ctl=DISC.ctl[key]=new AbortController();
+  try{
+    const first=discussInput(key);
+    let hist=DISC[key].slice();
+    /* the whole conversation must fit one request: drop the oldest exchanges first */
+    while(hist.length>1&&apBytes(first)+hist.reduce((a,m)=>a+apBytes(m.content),0)>AP_CAP+20000) hist=hist.slice(2);
+    const turns=[{role:"user",content:first},{role:"assistant",content:"Understood. I have the analysis, what is applied and the current text. What would you like to discuss?"}].concat(hist.map(m=>({role:m.role,content:m.content})));
+    const text=await aiAsk(turns,{signal:ctl.signal,onText:({text})=>{ const el=document.querySelector(`[data-disc="${key}"] .discLive`); if(el) el.innerHTML=mdLite(text); }});
+    DISC[key].push({role:"assistant",content:text});
+  }catch(e){ if(!(e&&e.code==="cancelled")) DISC[key].push({role:"assistant",content:"(failed) "+aiErr(e),err:true}); }
+  finally{ DISC.busy[key]=false; discSave(key); paintDisc(key); }
+}
+function discussPanel(key){
+  const el=document.createElement("div"); el.className="turnRow"; el.dataset.disc=key; el.style.display="block";
+  el.innerHTML=`<div><b>Discuss these fixes with Claude</b> <span class="stat">question an edit, ask for a different correction, or request something new; edits Claude proposes appear here with Apply</span></div>
+    <div class="discMsgs" style="display:flex;flex-direction:column;gap:6px;margin:6px 0"></div>
+    <textarea class="discIn" rows="3" style="width:100%" placeholder="e.g. Edit 2 makes her too cold in the text scenes. Keep the resistance but soften it."></textarea>
+    <div class="acts"><button class="btn sm pri" type="button" data-dsend>Send</button><button class="btn sm" type="button" data-dstop hidden>Stop</button><button class="btn sm" type="button" data-dclear>Clear the conversation</button></div>`;
+  const ta=el.querySelector(".discIn"); ta.value=DISC.draft[key]||"";
+  ta.oninput=()=>{ DISC.draft[key]=ta.value; };
+  ta.addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); discussSend(key,ta.value); } });
+  el.querySelector("[data-dsend]").onclick=()=>discussSend(key,ta.value);
+  el.querySelector("[data-dstop]").onclick=()=>{ try{ DISC.ctl[key]&&DISC.ctl[key].abort(); }catch(e){} };
+  el.querySelector("[data-dclear]").onclick=()=>{ DISC[key]=[]; discSave(key); paintDisc(key); };
+  fillDisc(el,key); return el;
+}
+function fillDisc(el,key){
+  const box=el.querySelector(".discMsgs"); box.innerHTML="";
+  DISC[key].forEach(m=>{
+    const b=document.createElement("div"); b.className="bub "+(m.role==="user"?"me":"ai"); b.style.maxWidth="100%";
+    const shown=m.role==="assistant"?String(m.content).replace(/```edits\s*\n[\s\S]*?```/,"").trim():m.content;
+    b.innerHTML=m.role==="assistant"?mdLite(shown):esc(shown); if(m.err) b.style.color="var(--danger)";
+    box.appendChild(b);
+    if(m.role==="assistant") discEdits(m.content).forEach(ed=>box.appendChild(editCard(ed)));
+  });
+  if(DISC.busy[key]){ const b=document.createElement("div"); b.className="bub ai discLive"; b.textContent="Thinking…"; box.appendChild(b); }
+  const busy=DISC.busy[key];
+  el.querySelector("[data-dsend]").disabled=busy||!claudeReachable(); el.querySelector("[data-dstop]").hidden=!busy;
+  if(!claudeReachable()) el.querySelector("[data-dsend]").title=ANALYSE_HERE;
+}
+function paintDisc(key){ const el=document.querySelector(`[data-disc="${key}"]`); if(el) fillDisc(el,key); }
+/* What the fixer reads. No dialogues: each payload kind's REPORT (the analyst's reasoning, rubric, patterns,
+   payload notes and each scene's findings with their quotes) and each kind's FULL PAYLOAD once, plus the
+   layouts, a catalogue of the pieces, the engine judgements and the engine prompts that had issues. */
+function kindReport(k){
+  const list=kindScenes(k).filter(sc=>DR.results[sc.id]&&driftComplete(sc,DR.results[sc.id])); if(!list.length) return "";
+  const a=KA[k]||{}, kd=KINDS.find(x=>x.k===k);
+  const crit=c=>c?Object.keys(c).map(id=>{ const x=c[id], v=x&&typeof x==="object"?x.score:x; return v==null?null:`${id} ${v}${x&&x.note?" ("+x.note+")":""}`; }).filter(Boolean).join("; "):"";
+  return `## PAYLOAD KIND: ${kd.label} (tpl:${k})${a.score!=null?` — ${a.score}/10`:""}${a.at?"":" — NOT ANALYSED YET: only the scenes' own judgements, if any"}\n`+
+    (a.summary?`SUMMARY: ${a.summary}\n`:"")+(a.reasoning?`THE ANALYST'S REASONING: ${a.reasoning}\n`:"")+(crit(a.criteria)?`RUBRIC: ${crit(a.criteria)}\n`:"")+
+    (Array.isArray(a.patterns)&&a.patterns.length?"PATTERNS:\n"+a.patterns.map(x=>`- [${x.criterion||"?"}] ${x.pattern||""}${x.scenes&&x.scenes.length?" ("+x.scenes.join(", ")+")":""}${x.cause?" — cause: "+x.cause:""}`).join("\n")+"\n":"")+
+    (Array.isArray(a.payload_notes)&&a.payload_notes.length?"PAYLOAD STRUCTURE:\n"+a.payload_notes.map(x=>"- "+x).join("\n")+"\n":"")+
+    "SCENES:\n"+list.map(sc=>{ const j=DR.results[sc.id].judge||{};
+      return `### ${sc.title} (${sc.id}; tests: ${sc.tests}; presses on: ${(sc.focus||[]).join(", ")})${j.score!=null?` — ${j.score}/10`:""}`+(j.summary?`\n${j.summary}`:"")+(crit(j.criteria)?`\nRUBRIC: ${crit(j.criteria)}`:"")+
+        (Array.isArray(j.findings)&&j.findings.length?"\nFINDINGS:\n"+j.findings.map(f=>`- [${f.criterion||"?"}${f.turn?" t"+f.turn:""}] ${f.problem||""}${f.evidence?` — “${f.evidence}”`:""}${f.cause?` — cause: ${f.cause}`:""}`).join("\n"):""); }).join("\n");
+}
+function kindPayload(k){ const sc=kindScenes(k).find(sc=>DR.results[sc.id]&&DR.results[sc.id].payload&&driftComplete(sc,DR.results[sc.id])); return sc?{scene:sc,p:DR.results[sc.id].payload}:null; }
+/* every kind's payload, once, sharing what is left of the request: each keeps its head and its end */
+function payloadsText(budget){
+  const ps=KIND_ORDER.map(k=>({k,x:kindPayload(k)})).filter(o=>o.x); if(!ps.length) return "(none)";
+  const each=Math.max(6000,Math.floor((budget||AP_CAP)/ps.length)-400);
+  return ps.map(o=>`===== PAYLOAD: ${(KINDS.find(x=>x.k===o.k)||{label:o.k}).label} (tpl:${o.k}; as sent for the last reply of "${o.x.scene.title}") =====\n`+cutMiddle(payloadText(o.x.p),each)).join("\n\n");
+}
+function pieceCatalogue(){
+  /* the opening words keep their own line breaks, so wording copied from here matches the piece */
+  const head=v=>{ const t=v.trim(); return t.length>200?t.slice(0,200)+" …":t; };
+  const rows=["baseInstruction","formatRules"].map(k=>`prompt:${k} — <<<${head(itemVal({type:"prompt",key:k}))}>>>`);
+  Object.keys(S.meta.blockDefaults).forEach(k=>{ const v=itemVal({type:"frag",key:k}); if(!v.trim()) return;
+    rows.push(/\{\{|\[\[/.test(v)?`frag:${k} — TEMPLATE:\n<<<\n${v}\n>>>`:`frag:${k} — <<<${head(v)}>>>`); });
+  return rows.join("\n");
+}
 function overallInput(){
-  const kinds={};
-  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]&&driftComplete(sc,DR.results[sc.id])).map(sc=>{ const r=DR.results[sc.id], j=r.judge||{};
-    if(r.payload&&!kinds[sc.kind]) kinds[sc.kind]=r.payload;
-    const crit=j.criteria?Object.keys(j.criteria).map(k=>{ const x=j.criteria[k], v=typeof x==="object"&&x?x.score:x; return v==null?null:`${k} ${v}${x&&x.note?" ("+x.note+")":""}`; }).filter(Boolean).join("; "):"";
-    return `### ${sc.title} [${KIND_SHORT[sc.kind]}; presses on: ${(sc.focus||[]).join(", ")}]\nTESTS: ${sc.tests}\nGOOD LOOKS LIKE: ${sc.expect||sc.pass||""}\n`+exchangeText(sc,r.turns,700)+
-      (j.turns?"\nTURN VERDICTS: "+j.turns.map((v,i)=>`${i+1} ${v.verdict}${v.note?" ("+v.note+")":""}`).join("; "):"")+
-      (crit?`\nRUBRIC: ${crit}`:"")+(j.summary?`\nJUDGE (${j.score!=null?j.score+"/10":"?"}): ${j.summary}`:"")+
-      (Array.isArray(j.findings)&&j.findings.length?"\nFINDINGS:\n"+j.findings.map(f=>`- [${f.criterion||"?"}${f.turn?" t"+f.turn:""}] ${f.problem||""}${f.evidence?` — “${f.evidence}”`:""}${f.cause?` — cause: ${f.cause}`:""}`).join("\n"):""); }).join("\n\n");
+  const reports=KIND_ORDER.map(kindReport).filter(Boolean).join("\n\n");
   const engines=ENGINE_SCENES.filter(sc=>ENGRUN.byScene[sc.id]).map(sc=>{ const r=ENGRUN.byScene[sc.id];
     const gs=engGroupsOf(r.calls).map(g=>{ const j0=(r.judge||{})[g.key], j=judgeFailed(j0)?null:j0; return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?" Problems: "+j.problems.map(x=>(x.issue||x)+(x.cause?" [cause: "+x.cause+"]":"")).join("; "):""):"not judged"}`; }).join("\n");
     return `### Engine scene: ${sc.label}\n${gs}`; }).join("\n\n");
   const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
   const prompts=[...flagged].slice(0,8).map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,9000)}`).join("\n\n");
   const layouts=["solo","multi","gm","text","heat"].map(k=>`===== tpl:${k} =====\n${itemVal({type:"tpl",key:k})}`).join("\n\n");
-  const pieces=["baseInstruction","formatRules"].map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k})}`)
-    .concat(Object.keys(S.meta.blockDefaults).map(k=>{ const v=itemVal({type:"frag",key:k}); return v.trim()?`===== frag:${k} =====\n${v}`:null; }).filter(Boolean)).join("\n\n");
-  const pk=kinds.heat?"heat":kinds.solo?"solo":Object.keys(kinds)[0];
-  const payload=pk?`(${KIND_SHORT[pk]})\n${payloadText(kinds[pk]).slice(0,30000)}`:"(none)";
-  return {scenes,engines,prompts,layouts,pieces,payload};
+  return {reports,engines,prompts,layouts,catalogue:pieceCatalogue(),scenes:reports};
 }
 /* Each complete analysis is kept with the run's rubric, so the next one can see what an edit changed. */
 function runHistory(){ const h=lsGet("runhist",[]); return Array.isArray(h)?h:[]; }
@@ -3013,17 +3200,20 @@ function historyText(){
 }
 async function analyseTogether(){
   const x=overallInput();
-  if(!x.scenes&&!x.engines){ toast("Run some scenes first"); return null; }
+  if(!x.reports&&!x.engines){ toast("Run some scenes first"); return null; }
   const since=Math.min(...DRIFT_SCENES.map(sc=>DR.results[sc.id]&&DR.results[sc.id].at).filter(Boolean).concat(Object.values(ENGRUN.byScene).map(r=>r&&r.at).filter(Boolean)),Date.now());
   const cur=runScores(), h=runHistory(), prev=h.length?h[h.length-1].scores:null;
-  const input=apBuild("overseer",{scenes:x.scenes.slice(0,110000),scores:scoresText(cur,prev),history:historyText(),engines:x.engines.slice(0,25000),layouts:x.layouts,
-    pieces:x.pieces.slice(0,90000),prompts:x.prompts||"",payload:x.payload,applied:appliedText(appliedSince(since)),rotation:rotationText()});
+  const v={reports:x.reports,scores:scoresText(cur,prev),history:historyText(),engines:x.engines.slice(0,25000),layouts:x.layouts,catalogue:x.catalogue,
+    prompts:x.prompts||"",applied:appliedText(appliedSince(since)),rotation:rotationText()};
+  /* the payloads share what the rest leaves of one request */
+  v.payloads=payloadsText(AP_CAP-apBytes(apBuild("overseer",Object.assign({},v,{payloads:""})))-4000);
+  const input=apBuild("overseer",v);
   const sig=ALL.ctl?ALL.ctl.signal:undefined;
   let o;
-  if(AI.sample) o=await AI.sample.json(input.slice(0,320000),{signal:sig,modelTier:"complex",cache:false});
+  if(AI.sample) o=await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false});
   else { const t=await aiAsk([{role:"user",content:input}],{signal:sig,maxTokens:8000,temperature:0.2}); const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The complete analysis did not come back as JSON."}; o=JSON.parse(m[0]); }
   const rots=[...new Set(DRIFT_SCENES.map(sc=>rotOf(sc).join(" → ")).filter(Boolean))];
-  o.model=rots.length?"rotating "+rots.join(" / "):testLabel(); o.at=Date.now(); o.scores=cur; o.prevScores=prev; ALL.overall=o; lsSet("overall",o);
+  o.model=rots.length?"rotating "+rots.join(" / "):testLabel(); o.at=Date.now(); o.scores=cur; o.prevScores=prev; ALL.overall=o; lsSet("overall",o); DISC.rp=[]; discSave("rp");   // a new analysis, a new conversation
   const hist=h.concat([{at:o.at,model:o.model,score:o.score,scores:cur,edits:(o.edits||[]).length}]).slice(-12); lsSet("runhist",hist);
   renderOverall();
   return o;
@@ -3035,15 +3225,16 @@ function engOverallInput(){
     const gs=engGroupsOf(r.calls).map(g=>{ if(g.prompt) used.add(g.prompt); const j0=(r.judge||{})[g.key], j=judgeFailed(j0)?null:j0;
       return `- ${g.label}${g.prompt?` (prompt:${g.prompt})`:""}, ${g.calls.length} call${g.calls.length>1?"s":""}: ${j?j.verdict+" — "+(j.summary||"")+((j.problems||[]).length?"\n    problems: "+j.problems.map(x=>(x.issue||x)+(x.evidence?` — “${x.evidence}”`:"")+(x.cause?` [cause: ${x.cause}]`:"")).join("; "):""):"not judged"}`; }).join("\n");
     return `### ${sc.label}\nPURPOSE: ${sc.focus}\nAIMED AT: ${sc.checks||""}\nSCRIPT:\n${(r.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n")}\nENGINES:\n${gs}`; }).join("\n\n");
-  const prompts=[...used].map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,12000)}`).join("\n\n");
+  const bad=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(r) Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good") engGroupsOf(r.calls).forEach(g=>{ if(g.key===k&&g.prompt) bad.add(g.prompt); }); }); });
+  const prompts=[...used].sort((a,b)=>(bad.has(b)?1:0)-(bad.has(a)?1:0)).map(k=>`===== prompt:${k} =====${bad.has(k)?" (had problems)":""}\n${itemVal({type:"prompt",key:k}).slice(0,12000)}`).join("\n\n");
   return {scenes,prompts};
 }
 async function analyseEnginesTogether(){
   const x=engOverallInput(); if(!x.scenes){ toast("Run some engine scenes first"); return null; }
   const since=Math.min(...Object.values(ENGRUN.byScene).map(r=>r&&r.at).filter(Boolean),Date.now());
-  const input=apBuild("engfinal",{scenes:x.scenes.slice(0,120000),prompts:x.prompts.slice(0,150000),applied:appliedText(appliedSince(since))});
-  const o=await AI.sample.json(input.slice(0,320000),{signal:ENGALL.ctl&&ENGALL.ctl.signal,modelTier:"complex",cache:false});
-  o.at=Date.now(); o.model=testLabel(); ENGALL.overall=o; lsSet("engoverall",o); renderEngOverall(); return o;
+  const input=apBuild("engfinal",{scenes:x.scenes,prompts:x.prompts,applied:appliedText(appliedSince(since))});
+  const o=await AI.sample.json(input,{signal:ENGALL.ctl&&ENGALL.ctl.signal,modelTier:"complex",cache:false});
+  o.at=Date.now(); o.model=testLabel(); ENGALL.overall=o; lsSet("engoverall",o); DISC.eng=[]; discSave("eng"); renderEngOverall(); return o;
 }
 function renderEngOverall(){
   const host=$("#engOverallBox"); if(!host) return; host.innerHTML=""; const o=ENGALL.overall; if(!o) return;
@@ -3053,6 +3244,7 @@ function renderEngOverall(){
     ${Array.isArray(o.scenes)&&o.scenes.length?`<ul style="margin:0;padding-left:18px;font-size:12.5px">${o.scenes.map(x=>`<li><span class="vd ${x.outcome==="right"?"held":x.outcome==="wrong"?"broke":"bent"}">${esc(x.outcome||"")}</span> <b>${esc(x.scene||"")}</b> — ${esc(x.note||"")}</li>`).join("")}</ul>`:""}
     ${Array.isArray(o.patterns)&&o.patterns.length?`<ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px">${o.patterns.map(x=>`<li>${x.engine?`<code>${esc(x.engine)}</code> `:""}<b>${esc(x.pattern||"")}</b>${x.cause?` <span class="stat">— cause: ${esc(x.cause)}</span>`:""}</li>`).join("")}</ul>`:""}`;
   (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
+  el.appendChild(discussPanel("eng"));
   host.appendChild(el);
   el.querySelector("[data-clear]").onclick=()=>{ ENGALL.overall=null; lsSet("engoverall",null); renderEngOverall(); };
 }
@@ -3076,8 +3268,10 @@ async function judgeAndAnalyseEngines(inRun){
   if(!inRun){ if(busyAll()) return; ENGALL.running=true; ENGALL.ctl=new AbortController(); ALL.ctl=ENGALL.ctl; paintAllButtons(); }
   try{
     await runTeam(ENGALL.ctl.signal,"engine");
-    if(!ENGALL.ctl.signal.aborted){ $("#engAllStat").textContent="The complete engine analysis is reading every engine together…"; await analyseEnginesTogether(); $("#engAllStat").textContent="Done."; }
-  }catch(e){ toast("The engine analysis failed: "+aiErr(e),6000); }
+    if(!ENGALL.ctl.signal.aborted){ $("#engAllStat").textContent="The complete engine analysis is reading every engine together…"; ENGALL.err=null;
+      try{ await analyseEnginesTogether(); $("#engAllStat").textContent="Done."; }
+      catch(e){ if(e&&e.code==="cancelled") throw e; ENGALL.err=aiErr(e); $("#engAllStat").textContent="The complete engine analysis failed: "+ENGALL.err+" Press “Judge all, then analyse” to try it again; judged engines are not judged twice."; } }
+  }catch(e){ if(!(e&&e.code==="cancelled")) toast("The engine analysis failed: "+aiErr(e),8000); }
   finally{ if(!inRun){ ENGALL.running=false; paintAllButtons(); renderEng(); } }
 }
 $("#btnEngAll").onclick=runEngineTests;
@@ -3097,8 +3291,9 @@ function paintTeam(){ const el=$(TEAM.which==="engine"?"#engAllStat":"#allStat")
   el.textContent=`Analysts: ${TEAM.busy.size} reading · ${TEAM.done}/${TEAM.total} done${TEAM.failed?` · ${TEAM.failed} failed`:""} · ${Math.max(0,TEAM.total-TEAM.done-TEAM.busy.size)} waiting`; }
 function analystTasks(sig){
   const tasks=[];
-  DRIFT_SCENES.forEach(sc=>{ const r=DR.results[sc.id]; if(!r||r.judge||!driftComplete(sc,r)) return;
-    tasks.push({key:"R|"+sc.id,label:sc.title,run:async()=>{ await analyseOne(sc); if(DR.results[sc.id].judge) tagEdits(DR.results[sc.id].judge.edits,"R:"+sc.id); }}); });
+  KIND_ORDER.forEach(k=>{ const done=kindScenes(k).filter(sc=>driftComplete(sc,DR.results[sc.id])); if(!done.length) return;
+    if(KA[k]&&!KA[k].err&&KA[k].at&&done.every(sc=>DR.results[sc.id].judge)) return;
+    tasks.push({key:"R|"+k,label:(KINDS.find(x=>x.k===k)||{label:k}).label,run:()=>analyseKind(k,sig)}); });
   ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r||!(r.calls||[]).length) return; r.judge=r.judge||{};
     engGroupsOf(r.calls).forEach(g=>{ if((r.judge[g.key]&&!judgeFailed(r.judge[g.key]))||!g.calls.some(c=>c.output!=null)) return;
       tasks.push({key:sc.id+"|"+g.key,label:`${sc.label} · ${g.label}`,run:async()=>{
@@ -3121,7 +3316,7 @@ async function runTeam(sig,which){
         try{ await t.run(); break; }
         catch(e){
           if(e&&e.code==="rate_limited"&&attempt<3&&!sig.aborted){ await new Promise(r=>setTimeout(r,15000*(attempt+1))); continue; }
-          TEAM.failed++; if(t.key.startsWith("R|")){ const r=DR.results[t.key.slice(2)]; if(r){ r.err=aiErr(e); r.judging=false; } }
+          TEAM.failed++; if(t.key.startsWith("R|")){ const a=KA[t.key.slice(2)]; if(a){ a.err=aiErr(e); a.judging=false; } }
           if(e&&(e.code==="cancelled"||e.code==="not_granted")) throw e;
           break; }
       }
@@ -3136,7 +3331,21 @@ async function analyseTeamAndOversee(which){
   await runTeam(sig,which||"reply");
   if(sig.aborted) return;
   const el=$("#allStat"); if(el) el.textContent=`The complete analysis is reading all ${TEAM.total||"the"} judgements together…`;
-  try{ await analyseTogether(); }catch(e){ toast("The complete analysis failed: "+aiErr(e),6000); }
+  await writeFixes();
+}
+/* the fixing step on its own: the complete analysis over what is already played and judged */
+async function writeFixes(){
+  ALL.err=null; renderOverall();
+  try{ return await analyseTogether(); }
+  catch(e){ if(e&&e.code==="cancelled") return null; ALL.err=aiErr(e); renderOverall(); toast("The complete analysis failed: "+ALL.err,8000); return null; }
+}
+async function writeFixesAlone(){
+  if(busyAll()) return;
+  if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
+  ALL.running=true; ALL.ctl=new AbortController(); paintAllButtons();
+  const el=$("#allStat"); if(el) el.textContent="The complete analysis is reading every scene and judgement together…";
+  try{ const o=await writeFixes(); if(el) el.textContent=o?"Done."+(o.score!=null?` Across all scenes: ${o.score}/10.`:""):ALL.ctl.signal.aborted?"Stopped.":"The complete analysis failed. See below."; }
+  finally{ ALL.running=false; paintAllButtons(); }
 }
 async function runEverything(){
   if(busyAll()) return;
@@ -3148,7 +3357,7 @@ async function runEverything(){
   try{
     /* play every scene first (one sandbox, one scene at a time), then the judges read them all at once */
     setOverall(null);
-    rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; });
+    rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; if(KA[sc.kind]) KA[sc.kind]=null; }); kaSave();
     $("#allStat").textContent=`Scenes (${rs.length})…`; await runDriftScenes(rs,true);
     if(!ALL.ctl.signal.aborted&&claudeReachable()) await analyseTeamAndOversee("reply");
     $("#allStat").textContent=ALL.ctl.signal.aborted?"Stopped.":!claudeReachable()?"Played. Export results, then Import results in the editor inside Claude to analyse.":"Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:"");
@@ -3166,13 +3375,14 @@ async function analyseEverything(){
 $("#btnAll").onclick=runEverything;
 { const ts=$("#teamSize"); if(ts){ ts.value=teamSize(); ts.onchange=()=>{ lsSet("teamsize",Math.max(1,Math.min(8,+ts.value||3))); ts.value=teamSize(); }; } }
 $("#btnAllAnalyse").onclick=analyseEverything;
+$("#btnAllFix").onclick=writeFixesAlone;
 $("#btnAllStop").onclick=()=>{ [ALL.ctl,DR.ctl,ENGRUN.ctl].forEach(c=>{ try{ c&&c.abort(); }catch(e){} }); };
 $("#btnSelAllReply").onclick=()=>{ lsSet("selreply",DRIFT_SCENES.map(x=>x.id)); renderDrift(); renderEstimate(); };
 $("#btnSelNoReply").onclick=()=>{ lsSet("selreply",[]); renderDrift(); renderEstimate(); };
 $("#btnAllExport").onclick=async()=>{
-  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]).map(sc=>{ const r=DR.results[sc.id]; return {id:sc.id,title:sc.title,model:r.model,at:r.at,turns:r.turns,payload:r.payload,judge:r.judge||null}; });
+  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]).map(sc=>{ const r=DR.results[sc.id]; return {id:sc.id,title:sc.title,model:r.model,at:r.at,turns:r.turns,payload:r.payload,judge:r.judge||null,rotation:r.rotation}; });
   if(!scenes.length&&!Object.keys(ENGRUN.byScene).length){ toast("Run something first"); return; }
-  const ok=await saveFile("storymind_tests_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"test-results",date:Date.now(),scenes,engines:ENGRUN.byScene,overall:ALL.overall}));
+  const ok=await saveFile("storymind_tests_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"test-results",date:Date.now(),scenes,kinds:KA,engines:ENGRUN.byScene,overall:ALL.overall}));
   if(ok) toast("Results exported. Open them in the editor inside Claude with Import results");
 };
 $("#btnAllImport").onclick=()=>$("#fileDrift").click();
@@ -3181,10 +3391,10 @@ $("#fileDrift").addEventListener("change",async e=>{
   try{ const b=JSON.parse(await f.text());
     if(!b||["test-results","drift-results","engine-results"].indexOf(b.kind)<0) throw new Error("Not a test results file");
     /* a results file is a new test set: it replaces what was here, the overseer's verdict included */
-    if(b.kind==="test-results"){ DR.results={}; ENGRUN.byScene={}; }
+    if(b.kind==="test-results"){ DR.results={}; ENGRUN.byScene={}; Object.keys(KA).forEach(k=>delete KA[k]); Object.assign(KA,b.kinds||{}); kaSave(); }
     setOverall(b.overall||null);
     let n=0;
-    (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null}; n++; } });
+    (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null,rotation:x.rotation}; n++; } });
     if(b.kind==="engine-results"){ const id=engPreset().id; ENGRUN.byScene[id]={calls:b.calls||[],judge:b.judge||{},model:b.model||"",focus:b.focus||"",lines:b.lines||[]}; n++; }
     if(b.engines) Object.keys(b.engines).forEach(k=>{ if(ENGINE_SCENES.some(x=>x.id===k)){ ENGRUN.byScene[k]=b.engines[k]; n++; } });
     lsSet("engbyscene",ENGRUN.byScene); driftSave(); engLoad(engPreset().id); renderDrift(); renderEng(); renderEstimate();
@@ -3523,7 +3733,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

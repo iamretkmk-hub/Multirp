@@ -212,10 +212,12 @@ The **Analyst prompts** tab shows every prompt the editor sends to Claude. Each 
   every reply, how a model weighs a payload, and HOW TO FIX.
 - **Ask Claude** (`ask`).
 - **Test & review** (`review`).
-- **Scene judge** (`scene`): one roleplay scene. It scores the rubric and does not fix.
+- **Payload-kind analyst** (`kind`): every roleplay scene of one payload kind (solo, several characters,
+  text or heat), with that kind's payload sent once. It scores the rubric and does not fix.
 - **Engine judge** (`engine`): one background engine in one engine scene. It does not fix either.
 - **The complete analysis** (`overseer`): every roleplay scene, then the fixes.
 - **The complete engine analysis** (`engfinal`): every engine scene, then the fixes to the engine prompts.
+- **Discuss the fixes** (`discuss`): the opening of the conversation under a complete analysis.
 - **LLM evaluation** (`compare`).
 - **Claude stands in** (`standin`).
 
@@ -318,31 +320,97 @@ build only):
 The memory stand-in (`memFor`) gives the two newest memories. It adds up to three whose words match the
 last lines and the place, the way retrieval would.
 
+**Separate per payload kind.** The tab is split into four sections, one per payload kind: **Solo**,
+**Several characters**, **Text messages** and **Heat of the moment** (`KINDS`). Each kind has its own
+layout, so each is tested and analysed on its own. A section shows its scenes, a **Run these** button (the
+ticked scenes of that kind, or all of them) and an **Analyse these** button. Above its scenes it shows that
+kind's own analysis: score, summary, rubric, the patterns across its scenes and notes on its payload's
+structure. Scenes are ordered by kind (`DRIFT_SCENES` is sorted on `KIND_ORDER`) and played in that order.
+Gamemaster beats inside solo and several-character scenes are still answered through the gamemaster
+layout. Their scene stays in its own kind.
+
 **The flow:**
 1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
    model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
    lines × speakers.
-2. **Judges** (`scene`), several at a time (*Analysts at once*), each read one scene. For every turn they
-   give a verdict, *good*, *weak* or *wrong*. They score each criterion 0–10 with a note and a quote, and
-   list findings with the turn, the evidence and the suspected cause. **They propose no edits**, so no
-   scene gets its own patch.
-3. **One complete analysis** (`overseer`, `analyseTogether`) reads the whole run:
-   - every exchange with its scores and findings;
+2. **One analyst per payload kind** (`kind`, `analyseKind`), up to *Analysts at once* in parallel. Each gets
+   **its kind's payload once** (the last payload of its first scene, built with that kind's layout). It
+   then gets every complete scene of the kind: id, purpose, ground truth, what good looks like, the
+   criteria it presses on, and the full exchange. Its one answer holds:
+   - for each scene, a verdict on every turn, rubric scores with a note and a quote, and findings with the
+     evidence and the suspected cause;
+   - for the kind, patterns across its scenes and notes on its payload's structure.
+
+   **It proposes no edits.** Each scene's part becomes that scene's judgement, and the kind's part is kept
+   in `KA` (saved per browser, exported and imported with the results). Playing a scene on its own
+   analyses its kind afterwards.
+3. **The fixer**, one complete analysis (`overseer`, `analyseTogether`). **It gets no dialogues.** For each
+   kind it gets two things:
+   - **The kind's report** (`kindReport`): the analyst's **reasoning** (written for a fixer who will not see
+     the dialogues), the score, rubric, patterns and payload-structure notes, and each scene's score,
+     summary and findings with their quoted evidence and cause.
+   - **The kind's full payload, once** (`payloadsText`), exactly as sent. The payloads share whatever the
+     rest of the request leaves, and each keeps its head and its end.
+
+   Besides those, it gets:
    - the rubric averaged over the run (`runScores`), next to **earlier runs** and the edits applied between
      them (`runhist`, the last 12);
    - the engine judgements;
    - **each payload kind's layout** (the order of the pieces);
-   - the current full text of every piece;
-   - one real payload.
+   - a **catalogue of the pieces** (`pieceCatalogue`): each key with its opening words, and the full
+     template of any piece whose wording has `{{…}}` or `[[…]]` in it.
 
-   It names patterns across scenes and notes about the payload's structure. It then writes at most 10
-   general edits, each naming the criteria it helps and what it risks. A criterion that did not move after
-   an edit means the cause is elsewhere, and it is told to look again rather than push the same text
-   harder.
+   An edit's `find` is copied from the piece's own wording in the payload or the catalogue, never from story
+   data the app filled in.
+   It looks for causes shared across kinds (a piece used in several layouts) and causes found in one kind
+   only (its layout). It then writes at most 10 general edits, each naming the criteria it helps and what
+   it risks. A criterion that did not move after an edit means the cause is elsewhere, and it is told to
+   look again rather than push the same text harder.
 4. The result shows the rubric table, this run against the previous one, the structure notes, the patterns
    and the edit cards.
 
-**Analyse all** runs steps 2 and 3 on scenes already played. **Import results** of a full test set replaces
+**Analyse all** runs steps 2 and 3 on scenes already played. A kind whose scenes are all analysed is not
+analysed again.
+
+**Write the fixes** runs only step 3, over the scenes already judged. If the complete analysis fails, its
+reason stays on screen above any earlier result, with a **Write the fixes again** button. A toast alone
+was easy to miss, and the run then looked as if it had stopped after the judges.
+
+**Discussing the fixes.** Under each complete analysis (roleplay and engines) is a conversation with
+Claude: **Discuss these fixes with Claude**. Use it to:
+- question an edit, or ask why;
+- ask for a smaller or different correction;
+- point at a reply you did not like;
+- request something new.
+
+Every message rebuilds the opening (`discuss`). It holds the same input as the fixer, with no dialogues:
+- the complete analysis, with each proposed edit's state (ready, applied, already changed, missing);
+- every edit applied so far;
+- each kind's report;
+- each kind's full payload;
+- the layouts;
+- the current catalogue.
+
+For the engines, it holds each engine scene's judgements and every engine prompt that ran. Claude
+therefore never quotes words that are gone.
+
+When you ask for a change, Claude puts the edits in an `edits` block. They show as ordinary edit cards
+with **Apply** and **Undo**, and the block itself is hidden. The conversation is kept in this browser
+(`disc_rp`, `disc_eng`), and the oldest exchanges are dropped when it would exceed one request. A new
+complete analysis starts a new conversation; **Clear the conversation** starts one by hand.
+
+**Claude's input limit.** One request to Claude takes at most 256 KiB of text, counted in UTF-8 bytes
+(a Turkish letter can take two), and a larger one is refused (`prompt_too_large`). A full run of twelve
+scenes with the pieces, the layouts and the engine prompts used to go over that, so the judges finished
+and the fixing step was refused.
+- `apBuild` keeps every request under `AP_CAP` (225,000 bytes).
+- When a request is too big, it shortens the data in the template's `fit` order, most expendable first:
+  for the complete analysis that is the sample payload, then the engine prompts, engines, history,
+  scenes, pieces and layouts.
+- Each cut keeps the head and the tail of the text and marks the cut. The instructions and the reply
+  format are never cut.
+- Before cutting anything, the complete analysis first quotes each reply shorter.
+- The engine prompts that had problems go first, so a cut falls on the healthy ones. **Import results** of a full test set replaces
 every earlier result, and the old complete analysis goes with them. **Clear** removes it by hand.
 
 **Your story as the data.** **Use my own story…** loads a StoryMind backup in place of the sample:

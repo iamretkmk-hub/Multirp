@@ -383,6 +383,14 @@ const ROOT=path.resolve(__dirname,'..');
     ok("its decisions show, on the run and on the analyst's own edit", /1 dropped/.test(od.box)&&/Overseer: dropped helps one scene/.test(od.card), od.card.slice(-400));
     ok("the combined edit applies", await pg.evaluate(()=>{ const b=document.querySelector('#overallBox .chg [data-a="apply"]'); if(!b||b.disabled) return false; b.click(); return /PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))); }));
 
+    const beforeImp=await pg.evaluate(()=>!!__PE.ALL.overall&&!!document.querySelector("#overallBox .scene"));
+    const pastImp=await pg.evaluate(()=>__PE.DR.results.past);
+    const set2Imp={app:"StoryMind",kind:"test-results",date:Date.now(),scenes:[{id:"daily",title:"x",model:"m",at:Date.now(),turns:[{user:"a",reply:"b"}],payload:null,judge:null},Object.assign({id:"past",title:"Invented past"},pastImp)],engines:{}};
+    await pg.setInputFiles('#fileDrift',{name:"storymind_tests_new.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify(set2Imp))});
+    await pg.waitForTimeout(500);
+    const afterImp=await pg.evaluate(()=>({overall:__PE.ALL.overall,box:!!document.querySelector("#overallBox .scene"),ids:Object.keys(__PE.DR.results),eng:Object.keys(__PE.ENGRUN.byScene)}));
+    ok("importing a new test set replaces the old results and clears the old overseer verdict", beforeImp&&afterImp.overall===null&&!afterImp.box&&afterImp.ids.join()==="daily,past"&&afterImp.eng.length===0, JSON.stringify(afterImp).slice(0,300));
+
     console.log("\n[12 — LLM evaluation: models compared on fixed prompts, no prompt edits]");
     OR.calls=[];
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]);

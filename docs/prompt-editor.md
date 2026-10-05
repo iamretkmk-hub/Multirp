@@ -253,6 +253,10 @@ same cause as others, folded into one) or **drop** (helps one scene and hurts an
 would do, duplicates or conflicts). Last, it writes at most 8 final edits for the run, each naming the
 scenes it helps and what it risks.
 
+The overseer's verdict belongs to one test set. **Run everything** starts without it. **Import results**
+of a full test set replaces every earlier result, and the old verdict goes with them; it is replaced by
+the file's own verdict when the file carries one. **Clear** on the verdict removes it by hand.
+
 Its decisions are listed under its verdict, and each analyst's edit card carries the overseer's call on
 it.
 

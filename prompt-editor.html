@@ -2768,13 +2768,15 @@ function renderEstimate(){
   el.textContent=`Selected: ${rs.length} reply scene${rs.length===1?"":"s"} (${replies} replies) and ${es.length} engine scene${es.length===1?"":"s"} (about ${es.length*95} engine calls). Claude then analyses ${rs.length} scene${rs.length===1?"":"s"}, about ${es.length*24} engines, and finally everything together.`;
   renderOverall();
 }
+/* the overseer's verdict belongs to one test set: replaced or cleared with it */
+function setOverall(o){ ALL.overall=o||null; lsSet("overall",ALL.overall); renderOverall(); }
 function renderOverall(){
   let host=$("#overallBox");
   if(!host){ host=document.createElement("div"); host.id="overallBox"; host.className="msgs"; const anchor=$("#allEstimate"); anchor&&anchor.insertAdjacentElement("afterend",host); }
   const o=ALL.overall; host.innerHTML="";
   if(!o){ return; }
   const el=document.createElement("div"); el.className="scene";
-  el.innerHTML=`<h3>Across all scenes ${typeof o.score==="number"?`<span class="score">${o.score}/10</span>`:""}<span class="sp"></span><span class="stat">${esc(o.model||"")}</span></h3>
+  el.innerHTML=`<h3>Across all scenes ${typeof o.score==="number"?`<span class="score">${o.score}/10</span>`:""}<span class="sp"></span><span class="stat">${esc(o.model||"")}${o.at?" · "+esc(new Date(o.at).toLocaleString()):""}</span> <button class="btn sm" type="button" data-clear-overall>Clear</button></h3>
     <div class="turnRow"><div><b>Verdict.</b> ${esc(o.summary||"")}</div></div>
     ${Array.isArray(o.patterns)&&o.patterns.length?`<ul style="margin:0;padding-left:18px;font-size:12.5px">${o.patterns.map(x=>`<li><b>${esc(x.pattern||"")}</b>${x.scenes&&x.scenes.length?` <span class="stat">(${esc(x.scenes.join(", "))})</span>`:""}${x.cause?` <span class="stat">— cause: ${esc(x.cause)}</span>`:""}</li>`).join("")}</ul>`:""}`;
   const ds=Array.isArray(o.decisions)?o.decisions:[];
@@ -2782,6 +2784,7 @@ function renderOverall(){
     el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The overseer decided on ${ds.length} analyst edit${ds.length>1?"s":""}: ${n("keep")} kept · ${n("merge")} merged · ${n("drop")} dropped</summary><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${ds.map(d=>`<li><code>${esc(d.id||"")}</code> <span class="vd ${d.verdict==="keep"?"held":d.verdict==="drop"?"broke":"bent"}">${esc(d.verdict||"")}</span> ${esc(d.why||"")}</li>`).join("")}</ul></details>`); }
   (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
   host.appendChild(el);
+  const cb=el.querySelector("[data-clear-overall]"); if(cb) cb.onclick=()=>{ setOverall(null); toast("The overseer's verdict is cleared"); };
 }
 /* What the combined analysis reads: every scene's exchange and verdict, every engine's verdict and
    problems, one real payload per kind, the editable items, and the engine prompts that had issues. */
@@ -2876,6 +2879,7 @@ async function runEverything(){
   ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; paintAllButtons();
   try{
     /* play everything first (one sandbox, one scene at a time), then the team reads it all at once */
+    setOverall(null);
     rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; });
     es.forEach(sc=>{ if(ENGRUN.byScene[sc.id]) ENGRUN.byScene[sc.id].judge={}; });
     if(rs.length){ $("#allStat").textContent=`Reply scenes (${rs.length})…`; await runDriftScenes(rs,true); }
@@ -2910,11 +2914,13 @@ $("#fileDrift").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{ const b=JSON.parse(await f.text());
     if(!b||["test-results","drift-results","engine-results"].indexOf(b.kind)<0) throw new Error("Not a test results file");
+    /* a results file is a new test set: it replaces what was here, the overseer's verdict included */
+    if(b.kind==="test-results"){ DR.results={}; ENGRUN.byScene={}; }
+    setOverall(b.overall||null);
     let n=0;
     (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null}; n++; } });
     if(b.kind==="engine-results"){ const id=engPreset().id; ENGRUN.byScene[id]={calls:b.calls||[],judge:b.judge||{},model:b.model||"",focus:b.focus||"",lines:b.lines||[]}; n++; }
     if(b.engines) Object.keys(b.engines).forEach(k=>{ if(ENGINE_SCENES.some(x=>x.id===k)){ ENGRUN.byScene[k]=b.engines[k]; n++; } });
-    if(b.overall){ ALL.overall=b.overall; lsSet("overall",b.overall); }
     lsSet("engbyscene",ENGRUN.byScene); driftSave(); engLoad(engPreset().id); renderDrift(); renderEng(); renderEstimate();
     toast(`Imported ${n} scene${n===1?"":"s"}${claudeReachable()?". Tap Analyse all to have Claude read them, together at the end":""}`);
   }catch(err){ toast("Could not import: "+err.message,5000); }

@@ -241,6 +241,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button type="button" data-r="claude">Claude</button>
         <button type="button" data-r="tests">Tests</button>
         <button type="button" data-r="llm">LLM evaluation</button>
+        <button type="button" data-r="ap">Analyst prompts</button>
       </div>
       <span class="sp"></span>
       <span class="stat" id="plStat"></span>
@@ -303,6 +304,11 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       <div id="engList" class="msgs"></div>
     </div>
 
+    <div id="rAp" class="scroll" style="display:none;flex-direction:column">
+      <div class="empty" style="padding:10px 12px"><b>What Claude is asked.</b> Every prompt this editor sends to Claude, editable. <code>{{name}}</code> is filled with the live data listed under each prompt; <code>{{#flag}}…{{/flag}}</code> is kept only when the flag is on and <code>{{^flag}}…{{/flag}}</code> only when it is off. Keep each “Reply with ONLY this JSON” shape and its field names: the editor reads them. Your version is kept in this browser and used from the next analysis on; <b>Reset</b> brings the shipped one back. <b>Last sent</b> shows the exact text Claude got the last time, data filled in.</div>
+      <div class="ctl"><button class="btn sm" id="btnApExport" type="button">Export analyst prompts</button><button class="btn sm" id="btnApImport" type="button">Import</button><input type="file" id="fileAp" accept=".json,application/json" hidden><span class="stat" id="apStat"></span></div>
+      <div id="apList" class="msgs"></div>
+    </div>
     <div id="rLlm" class="scroll" style="display:none;flex-direction:column">
       <div class="provider" id="llmKeyBox"></div>
       <div class="empty" style="padding:10px 12px"><b>Which model does which job best?</b> Your prompts stay exactly as they are; nothing here proposes prompt edits. For each model setting below, add the models you want to compare. The roleplay candidates play the chosen scenes in full, each building its own conversation. The engine settings are compared on identical input: one engine scene is recorded once, then every call of that setting is replayed with each candidate, sent the way StoryMind sends it. Claude then compares them blind and says what each model did well and which to use where.</div>
@@ -484,7 +490,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     if(p.blockTpls)state.blockTpls=J(p.blockTpls);
     if(p.payloadTemplates)state.payloadTemplates=J(p.payloadTemplates);
     var s=p.settings||{};
-    Object.keys(s).forEach(function(k){if(k==="blockTpls"||k==="payloadTemplates")return;try{state[k]=parseLike(state[k],s[k]);}catch(e){}});
+    /* during a live run the model settings carry their pe-field tags: a new value is kept for afterwards
+       instead of overwriting the tag (which would leave every later call without its setting) */
+    Object.keys(s).forEach(function(k){if(k==="blockTpls"||k==="payloadTemplates")return;
+      try{ if(LIVE&&LIVE.fieldKeep&&(k in LIVE.fieldKeep)){LIVE.fieldKeep[k]=parseLike(LIVE.fieldKeep[k],s[k]);return;} state[k]=parseLike(state[k],s[k]);}catch(e){}});
     state.payloadTplOn=true;
     return true;
   }
@@ -898,7 +907,8 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   var PE_PROV="or", PE_REASON_KEEP;
   var PROV_LABEL={or:"OpenRouter",nano:"NanoGPT"};
   function provKey(p){ return String((p==="nano"?state.nanoKey:state.key)||"").trim(); }
-  function setModel(o){ o=o||{}; if(o.key!=null)state.key=String(o.key); if(o.nanoKey!=null)state.nanoKey=String(o.nanoKey); if(o.prov)PE_PROV=o.prov==="nano"?"nano":"or"; if(o.model)state.model=String(o.model);
+  function setModel(o){ o=o||{}; if(o.key!=null)state.key=String(o.key); if(o.nanoKey!=null)state.nanoKey=String(o.nanoKey); if(o.prov)PE_PROV=o.prov==="nano"?"nano":"or";
+    if(o.model){ if(LIVE&&LIVE.fieldKeep&&("model" in LIVE.fieldKeep))LIVE.fieldKeep.model=String(o.model); else state.model=String(o.model); }
     if(o.reasoning!=null){ if(PE_REASON_KEEP===undefined)PE_REASON_KEEP=state.reasoningOn; state.reasoningOn=o.reasoning?true:PE_REASON_KEEP; }
     return {model:state.model,prov:PE_PROV,hasKey:!!provKey(PE_PROV)}; }
   async function complete(o){
@@ -1589,9 +1599,9 @@ $("#fileWorld").addEventListener("change",async e=>{
   try{
     const b=JSON.parse(await f.text());
     if(!b||(b.app&&b.app!=="StoryMind")) throw new Error("Not a StoryMind file");
-    const w=b.kind==="editor-world"?b:slimWorld(b); STORY.picked=true;
-    S.world=await engCall("loadWorld",w,60000);
-    STORY.w=w; await storySet(w); paintWorldSel(); fillPreviewControls(); refreshPreview();
+    const w=b.kind==="editor-world"?b:slimWorld(b); STORY.picked=true; STORY.w=w;
+    const world=await engCall("loadWorld",w,60000);
+    S.world=world; paintWorldSel(); fillPreviewControls(); refreshPreview(); await storySet(w);
     const miss=["p_buket","p_sami","p_berk"].filter(id=>!w.collections.personas.some(p=>p.id===id));
     toast("Payloads and tests now use “"+(S.world.name||f.name)+"”"+(miss.length?". It has no Buket/Sami/Berker, so the test scenes will not fit it":""),6000);
   }catch(err){ toast("Could not use that file: "+err.message,5000); }
@@ -1797,14 +1807,178 @@ function aiErr(e){
 function payloadText(p){
   return p.messages.map((m,i)=>`===== MESSAGE ${i+1} · ${m.role.toUpperCase()} =====\n${m.content}`).join("\n\n");
 }
-const CONTEXT=`You are helping the author of StoryMind, an adult roleplay app, write the prompts the app sends to language models. The app assembles each reply payload from a layout template ({{call//piece}} drops a named piece in, {{call//piece//full}} is the piece with its heading, [system]/[user] mark messages, {{call//dialogue_history}} is the transcript, {{if flag}}…{{endif}} and [[section]]…[[end]] are structure inside a piece, {{name}} values are filled by the app). Pieces ("fragments") are short fixed wordings the app wraps around live story data. The story language is usually Turkish; the instructions are English.
+/* ---------------- the analyst prompts ----------------
+   Every prompt this editor sends to Claude, as an editable template. {{name}} is filled with the live data
+   (listed under each prompt); {{#flag}}…{{/flag}} is kept only when the flag is on, {{^flag}}…{{/flag}} only
+   when it is off. Anything else in braces ({{call//…}}, {{…}}) is left exactly as written. An edited
+   prompt is kept in this browser; Reset brings the shipped one back. */
+const AP_DEFS=[
+ {id:"context",label:"The method (shared by every analysis)",desc:"Who Claude is helping and HOW TO FIX. Placed at the top of the other prompts through {{context}}.",vars:{},
+  def:`You are helping the author of StoryMind, an adult roleplay app, write the prompts the app sends to language models. The app assembles each reply payload from a layout template ({{call//piece}} drops a named piece in, {{call//piece//full}} is the piece with its heading, [system]/[user] mark messages, {{call//dialogue_history}} is the transcript, {{if flag}}…{{endif}} and [[section]]…[[end]] are structure inside a piece, {{name}} values are filled by the app). Pieces ("fragments") are short fixed wordings the app wraps around live story data. The story language is usually Turkish; the instructions are English.
 Be direct and specific. Quote the exact words you would change. Keep every {{…}}, [[…]] and placeholder the text already uses unless the author asks otherwise, and never invent placeholder names.
 
 HOW TO FIX — FIND THE CAUSE, THEN REMOVE OR CHANGE IT. NEVER FIX BY PILING ON RULES.
 1. Trace every problem to the exact words that produced it: an instruction pushing the wrong way, two pieces that contradict, a rule stated twice so it weighs double, an example the model copies, a heading that frames the material wrongly, a piece that should not be in the payload at all. Quote those words: they are the cause.
 2. Fix it there. In this order of preference: delete the words or the piece; rewrite or shorten them; merge duplicates into one; move a piece to where it belongs. Deleting a rule that over-steers is often the whole fix.
 3. Add a new instruction only when nothing in the text covers the gap at all, and say why removing or rewriting could not fix it. Never answer a failure with a new rule on top of the one that failed, and never add emphasis (IMPORTANT, NEVER, ALWAYS, capitals) to make an old rule louder.
-4. The text should come out the same length or shorter. Every added rule makes the model more careful, more repetitive and more likely to recite rules back.`;
+4. The text should come out the same length or shorter. Every added rule makes the model more careful, more repetitive and more likely to recite rules back.`},
+ {id:"ask",label:"Ask Claude (chat about the open item)",desc:"The first message of a conversation in the Claude tab. Your question follows it.",
+  vars:{context:"the method",item:"the open item: its name, purpose, current text and shipped default",payload:"the full payload, when “include the full payload” is ticked (empty otherwise)"},
+  def:`{{context}}
+
+{{item}}{{#payload}}
+
+THE FULL PAYLOAD THIS BUILDS (sample story):
+{{payload}}{{/payload}}
+
+When you propose a complete replacement for the open item, follow HOW TO FIX: cut and rewrite before you add, and say how much shorter or longer it comes out. Put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`},
+ {id:"review",label:"Test & review (one reply against its payload)",desc:"After your model answers the payload in the Claude tab.",
+  vars:{context:"the method",payload:"the payload that was sent",reply:"what the model wrote",catalogue:"the items Claude may edit, with ids"},
+  def:`{{context}}
+
+The roleplay model the author uses was given the payload below and wrote the reply under it. Review that reply as the prompt engineer: where did it fall short of what a great reply would be (voice, length, staying in character, repeating, echoing the other person, language, format, pacing, inventing facts, ignoring a rule), and which words in the PAYLOAD pushed it there or failed to prevent it? Also flag payload problems you noticed while answering: contradictions between pieces, rules stated twice, confusing point of view, wasted tokens.
+
+Then fix the causes, following HOW TO FIX above. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text, or empty to delete it. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first, removals and rewrites before any addition.
+
+Reply with ONLY this JSON:
+{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
+
+===== THE PAYLOAD =====
+{{payload}}
+
+===== THE MODEL'S REPLY =====
+{{reply}}
+
+===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
+{{catalogue}}`},
+ {id:"scene",label:"Scene analyst (one reply scene)",desc:"One analyst per reply scene in the Tests tab.",
+  vars:{context:"the method",title:"the scene's title",tests:"what it tests",kind:"the payload kind, described",facts:"the scene's ground truth",pass:"what passing looks like",exchange:"every turn: the player's line (or gamemaster beat) and the reply",quality:"flag: a quality scene (on) or a holding-the-line scene (off)",payload:"the last payload sent",catalogue:"the items Claude may edit, with ids"},
+  def:`{{context}}
+
+You are judging an instruction-following test of the roleplay model. A scripted player pushed the character, one line at a time, toward one specific failure. The author's own roleplay model answered every turn through the payload below (the last one is shown; earlier turns had the same instructions with a shorter transcript).
+
+THE TEST: {{title}} — {{tests}}
+THE PAYLOAD KIND: {{kind}}
+GROUND TRUTH: {{facts}}
+WHAT PASSING LOOKS LIKE: {{pass}}
+ALSO ALWAYS: the reply is in natural Turkish; it never writes Emre's words or actions; it never steps out of the fiction; it follows the payload's format rules.
+
+THE EXCHANGE:
+{{exchange}}
+
+{{#quality}}This scene measures QUALITY and realistic pacing, not refusal. Judge each reply: "held" (meets the bar described), "bent" (flat, generic, a step too fast or too stiff), "broke" (the failure the bar names).{{/quality}}{{^quality}}Judge each reply: "held" (fully in line), "bent" (gave some ground it should not have, or a smaller rule slipped), "broke" (did the failure the test is about).{{/quality}} drift_at is the first turn that bent or broke, or null. score is 0–10 ({{#quality}}10 = exactly the bar: lively, believable, paced right{{/quality}}{{^quality}}10 = never moved{{/quality}}).
+Then find the cause: the words in the payload that pushed it to drift, or the competing words that drowned out what should have held it (a drift is as often caused by a rule pulling the other way as by a missing one). Fix the causes following HOW TO FIX above, with at most 5 find-and-replace edits on ONE item each from the catalogue at the end. "find" must be copied EXACTLY from that item's current text; "replace" may be empty to delete; keep {{…}} and [[…]] markers intact. If it held throughout, propose only removals of text that did no work.
+
+Reply with ONLY this JSON:
+{"turns":[{"verdict":"held|bent|broke","note":"one short line"}],"drift_at":null,"score":10,"summary":"two sentences","edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
+
+===== THE LAST PAYLOAD =====
+{{payload}}
+
+===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
+{{catalogue}}`},
+ {id:"engine",label:"Engine analyst (one background engine)",desc:"One analyst per engine recorded in an engine scene.",
+  vars:{context:"the method",engine:"the engine's name",prompt_key:"its prompt key (empty when it has none)",dbg:"its debug label",model:"the model that answered",focus:"what the scene was built to test",lines:"the player's lines, numbered",roleplay:"flag: this group is the characters' own replies",template:"the engine's prompt template (exact current text)",calls:"up to two real calls: what the app sent and the answer"},
+  def:`{{context}}
+
+You are reviewing one BACKGROUND ENGINE of the app — a model call the player never sees, whose output the app parses and stores (memories, relationship numbers, plans, promises, rumours, routing decisions, director beats…). Below are real calls from a played scene: the exact messages the app sent and what the model under test answered.
+
+ENGINE: {{engine}}{{#prompt_key}} (prompt key "{{prompt_key}}"){{/prompt_key}} — debug label "{{dbg}}"
+MODEL THAT ANSWERED: {{model}}
+{{#focus}}
+WHAT THE SCENE WAS BUILT TO TEST (judge this engine's part in it):
+{{focus}}
+{{/focus}}{{#lines}}
+THE PLAYER'S LINES, IN ORDER:
+{{lines}}
+{{/lines}}{{#roleplay}}
+This group is the characters' own replies: judge realism, proportion and character under this pressure, and whether the right person answered. Their wording comes from the reply pieces, not one prompt, so propose no edits here; name the pieces at fault instead.
+{{/roleplay}}
+Judge the ANSWER against the prompt: does it keep the output contract exactly (format, JSON shape and field names, nothing outside it); is every claim supported by the input (no invented events, people, feelings or facts); does it follow the prompt's own rules and scope (who it is about, point of view, language, length); would the app's parser and the next engine get something useful? Then judge the PROMPT: where its wording let the answer go wrong, or is contradictory, ambiguous, redundant or wastes tokens.
+
+Find the cause of each problem in the prompt's own words, then fix it following HOW TO FIX above, with at most 5 find-and-replace edits{{#prompt_key}} on "prompt:{{prompt_key}}"{{/prompt_key}}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); "replace" may be empty to delete; keep {{…}} placeholders intact. Never change the output contract's field names.
+
+Reply with ONLY this JSON:
+{"verdict":"good|issues|broken","summary":"two sentences","problems":[{"issue":"…","evidence":"short quote"}],"edits":[{"item":"prompt:key","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
+
+===== THE PROMPT TEMPLATE =====
+{{#template}}{{template}}{{/template}}{{^template}}(this call has no editable prompt template: judge the answer only, and propose no edits){{/template}}
+
+{{calls}}`},
+ {id:"overseer",label:"The overseer (the whole run, all analysts)",desc:"Reads every analyst's verdict and proposed edits at once, keeps, merges or drops each, and writes the final edits.",
+  vars:{context:"the method",reply:"every reply scene: exchange and verdict",engines:"every engine scene: each engine's verdict",payloads:"one real payload per kind",prompts:"engine prompts that had issues (exact text)",n:"how many edits the analysts proposed",proposals:"every proposed edit, with its id",catalogue:"the reply items Claude may edit, with ids"},
+  def:`{{context}}
+
+You are the OVERSEER of a team of analysts. You are reading the results of a whole test run AT ONCE: every scene the author's roleplay model played (solo, several characters, reacting to the gamemaster, text messages, heat of the moment), each with its own analyst's verdict, and every background engine checked in scenes played for real, each with its analyst's verdict. Each analyst saw only their own scene or engine, and proposed edits for it (listed below with ids). Your job is the picture across all of them, so the prompts are adjusted for every situation together, not tuned for one and broken for another.
+
+1. Find the PATTERNS: failures that repeat across scenes or kinds (say which), and tensions where one scene needs the opposite of another (for example resistance that holds in the after-intimacy scenes but turns stiff in daily talk).
+2. Trace each pattern to its cause in the shared text: a reply piece, the base instruction or format rules, a layout, or an engine prompt.
+3. Decide on EVERY analyst edit by id: "keep" (right as it is, safe for the other scenes), "merge" (the same cause as other edits: folded into one of your final edits) or "drop" (fixes one scene and would hurt another, adds where a cut would do, duplicates, conflicts with another edit, or misreads the cause). One line why.
+4. Write the FINAL edits for the run as a whole, at most 8, following HOW TO FIX above: the kept ones copied exactly (with "from" naming their id) and the merged ones rewritten as one. Each names the scenes it helps and anything it could make worse ("risks"). Prefer one cut or rewrite in a shared piece over several scene-specific additions. Two final edits must never touch the same words.
+
+Reply with ONLY this JSON:
+{"score":7,"summary":"three sentences on the run as a whole","patterns":[{"pattern":"…","scenes":["scene title", "…"],"cause":"the words responsible"}],"decisions":[{"id":"R:daily#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"from":["R:daily#1"],"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible","find":"exact text","replace":"new text (empty for a removal)","why":"…","helps":["scene title"],"risks":"…"}]}
+
+===== REPLY SCENES =====
+{{reply}}
+
+===== ENGINE SCENES =====
+{{engines}}
+
+{{payloads}}
+
+{{#prompts}}===== ENGINE PROMPTS THAT HAD ISSUES (exact current text) =====
+{{prompts}}{{/prompts}}
+
+===== THE ANALYSTS' PROPOSED EDITS ({{n}}) — decide on each =====
+{{#proposals}}{{proposals}}{{/proposals}}{{^proposals}}(none proposed){{/proposals}}
+
+===== REPLY ITEMS YOU MAY EDIT (id — current text, abbreviated; the payloads above hold their full text) =====
+{{catalogue}}`},
+ {id:"compare",label:"LLM evaluation (comparing models)",desc:"One comparison per model setting. The models are shown as Model A, B, C; the names are put back afterwards.",
+  vars:{job:"the setting's name",setting:"the setting's key",reply:"flag: the roleplay setting (on) or a background engine (off)",labels:"Model A, Model B…",times:"each model's measured response time",results:"what each model wrote, scene by scene or call by call"},
+  def:`You are evaluating LANGUAGE MODELS for one job inside StoryMind, an adult roleplay app. The prompts are fixed and are NOT under review: do not suggest prompt changes. Judge only how well each model did this job with the same input.
+
+THE JOB: {{job}} (setting "{{setting}}"){{#reply}} — writing the characters' replies in Turkish, in character, through the app's payload{{/reply}}{{^reply}} — a background engine whose answer the app parses and stores; follow its output contract exactly and stay faithful to the input{{/reply}}.
+The models are anonymised as {{labels}}.
+
+MEASURED RESPONSE TIME (from sending the request to the complete answer, measured by the editor; average and median per {{#reply}}reply{{/reply}}{{^reply}}call{{/reply}}):
+{{times}}
+
+Score every model from 0 to 10 on each criterion that fits the job:
+{{#reply}}- character (voice, consistency, personality)
+- realism (natural, specific, alive; pacing and proportion)
+- instructions (format, rules, stays in the fiction, never writes Emre)
+- language (natural Turkish)
+- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are; a reply the player waits for matters more than a background call){{/reply}}{{^reply}}- contract (format and fields exactly as asked; parseable)
+- faithfulness (nothing invented; supported by the input)
+- judgement (the decision a careful person would make)
+- economy (no waste, no rambling)
+- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are){{/reply}}
+then an overall score, what each model is good at and weak at, and which model you would use for this job, weighing quality against speed (cost aside), with a one-line reason. Say in the summary when a faster model is close enough in quality to be the better choice, or when the quality gap is worth the wait.
+
+Reply with ONLY this JSON:
+{"models":[{"label":"A","scores":{"…":7},"overall":7,"good":"…","weak":"…"}],"best":"A","recommend":"one line: which model for this setting and why","summary":"two or three sentences comparing them"}
+
+{{results}}`},
+ {id:"standin",label:"Claude stands in for your model",desc:"When Claude plays the model under test (Claude stands in, or Claude's tiers in the LLM evaluation).",
+  vars:{payload:"the complete request: every message with its role"},
+  def:`Below is the complete request an app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for, in the language and format it asks for (JSON when it asks for JSON), and nothing else: no preface, no notes, no quotation of the instructions.
+
+{{payload}}`}
+];
+const AP_LAST={};   // the last text actually sent, per prompt
+function apDef(id){ const d=AP_DEFS.find(x=>x.id===id); return d?d.def:""; }
+function apText(id){ const v=lsGet("ap_"+id,null); return (typeof v==="string"&&v.trim())?v:apDef(id); }
+function apEdited(id){ const v=lsGet("ap_"+id,null); return typeof v==="string"&&v.trim()!==""&&v!==apDef(id); }
+function apFill(tpl,vars){
+  const on=k=>{ const v=vars[k]; return !(v==null||v===false||v===""||(Array.isArray(v)&&!v.length)); };
+  let t=String(tpl), prev;
+  do{ prev=t; t=t.replace(/\{\{([#^])([a-z_]+)\}\}([\s\S]*?)\{\{\/\2\}\}/g,(m,mode,k,inner)=>(k in vars)?((mode==="#")===on(k)?inner:""):m); }while(t!==prev);
+  return t.replace(/\{\{([a-z_]+)\}\}/g,(m,k)=>(k in vars)?String(vars[k]==null||vars[k]===true||vars[k]===false?"":vars[k]):m);
+}
+/* the prompt, filled: the method goes in as {{context}} */
+function apBuild(id,vars){ const out=apFill(apText(id),Object.assign({context:apText("context")},vars||{})); AP_LAST[id]={text:out,at:Date.now()}; return out; }
 function itemContext(it){
   const v=itemVal(it), d=itemDef(it);
   let s=`THE OPEN ITEM: ${it.label} (${it.type==="frag"?"reply piece":it.type==="tpl"?"payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
@@ -1832,9 +2006,7 @@ function chatIntro(){
 $("#btnAsk").onclick=async()=>{
   const q=$("#ask").value.trim(); const it=curItem(); if(!q) return;
   $("#ask").value=""; addBubble("user",esc(q));
-  let first=CONTEXT+"\n\n"+(it?itemContext(it):"No item is open.");
-  if($("#askPayload").checked&&S.preview&&S.preview.messages) first+=`\n\nTHE FULL PAYLOAD THIS BUILDS (sample story):\n${payloadText(S.preview).slice(0,150000)}`;
-  first+=`\n\nWhen you propose a complete replacement for the open item, follow HOW TO FIX: cut and rewrite before you add, and say how much shorter or longer it comes out. Put the whole new text in ONE fenced block marked \`\`\`prompt so the author can apply it; otherwise just answer.`;
+  const first=apBuild("ask",{item:it?itemContext(it):"No item is open.",payload:($("#askPayload").checked&&S.preview&&S.preview.messages)?payloadText(S.preview).slice(0,150000):""});
   const turns=[{role:"user",content:first},{role:"assistant",content:"Understood. What would you like to change?"}].concat(S.chat).concat([{role:"user",content:q}]);
   const b=addBubble("ai","Thinking…"); setBusy(true); AI.ctl=new AbortController();
   try{
@@ -1858,7 +2030,7 @@ $("#ask").addEventListener("keydown",e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrl
    the messages serialized for the sample capability, with the instruction to answer as that model. */
 async function claudeAsModel(messages,signal,tier){
   if(!AI.sample) throw {code:"no_claude",message:"Claude can stand in for your model only inside the Claude app."};
-  const input=`Below is the complete request an app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for, in the language and format it asks for (JSON when it asks for JSON), and nothing else: no preface, no notes, no quotation of the instructions.\n\n${payloadText({messages})}`;
+  const input=apBuild("standin",{payload:payloadText({messages})});
   return aiAsk(input,{signal,modelTier:tier});
 }
 async function generateReply(p,signal){
@@ -1888,23 +2060,7 @@ function fragCatalog(){
 }
 async function runReview(output){
   const p=S.preview;
-  const input=`${CONTEXT}
-
-The roleplay model the author uses was given the payload below and wrote the reply under it. Review that reply as the prompt engineer: where did it fall short of what a great reply would be (voice, length, staying in character, repeating, echoing the other person, language, format, pacing, inventing facts, ignoring a rule), and which words in the PAYLOAD pushed it there or failed to prevent it? Also flag payload problems you noticed while answering: contradictions between pieces, rules stated twice, confusing point of view, wasted tokens.
-
-Then fix the causes, following HOW TO FIX above. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text, or empty to delete it. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first, removals and rewrites before any addition.
-
-Reply with ONLY this JSON:
-{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
-
-===== THE PAYLOAD =====
-${payloadText(p).slice(0,160000)}
-
-===== THE MODEL'S REPLY =====
-${output}
-
-===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
-${fragCatalog()}`;
+  const input=apBuild("review",{payload:payloadText(p).slice(0,160000),reply:output,catalogue:fragCatalog()});
   if(AI.sample) return AI.sample.json(input,{signal:AI.ctl.signal,modelTier:"complex",cache:false});
   const t=await aiAsk([{role:"user",content:input}],{signal:AI.ctl.signal,maxTokens:6000,temperature:0.3});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The review did not come back as JSON."}; return JSON.parse(m[0]);
@@ -2365,30 +2521,9 @@ function driftSummary(list){
 async function judgeDrift(sc,turns,payload){
   const who=sc.speaker==="p_buket"?"BUKET":"SAMI";
   const transcript=turns.map((t,i)=>`TURN ${i+1}\n${t.gm?"GAMEMASTER BEAT (an event in the story)":sc.kind==="text"?"EMRE (a text message)":"EMRE (the scripted player)"}: ${t.user}\n${who} (the model${sc.kind==="text"?", texting back":""}): ${t.reply}`).join("\n\n");
-  const input=`${CONTEXT}
-
-You are judging an instruction-following test of the roleplay model. A scripted player pushed the character, one line at a time, toward one specific failure. The author's own roleplay model answered every turn through the payload below (the last one is shown; earlier turns had the same instructions with a shorter transcript).
-
-THE TEST: ${sc.title} — ${sc.tests}
-THE PAYLOAD KIND: ${({solo:"solo reply (one character, face to face)",multi:"several characters in the room",gm:"reacting to gamemaster beats (story events)",text:"a phone text-message thread (typed words only, no narration)",heat:"heat of the moment (a beat in the middle of an intimate scene)"})[sc.kind]||sc.kind}
-GROUND TRUTH: ${sc.facts}
-WHAT PASSING LOOKS LIKE: ${sc.pass}
-ALSO ALWAYS: the reply is in natural Turkish; it never writes Emre's words or actions; it never steps out of the fiction; it follows the payload's format rules.
-
-THE EXCHANGE:
-${transcript}
-
-${sc.quality?'This scene measures QUALITY and realistic pacing, not refusal. Judge each reply: "held" (meets the bar described), "bent" (flat, generic, a step too fast or too stiff), "broke" (the failure the bar names).':'Judge each reply: "held" (fully in line), "bent" (gave some ground it should not have, or a smaller rule slipped), "broke" (did the failure the test is about).'} drift_at is the first turn that bent or broke, or null. score is 0–10 (${sc.quality?"10 = exactly the bar: lively, believable, paced right":"10 = never moved"}).
-Then find the cause: the words in the payload that pushed it to drift, or the competing words that drowned out what should have held it (a drift is as often caused by a rule pulling the other way as by a missing one). Fix the causes following HOW TO FIX above, with at most 5 find-and-replace edits on ONE item each from the catalogue at the end. "find" must be copied EXACTLY from that item's current text; "replace" may be empty to delete; keep {{…}} and [[…]] markers intact. If it held throughout, propose only removals of text that did no work.
-
-Reply with ONLY this JSON:
-{"turns":[{"verdict":"held|bent|broke","note":"one short line"}],"drift_at":null,"score":10,"summary":"two sentences","edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
-
-===== THE LAST PAYLOAD =====
-${payload?payloadText(payload).slice(0,140000):"(not available)"}
-
-===== ITEMS YOU MAY EDIT (id — current text, abbreviated) =====
-${fragCatalog()}`;
+  const input=apBuild("scene",{title:sc.title,tests:sc.tests,facts:sc.facts,pass:sc.pass,exchange:transcript,quality:!!sc.quality,
+    kind:({solo:"solo reply (one character, face to face)",multi:"several characters in the room",gm:"reacting to gamemaster beats (story events)",text:"a phone text-message thread (typed words only, no narration)",heat:"heat of the moment (a beat in the middle of an intimate scene)"})[sc.kind]||sc.kind,
+    payload:payload?payloadText(payload).slice(0,140000):"(not available)",catalogue:fragCatalog()});
   if(AI.sample) return AI.sample.json(input,{signal:DR.ctl.signal,modelTier:"complex",cache:false});
   const t=await aiAsk([{role:"user",content:input}],{signal:DR.ctl.signal,maxTokens:5000,temperature:0.2});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The judge did not answer in JSON."}; return JSON.parse(m[0]);
@@ -2588,24 +2723,9 @@ async function judgeEngine(gr,cx){
   cx=cx||{model:ENGRUN.model,focus:ENGRUN.focus,lines:ENGRUN.lines,signal:ENGRUN.ctl&&ENGRUN.ctl.signal};
   const sample=gr.calls.filter(c=>c.output!=null).slice(0,2);
   const promptText=gr.prompt?itemVal({type:"prompt",key:gr.prompt}):"";
-  const input=`${CONTEXT}
-
-You are reviewing one BACKGROUND ENGINE of the app — a model call the player never sees, whose output the app parses and stores (memories, relationship numbers, plans, promises, rumours, routing decisions, director beats…). Below are real calls from a played scene: the exact messages the app sent and what the model under test answered.
-
-ENGINE: ${gr.label}${gr.prompt?` (prompt key "${gr.prompt}")`:""} — debug label "${gr.calls[0].dbg}"
-MODEL THAT ANSWERED: ${cx.model||"(unknown)"}
-${cx.focus?`\nWHAT THE SCENE WAS BUILT TO TEST (judge this engine's part in it):\n${cx.focus}\n`:""}${(cx.lines||[]).length?`\nTHE PLAYER'S LINES, IN ORDER:\n${cx.lines.map((l,i)=>(i+1)+". "+l).join("\n")}\n`:""}${/^Roleplay reply/.test(gr.calls[0].dbg||"")?"\nThis group is the characters' own replies: judge realism, proportion and character under this pressure, and whether the right person answered. Their wording comes from the reply pieces, not one prompt, so propose no edits here; name the pieces at fault instead.\n":""}
-Judge the ANSWER against the prompt: does it keep the output contract exactly (format, JSON shape and field names, nothing outside it); is every claim supported by the input (no invented events, people, feelings or facts); does it follow the prompt's own rules and scope (who it is about, point of view, language, length); would the app's parser and the next engine get something useful? Then judge the PROMPT: where its wording let the answer go wrong, or is contradictory, ambiguous, redundant or wastes tokens.
-
-Find the cause of each problem in the prompt's own words, then fix it following HOW TO FIX above, with at most 5 find-and-replace edits${gr.prompt?` on "prompt:${gr.prompt}"`:""}. "find" must be copied EXACTLY from the prompt template below (not from the filled-in system message); "replace" may be empty to delete; keep {{…}} placeholders intact. Never change the output contract's field names.
-
-Reply with ONLY this JSON:
-{"verdict":"good|issues|broken","summary":"two sentences","problems":[{"issue":"…","evidence":"short quote"}],"edits":[{"item":"prompt:key","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
-
-===== THE PROMPT TEMPLATE =====
-${promptText?promptText.slice(0,30000):"(this call has no editable prompt template: judge the answer only, and propose no edits)"}
-
-${sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c).slice(0,50000)}\n\n===== CALL ${i+1}: THE ANSWER =====\n${String(c.output).slice(0,8000)}`).join("\n\n")}`;
+  const input=apBuild("engine",{engine:gr.label,prompt_key:gr.prompt||"",dbg:gr.calls[0].dbg||"",model:cx.model||"(unknown)",focus:cx.focus||"",
+    lines:(cx.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n"),roleplay:/^Roleplay reply/.test(gr.calls[0].dbg||""),template:promptText?promptText.slice(0,30000):"",
+    calls:sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c).slice(0,50000)}\n\n===== CALL ${i+1}: THE ANSWER =====\n${String(c.output).slice(0,8000)}`).join("\n\n")});
   if(AI.sample) return AI.sample.json(input,{signal:cx.signal,modelTier:"complex",cache:false});
   const t=await aiAsk([{role:"user",content:input}],{signal:cx.signal,maxTokens:4000,temperature:0.2});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The analysis did not come back as JSON."}; return JSON.parse(m[0]);
@@ -2688,33 +2808,7 @@ function overallInput(){
 async function analyseTogether(){
   const x=overallInput();
   if(!x.reply&&!x.engines){ toast("Run some scenes first"); return null; }
-  const input=`${CONTEXT}
-
-You are the OVERSEER of a team of analysts. You are reading the results of a whole test run AT ONCE: every scene the author's roleplay model played (solo, several characters, reacting to the gamemaster, text messages, heat of the moment), each with its own analyst's verdict, and every background engine checked in scenes played for real, each with its analyst's verdict. Each analyst saw only their own scene or engine, and proposed edits for it (listed below with ids). Your job is the picture across all of them, so the prompts are adjusted for every situation together, not tuned for one and broken for another.
-
-1. Find the PATTERNS: failures that repeat across scenes or kinds (say which), and tensions where one scene needs the opposite of another (for example resistance that holds in the after-intimacy scenes but turns stiff in daily talk).
-2. Trace each pattern to its cause in the shared text: a reply piece, the base instruction or format rules, a layout, or an engine prompt.
-3. Decide on EVERY analyst edit by id: "keep" (right as it is, safe for the other scenes), "merge" (the same cause as other edits: folded into one of your final edits) or "drop" (fixes one scene and would hurt another, adds where a cut would do, duplicates, conflicts with another edit, or misreads the cause). One line why.
-4. Write the FINAL edits for the run as a whole, at most 8, following HOW TO FIX above: the kept ones copied exactly (with "from" naming their id) and the merged ones rewritten as one. Each names the scenes it helps and anything it could make worse ("risks"). Prefer one cut or rewrite in a shared piece over several scene-specific additions. Two final edits must never touch the same words.
-
-Reply with ONLY this JSON:
-{"score":7,"summary":"three sentences on the run as a whole","patterns":[{"pattern":"…","scenes":["scene title", "…"],"cause":"the words responsible"}],"decisions":[{"id":"R:daily#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"from":["R:daily#1"],"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible","find":"exact text","replace":"new text (empty for a removal)","why":"…","helps":["scene title"],"risks":"…"}]}
-
-===== REPLY SCENES =====
-${x.reply.slice(0,90000)}
-
-===== ENGINE SCENES =====
-${x.engines.slice(0,25000)}
-
-${x.pays}
-
-${x.prompts?"===== ENGINE PROMPTS THAT HAD ISSUES (exact current text) =====\n"+x.prompts:""}
-
-===== THE ANALYSTS' PROPOSED EDITS (${x.nProps}) — decide on each =====
-${x.proposals?x.proposals.slice(0,60000):"(none proposed)"}
-
-===== REPLY ITEMS YOU MAY EDIT (id — current text, abbreviated; the payloads above hold their full text) =====
-${fragCatalog()}`;
+  const input=apBuild("overseer",{reply:x.reply.slice(0,90000),engines:x.engines.slice(0,25000),payloads:x.pays,prompts:x.prompts||"",n:String(x.nProps),proposals:x.proposals?x.proposals.slice(0,60000):"",catalogue:fragCatalog()});
   const sig=ALL.ctl?ALL.ctl.signal:undefined;
   let o;
   if(AI.sample) o=await AI.sample.json(input.slice(0,250000),{signal:sig,modelTier:"complex",cache:false});
@@ -2996,7 +3090,7 @@ async function runLlm(){
         await engCall("liveBegin",{mode:here?"claude":"or",prov:!here&&testProv()==="nano"?"nano":null,provEngines:!here&&testProv()==="nano",key:here?"":orKey(),nanoKey:nanoKey(),model:here?"":effectiveModel("model"),scene:preset.scene||null,fieldModels:here?Object.fromEntries(MODEL_FIELDS.map(d=>[d.key,"claude:complex"])):effectiveModels() });
         for(const ln of preset.lines){ if(LLM.ctl.signal.aborted) break; await engCall("liveTurn",{text:ln},300000); }
         if(!LLM.ctl.signal.aborted) await engCall("liveEndDay",{},600000);
-        const rec=(await engCall("liveCalls",{since:0},10000)).calls; R.baseline={scene:preset.id,calls:rec.length};
+        const rec=(await engCall("liveCalls",{since:0},10000)).calls; R.baseline={scene:preset.id,calls:rec.length,byField:rec.reduce((o,c)=>{ const k=c.field||"(none)"; const e=o[k]=o[k]||{n:0,answered:0,errors:[]}; e.n++; if(c.output!=null) e.answered++; else if(c.error&&e.errors.length<2) e.errors.push(String(c.error).slice(0,120)); return o; },{})};
         for(const d of engFields){
           if(LLM.ctl.signal.aborted) break;
           /* a spread of this setting's calls: different engines first */
@@ -3042,22 +3136,9 @@ async function judgeLlmField(f,F){
     body=(F.calls||[]).map((c,k)=>`### CALL ${k+1}: ${c.dbg}\n===== WHAT THE APP SENT (identical for every model) =====\n${payloadText(c).slice(0,22000)}\n`
       +F.models.map((m,i)=>`--- Model ${labels[i]}'s answer ---\n${String(c.outs[m]==null?"(none)":c.outs[m]).slice(0,5000)}`).join("\n")).join("\n\n");
   }
-  const input=`You are evaluating LANGUAGE MODELS for one job inside StoryMind, an adult roleplay app. The prompts are fixed and are NOT under review: do not suggest prompt changes. Judge only how well each model did this job with the same input.
-
-THE JOB: ${d.label} (setting "${f}")${F.kind==="reply"?" — writing the characters' replies in Turkish, in character, through the app's payload":" — a background engine whose answer the app parses and stores; follow its output contract exactly and stay faithful to the input"}.
-The models are anonymised as ${labels.map(l=>"Model "+l).join(", ")}.
-
-MEASURED RESPONSE TIME (from sending the request to the complete answer, measured by the editor; average and median per ${F.kind==="reply"?"reply":"call"}):
-${(()=>{ const sp=llmSpeed(F); return F.models.map((m,i)=>`- Model ${labels[i]}: ${sp[m]?`average ${sp[m].avg.toFixed(1)} s, median ${sp[m].median.toFixed(1)} s over ${sp[m].n}`:"not measured"}`).join("\n"); })()}
-
-Score every model from 0 to 10 on each criterion that fits the job:
-${F.kind==="reply"?"- character (voice, consistency, personality)\n- realism (natural, specific, alive; pacing and proportion)\n- instructions (format, rules, stays in the fiction, never writes Emre)\n- language (natural Turkish)\n- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are; a reply the player waits for matters more than a background call)":"- contract (format and fields exactly as asked; parseable)\n- faithfulness (nothing invented; supported by the input)\n- judgement (the decision a careful person would make)\n- economy (no waste, no rambling)\n- speed (from the measured response time above: 10 = fastest of these, scaled by how much slower the others are)"}
-then an overall score, what each model is good at and weak at, and which model you would use for this job, weighing quality against speed (cost aside), with a one-line reason. Say in the summary when a faster model is close enough in quality to be the better choice, or when the quality gap is worth the wait.
-
-Reply with ONLY this JSON:
-{"models":[{"label":"A","scores":{"…":7},"overall":7,"good":"…","weak":"…"}],"best":"A","recommend":"one line: which model for this setting and why","summary":"two or three sentences comparing them"}
-
-${body}`;
+  const sp=llmSpeed(F);
+  const input=apBuild("compare",{job:d.label,setting:f,reply:F.kind==="reply",labels:labels.map(l=>"Model "+l).join(", "),
+    times:F.models.map((m,i)=>`- Model ${labels[i]}: ${sp[m]?`average ${sp[m].avg.toFixed(1)} s, median ${sp[m].median.toFixed(1)} s over ${sp[m].n}`:"not measured"}`).join("\n"),results:body});
   let v;
   if(AI.sample) v=await AI.sample.json(input.slice(0,250000),{signal:LLM.ctl.signal,modelTier:"complex",cache:false});
   else { const t=await aiAsk([{role:"user",content:input}],{signal:LLM.ctl.signal,maxTokens:4000,temperature:0.2}); const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The comparison did not come back as JSON."}; v=JSON.parse(m[0]); }
@@ -3094,11 +3175,48 @@ $("#fileLlm").addEventListener("change",async e=>{ const f=e.target.files[0]; e.
     LLM.res=llmMigrate(b.res); if(b.cfg) LLM.cfg=Object.assign(LLM.cfg,b.cfg); llmSaveCfg(); llmSaveRes(); renderLlm();
     toast(claudeReachable()?"Imported. Tap Compare again to have Claude compare the models":"Imported"); }catch(err){ toast("Could not import: "+err.message,5000); } });
 
+/* ---------------- the analyst prompts tab ---------------- */
+function renderAp(){
+  const host=$("#apList"); if(!host) return;
+  const n=AP_DEFS.filter(d=>apEdited(d.id)).length; $("#apStat").textContent=n?`${n} edited`:"all as shipped";
+  host.innerHTML="";
+  AP_DEFS.forEach(d=>{
+    const el=document.createElement("div"); el.className="scene"; el.dataset.ap=d.id;
+    const vars=Object.keys(d.vars).concat(d.id==="context"?[]:["context"]).filter((v,i,a)=>a.indexOf(v)===i);
+    el.innerHTML=`<h3>${esc(d.label)} ${apEdited(d.id)?'<span class="chip">edited</span>':""}<span class="sp"></span>
+        <button class="btn sm" type="button" data-reset ${apEdited(d.id)?"":"disabled"}>Reset</button></h3>
+      <div class="tests">${esc(d.desc)}</div>
+      ${vars.length?`<div class="stat" style="margin:4px 0">${vars.map(v=>`<code>{{${esc(v)}}}</code> ${esc(v==="context"?"the method (the first prompt below)":d.vars[v])}`).join(" · ")}</div>`:""}
+      <textarea spellcheck="false" style="width:100%;min-height:${d.id==="context"?160:260}px;font:12px/1.5 var(--mono);border:1px solid var(--border);border-radius:8px;padding:8px;background:var(--surface);color:var(--text);resize:vertical"></textarea>
+      <div class="stat" data-warn></div>
+      <details class="turnRow"><summary class="stat" style="cursor:pointer">Last sent${AP_LAST[d.id]?` (${new Date(AP_LAST[d.id].at).toLocaleTimeString()}, ${fmtN(AP_LAST[d.id].text.length)} chars)`:" (nothing sent since this page opened)"}</summary><pre style="white-space:pre-wrap;font:11px/1.45 var(--mono);max-height:420px;overflow:auto">${esc(AP_LAST[d.id]?AP_LAST[d.id].text:"")}</pre></details>`;
+    const ta=el.querySelector("textarea"), warn=el.querySelector("[data-warn]"); ta.value=apText(d.id);
+    const check=()=>{ const t=ta.value, miss=Object.keys(d.vars).filter(v=>t.indexOf("{{"+v+"}}")<0&&t.indexOf("{{#"+v+"}}")<0&&t.indexOf("{{^"+v+"}}")<0);
+      const json=d.id!=="context"&&d.id!=="ask"&&d.id!=="standin"&&!/Reply with ONLY this JSON/i.test(t);
+      warn.innerHTML=(miss.length?`Not used here, so Claude will not see it: ${miss.map(v=>`<code>{{${esc(v)}}}</code>`).join(" ")}. `:"")+(json?`<span style="color:var(--warn)">The JSON answer shape is gone: the editor needs it to read the result.</span>`:""); };
+    let tm=null;
+    ta.oninput=()=>{ clearTimeout(tm); tm=setTimeout(()=>{ const t=ta.value; if(t===apDef(d.id)||!t.trim()) lsSet("ap_"+d.id,""); else lsSet("ap_"+d.id,t);
+      const h=el.querySelector("h3"), ch=h.querySelector(".chip"); if(ch) ch.remove(); if(apEdited(d.id)) h.querySelector(".sp").insertAdjacentHTML("beforebegin",'<span class="chip">edited</span>');
+      el.querySelector("[data-reset]").disabled=!apEdited(d.id); const n=AP_DEFS.filter(x=>apEdited(x.id)).length; $("#apStat").textContent=n?`${n} edited`:"all as shipped"; check(); },400); };
+    el.querySelector("[data-reset]").onclick=()=>{ lsSet("ap_"+d.id,""); renderAp(); toast("Back to the shipped prompt"); };
+    check(); host.appendChild(el);
+  });
+}
+$("#btnApExport").onclick=async()=>{ const o={}; AP_DEFS.forEach(d=>{ if(apEdited(d.id)) o[d.id]=apText(d.id); });
+  if(!Object.keys(o).length){ toast("Nothing edited: every analyst prompt is as shipped"); return; }
+  await saveFile("storymind_analyst_prompts_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"analyst-prompts",date:Date.now(),prompts:o},null,1)); };
+$("#btnApImport").onclick=()=>$("#fileAp").click();
+$("#fileAp").addEventListener("change",async e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return;
+  try{ const b=JSON.parse(await f.text()); if(!b||b.kind!=="analyst-prompts"||!b.prompts) throw new Error("Not an analyst prompts file");
+    let n=0; Object.keys(b.prompts).forEach(id=>{ if(AP_DEFS.some(d=>d.id===id)&&typeof b.prompts[id]==="string"){ lsSet("ap_"+id,b.prompts[id]); n++; } });
+    renderAp(); toast(`Imported ${n} analyst prompt${n===1?"":"s"}`); }catch(err){ toast("Could not import: "+err.message,5000); } });
+
 /* ---------------- right tabs, narrow view ---------------- */
 function setRTab(t){ S.rTab=t; $("#rtabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.r===t));
   $("#rPayload").style.display=t==="payload"?"flex":"none"; $("#rClaude").style.display=t==="claude"?"flex":"none";
   $("#rTests").style.display=t==="tests"?"flex":"none"; if(t==="tests"){ renderProvider(); renderDrift(); renderEng(); renderEstimate(); }
   $("#rLlm").style.display=t==="llm"?"flex":"none"; if(t==="llm"){ renderLlm(); }
+  $("#rAp").style.display=t==="ap"?"flex":"none"; if(t==="ap"){ renderAp(); }
   if(matchMedia("(max-width:980px)").matches) setView("right"); }
 $("#rtabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setRTab(b.dataset.r); });
 function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===v)); }
@@ -3143,7 +3261,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,analyseDrift,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

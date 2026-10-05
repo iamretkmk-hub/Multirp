@@ -168,6 +168,32 @@ model refuses "reasoning off", and remembers that model (`sm_reasononly`).
 an Anthropic or Claude model is refused there before anything is sent, whatever started it. Such models
 are also left out of the model lists. Claude runs only through the Claude app.
 
+## Analyst prompts (what Claude is asked)
+
+The **Analyst prompts** tab shows every prompt the editor sends to Claude, and each can be edited
+(`AP_DEFS`, filled by `apBuild`):
+
+- **The method** (`context`): who Claude is helping, and HOW TO FIX. It goes into the others as `{{context}}`.
+- **Ask Claude** (`ask`).
+- **Test & review** (`review`).
+- **Scene analyst** (`scene`).
+- **Engine analyst** (`engine`).
+- **The overseer** (`overseer`).
+- **LLM evaluation** (`compare`).
+- **Claude stands in** (`standin`).
+
+`{{name}}` is filled with live data, and each prompt lists its names. `{{#flag}}…{{/flag}}` is kept only
+when the flag is on; `{{^flag}}…{{/flag}}` only when it is off. Any other brace text, such as the app's own
+`{{call//…}}` or `{{…}}` wording, is left exactly as written. An edited prompt is kept in this browser
+(`ap_<id>`) and used from the next analysis on. **Reset** brings the shipped one back. **Last sent** shows
+the exact text Claude got last time, data filled in. Warnings appear when an edit drops a placeholder, or
+drops the "Reply with ONLY this JSON" shape the editor reads. **Export** and **Import** move the edited
+prompts between browsers (`kind: "analyst-prompts"`).
+
+During a live run the model settings carry `pe-field:` tags. A pack applied mid-run (an edit, the preview)
+now updates the value kept for afterwards instead of overwriting a tag; it used to leave every later
+call without its setting.
+
 ## How Claude fixes things
 
 Every analysis (Ask Claude, Test & review, the drift tests, the engine tests) carries one method, in

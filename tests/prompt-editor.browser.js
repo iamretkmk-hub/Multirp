@@ -457,6 +457,26 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the thinking switch turns reasoning on for the model under test", !!rc&&rc.body.reasoning&&rc.body.reasoning.enabled===true, JSON.stringify(rc&&rc.body.reasoning));
     await pg.evaluate(async()=>{ localStorage.setItem("pe_v1_testreasoning",JSON.stringify(false)); await pushModelToEngine(); });
 
+    console.log("\n[15 — the analyst prompts: shown, editable, used15]");
+    const apx=await pg.evaluate(()=>{ const P=__PE;
+      const sc=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:true,payload:"PL",catalogue:"C"});
+      const sc2=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:false,payload:"PL",catalogue:"C"});
+      return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
+        q:/measures QUALITY/.test(sc)&&!/never moved/.test(sc),nq:/never moved/.test(sc2)&&!/measures QUALITY/.test(sc2),left:/\{\{[#^\/]/.test(sc)||/\{\{(title|exchange|payload)\}\}/.test(sc),
+        keepsMarkers:/keep \{\{…\}\} and \[\[…\]\] markers intact/.test(sc)}; });
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, engine, overseer, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,engine,overseer,compare,standin", apx.ids.join());
+    ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.q&&apx.nq&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
+    await pg.click('#rtabs button[data-r="ap"]');
+    await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="scene"] textarea'); ta.value=ta.value.replace("You are judging an instruction-following test","PE-AP-EDIT You are judging an instruction-following test"); ta.dispatchEvent(new Event("input")); });
+    await pg.waitForTimeout(700);
+    OR.calls=[];
+    await pg.evaluate(async()=>{ const sc=__PE.DRIFT_SCENES[0]; __PE.DR.results[sc.id].judge=null; await __PE.analyseDrift([sc]); });
+    const used15=OR.calls.find(c=>c.claude&&/instruction-following test/.test(c.body.messages[0].content));
+    const ui15=await pg.evaluate(()=>{ __PE.renderAp(); const el=document.querySelector('#apList [data-ap="scene"]'); return {chip:/edited/.test(el.querySelector("h3").textContent),last:el.querySelector("pre").textContent}; });
+    ok("an edit is used15 by the next analysis, and the exact text sent is shown", !!used15&&/PE-AP-EDIT/.test(used15.body.messages[0].content)&&ui15.chip&&/PE-AP-EDIT/.test(ui15.last)&&/HOW TO FIX/.test(ui15.last), JSON.stringify({used15:!!used15,chip:ui15.chip}));
+    const rs15=await pg.evaluate(()=>{ document.querySelector('#apList [data-ap="scene"] [data-reset]').click(); return !/PE-AP-EDIT/.test(__PE.apText("scene")); });
+    ok("Reset brings the shipped prompt back", rs15);
+
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});
     await sctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());

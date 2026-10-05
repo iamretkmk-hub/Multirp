@@ -3885,6 +3885,14 @@ Write the moment in that pose: keep its arrangement and framing, put each person
     def:`THE SCENE HAS CHANGED — from "{{from}}" to "{{to}}". This is a new position, not a continuation of the last one: the previous frame's pose, body positions, who is where, the framing and the camera are all gone. Write them fresh from the scene type above and the latest exchange, and do not carry over a single phrase about pose or position from before.
 Carry over ONLY what each person has on (or has off): {{clothing}}`},
 
+  /* v150.17 — A POSITION'S OWN REFERENCE VIDEOS. Each video position (Settings › Video) can hold reference
+     videos — neutral grey 3D figures performing its motion. One goes with the clip, at random, and the
+     model only follows it if the prompt names its @token. */
+  x_vid_motion_ref:{label:"Video writer — the position's reference video",json:false,
+    hint:"Added to the video prompt writer (and the scene video writer) when the chosen position has reference videos: one of them is sent with the clip. Placeholder: {{token}} (its @token, e.g. @video1).",
+    def:`## MOTION REFERENCE
+{{token}} is a reference video made for this position: a neutral grey 3D figure performing its motion. The model only follows it if your prompt names it, so name it where the movement is described — "the motion, its rhythm and the body positions follow {{token}}". Take ONLY the movement from it: the people, their faces, their bodies and their clothes come from the pictures, never from the grey figure.`},
+
   /* v145.1 — SCENE VIDEO. The film button in a reply's action row turns the last stretch of the
      roleplay (one line per second of the configured clip length) into ONE reference-to-video clip.
      The people are sent as their own reference pictures and named by @token, the camera is POV or
@@ -13108,7 +13116,9 @@ async function generateVideo(prompt,imageUrl,opts){
     const imgs=[];
     for(let i=0;i<list.length;i++) imgs.push(await hostFrame(list[i],"reference picture @image"+(i+1)));
     if(imgs.length) body.reference_images=imgs;
-    body.prompt=normalizeRefTokens(body.prompt,{image:imgs.length,video:0,audio:0});
+    // v150.17 — the position's reference video, the clip's only video here (@video1)
+    if(opts.motionRef) body.reference_videos=[opts.motionRef];
+    body.prompt=normalizeRefTokens(body.prompt,{image:imgs.length,video:(body.reference_videos||[]).length,audio:0});
   }else if(vidSupportsRefs(model)){
     await ensureRefUrls();
     const host=async list=>{
@@ -13126,7 +13136,9 @@ async function generateVideo(prompt,imageUrl,opts){
     if(refOnly&&img&&/^https?:/i.test(img)) imgs.push(img);
     if(refOnly&&endImg&&/^https?:/i.test(endImg)) imgs.push(endImg);
     imgs.push(...await host(R.image));
-    const rv=await host(R.video.slice(0,REF_LIMITS.video));
+    // v150.17 — the position's reference video goes after the library's, so the library keeps its numbers
+    const rv=await host(R.video.slice(0,REF_LIMITS.video-(opts.motionRef?1:0)));
+    if(opts.motionRef) rv.push(opts.motionRef);
     const auds=R.audio.slice(0,REF_LIMITS.audio);
     const ra=await host(auds);
     // The voice-guided clip's spoken track rides in the same slot list, ahead of the library.
@@ -14108,6 +14120,7 @@ function videoWriterSystem(rule,opts){
   }else{
     sys+="\n\n## SOUND\nDo NOT describe sound in this prompt.";
   }
+  if(opts.motionToken) sys+="\n\n"+vidMotionBlock(opts.motionToken);   // v150.17
   if(opts.endPrompt){
     sys+="\n\n## FINISHING FRAME\nThis clip ends on a second, fixed image"
        +(vidIsRefOnly()?" (sent as image 2 — name it in the last beat)":"")
@@ -23745,6 +23758,76 @@ async function rulePosePick(rule){
   let src=""; try{ src=await mediaDB.kvGet(_poseKey(ids[i]))||""; }catch(e){ src=""; }
   return {src:(typeof src==="string"?src:""),idx:i,of:ids.length,id:ids[i]};
 }
+/* ===== v150.17 — REFERENCE VIDEOS ON A VIDEO POSITION. The same idea for Settings › Video: each position
+   (state.vidRules) keeps the ids of up to MOTION_MAX_PER_POS reference videos in rule.motionRefs; the
+   bytes are Blobs in IndexedDB under "vmotion:<id>". Clips are far too large for the settings store
+   and for the JSON backup, so these are NOT carried by a backup. When a clip is made for that
+   position, ONE of them — a uniform random pick — is uploaded and sent as a reference video, and the
+   writer is told its @token (x_vid_motion_ref). */
+const MOTION_MAX_PER_POS=8, MOTION_MAX_BYTES=50*1024*1024;
+const _motionKey=id=>"vmotion:"+id;
+const _motionHosted=new Map();   // id -> hosted URL, for this session (no re-upload per clip)
+function ruleMotionIds(rule){ return (rule&&Array.isArray(rule.motionRefs)?rule.motionRefs:[]).filter(x=>typeof x==="string"&&x).slice(0,MOTION_MAX_PER_POS); }
+function _saveVidRules(){ try{ store.set(K.vidRules,state.vidRules); }catch(e){} }
+async function ruleMotionAdd(rule,blob){
+  if(!rule||!blob)return false;
+  const ids=ruleMotionIds(rule);
+  if(ids.length>=MOTION_MAX_PER_POS){ toast(`${MOTION_MAX_PER_POS} reference videos is the most for one position — remove one first`); return false; }
+  const id="mv"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  const ok=await mediaDB.kvSet(_motionKey(id),blob);
+  if(!ok){ toast("Couldn't store that video"); return false; }
+  rule.motionRefs=ids.concat([id]); _saveVidRules(); return true;
+}
+async function ruleMotionRemove(rule,id){
+  if(!rule)return;
+  rule.motionRefs=ruleMotionIds(rule).filter(x=>x!==id); _saveVidRules(); _motionHosted.delete(id);
+  try{ await mediaDB.kvDelete(_motionKey(id)); }catch(e){}
+}
+// One of the position's reference videos, at random, uploaded: {url,idx,of,id}; url "" when there is none.
+async function ruleMotionPick(rule,setStat){
+  const ids=ruleMotionIds(rule); if(!ids.length)return {url:"",idx:-1,of:0,id:""};
+  const i=_poseRoll(ids.length), id=ids[i];
+  if(_motionHosted.has(id))return {url:_motionHosted.get(id),idx:i,of:ids.length,id};
+  let blob=null; try{ blob=await mediaDB.kvGet(_motionKey(id)); }catch(e){}
+  if(!blob||!blob.size)return {url:"",idx:i,of:ids.length,id};
+  if(setStat)setStat("Uploading the reference video…");
+  const local=URL.createObjectURL(blob);
+  let url=""; try{ url=await atlasUpload(local); }catch(e){ url=""; } finally{ try{ URL.revokeObjectURL(local); }catch(e){} }
+  if(!/^https?:/i.test(url||""))throw{friendly:"Couldn't upload this position's reference video to AtlasCloud, so the clip was not sent."};
+  _motionHosted.set(id,url);
+  return {url,idx:i,of:ids.length,id};
+}
+async function renderRuleMotions(rule,box){
+  if(!rule||!box)return;
+  box.innerHTML="";
+  for(const id of ruleMotionIds(rule)){
+    const cell=document.createElement('div'); cell.className="refSlot"; cell.setAttribute('data-motion',id);
+    let blob=null; try{ blob=await mediaDB.kvGet(_motionKey(id)); }catch(e){}
+    if(blob&&blob.size){ const v=document.createElement('video'); v.muted=true; v.playsInline=true; v.preload="metadata";
+      v.src=URL.createObjectURL(blob); v.style.cssText="width:100%;height:100%;object-fit:cover"; cell.appendChild(v); }
+    else cell.innerHTML=`<span>?</span>`;
+    const x=document.createElement('button'); x.type="button"; x.className="rsDel"; x.textContent="×"; x.title="Remove this reference video";
+    x.onclick=async ev=>{ ev.stopPropagation(); await ruleMotionRemove(rule,id); renderRuleMotions(rule,box); };
+    cell.appendChild(x); box.appendChild(cell);
+  }
+  if(ruleMotionIds(rule).length<MOTION_MAX_PER_POS){
+    const add=document.createElement('div'); add.className="refSlot empty"; add.title="Add reference videos";
+    add.innerHTML=`<span>＋</span>`; add.onclick=()=>uploadRuleMotions(rule,box); box.appendChild(add);
+  }
+}
+async function uploadRuleMotions(rule,box){
+  const files=await pickFiles("video/*",true);
+  if(!files||!files.length)return;
+  let added=0, skipped=0;
+  for(const f of files){
+    if(ruleMotionIds(rule).length>=MOTION_MAX_PER_POS)break;
+    if(!f||!f.size||f.size>MOTION_MAX_BYTES||!/^video\//.test(f.type||"video/")){ skipped++; continue; }
+    if(await ruleMotionAdd(rule,f))added++;
+  }
+  renderRuleMotions(rule,box);
+  toast(added?`${added} reference video${added===1?"":"s"} added${skipped?` · ${skipped} skipped (over 50 MB or not a video)`:""}`:"Nothing was added");
+}
+function vidMotionBlock(token){ return fillTpl(up("x_vid_motion_ref"),{token}); }
 /* The editor strip for one scene type: every picture with an ×, then a dashed ＋ tile while there is room. */
 async function renderRulePoses(rule,box){
   if(!rule||!box)return;
@@ -29522,10 +29605,10 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video Prompt Writer",desc:"Turns a still into ONE motion prompt for the clip. Receives the configured clip length, the shared video ruleset (mid-scene pacing, the facial/hands/body detail, the anatomy rules) and the routed position's own template.",blocks:[
-    {kind:"prompt",promptKey:"vidPrompt"},
+    {kind:"prompt",promptKey:"vidPrompt"},{kind:"prompt",promptKey:"x_vid_motion_ref"},
     {kind:"dyn",label:"The still's prompt + latest exchange",scope:"chat",desc:"What the frame shows and the beat being animated. The Movie writer also receives the prompt count, the seconds per segment and the finished clip length."}]},
   {key:"scene_video",label:"Scene Video Writer",desc:"The film button under a character's reply: the last lines of the roleplay (one per second of the clip length) become one reference-to-video clip. Chooses POV or third person, names each person by their @image token, carries the clothing from the start of the stretch, and writes a separate ambient-only sound prompt. The previous clip of the same character in the same place is its continuity.",blocks:[
-    {kind:"prompt",promptKey:"x_scene_video_writer"},{kind:"prompt",promptKey:"x_scene_video_audio_rule"},
+    {kind:"prompt",promptKey:"x_scene_video_writer"},{kind:"prompt",promptKey:"x_scene_video_audio_rule"},{kind:"prompt",promptKey:"x_vid_motion_ref"},
     {kind:"dyn",label:"People + tokens, place and time, clothing, continuity, the lines",scope:"chat",desc:"Who is in the stretch and which reference picture is whose, the place and its picture, the day and time of day, what everyone wears when the stretch begins, the previous clip's prompt and end state when it was the same character in the same place, and the lines themselves."}]},
   {key:"video_book",label:"Story Book & Video Book",desc:"The book writer: when a picture (or a scene clip) is made, the roleplay since the last passage becomes the prose that leads into it.",blocks:[
     {kind:"prompt",promptKey:"x_book_writer"},{kind:"prompt",promptKey:"x_book_writer_redo"},
@@ -40255,7 +40338,12 @@ async function animateScene(mid){
       throw{friendly:IMG_CHILD_BLOCK_MSG};
     const _vidRule=await pickRule(_vMinor?_imgSafeRules(state.vidRules):state.vidRules,_scenePrompt);       // which POSITION this is
     const _isExplicit=!!(_vidRule&&_vidRule.explicit);
-    const _sys=videoWriterSystem(_vidRule);
+    /* v150.17 — this position's reference video, one at random, after the library's own videos */
+    let _motion={url:"",idx:-1,of:0,id:""};
+    if(vidSupportsRefs()&&_vidRule&&ruleMotionIds(_vidRule).length) _motion=await ruleMotionPick(_vidRule,setStat);
+    let _motionToken="";
+    if(_motion.url){ let lib=0; try{ lib=Math.min(vidRefs().video.length,REF_LIMITS.video-1); }catch(e){ lib=0; } _motionToken="@video"+(lib+1); }
+    const _sys=videoWriterSystem(_vidRule,{motionToken:_motionToken});
     const motion=await chatCompletion(epSend("x_video_motion_prompt_writer",_sys,{clip:`CLIP LENGTH: ${videoSeconds()} seconds`,scene:(_scenePrompt||"(no stored prompt — write natural motion for the pictured scene)")}),state.rewriter,{fn:"rewriter",temp:fnTemp("rewriter",0.6),max:fnTok("rewriter",videoWriterTokens(_isExplicit)),foreground:true,dbg:"Video motion prompt writer"});
     const vidPrompt=injectRuleKeywords(motion.trim().replace(/^["']|["']$/g,""),_vidRule);
     if(_vidRule&&_vidRule.label){const e=document.getElementById('vidrule_'+mid);if(e)e.textContent=_vidRule.label;}
@@ -40278,7 +40366,7 @@ async function animateScene(mid){
     setStat(`Generating a ${videoSeconds()}s clip… (~1 min)`);
     const _vidOut={};
     const videoUrl=await generateVideo(vidPrompt,msg.img,
-      {rule:_vidRule,audio:_voiceUrl,out:_vidOut,setStat});
+      {rule:_vidRule,audio:_voiceUrl,out:_vidOut,setStat,motionRef:_motion.url||""});
     // Keep the durable, embeddable remote URL as the primary source. A direct <video src=remote>
     // plays without CORS on https hosts; the render path will blob-recover only if it errors.
     // (Eagerly blob-fetching here failed on CDNs without CORS headers and discarded the URL that
@@ -40476,7 +40564,15 @@ async function sceneVideo(mid){
     const _svMinor=(cast.people||[]).some(p=>{ try{ return typeof isMinorChar==="function"&&isMinorChar(p); }catch(e){ return false; } });
     // v150.13 — a girl or a boy in the stretch: no clip
     if((cast.people||[]).some(_imgChildSubject)||_imgChildSubject(focal)||_imgPlayerChild()) throw{friendly:IMG_CHILD_BLOCK_MSG};
-    const sys=fillTpl(up("x_scene_video_writer"),{user:state.user||"the player",seconds:String(sec),beats:String(blocks)})
+    /* v150.17 — when any video position has reference videos, this stretch is routed to a position and
+       that position's video (one at random) goes with the clip as @video1. */
+    let _svMotion={url:"",idx:-1,of:0,id:""}, _svPos=null;
+    if(vidSupportsRefs()&&(state.vidRules||[]).some(r=>r&&r.enabled!==false&&ruleMotionIds(r).length)){
+      const _txt=win.items.map(x=>`${x.m.role==='user'?state.user:(x.m.speaker||"Narrator")}: ${dropThoughtSpans(x.m.content||"")}`).join("\n");
+      _svPos=await pickRule(_svMinor?_imgSafeRules(state.vidRules):state.vidRules,_txt);
+      if(_svPos&&ruleMotionIds(_svPos).length) _svMotion=await ruleMotionPick(_svPos,setStat);
+    }
+    const sys=fillTpl(up("x_scene_video_writer"),{user:state.user||"the player",seconds:String(sec),beats:String(blocks)})+(_svMotion.url?"\n\n"+vidMotionBlock("@video1"):"")
       +(_svMinor?"\n\nHARD LIMIT — someone in this clip is a minor. Nothing sexual, suggestive, romantic-physical or intimate may appear or be implied: no nudity, no undressing, no kissing or caressing, no lingering on bodies. Everyone fully and ordinarily clothed; only everyday, non-romantic action. If the lines ask for more, show an innocent everyday moment instead.":"");
     const raw=await chatCompletion(epSend("x_scene_video_writer",sys,{
         clip, people:cast.roster.join("\n"), scene:_svWhenWhere(chat,win.items),
@@ -40497,7 +40593,7 @@ async function sceneVideo(mid){
     const first=vidIsRefOnly()?null:(_svFrameUrl(prev)||msg.img||cast.refs[0]||null);
     setStat(`Generating a ${sec}s clip… (~1 min)`);
     const out={};
-    const videoUrl=await generateVideo(finalPrompt,first,{refImages:cast.refs,out,setStat});
+    const videoUrl=await generateVideo(finalPrompt,first,{refImages:cast.refs,out,setStat,motionRef:_svMotion.url||"",rule:_svPos||null});
     const who=cast.people.map(p=>p.name).join(", ");
     const _rec={id:"vid_"+Date.now(),mid,url:videoUrl,prompt:finalPrompt,character:who,characterId:(focal&&!focal.guest&&focal.id)||null,universeId:chat.universeId||null,date:Date.now(),sceneClip:true};
     state.videos.push(_rec); captureGalleryMedia(_rec);     // the bytes → IndexedDB, so the movie outlives the link
@@ -53933,6 +54029,9 @@ function renderRules(kind){
         <input type="text" data-k="keywords" value="${esc(r.keywords||r.keyword||'')}" placeholder="e.g. m15510n4ry, p0v, detailed anatomy">
         <div class="kvline" style="padding:6px 0 0"><label>Explicit — adds the SOUND section and the anatomy rules to the writer</label>
           <label class="switchLbl"><input type="checkbox" data-k="explicit" ${r.explicit?'checked':''}><span class="sl"></span></label></div>
+        <label>Reference videos <span class="desc" style="display:inline;font-weight:400">— up to ${MOTION_MAX_PER_POS}, one sent at random</span></label>
+        <div class="rulePoses" data-motions="1"></div>
+        <div class="desc" data-help style="margin:-2px 0 6px">Short clips of this position's motion — neutral grey 3D figures that fit anyone. When a clip is made for this position (Animate, or the scene video button), ONE of them, chosen at random, goes to the video model as a reference video and the writer names it, so the movement follows it while the people come from their pictures. Up to 50 MB each. Kept on this device only: a backup does not carry them.</div>
         <label>Position prompt template (injected into the writer when this position is chosen — NOT shown to the router)</label>
         <select data-tpl="1" style="width:100%;margin-bottom:4px">
           <option value="">Insert a foundation template…</option>
@@ -53976,6 +54075,8 @@ function renderRules(kind){
         <button class="btn danger sec small" data-del="1" style="margin-top:4px">Delete rule</button>`;
       }
       c.appendChild(body);
+      // v150.17 — this video position's reference videos
+      {const mb=body.querySelector('[data-motions]'); if(mb)renderRuleMotions(r,mb);}
       // v150.16 — this scene type's pose pictures
       {const pb=body.querySelector('[data-poses]');
        if(pb){ renderRulePoses(r,pb);

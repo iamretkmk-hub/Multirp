@@ -437,6 +437,35 @@ const ROOT=path.resolve(__dirname,'..');
     const dcl=await pg.evaluate(()=>{ __PE.ALL.overall=null; renderOverall(); setOverall({score:5,summary:"new",edits:[]}); return __PE.DISC.rp.length; });
     ok("a new analysis starts a new conversation", dcl===0, dcl);
 
+    console.log("\n[11e — before → after: what the changes since the earlier run did]");
+    OR.calls=[];
+    OR.answer=body=>{ const t=String(((body.messages||[])[0]||{}).content||"");
+      if(/You are checking WHAT THE LAST CHANGES DID/.test(t)){ const mm=t.match(/^\+ (.*PE-NEW-OPENING.*)$/m), line=mm?mm[1].trim().slice(0,30):"";
+        return JSON.stringify({summary:"PE-EFFECT-SUMMARY the new wording helped memory but hurt Turkish",edits:[{edit:"frag:style_header: the new opening",effect:"mixed",evidence:"memory 4→7, turkish 6→5"}],
+          criteria:[{criterion:"memory",before:4,after:7,why:"w"},{criterion:"turkish",before:6,after:5,why:"w"}],regressions:["PE-EFFECT-REGRESSION Turkish got stiffer"],keep:["the memory line"],
+          revert:[{item:"frag:style_header",kind:"rewrite",find:line,replace:"PE-REVERTED",why:"stiff"}],next:"look at the register"}); }
+      if(/COMPLETE ANALYSIS of a test run/.test(t)) return JSON.stringify({score:6,summary:"PE-FIXER-2",criteria:{},patterns:[],structure:[],edits:[]});
+      return /JSON/i.test(t)?"{}":'"Tamam."'; };
+    const ef=await pg.evaluate(async()=>{ const P=__PE;
+      lsSet("runsnaps",[]); await P.writeFixesAlone();                      // run 1: a snapshot, nothing to compare with
+      const first=P.snaps().length, noEffect=!P.ALL.effect;
+      /* the author applies an edit, and the scenes are played again: a later run with the new wording in its payload */
+      const it=P.findItem("frag:style_header"), old=P.itemVal(it), line=old.split("\n").find(l=>l.trim().length>20).trim();
+      P.setVal(it,old.replace(line,"PE-NEW-OPENING "+line)); APPLIED["pe-eff"]={t:Date.now(),item:"frag:style_header",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
+      P.DRIFT_SCENES.forEach(sc=>{ const r=P.DR.results[sc.id]; if(r&&r.turns&&r.turns.length){ r.at=Date.now(); if(r.payload) r.payload={messages:r.payload.messages.map((m,i)=>i===0?Object.assign({},m,{content:String(m.content)+"\nPE-NEW-OPENING "+line}):m)};
+        if(r.judge){ r.judge=Object.assign({},r.judge,{score:7,criteria:Object.assign({},r.judge.criteria,{memory:{score:7,note:"better"}})}); } } });
+      await new Promise(r=>setTimeout(r,20));
+      await P.writeFixesAlone();                                             // run 2: compared with run 1 before the fixer
+      const box=(document.querySelector("#effectBox")||{}).textContent||"", rv=document.querySelector("#effectBox .chg [data-a=apply]");
+      const res={first,noEffect,snaps:P.snaps().length,effect:!!P.ALL.effect,box:/PE-EFFECT-SUMMARY/.test(box)&&/PE-EFFECT-REGRESSION/.test(box)&&/mixed/.test(box)&&/Memory 4→7/.test(box),revert:!!rv&&!rv.disabled};
+      rv&&rv.click(); res.reverted=/PE-REVERTED/.test(P.itemVal(it)); P.setVal(it,old); delete APPLIED["pe-eff"]; lsSet("applied",APPLIED); return res; });
+    const ec=OR.calls.find(c=>c.claude&&/You are checking WHAT THE LAST CHANGES DID/.test(c.body.messages[0].content)), et=ec?ec.body.messages[0].content:"";
+    const fx=OR.calls.filter(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)).pop(), fxt=fx?fx.body.messages[0].content:"";
+    ok("the first run leaves a snapshot and has nothing to compare with", ef.first===1&&ef.noEffect, JSON.stringify(ef));
+    ok("the next run is compared with it first: the edit in between, the payload diff, the scores before → after", !!ec&&/PE-NEW-OPENING/.test(et.split("===== THE SCORES")[0])&&/^\+ .*PE-NEW-OPENING/m.test(et)&&/^- /m.test(et)&&/→ 7 \(\+/.test(et)&&/BEFORE: /.test(et), et.slice(0,300));
+    ok("the fixer reads what the last changes did", /WHAT THE LAST CHANGES DID[\s\S]*PE-EFFECT-SUMMARY/.test(fxt)&&/PE-EFFECT-REGRESSION/.test(fxt), fxt.slice(0,200));
+    ok("the verdict shows above the complete analysis, with a revert you can apply", ef.effect&&ef.box&&ef.revert&&ef.reverted&&ef.snaps===2, JSON.stringify(ef));
+
     console.log("\n[11c — a long run still fits one request to Claude, and a failed fixing step can be run again]");
     const fit=await pg.evaluate(async()=>{ const P=__PE, long="Şöyle düşünüyorum, ağabeyciğim: gülüşün öğleden beri aklımdan çıkmıyor, işte böyle. ".repeat(40);
       const keep=JSON.stringify(P.DR.results), keepO=P.ALL.overall;
@@ -445,6 +474,7 @@ const ROOT=path.resolve(__dirname,'..');
           judge:{score:5,summary:"s",criteria:{turkish:{score:5,note:"n",evidence:"e"}},turns:sc.lines.map(()=>({verdict:"weak",note:"n"})),findings:[{criterion:"turkish",turn:1,problem:"p",evidence:"e",cause:"c"}]}}; });
       const huge=P.apBuild("overseer",{reports:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),catalogue:P.overallInput().catalogue,layouts:P.overallInput().layouts,payloads:"ğ".repeat(60000),scores:"x"});
       const rawBytes=P.apBytes("Şöyle düşünüyorum ğüşıöç. ".repeat(9000))+P.apBytes("ğ".repeat(60000)), hugeOk=P.apBytes(huge)<=P.AP_CAP&&/Reply with ONLY this JSON/.test(huge)&&/===== tpl:solo =====/.test(huge)&&/cut here to fit/.test(huge);
+      lsSet("runsnaps",[]);   // no earlier run: the first call is the fixer's
       let sent=null, calls=0; const orig=AI.sample.json;
       AI.sample.json=async(input)=>{ calls++; sent=input; if(calls===1) throw {code:"prompt_too_large",message:"too big"}; return {score:6,summary:"PE-FIXED",criteria:{},patterns:[],structure:[],edits:[]}; };
       await P.writeFixesAlone();
@@ -544,7 +574,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, complete analyses, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,overseer,engfinal,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,overseer,effect,engfinal,discuss,compare,standin", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

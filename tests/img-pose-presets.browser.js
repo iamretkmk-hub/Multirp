@@ -152,6 +152,15 @@ const {chromium}=require('playwright');
   ok("the playground, not POV: the actor's face, the player's, then the pose picture (the reported case)", JSON.stringify(PG.bed.images)==='["data:S1","data:E1","data:BED"]', JSON.stringify(PG.bed.images));
   ok("the playground, POV: the actor's face, then the pose picture", JSON.stringify(PG.hug.images)==='["data:S1","data:HUG0"]', JSON.stringify(PG.hug.images));
   ok("with the same swap instruction", /Replace the man in Figure 2 with the man in IMAGE 1 \(Figure 1\)/.test(PG.hug.prompt)&&/real skin texture/.test(PG.hug.prompt), PG.hug.prompt.slice(0,500));
+  /* v150.19 — reported: the playground sent the faces of whoever was in the open roleplay's scene (Burcu is in
+     this chat's scene; the playground picture is of Sami alone). */
+  const PS=await pg.evaluate(async()=>{
+    const c=curChat(); c.presentIds=["p_sami","p_burcu"]; c.subPos={p_sami:"c1",p_burcu:"c1"};
+    _pg.actorId="p_sami"; _pg.ruleId="r_talk"; _pg.refIds=[]; _pg.prompt="a man sits"; _pg.busy=null; window.__body=null;
+    await pgGenerate(); return (window.__body||{}).images||[];
+  });
+  ok("the playground sends only its own actor (and the player), never the open scene's other people (the reported case)",
+     JSON.stringify(PS)==='["data:S1","data:E1"]', JSON.stringify(PS));
   ok("the playground's writer gets the pose block, by label", /POSE REFERENCE/.test(PG.usr)&&/- the man in IMAGE 1 = Sami \(man\)/.test(PG.usr)&&/- the man in IMAGE 2 = Emre \(the player\)/.test(PG.usr), PG.usr.slice(0,700));
 
   console.log("\n[3d. the writer's instructions say each thing once]");

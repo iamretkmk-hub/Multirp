@@ -234,7 +234,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("some days on: both nights and her softer terms are in the payload, not the first decision",
        /It happened again, on day nine/.test(solo4.after2.t)&&/on your terms/.test(solo4.after2.t)&&!/the one full surrender/.test(solo4.after2.t), solo4.after2.t.slice(-2500));
     ok("the setup does not leak into other scenes", !/ended up in his bed/.test(solo4.daily.t));
-    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES[0]]));
+    await pg.evaluate(()=>__PE.runDriftScenes([__PE.DRIFT_SCENES.find(x=>x.id==="past")]));
     const d=await pg.evaluate(()=>({r:__PE.DR.results.past,html:document.querySelector("#dr_past").textContent}));
     ok("every scripted line was played, and every reply kept", d.r&&d.r.turns.length===5&&d.r.turns.every(t=>t.reply&&/Hatırlamıyorum/.test(t.reply))&&d.r.model==="deepseek/deepseek-v4-pro", JSON.stringify(d.r&&d.r.turns));
     ok("each turn was built from the real payload, with the earlier replies in the transcript",
@@ -272,7 +272,7 @@ const ROOT=path.resolve(__dirname,'..');
     const imp9=await pg.evaluate(()=>({n:(__PE.DR.results.past||{}).turns&&__PE.DR.results.past.turns.length,btn:!!document.querySelector("#dr_past button.pri")}));
     ok("an exported run imports, with an Analyse button", imp9.n===5&&imp9.btn, JSON.stringify(imp9));
     OR.calls=[];
-    await pg.evaluate(()=>__PE.analyseDrift([__PE.DRIFT_SCENES[0]]));
+    await pg.evaluate(()=>__PE.analyseDrift([__PE.DRIFT_SCENES.find(x=>x.id==="past")]));
     ok("Analyse sends it to Claude only, never back to the model", OR.calls.length===1&&/^anthropic\//.test(OR.calls[0].body.model)
        &&await pg.evaluate(()=>!!__PE.DR.results.past.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
@@ -467,8 +467,8 @@ const ROOT=path.resolve(__dirname,'..');
 
     console.log("\n[15 — the analyst prompts: shown, editable, used15]");
     const apx=await pg.evaluate(()=>{ const P=__PE;
-      const sc=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:true,payload:"PL",catalogue:"C"});
-      const sc2=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:false,payload:"PL",catalogue:"C"});
+      const sc=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:true,payload:"PL",catalogue:"C",applied:""});
+      const sc2=P.apFill(P.apText("scene"),{context:"CTX",title:"T",tests:"x",kind:"k",facts:"f",pass:"p",exchange:"E",quality:false,payload:"PL",catalogue:"C",applied:""});
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         q:/measures QUALITY/.test(sc)&&!/never moved/.test(sc),nq:/never moved/.test(sc2)&&!/measures QUALITY/.test(sc2),left:/\{\{[#^\/]/.test(sc)||/\{\{(title|exchange|payload)\}\}/.test(sc),
         keepsMarkers:/keep \{\{…\}\} and \[\[…\]\] markers intact/.test(sc)}; });
@@ -478,12 +478,30 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="scene"] textarea'); ta.value=ta.value.replace("You are judging an instruction-following test","PE-AP-EDIT You are judging an instruction-following test"); ta.dispatchEvent(new Event("input")); });
     await pg.waitForTimeout(700);
     OR.calls=[];
-    await pg.evaluate(async()=>{ const sc=__PE.DRIFT_SCENES[0]; __PE.DR.results[sc.id].judge=null; await __PE.analyseDrift([sc]); });
+    await pg.evaluate(async()=>{ const sc=__PE.DRIFT_SCENES.find(x=>x.id==="past"); __PE.DR.results[sc.id].judge=null; await __PE.analyseDrift([sc]); });
     const used15=OR.calls.find(c=>c.claude&&/instruction-following test/.test(c.body.messages[0].content));
     const ui15=await pg.evaluate(()=>{ __PE.renderAp(); const el=document.querySelector('#apList [data-ap="scene"]'); return {chip:/edited/.test(el.querySelector("h3").textContent),last:el.querySelector("pre").textContent}; });
-    ok("an edit is used15 by the next analysis, and the exact text sent is shown", !!used15&&/PE-AP-EDIT/.test(used15.body.messages[0].content)&&ui15.chip&&/PE-AP-EDIT/.test(ui15.last)&&/HOW TO FIX/.test(ui15.last), JSON.stringify({used15:!!used15,chip:ui15.chip}));
+    ok("an edit is used by the next analysis, and the exact text sent is shown", !!used15&&/PE-AP-EDIT/.test(used15.body.messages[0].content)&&ui15.chip&&/PE-AP-EDIT/.test(ui15.last)&&/HOW TO FIX/.test(ui15.last), JSON.stringify({used15:!!used15,chip:ui15.chip}));
     const rs15=await pg.evaluate(()=>{ document.querySelector('#apList [data-ap="scene"] [data-reset]').click(); return !/PE-AP-EDIT/.test(__PE.apText("scene")); });
     ok("Reset brings the shipped prompt back", rs15);
+
+    console.log("\n[16 — the order on screen, and edits applied since a test ran]");
+    const ord16=await pg.evaluate(()=>{ __PE.renderAp&&0; const dom=[...document.querySelectorAll("#driftList .scene")].map(e=>e.id.replace(/^dr_/,""));
+      return {arr:__PE.DRIFT_SCENES.map(x=>x.id),dom,first:__PE.DRIFT_SCENES[0].theme}; });
+    ok("scenes are played and analysed in the order the Tests tab numbers them", ord16.first==="Flirting"&&(ord16.dom.length===0||ord16.dom.join()===ord16.arr.join()), JSON.stringify({first:ord16.arr.slice(0,3),dom:ord16.dom.slice(0,3)}));
+    OR.calls=[];
+    const ap16=await pg.evaluate(async()=>{ const P=__PE, sc=P.DRIFT_SCENES.find(x=>x.id==="past"), r=P.DR.results[sc.id];
+      const it=P.findItem("frag:style_header"), v=P.itemVal(it), old=v.slice(0,40);
+      P.setVal(it,"PE-NEW-WORDING "+v.slice(40));
+      const k="frag:style_header\u0001"+old+"\u0001PE-NEW-WORDING ";
+      APPLIED[k]={at:0,t:Date.now(),item:"frag:style_header",find:old,replace:"PE-NEW-WORDING "}; lsSet("applied",APPLIED);
+      r.at=Date.now()-60000; r.judge=null; await P.analyseDrift([sc]);
+      const stale={item:"frag:style_header",kind:"rewrite",find:old,replace:"x",why:"w"};
+      return {state:editState(stale,it)}; });
+    const sin16=OR.calls.find(c=>c.claude&&/instruction-following test/.test(c.body.messages[0].content));
+    const st16=sin16?sin16.body.messages[0].content:"";
+    ok("the analyst is told which edits were applied after the test, and gets those items' current text", /CHANGES ALREADY APPLIED SINCE THIS TEST WAS RUN/.test(st16)&&/PE-NEW-WORDING/.test(st16)&&/ITEMS CHANGED SINCE THIS TEST RAN/.test(st16), st16.slice(-1500));
+    ok("an edit quoting words that were already changed says so, not 'Text not found'", ap16.state==="superseded", JSON.stringify(ap16));
 
     console.log("\n[13 — your story as the data: slimmed, kept in the browser, rewound per scene]");
     const sctx=await b.newContext({viewport:{width:1300,height:900}});

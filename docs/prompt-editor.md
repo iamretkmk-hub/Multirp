@@ -168,6 +168,26 @@ model refuses "reasoning off", and remembers that model (`sm_reasononly`).
 an Anthropic or Claude model is refused there before anything is sent, whatever started it. Such models
 are also left out of the model lists. Claude runs only through the Claude app.
 
+## What the analysts know about edits already made
+
+An analyst reads the payload exactly as it was when the scene was played. If you applied edits after
+that, the payload still shows the old wording, and an analyst used to quote words that were already gone
+(so Apply said "Text not found"). Now:
+
+- **The analyst is told.** Every applied edit is remembered with its item, the old words and the new ones
+  (`APPLIED`). The scene analyst, the engine analyst and the overseer are given the edits applied after
+  the test ran, as `{{applied}}` in their prompts. They are told not to propose them again, and to quote
+  only current text.
+- **It sees the current text.** The catalogue gives the full current text of every item changed since the
+  test (`fragCatalog(since)`).
+- **A stale edit says so.** An edit card whose words were already replaced by an applied edit shows
+  **Already changed** (`supersededBy`), not "Text not found". Run the scene again to have the new wording
+  judged.
+
+**Order.** The scenes are kept in the order the Tests tab shows and numbers them, grouped by theme
+(Flirting, After intimacy, Daily talk, Holding the line). They are played, analysed and listed in that
+order.
+
 ## Analyst prompts (what Claude is asked)
 
 The **Analyst prompts** tab shows every prompt the editor sends to Claude, and each can be edited

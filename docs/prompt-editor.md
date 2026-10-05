@@ -212,8 +212,9 @@ The **Analyst prompts** tab shows every prompt the editor sends to Claude. Each 
   every reply, how a model weighs a payload, and HOW TO FIX.
 - **Ask Claude** (`ask`).
 - **Test & review** (`review`).
-- **Payload-kind analyst** (`kind`): every roleplay scene of one payload kind (solo, several characters,
-  text or heat), with that kind's payload sent once. It scores the rubric and does not fix.
+- **1 · Scene judge** (`scene`): one roleplay scene on its own, with its dialogue and its payload. No fixes.
+- **2 · Payload-kind analyst** (`kind`): re-evaluates the scene reports of one kind (solo, several
+  characters, text or heat) with that kind's payload once. No fixes.
 - **Engine judge** (`engine`): one background engine in one engine scene. It does not fix either.
 - **The complete analysis** (`overseer`): every roleplay scene, then the fixes.
 - **The complete engine analysis** (`engfinal`): every engine scene, then the fixes to the engine prompts.
@@ -333,22 +334,26 @@ layout. Their scene stays in its own kind.
 1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
    model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
    lines × speakers.
-2. **One analyst per payload kind** (`kind`, `analyseKind`), up to *Analysts at once* in parallel. Each gets
-   **its kind's payload once** (the last payload of its first scene, built with that kind's layout). It
-   then gets every complete scene of the kind: id, purpose, ground truth, what good looks like, the
-   criteria it presses on, and the full exchange. Its one answer holds:
-   - for each scene, a verdict on every turn, rubric scores with a note and a quote, and findings with the
-     evidence and the suspected cause;
-   - for the kind, patterns across its scenes and notes on its payload's structure.
+2. **The analysis is hierarchical**, per payload kind (`analyseKind`), with up to *Analysts at once* kinds in
+   parallel:
+   - **Level 1: each scene on its own** (`scene`, `judgeScene`, two at a time within a kind). The judge
+     gets that scene's dialogue and the payload it was played through. For every turn it gives a verdict,
+     scores the rubric with a note and a quote, and lists findings with the evidence and the suspected
+     cause. Its **reasoning** is written for readers who will never see the dialogue. A scene already
+     judged is not judged again.
+   - **Level 2: the kind re-evaluates its scene reports** (`kind`). It gets every scene report of the kind
+     (`sceneReport`, no dialogues) and the kind's payload once. It checks each judge's cause against the
+     payload (confirmed, corrected or rejected), names the patterns and the strengths the fixes must keep,
+     reads the payload's structure, scores the kind and writes its reasoning.
 
-   **It proposes no edits.** Each scene's part becomes that scene's judgement, and the kind's part is kept
-   in `KA` (saved per browser, exported and imported with the results). Playing a scene on its own
-   analyses its kind afterwards.
+   **Neither level proposes edits.** The kind's report is kept in `KA` (saved per browser, exported and
+   imported with the results). Playing a scene on its own judges it and then re-evaluates its kind.
 3. **The fixer**, one complete analysis (`overseer`, `analyseTogether`). **It gets no dialogues.** For each
    kind it gets two things:
-   - **The kind's report** (`kindReport`): the analyst's **reasoning** (written for a fixer who will not see
-     the dialogues), the score, rubric, patterns and payload-structure notes, and each scene's score,
-     summary and findings with their quoted evidence and cause.
+   - **The kind's report** (`kindReport`): its reasoning, score, rubric, the judges' causes re-evaluated,
+     the patterns and the payload-structure notes. Under it come **every scene report** of the kind, each
+     with the judge's reasoning and its findings with quoted evidence. The fixer keeps every scenario in
+     mind, so a fix for one does not break another.
    - **The kind's full payload, once** (`payloadsText`), exactly as sent. The payloads share whatever the
      rest of the request leaves, and each keeps its head and its end.
 

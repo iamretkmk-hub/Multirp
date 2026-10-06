@@ -452,6 +452,28 @@ Each fixer gets every edit applied before to the pieces it can change, including
 (`historyFor`), and what the fixers before it proposed in this run (`earlierText`). It is told not to undo
 or repeat them, and to build on an earlier proposal when it touches the same piece.
 
+**Every cause is routed to where it comes from.** Only part of a reply payload is the fixed wording
+the editor can change. Much of it is content other engines generated (outfits, relationship readings,
+mood, presence, memories, plans, rumours, summaries, the gamemaster's beats). Some is the story's own
+data (a character's bio, personality, backstory). And some is decided by the app's code (what is
+selected, privacy, order, cut text, timing).
+- **The judges** give every finding a `source` (*wording*, *generated*, *story* or *code*) and its
+  `origin`. The section analyst checks that, too.
+- **The section fixers** turn only *wording* causes into edits. They are told never to paper over the
+  other kinds with more wording, and they report them in three lists:
+  - `generated`: naming the engine prompt that writes the block, from the app's list of engine prompts;
+  - `story`: whose card, which field, what to change;
+  - `backend`: the code change and why it would be effective.
+
+  Engine prompt fixers report `backend` too.
+- **The reconcilers** consolidate the lists and drop a wording edit that only compensates for one of
+  them.
+- **The complete analysis** shows them under **Outside the wording**:
+  - each generated-content problem has **Fix this engine prompt**, which sends it to that prompt
+    (`genfix`) even if no engine scene ran it. Its edits come back with **Apply selected**.
+  - **Download the backend and story list** saves them as one Markdown file (`backendMarkdown`) to hand
+    over for the code changes.
+
 **Suggestions per section, one change at the end.** Section fixers and engine-prompt fixers only
 **suggest** edits. Their suggestions are listed read-only in the section (or under "Each engine prompt's
 fixer"), and nothing is applied from them. After all the analysis, the final run (the reconciler) checks

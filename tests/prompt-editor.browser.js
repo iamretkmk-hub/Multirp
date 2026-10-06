@@ -378,11 +378,15 @@ const ROOT=path.resolve(__dirname,'..');
     OR.calls=[];
     const soloTpl=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("tpl:solo")));
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]), first=String(((body.messages||[])[0]||{}).content||"");
-      if(/You are the FIXER for ONE test section/.test(first)) return JSON.stringify({summary:"PE-SEC-SUMMARY",keep:["PE-SEC-KEEP"],edits:[{item:"frag:style_header",kind:"rewrite",find:"PE-REVIEWED",replace:"PE-SEC-FIX",why:"w",shared:"everywhere",helps:["turkish"]}]});
+      if(/You are the FIXER for ONE test section/.test(first)) return JSON.stringify({summary:"PE-SEC-SUMMARY",keep:["PE-SEC-KEEP"],edits:[{item:"frag:style_header",kind:"rewrite",find:"PE-REVIEWED",replace:"PE-SEC-FIX",why:"w",shared:"everywhere",helps:["turkish"]}],
+        generated:[{block:"outfit",prompt:"PE-GEN-KEY",problem:"PE-GEN-COAT a coat on the beach",evidence:"palto",fix:"dress for the place"}],story:[{who:"Buket",field:"bio",problem:"PE-STORY-BIO",change:"c"}],backend:[{area:"privacy",problem:"PE-BACK-PRIV",change:"filter it",impact:"i"}]});
+      if(/The roleplay tests found a problem in content that an ENGINE wrote/.test(first)){ const c=first, at=c.indexOf("===== THE PROMPT (current text) ====="), f=at<0?"":(c.slice(at).split("\n").slice(1).find(l=>l.trim().length>=30)||"").trim().slice(0,40);
+        return JSON.stringify({summary:"PE-GENFIX",edits:[{kind:"rewrite",find:f,replace:f+" PE-GEN-FIXED",why:"w"}],backend:[{area:"input",problem:"PE-GEN-BACK",change:"c"}]}); }
       if(/COMPLETE ANALYSIS of a test run/.test(first)) return JSON.stringify({score:6,summary:"s",criteria:{memory:4},patterns:[{criterion:"memory",pattern:"the past is buried",scenes:["Loyal to what happened"],cause:"x"}],
         structure:["The trackers sit far from the reply"],
         edits:[{item:"tpl:solo",kind:"move",find:"{{call//trackers//full}}",before:"{{call//drives//full}}",cause:"buried",why:"nearer the reply",helps:["self"],risks:"none"},
-               {item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-REVIEWED",replace:"PE-ALL-FIX",why:"w",helps:["turkish","meaning"],risks:"none"}]});
+               {item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-REVIEWED",replace:"PE-ALL-FIX",why:"w",helps:["turkish","meaning"],risks:"none"}],
+        generated:[{prompt:"GENKEY",block:"outfit",problem:"PE-GEN-COAT a coat on the beach",evidence:"palto",fix:"dress for the place",sections:["Text messages"]}],story:[{who:"Buket",field:"bio",problem:"PE-STORY-BIO",change:"c"}],backend:[{area:"privacy",problem:"PE-BACK-PRIV",change:"filter it",impact:"i",priority:"high"}]});
       if(SCENE_RX.test(first)) return SCENE(first);
       if(KIND_RX.test(first)) return KIND(first);
       const sys=String(((body.messages||[])[0]||{}).content||""); return /JSON/i.test(sys)?"{}":'"Tamam." *Gülümsüyor.*'; };
@@ -411,6 +415,8 @@ const ROOT=path.resolve(__dirname,'..');
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
     const fxLater=fx11[fx11.length-1]||"", fxFirst=fx11[0]||"";
     ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 frag:style_header/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*frag:style_header/.test(fxLater), fxLater.slice(0,200));
+    ok("the judges label where each problem comes from (wording, generated, story, code), and the section fixer sorts causes and knows the engine prompts", /WHERE A PROBLEM COMES FROM/.test(sc11[0]||"")&&/"source":"wording\|generated\|story\|code"/.test(sc11[0]||"")&&/SORT EVERY CAUSE BY WHERE IT COMES FROM/.test(fxLater)&&/THE APP'S ENGINE PROMPTS/.test(fxLater)&&/memBuild — /.test(fxLater), (sc11[0]||"").slice(0,100));
+    ok("the reconciler reads each section's generated, story and backend findings", /GENERATED CONTENT \(another engine's prompt\):\n- PE-GEN-KEY/.test(ft)&&/STORY DATA:\n- Buket · bio: PE-STORY-BIO/.test(ft)&&/BACKEND \(code\):\n- \[privacy\] PE-BACK-PRIV/.test(ft), ft.slice(ft.indexOf("EVERY SECTION'S PROPOSALS"),ft.indexOf("EVERY SECTION'S PROPOSALS")+600));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
     const secApply=await pg.evaluate(()=>!!document.querySelector("#kind_text .chg"));
     ok("each section lists its fixer's suggestions, with nothing to apply there", /This section's fixer suggested 1 edit: PE-SEC-SUMMARY/.test(sec11)&&/S:text#1/.test(sec11)&&!secApply, sec11.slice(0,300));
@@ -421,6 +427,18 @@ const ROOT=path.resolve(__dirname,'..');
     const sel11=await pg.evaluate(()=>{ const box=document.querySelector("#overallBox"), bar=box.querySelector("[data-sapply]"), picks=box.querySelectorAll("[data-pick]");
       return {bar:!!bar,label:bar&&bar.textContent,picks:picks.length,checked:[...picks].every(x=>x.checked),title:/The complete change \(2 edits\)/.test(box.textContent)}; });
     ok("the final run proposes one complete change: every edit with a checkbox, and Apply selected", sel11.bar&&sel11.picks===2&&sel11.checked&&sel11.title&&/Apply selected \(\d\)/.test(sel11.label), JSON.stringify(sel11));
+    const out11=await pg.evaluate(async()=>{ const P=__PE, box=document.querySelector('#overallBox [data-outside="rp"]'); const txt=box?box.textContent:"";
+      const g=P.ALL.overall.generated[0]; const key=P.ITEMS().find(x=>x.type==="prompt"&&x.key!=="baseInstruction"&&x.key!=="formatRules"&&P.itemVal(x).length>200).key; g.prompt=key;
+      renderOverall(); const b=document.querySelector('#overallBox [data-outside="rp"] [data-genfix]'); b.click();
+      for(let i=0;i<50&&!(g.fixer);i++) await new Promise(r=>setTimeout(r,100)); await new Promise(r=>setTimeout(r,200));
+      const row=document.querySelector('#overallBox [data-outside="rp"] [data-gen="0"]'); const ap=row&&row.querySelector('[data-a="apply"]');
+      const md=P.backendMarkdown();
+      return {txt:/Content another engine generated/.test(txt)&&/PE-GEN-COAT/.test(txt)&&/Story data to change/.test(txt)&&/PE-STORY-BIO/.test(txt)&&/Backend changes/.test(txt)&&/PE-BACK-PRIV/.test(txt)&&/Download the backend and story list/.test(txt),
+        fixed:!!(g.fixer&&g.fixer.edits.length&&/PE-GEN-FIXED/.test(g.fixer.edits[0].replace)),key,applyReady:!!ap&&!ap.disabled,md:/PE-BACK-PRIV/.test(md)&&/PE-GEN-BACK/.test(md)&&/Story data to change/.test(md)&&/PE-STORY-BIO/.test(md)}; });
+    const gcall=OR.calls.find(c=>c.claude&&/The roleplay tests found a problem in content that an ENGINE wrote/.test(c.body.messages[0].content)), gct=gcall?gcall.body.messages[0].content:"";
+    ok("outside the wording: generated content (by engine prompt), story data and backend changes are listed under the analysis", out11.txt, JSON.stringify(out11));
+    ok("a generated-content problem is sent to the engine prompt that wrote it, and its edits can be applied there", out11.fixed&&out11.applyReady&&/PE-GEN-COAT/.test(gct)&&new RegExp('prompt is "'+out11.key+'"').test(gct), JSON.stringify(out11));
+    ok("the backend and story list downloads as one file, with the engine fixer's backend notes too", out11.md, JSON.stringify(out11));
     ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
     const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
       b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
@@ -431,7 +449,7 @@ const ROOT=path.resolve(__dirname,'..');
     const as11=await pg.evaluate(()=>{ const box=document.querySelector("#overallBox"), cards=[...box.querySelectorAll(".chg")];
       const mv=cards.find(c=>/Moves/.test(c.textContent)), rw=cards.find(c=>/PE-ALL-FIX/.test(c.textContent));
       mv.querySelector("[data-pick]").checked=false; rw.querySelector("[data-pick]").checked=true; mv.querySelector("[data-pick]").dispatchEvent(new Event("change"));
-      const before=__PE.itemVal(__PE.findItem("tpl:solo")); box.querySelector("[data-sapply]").click();
+      const before=__PE.itemVal(__PE.findItem("tpl:solo")); [...box.querySelectorAll("[data-sapply]")].pop().click();
       const r={fix:/PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),moveUntouched:__PE.itemVal(__PE.findItem("tpl:solo"))===before};
       const u=rw.querySelector('[data-a="undo"]'); if(u&&!u.hidden) u.click(); return r; });
     ok("Apply selected applies the ticked edits only", as11.fix&&as11.moveUntouched, JSON.stringify(as11));
@@ -679,7 +697,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,editrepair,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,genfix,editrepair,discuss,compare,standin", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

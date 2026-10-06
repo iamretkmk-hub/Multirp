@@ -16,11 +16,13 @@ A separate page, next to `index.html`, for rewriting StoryMind's prompts away fr
 
 Edits are kept in the browser as a draft until another file is opened.
 
-**The starting prompts.** `prompt-editor-start.json`, beside the page, is the latest prompt export (a
-plain `kind:"prompts"` file). It opens automatically when there is no draft, or when it is newer than the
-file the draft came from. A draft that has edits is never replaced silently: the page offers the newer
-file and says to download the edits first. **⋯ › Open the bundled latest prompts** opens it at any time.
-To update it, replace the file with a newer export.
+**No bundled prompts.** The editor starts from your draft in this browser, or, on a first visit, from
+the shipped defaults until you open a file. Nothing is opened over your draft. A bundled
+`prompt-editor-start.json` used to be opened at start whenever the draft came from another file. That
+silently put people back on an older export when they had no edits, and offered the old file as "newer"
+when they had. It was removed; the file now lives in `tests/fixtures/latest-prompts.json` for the tests
+that need it. The draft is written as soon as you edit and again when the page is hidden or closed, and
+opening a file writes it at once.
 
 ## The full payload is the app's own
 
@@ -48,8 +50,9 @@ universe export (`slimWorld`). It prefers the universe that has Buket in it, and
 no embeddings, no book, the universe's own prompt overrides cleared, and the last 40 messages kept.
 The slimmed copy, about half a megabyte for the Isdemir backup, is kept in the browser (IndexedDB
 `pe-story`) and loads at every start. **Forget it** in the same dialog drops it. Nothing is uploaded.
-A `prompt-editor-world.json` beside the page is used when the browser holds none. The private copy
-of the editor inside Claude ships one; the public site does not, because the repository is public.
+No story is bundled: without one in this browser the editor uses the sample. (A bundled
+`prompt-editor-world.json`, an older backup, used to stand in and has been removed.) Load your backup
+again with **Use my own story…** whenever you want newer data.
 
 - **The scenes' names.** Buket, Sami, Berker and Özlem, Buket's home (`l_sami`, with `s_liv`, `s_kit`,
   `s_bed`, `s_door`), the player's home (`l_emre`, with `s_eliv`, `s_ebed`, `s_egate`…) and the plant

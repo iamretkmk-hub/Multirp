@@ -9,7 +9,7 @@
      6  a reset prompt is written out in full (the app's import keeps any key a file leaves out)
      7  Test & review: the reviewer's edit is applied by find/replace to the right item
      8  served as Claude serves it (editor = index.html, StoryMind = storymind.html), the engine starts
-     0  prompt-editor-start.json (the latest prompts) opens on first load; a draft with edits is kept
+     0  no prompts file is bundled: the editor starts from the draft or the defaults, and an opened file survives a reload
    Run: node tests/prompt-editor.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const http=require('http'), fs=require('fs'), path=require('path');
@@ -19,7 +19,7 @@ const ROOT=path.resolve(__dirname,'..');
   /* the editor fetches index.html beside it, so it is served over http, not file:// */
   /* /art/… is the layout Claude serves the editor with: the editor IS index.html there, and StoryMind
      sits beside it as storymind.html. */
-  const ART={"index.html":"prompt-editor.html","storymind.html":"index.html","prompt-editor-start.json":"prompt-editor-start.json"};
+  const ART={"index.html":"prompt-editor.html","storymind.html":"index.html"};
   const srv=http.createServer((q,r)=>{
     let rel=decodeURIComponent(q.url.split('?')[0]).replace(/^\/+/,'');
     if(rel.startsWith('art/')){ rel=ART[rel.slice(4)]||'__none__'; }
@@ -32,6 +32,7 @@ const ROOT=path.resolve(__dirname,'..');
   const b=await chromium.launch({executablePath:BIN});
   const ctx=await b.newContext({viewport:{width:1300,height:900}});
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/,r=>r.abort());
+  const bundledAsks=[]; await ctx.route(/prompt-editor-(start|world)\.json/,r=>{ bundledAsks.push(r.request().url()); r.fulfill({status:404,body:""}); });
   /* OpenRouter, stood in for: the model list the editor reads at start, and a chat endpoint whose
      answer each section sets. Every chat request is recorded with its headers and body. */
   const OR={calls:[],answer:()=>'"Tamam."'};
@@ -83,12 +84,19 @@ const ROOT=path.resolve(__dirname,'..');
     ok("without the Claude app there is no analyst at all (OpenRouter never analyses)", noClaude==="no_claude", noClaude);
     await installClaude(pg);
 
-    console.log("\n[0 — the bundled latest prompts open on first load]");
-    const start=JSON.parse(fs.readFileSync(path.join(ROOT,'prompt-editor-start.json'),'utf8'));
+    console.log("\n[0 — no bundled prompts or story: the editor starts from your draft, and your file stays after a reload]");
+    const start=JSON.parse(fs.readFileSync(path.join(ROOT,'tests','fixtures','latest-prompts.json'),'utf8'));
+    const fresh=await pg.evaluate(()=>({file:__PE.S.fileName,orig:!!__PE.S.orig,story:!!(__PE.STORY.w)}));
+    ok("a first visit opens no bundled file: the shipped defaults, no story", fresh.file===""&&!fresh.orig&&!fresh.story&&bundledAsks.length===0, JSON.stringify({fresh,bundledAsks}));
+    /* the author opens an export (the latest one, here), as with ⋯ › Open */
+    await pg.evaluate(s=>{ __PE.openPack(JSON.parse(s),"My export"); },JSON.stringify(start));
+    await pg.reload();
+    await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
+    await installClaude(pg);
     const s0=await pg.evaluate(async()=>{ const S=__PE.S; const p=await __PE.engCall('build',{kind:'solo'});
       return {file:S.fileName,date:S.orig&&S.orig.date,solo:__PE.itemVal(__PE.findItem("tpl:solo")),unk:p.unknownCalls,unkV:p.unknownVars,
-        edited:__PE.ITEMS().filter(it=>__PE.itemStatus(it).edited).length}; });
-    ok("prompt-editor-start.json is the opened file", /^Latest prompts/.test(s0.file)&&s0.date===start.date, JSON.stringify({file:s0.file,date:s0.date}));
+        edited:__PE.ITEMS().filter(it=>__PE.itemStatus(it).edited).length,modal:(document.querySelector("#modalHost")||{}).textContent||""}; });
+    ok("after a reload the opened file is still the one in the editor, with no prompt to switch back", s0.file==="My export"&&s0.date===start.date&&!/bundled/i.test(s0.modal)&&bundledAsks.length===0, JSON.stringify({file:s0.file,date:s0.date,asks:bundledAsks}));
     ok("its solo layout is the one in the editor", s0.solo===JSON.parse(start.settings.payloadTemplates).solo);
     ok("and it builds with every name known", s0.unk.length===0&&s0.unkV.length===0, JSON.stringify(s0));
     ok("nothing counts as edited", s0.edited===0, s0.edited);
@@ -108,19 +116,16 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the This turn switches bring in arrival, video, voice and after heat",
        ["situation","watching_now","spoken_delivery","after_heat"].every(b=>!rich.on.some(e=>e.split("//")[0]===b)), rich.on.join(" "));
 
-    /* a draft with an edit, from an older file: reloading must not throw the edit away silently */
-    await pg.evaluate(()=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); __PE.S.orig.date=1; });
-    await pg.waitForTimeout(800);
-    await pg.reload();
+    /* a draft with an edit: a reload keeps it, with no file put over it and nothing to choose */
+    await pg.evaluate(()=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); });
+    await pg.reload();                                                   // straight away: the draft is written as the page goes
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
-    await installClaude(pg);
-    await pg.waitForSelector(".modal",{timeout:10000});
-    const kept=await pg.evaluate(()=>({modal:document.querySelector(".modal header").textContent,
-      draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header")))}));
-    ok("a draft with edits is kept, and the newer file is offered", /Newer prompts/.test(kept.modal)&&kept.draft, JSON.stringify(kept));
-    await pg.click(".modal footer .btn.pri");
-    await pg.waitForTimeout(600);
-    ok("choosing it opens the latest prompts", await pg.evaluate(d=>__PE.S.orig.date===d&&!/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),start.date));
+    await installClaude(pg); await pg.waitForTimeout(500);
+    const kept=await pg.evaluate(()=>({modal:!!document.querySelector(".modal"),file:__PE.S.fileName,draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header")))}));
+    ok("a draft with edits is kept on reload, even when the page closes at once, and no other file is offered", !kept.modal&&kept.file==="My export"&&kept.draft&&bundledAsks.length===0, JSON.stringify(kept));
+    /* back to the file as opened, for the steps below */
+    await pg.evaluate(s=>{ __PE.openPack(JSON.parse(s),"My export"); },JSON.stringify(start));
+    ok("opening a file again replaces the draft with that file", await pg.evaluate(d=>__PE.S.orig.date===d&&!/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),start.date));
 
     console.log("\n[1 — the engine runs and builds every reply kind]");
     const kinds=await pg.evaluate(async()=>{ const o={}; for(const k of __PE.S.meta.kinds){ try{ const p=await __PE.engCall('build',{kind:k});
@@ -795,7 +800,7 @@ const ROOT=path.resolve(__dirname,'..');
     const a=await art.evaluate(()=>({chip:document.querySelector("#engTxt").textContent,n:window.__PE&&window.__PE.S.preview&&window.__PE.S.preview.messages&&window.__PE.S.preview.messages.length,
       file:window.__PE&&window.__PE.S.fileName}));
     ok("the engine starts from storymind.html, not from the editor itself", booted&&/v\d/.test(a.chip)&&a.n>2, JSON.stringify(a));
-    ok("and the bundled latest prompts are open", /^Latest prompts/.test(a.file||""), a.file);
+    ok("and no bundled prompts file was opened", (a.file||"")===""&&bundledAsks.filter(u=>/\/art\//.test(u)).length===0, a.file);
     ok("the editor's own source is never taken for StoryMind", await art.evaluate(async()=>{ const t=await (await fetch("index.html")).text(); return !isAppSource(t); }));
     errs.push(...artErrs);
     await actx.close();

@@ -37,7 +37,7 @@ const {chromium}=require('playwright');
   });
   ok("a paragraph that is an earlier turn again is dropped, the new part is kept", rp.copied===rp.own&&/Bunu bir daha/.test(rp.copied), JSON.stringify(rp.copied));
   ok("also with the speaker's name in front of the copy", rp.labelled===rp.own, JSON.stringify(rp.labelled));
-  ok("a reply that is nothing but a copy comes back empty (the Retry notice)", rp.allCopy.trim()==="", JSON.stringify(rp.allCopy));
+  ok("a reply that is nothing but a copy is posted as the model gave it (v148.7)", rp.allCopy.trim()==="Sami masaya döndü, bardağını aldı ve kimseye bakmadan bir yudum içti. Sonra Emre'ye döndü.", JSON.stringify(rp.allCopy));
   ok("a reply that copies nothing is untouched", rp.own==="*Buket kaşlarını kaldırdı.* \"Bunu bir daha söyleme.\"", rp.own);
   ok("a reply cut by the token limit ends at its last finished sentence", rp.cut==="*Buket gülümsedi ve kapıyı biraz daha açtı.* \"Olur, gir bakalım.\"", rp.cut);
   ok("a reply that ends on a quote or a beat is left whole", rp.whole==="*Buket gülümsedi.* \"Olur, gel.\""&&rp.beat==="\"Olur.\" *kapıyı kapattı*", JSON.stringify([rp.whole,rp.beat]));

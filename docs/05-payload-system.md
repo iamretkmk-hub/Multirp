@@ -70,7 +70,7 @@ an empty block renders nothing.
 | `task` | Core directive + the editable **Global Base Instruction**. Universal. |
 | `world` | The universe's `setting` text. Universal. |
 | `format` | Formatting contract (`*narration*`, `_thoughts_`, `"dialogue"`) **+ the player's story language**. Swapped for the text/heat format in those payloads. |
-| `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, the **maintained** goals & ambitions list, the live `<pursuit_status>`, appearance, wardrobe, where they live. See "v30.3 — one maintained want-list" below. |
+| `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, the **maintained** goals & ambitions list, appearance, wardrobe, where they live. See "v30.3 — one maintained want-list" below. |
 | `relationships` | Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. **(!)** Full prose only for the player and whoever is actually present; everyone else collapses to a `Name — tie` list under `rel_elsewhere`. The block keeps *every* tie on purpose (you don't forget your daughter because she isn't in the room) — but a live two-person scene was spending ~1,300 tokens on nine people, ~700 of it paragraphs about seven who could not be spoken to. The tie is what stops a bond being played as a stranger and it survives; the paragraph only earns its place for someone in front of you. A tie-less entry falls back to a trimmed clause of its prose. |
 | `scenario` | The character's scenario, when set. |
 | `others_present` | Who else is within earshot + the "only these people exist" footer. |
@@ -105,16 +105,24 @@ an empty block renders nothing.
 pursuit and its progress log on every turn, `<goals_ambitions>` was frozen at character creation,
 and `<what_you_quietly_want>` carried the live intent aim. Nothing removed anything.
 
-Now: **one `<goals_and_ambitions>`**, rewritten at day's end by the goals curator (doc 08), plus a
-compact **`<pursuit_status>`** holding only the code-tracked half of a live pursuit (have you asked
-yet, is it still hanging, what moved last) — that part is fact, not opinion, and it is what stops a
-character asking the same thing four times.
+Now: **one `<goals_and_ambitions>`**, rewritten at day's end by the goals curator (doc 08).
+
+**v150.25 — the pursuit status is not in any reply payload.** The code-tracked half of a live
+pursuit or agreed task (asked yet, still hanging, what moved last, what just resolved) used to ride
+in `your_bio` as `<pursuit_status>`. It is now handed only to the background engines that decide
+what a character does or wants, as a third-person `PURSUIT STATUS` block (`pursuitStatusBlock`):
+the Gamemaster (judge + author, the present cast), the Scene Writer (the event's character + the
+room), and the living universe — `worldRound`, `offstageEvent`, `calExec`, `goalPursuit`,
+`intentForm`, `intentTick` — each as its own `pursuits` engine part. Any engine template can also
+call `{{call//pursuits}}` (the present cast). What reaches a reply is the *decision* those engines
+make (an overture's intent, a plan, an event beat), never the ledger. The `pending_ask` rail flag,
+which read the same ledger to switch on "circle it once", went with it: that rail now fires only on
+`stalled`, and a customized box that still tests `pending_ask` reads an unknown flag, which is false.
 
 - Source: `persona.goalsLive = {lines[], day, at, changed}`; `liveGoalsLines/liveGoalsText` read it.
 - **`persona.goals` is never written to.** It is the foundation the curator is handed and told not to
   contradict. No `goalsLive` (curator off, never run, reset by the author) ⇒ the old three-block
-  shape renders exactly as before, `<what_you_quietly_want>` included, and `<pursuit_status>` carries
-  the full pursuit description instead of just its state.
+  shape renders exactly as before, `<what_you_quietly_want>` included.
 - Everything is **self only** — nobody else's view of this character carries it.
 - Engines read `engineGoals(p, cap)`, not `persona.goals`: maintained list when there is one, else
   the authored field. Consumers: `castGoalsSheet`, the GM's offstage roster, `_pulseSheet`,
@@ -196,7 +204,7 @@ generation is what produces careful, rule-reciting output.
 
 | Rail | Fires when |
 |---|---|
-| `rail_oblique_once` (split out of `rail_oblique`) | the exchange has stalled on the same ask, or this character carries a pursuit they have already put to someone. Without one of those there is no loop to break out of. |
+| `rail_oblique_once` (split out of `rail_oblique`) | the exchange has stalled on the same ask (`stalled`). Without that there is no loop to break out of. (v150.26 — no longer also on `pending_ask`; the pursuit ledger is not read by replies.) |
 | `rail_noecho` | somebody else actually spoke last. On a turn that continues the character's own line there is nothing of the player's to echo. |
 | `rail_single_solo` | never, by default — RESPONSE GUIDANCE opens with the same sentence one block earlier. Still available in the payload editor. |
 
@@ -478,7 +486,7 @@ Two to five lines…
   names, so `{{call//rail_noecho}}` still resolves — nothing that referenced a rail broke.
 - `{{if flag}}`, `{{if flag = value}}`, `{{if not flag}}`, `and`/`or`, `{{else}}`, `{{endif}}` —
   nesting allowed. Flags come from the producer (`B._railFlags`): `render_mode`
-  (solo/multi/gm/text/heat), `language`, `stalled`, `pending_ask`, `continuing`. Names and values
+  (solo/multi/gm/text/heat), `language`, `stalled`, `continuing`, `voicing`. Names and values
   are compared lower-cased. An **unbalanced** `{{if}}` drops the markers and KEEPS the text — a
   typo loses a condition, never a rule.
 - `{{comment}} … {{endcomment}}` is a note to yourself. It never ships.

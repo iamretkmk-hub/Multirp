@@ -857,7 +857,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         patch.afterHeatBy=Object.assign({},p.afterHeatBy||{},ah); }
       Object.assign(p,patch); });
   }
-  async function build(o){
+  async function _build(o){
     o=o||{};
     restoreBase();
     var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo";
@@ -935,7 +935,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       unknownCalls:REP.unknown_calls||[],unknownVars:REP.unknown_values||[],hasHistory:true,
       fired:REP.fired||[],asked:REP.asked||[],fellBack:REP.fellBack||"",list:REP.list||""};
   }
-  function buildEngine(o){
+  function _buildEngine(o){
     restoreBase();
     var key=o.key,d=ENGINE_PARTS[key];if(!d)throw new Error("Unknown engine "+key);
     var chat=curChat();var cast=state.personas.filter(function(p){return chat&&p.universeId===chat.universeId&&!p.removed;});
@@ -1014,7 +1014,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     window.up=function(k,uid){LIVE.ups.push(k);if(LIVE.ups.length>40)LIVE.ups.shift();return LIVE.origUp(k,uid);};
     window.uiConfirm=async function(){return true;};
     window.uiChoose=async function(msg,opts){return opts&&opts[0]?opts[0].value:null;};
-    if(o.scene){ var ch=curChat(); if(ch){ if(o.scene.chat)Object.assign(ch,J(o.scene.chat)); rewind(ch,o.scene.asOf); if(o.scene.opener)ch.messages=[]; if(o.scene.opener)ch.messages.push({mid:"lv0",role:"assistant",speaker:"Narrator",narratorEvent:true,present:(ch.presentIds||[]).slice(),content:o.scene.opener}); applySetup(ch,o.scene.setup); } }
+    if(o.scene){ var ch=curChat(); if(ch){ if(o.scene.chat)Object.assign(ch,J(o.scene.chat));
+      /* the base story's engine cursors index ITS transcript: a memDoneIdx past the end opened every arc past the
+         scene's lines (no memory all day), a stale gmLastCheck/activeEvent/dnd kept the gamemaster quiet */
+      Object.assign(ch,{memEvent:null,memDoneIdx:-1,gmLastCheck:0,_presenceSeenMid:null,_presenceLastRun:0,activeEvent:null,dnd:false,expected:[],tempChars:[],subSelf:false}); rewind(ch,o.scene.asOf); if(o.scene.opener)ch.messages=[]; if(o.scene.opener)ch.messages.push({mid:"lv0",role:"assistant",speaker:"Narrator",narratorEvent:true,present:(ch.presentIds||[]).slice(),content:o.scene.opener}); applySetup(ch,o.scene.setup); } }
     if(o.key)state.key=String(o.key); else if(!state.key)state.key="pe-claude";
     if(o.nanoKey!=null)state.nanoKey=String(o.nanoKey);
     /* the provider for the roleplay replies, and (provEngines) for every background engine too */
@@ -1067,6 +1070,13 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
      (no roleplay model answers), then StoryMind's own after-turn engines run on it (postTurn): plans,
      promises, relationships, trackers, the gamemaster, memory. So an engine is judged on a conversation
      whose every word is known. */
+  /* A preview build during a live run used to swap the live scene for the base story (restoreBase), so the
+     run's next lines went into an unrelated chat and its engines read the wrong scene. The live state is
+     kept across a build and put back after it. */
+  function liveKeep(){ return LIVE?{chats:state.chats,memory:state.memory,personas:state.personas,universes:state.universes,gossip:state.gossip,curChat:state.curChat,curUniverse:state.curUniverse}:null; }
+  function liveRestore(k){ if(k)Object.keys(k).forEach(function(x){ state[x]=k[x]; }); }
+  async function build(o){ var k=liveKeep(); try{ return await _build(o); } finally{ liveRestore(k); } }
+  function buildEngine(o){ var k=liveKeep(); try{ return _buildEngine(o); } finally{ liveRestore(k); } }
   async function liveScript(o){
     if(!LIVE)throw new Error("No live run.");
     var chat=curChat(), from=LIVE.calls.length, n=chat.messages.length, here=(chat.presentIds||[]).slice();
@@ -1075,6 +1085,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     (o.replies||[]).forEach(function(r,i){ var p=state.personas.find(function(x){return x.id===r.who;});
       chat.messages.push({mid:"ls"+n+"r"+i,role:"assistant",speaker:p?p.name:r.who,speakerId:r.who,toId:"__user__",content:String(r.text),present:here}); });
     try{ markChatDirty&&markChatDirty(chat); }catch(e){}
+    /* as the app's own turn paths do: who came and went, then the memory arc, then the post-turn engines */
+    try{ await runPresenceTracker(chat); }catch(e){}
+    try{ maybeBuildMemory(chat); }catch(e){}
     try{ await postTurn(chat); }catch(e){}
     await settle(o.maxMs||240000);
     return {calls:LIVE.calls.length-from};
@@ -1592,6 +1605,7 @@ $("#btnRebuild").onclick=refreshPreview;
 $("#plFind").addEventListener("input",()=>renderPreview());
 async function refreshPreview(){
   if(!ENG.ready||!S.world) return;
+  if(ENGRUN.running) return;   // a live engine run owns the engine until it ends
   clearTimeout(refreshPreview._t);
   refreshPreview._t=setTimeout(async()=>{
     const v=$("#plKind").value||"solo";
@@ -3357,7 +3371,8 @@ function engLoad(id){ const r=ENGRUN.byScene[id]||{}; ENGRUN.cur=id; ENGRUN.call
 function engSave(){ if(!ENGRUN.cur) return; const prev=ENGRUN.byScene[ENGRUN.cur], same=prev&&prev.calls===ENGRUN.calls;
   ENGRUN.byScene[ENGRUN.cur]=Object.assign({calls:ENGRUN.calls,judge:ENGRUN.judge,model:ENGRUN.model,focus:ENGRUN.focus,lines:ENGRUN.lines,at:same&&prev.at?prev.at:Date.now()},same&&prev.report?{report:prev.report}:{});
   if(!lsSet("engbyscene",ENGRUN.byScene)){ /* storage full: keep the newest scene only */ const k=ENGRUN.cur; lsSet("engbyscene",{[k]:ENGRUN.byScene[k]}); } }
-function engScript(){ const t=lsGet("engscript",""); return (t&&t.trim())?t:engLinesText(engPreset().lines); }
+/* the box text belongs to one scene (engscriptFor): another scene shown in the box gets its own lines */
+function engScript(){ const t=lsGet("engscript",""); return (t&&t.trim()&&lsGet("engscriptFor","")===engPreset().id)?t:engLinesText(engPreset().lines); }
 function engGroupKey(c){ return (c.prompts&&c.prompts[0])||("dbg:"+String(c.dbg||"(unlabelled)").replace(/\s*\(.*$/,"").trim()); }
 function engGroupsOf(calls){
   const g={};
@@ -3434,9 +3449,10 @@ async function runEngines(presetId,inAll){
   const pid=presetId||engPreset().id, preset=ENGINE_SCENES.find(x=>x.id===pid)||engPreset();
   /* the lines in the editor box belong to the scene being shown; any other scene plays its own */
   const lines=pid===engPreset().id?parseEngScript($("#engScript").value||engScript()):preset.lines;
-  if(pid===engPreset().id) lsSet("engscript",$("#engScript").value);
+  if(pid===engPreset().id){ lsSet("engscript",$("#engScript").value); lsSet("engscriptFor",pid); }
   await useTestWorld();
   lsSet("engpreset",pid); $("#engPreset").value=pid; engLoad(pid);
+  $("#engScript").value=engLinesText(lines);   // the box shows the lines this run plays
   ENGRUN.running=true; ENGRUN.ctl=ALL.ctl||new AbortController(); ENGRUN.calls=[]; ENGRUN.judge={}; ENGRUN.model=testLabel();
   ENGRUN.focus=preset.focus; ENGRUN.lines=engLinesText(lines).split("\n"); renderEng();
   const mode=testMode();

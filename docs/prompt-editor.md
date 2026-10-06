@@ -339,8 +339,7 @@ several-character scenes are still answered through the gamemaster layout.
 1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
    model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
    lines × speakers.
-2. **The analysis is hierarchical**, per section (`analyseKind`), with up to *Analysts at once* kinds in
-   parallel:
+2. **The analysis is hierarchical**, per section (`analyseKind`), one section at a time:
    - **Level 1: each scene on its own** (`scene`, `judgeScene`, two at a time within a kind). The judge
      gets that scene's dialogue and the payload it was played through. For every turn it gives a verdict,
      scores the rubric with a note and a quote, and lists findings with the evidence and the suspected
@@ -433,6 +432,22 @@ complete analysis starts a new conversation; **Clear the conversation** starts o
 - **Compact answers.** The judges are asked for one-line notes, at most six findings and short reasoning.
 - **No transcript twice.** Judges and fixers get the payload without the transcript (`instrText`), since
   the dialogue is given separately.
+
+**What "Text not found" means.** An edit replaces exact words in one piece. "Text not found" means those
+words are not in that piece as it reads now: Claude copied them from the filled payload (with the names,
+memories or numbers the app put in), from a different piece, or with different spacing. Every edit is
+now checked when it arrives (`locateEdit`, `repairEdits`):
+- spacing, line breaks and quote marks are matched loosely to the piece's exact words;
+- words that sit in exactly one other piece re-target the edit there;
+- what is still missing is shown to Claude with the piece's current text, to copy again (`editrepair`).
+
+A card that is still missing says why, with a **Fix this edit** button that runs the repair for that edit.
+A repaired card says how it was repaired.
+
+**Each fixer knows what was changed before it.** Sections, and the engine prompts' fixers, run one by one.
+Each fixer gets every edit applied before to the pieces it can change, including those from earlier runs
+(`historyFor`), and what the fixers before it proposed in this run (`earlierText`). It is told not to undo
+or repeat them, and to build on an earlier proposal when it touches the same piece.
 
 **The fixer runs right after its section's analysis.** When a section has been analysed (scenes judged
 one by one, then re-evaluated), its fixer runs straight away with that analysis, and its proposals

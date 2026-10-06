@@ -404,6 +404,8 @@ const ROOT=path.resolve(__dirname,'..');
        &&/### SCENE text_night/.test(fxT)&&!/### SCENE dinner/.test(fxT), (fxT||"none").slice(0,200)+" | "+fx11.length);
     ok("the reconciler gets every section's proposals and where each piece is used, but no payload and no dialogue", !!fin&&/===== EVERY SECTION'S PROPOSALS/.test(ft)&&/S:text#1 frag:style_header/.test(ft)&&/S:multi#1/.test(ft)&&/PE-SEC-KEEP/.test(ft)
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
+    const fxLater=fx11[fx11.length-1]||"", fxFirst=fx11[0]||"";
+    ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 frag:style_header/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*frag:style_header/.test(fxLater), fxLater.slice(0,200));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
     ok("each section shows its own fixer's proposals, to apply even if the reconciler fails", /This section's fixer proposed 1 edit: PE-SEC-SUMMARY/.test(sec11), sec11.slice(0,300));
     OR.calls=[];
@@ -528,6 +530,28 @@ const ROOT=path.resolve(__dirname,'..');
       return {peak,ok:r.every(x=>x&&x.ok),n:seen.length,shorter:seen.some(x=>/CUT-TEST[\s\S]*Answer again, much shorter/.test(x))}; });
     ok("one Claude request at a time, a rate limit waits and retries, a cut-off answer is asked again shorter", q.peak===1&&q.ok&&q.n===5&&q.shorter, JSON.stringify(q));
 
+    console.log("\n[11g — an edit whose words are not found is repaired, or explained with a button to fix it]");
+    const rp=await pg.evaluate(async()=>{ const P=__PE, it=P.findItem("frag:style_header"), v=P.itemVal(it), line=v.split("\n").find(l=>l.trim().split(/\s+/).length>=6).trim();
+      const words=line.split(/\s+/), spaced=words.slice(0,6).join("   ");                       // spacing differs
+      const e1={item:"frag:style_header",kind:"rewrite",find:spaced,replace:"PE-RP1",why:"w"};
+      const other=P.ITEMS().find(x=>x.type==="frag"&&x.key!=="style_header"&&P.itemVal(x).trim().split("\n")[0].trim().length>30), oline=P.itemVal(other).trim().split("\n")[0].trim().slice(0,30);
+      const e2={item:"frag:style_header",kind:"rewrite",find:oline,replace:"PE-RP2",why:"w"};       // the wrong piece named
+      const e3={item:"frag:style_header",kind:"rewrite",find:"Buket Özüçak "+words.slice(0,4).join(" ")+" PE-FILLED",replace:"PE-RP3",why:"w"};   // filled story data
+      const r1=P.locateEdit(e1), r2=P.locateEdit(e2), r3=P.locateEdit(e3);
+      const host=document.createElement("div"); document.body.appendChild(host); const c3=editCard(e3); host.appendChild(c3);
+      const note=(c3.querySelector(".missNote")||{}).textContent||"", fixBtn=c3.querySelector('[data-a="repair"]'), applyTxt=c3.querySelector('[data-a="apply"]').textContent;
+      const orig=AI.sample.json; let sent="";
+      AI.sample.json=async(input)=>{ sent=input; return {edits:[{i:1,find:words.slice(0,4).join(" "),replace:"PE-RP3"}]}; };
+      fixBtn.click(); for(let i=0;i<30&&!/Repaired/.test(host.textContent);i++) await new Promise(r=>setTimeout(r,100));
+      AI.sample.json=orig;
+      const after=host.querySelector('[data-a="apply"]'), res={r1,find1:e1.find===words.slice(0,6).join(" ")||P.itemVal(it).indexOf(e1.find)>=0,r2,item2:e2.item,r3,applyTxt,note:/copied from the filled payload/.test(note),fixVisible:!fixBtn.hidden,
+        sent:/CURRENT TEXT OF frag:style_header/.test(sent)&&/PE-FILLED/.test(sent),repaired:/Repaired \(copied again\)/.test(host.textContent),ready:after&&!after.disabled&&after.textContent==="Apply"};
+      host.remove(); return res; });
+    ok("loose spacing is matched to the piece's exact words", rp.r1==="fixed"&&rp.find1, JSON.stringify(rp));
+    ok("words that sit in another piece re-target the edit to that piece", rp.r2==="fixed"&&rp.item2!=="frag:style_header", JSON.stringify(rp));
+    ok("words that are nowhere say why, with Fix this edit", rp.r3==="missing"&&rp.applyTxt==="Text not found"&&rp.note&&rp.fixVisible, JSON.stringify(rp));
+    ok("Fix this edit shows Claude the piece's current text, and the repaired edit can be applied", rp.sent&&rp.repaired&&rp.ready, JSON.stringify(rp));
+
     console.log("\n[11c — a long run still fits one request to Claude, and a failed fixing step can be run again]");
     const fit=await pg.evaluate(async()=>{ const P=__PE, long="Şöyle düşünüyorum, ağabeyciğim: gülüşün öğleden beri aklımdan çıkmıyor, işte böyle. ".repeat(40);
       const keep=JSON.stringify(P.DR.results), keepO=P.ALL.overall;
@@ -639,7 +663,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,editrepair,discuss,compare,standin", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

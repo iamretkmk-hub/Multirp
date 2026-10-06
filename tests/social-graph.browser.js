@@ -55,8 +55,27 @@ const {chromium}=require('playwright');
      // v124.0 — the in-app sheet (uiConfirm) replaced the browser's confirm()
      await pg.evaluate(()=>/uiConfirm\(/.test(String(genSocialGraphForCharacter))
        && /Replace /.test(String(genSocialGraphForCharacter))));
-  ok("the result is trimmed on a word boundary, never mid-word",
-     await pg.evaluate(()=>/briefDesc\(text,1200\)/.test(String(generateSocialGraphFor))));
+  /* v150.26 — INTENTIONALLY CHANGED: the result was cut to 1200 characters (briefDesc), so a character with
+     a real cast got half the map the model wrote. It is stored whole now; only a paragraph the token limit
+     stopped mid-sentence goes back to its last full sentence. */
+  const SG=await pg.evaluate(async()=>{
+    const real=window.chatCompletion, uni=curUniverseObj()||state.universes[0];
+    const p={id:"p_sg",name:"Selin",universeId:uni.id,personality:"x",relationships:{}};
+    state.personas.push(p); const wasKey=state.key; state.key=state.key||"k";
+    const wasCfg=state.fnCfg; state.fnCfg=Object.assign({},wasCfg,{unigen:{tok:null}});
+    const sent=[]; const long=Array.from({length:40},(_,i)=>`Person ${i} is your neighbour and you trust them.`).join(" ");
+    let reply=long;
+    window.chatCompletion=async(m,mo,o)=>{ sent.push(o&&o.max); return reply; };
+    const whole=await generateSocialGraphFor(p,uni);
+    reply=long+" And Person 99 is the one you";
+    const cut=await generateSocialGraphFor(p,uni);
+    window.chatCompletion=real; state.key=wasKey; state.fnCfg=wasCfg;
+    state.personas=state.personas.filter(x=>x!==p);
+    return {len:long.length,whole,cut,long,sent};
+  });
+  ok("a long map is stored whole, not cut at 1200 characters", SG.len>1200 && SG.whole===SG.long, SG.len+" → "+String(SG.whole).length);
+  ok("a paragraph the token limit stopped mid-sentence ends at its last full sentence", SG.cut===SG.long, SG.cut&&SG.cut.slice(-80));
+  ok("the default token budget leaves room for a full cast", SG.sent.every(n=>n>=1400), JSON.stringify(SG.sent));
   ok("and it writes the field the relationships block actually reads", await pg.evaluate(()=>
       /persona\.socialGraph=/.test(String(generateSocialGraphFor))
    && /persona\.socialGraph/.test(String(relSheetBlockFull))));

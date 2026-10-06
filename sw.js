@@ -2,7 +2,7 @@
    The app is a single HTML file, so we cache the app shell (this directory's index)
    and serve it offline. API calls to OpenRouter/ModelsLab are always network-only.
    Bump CACHE_VERSION whenever you upload a new build so clients fetch the new file. */
-const CACHE_VERSION = "storymind-v445";
+const CACHE_VERSION = "storymind-v446";
 const APP_SHELL = ["./", "./index.html"];
 
 /* v144.1 — an install whose shell could not be cached FAILS, instead of succeeding empty. The failure

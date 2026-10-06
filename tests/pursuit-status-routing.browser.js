@@ -66,6 +66,8 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("charBioBlock(self) has no pursuit or task", !/Friday|ALREADY asked|pursuit_status|van/.test(R.sheet+R.call), R.sheet);
   ok("a roleplay reply was built", R.rpN>=1, String(R.rpN));
   ok("the roleplay reply payload has no pursuit or task", R.rpN>=1 && !LEAK.test(R.rp), (R.rp.match(LEAK)||[""])[0]);
+  /* v150.26 — and the pursuit ledger no longer switches a rail on: Sami's ask is pending, the exchange is not stalled */
+  ok("a pending ask does not turn on 'circle it once'", R.rpN>=1 && !/CIRCLE IT ONCE/.test(R.rp), "rail present");
 
   console.log("\n[the block the engines read]");
   const B=await pg.evaluate(()=>{ const c=__setup();

@@ -115,8 +115,9 @@ the Gamemaster (judge + author, the present cast), the Scene Writer (the event's
 room), and the living universe — `worldRound`, `offstageEvent`, `calExec`, `goalPursuit`,
 `intentForm`, `intentTick` — each as its own `pursuits` engine part. Any engine template can also
 call `{{call//pursuits}}` (the present cast). What reaches a reply is the *decision* those engines
-make (an overture's intent, a plan, an event beat), never the ledger; the only trace left in the
-reply is the content-free `pending_ask` rail flag that switches on "circle it once".
+make (an overture's intent, a plan, an event beat), never the ledger. The `pending_ask` rail flag,
+which read the same ledger to switch on "circle it once", went with it: that rail now fires only on
+`stalled`, and a customized box that still tests `pending_ask` reads an unknown flag, which is false.
 
 - Source: `persona.goalsLive = {lines[], day, at, changed}`; `liveGoalsLines/liveGoalsText` read it.
 - **`persona.goals` is never written to.** It is the foundation the curator is handed and told not to
@@ -203,7 +204,7 @@ generation is what produces careful, rule-reciting output.
 
 | Rail | Fires when |
 |---|---|
-| `rail_oblique_once` (split out of `rail_oblique`) | the exchange has stalled on the same ask, or this character carries a pursuit they have already put to someone. Without one of those there is no loop to break out of. |
+| `rail_oblique_once` (split out of `rail_oblique`) | the exchange has stalled on the same ask (`stalled`). Without that there is no loop to break out of. (v150.26 — no longer also on `pending_ask`; the pursuit ledger is not read by replies.) |
 | `rail_noecho` | somebody else actually spoke last. On a turn that continues the character's own line there is nothing of the player's to echo. |
 | `rail_single_solo` | never, by default — RESPONSE GUIDANCE opens with the same sentence one block earlier. Still available in the payload editor. |
 
@@ -485,7 +486,7 @@ Two to five lines…
   names, so `{{call//rail_noecho}}` still resolves — nothing that referenced a rail broke.
 - `{{if flag}}`, `{{if flag = value}}`, `{{if not flag}}`, `and`/`or`, `{{else}}`, `{{endif}}` —
   nesting allowed. Flags come from the producer (`B._railFlags`): `render_mode`
-  (solo/multi/gm/text/heat), `language`, `stalled`, `pending_ask`, `continuing`. Names and values
+  (solo/multi/gm/text/heat), `language`, `stalled`, `continuing`, `voicing`. Names and values
   are compared lower-cased. An **unbalanced** `{{if}}` drops the markers and KEEPS the text — a
   typo loses a condition, never a rule.
 - `{{comment}} … {{endcomment}}` is a note to yourself. It never ships.

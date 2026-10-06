@@ -1634,13 +1634,12 @@ function slimWorld(b){
 }
 /*SLIM-END*/
 
-/* where the story lives: this browser (IndexedDB), else prompt-editor-world.json beside the page */
+/* where the story lives: this browser (IndexedDB) only; no story file is bundled with the editor */
 const STORY={w:null};
 function storyDb(){ return new Promise((res,rej)=>{ try{ const r=indexedDB.open("pe-story",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }catch(e){ rej(e); } }); }
 async function storyGet(){ try{ const db=await storyDb(); return await new Promise(res=>{ const q=db.transaction("kv").objectStore("kv").get("world"); q.onsuccess=()=>res(q.result||null); q.onerror=()=>res(null); }); }catch(e){ return null; } }
 async function storySet(w){ try{ const db=await storyDb(); await new Promise(res=>{ const t=db.transaction("kv","readwrite"); const st=t.objectStore("kv"); w?st.put(w,"world"):st.delete("world"); t.oncomplete=res; t.onerror=res; t.onabort=res; }); }catch(e){} }
-async function fetchStoryFile(){ try{ const r=await fetch("prompt-editor-world.json",{cache:"no-store"}); if(!r.ok) return null; const b=await r.json(); return b&&b.kind==="editor-world"?b:null; }catch(e){ return null; } }
-async function loadStory(){ const w=(await storyGet())||(await fetchStoryFile()); if(!STORY.picked) STORY.w=w; return STORY.w; }
+async function loadStory(){ const w=await storyGet(); if(!STORY.picked) STORY.w=w; return STORY.w; }
 function paintWorldSel(){
   const sel=$("#worldSel"); if(!sel) return;
   sel.innerHTML=(STORY.w?`<option value="story">Your story: ${esc(STORY.w.name||"")}</option>`:"")+`<option value="sample">Sample: Isdemir Lojmanları (short, made up)</option>`;
@@ -1658,7 +1657,7 @@ $("#btnWorld").onclick=()=>modal("Use your own story as data",
   `<p class="hint" style="margin:0">Pick a <b>full backup</b> (best), a <b>roleplay export</b> or a <b>universe export</b> from StoryMind. The characters' cards, memories, relationships, plans, promises, motives and the latest messages fill every payload, and <b>all the test scenes run on it</b> (they are written for the Isdemir story: Buket, Sami, Berker).
   It is slimmed (no pictures, no embeddings, the last 40 messages) and kept <b>in this browser only</b>; nothing is uploaded and your app is not changed. Characters under 18 are left out, with everything that mentions them.
   Prompt overrides saved inside a universe are ignored here, so what you see is the prompts in this editor.</p>${STORY.w?`<p class="stat" style="margin:8px 0 0">Kept now: <b>${esc(STORY.w.name||"")}</b>, ${STORY.w.collections.personas.length} characters, ${STORY.w.collections.memory.length} memories.</p>`:""}`,
-  [{label:"Cancel"}].concat(STORY.w?[{label:"Forget it",fn:async()=>{ STORY.w=await fetchStoryFile(); await storySet(null); S.world=await engCall("loadWorld",STORY.w,60000).catch(()=>S.world); paintWorldSel(); fillPreviewControls(); refreshPreview(); toast(STORY.w?"Back to the bundled story":"Back to the sample"); }}]:[]).concat([{label:"Choose file…",pri:true,fn:()=>{ $("#fileWorld").click(); }}]));
+  [{label:"Cancel"}].concat(STORY.w?[{label:"Forget it",fn:async()=>{ STORY.w=null; await storySet(null); S.world=await engCall("loadWorld",STORY.w,60000).catch(()=>S.world); paintWorldSel(); fillPreviewControls(); refreshPreview(); toast(STORY.w?"Back to the bundled story":"Back to the sample"); }}]:[]).concat([{label:"Choose file…",pri:true,fn:()=>{ $("#fileWorld").click(); }}]));
 $("#fileWorld").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{
@@ -1692,7 +1691,7 @@ function openPack(b,name){
   S.prompts={}; Object.keys(S.orig.prompts).forEach(k=>{ if(typeof S.orig.prompts[k]==="string") S.prompts[k]=S.orig.prompts[k]; });
   S.frag=parseObj(S.orig.settings.blockTpls); S.tpl=parseObj(S.orig.settings.payloadTemplates);
   S.settings={}; Object.keys(S.orig.settings).forEach(k=>{ if(k!=="blockTpls"&&k!=="payloadTemplates") S.settings[k]=String(S.orig.settings[k]); });
-  saveDraft(); renderList(); renderEditor(); scheduleApply();
+  saveDraft(); flushDraft(); renderList(); renderEditor(); scheduleApply();
   const n=Object.keys(S.prompts).length, f=Object.keys(S.frag).length, t=Object.keys(S.tpl).length;
   toast(`Opened ${name||"the file"}: ${n} prompts, ${f} piece overrides, ${t} layouts`,4000);
 }
@@ -1754,17 +1753,17 @@ $("#btnMore").onclick=()=>{
     `<div style="display:flex;flex-direction:column;gap:8px">
       <button class="btn" type="button" id="mUnsaved">Show everything I edited</button>
       <button class="btn" type="button" id="mDraft">Start over from the opened file</button>
-      <button class="btn" type="button" id="mStart" ${S.startPack?"":"hidden"}>Open the bundled latest prompts${S.startPack?" ("+esc(startPackName(S.startPack).replace("Latest prompts · ",""))+")":""}</button>
       <button class="btn" type="button" id="mApp">Load a different StoryMind index.html…</button>
       <p class="hint" style="margin:0">Your edits are kept in this browser as a draft until you open another file. The engine is StoryMind ${esc((S.meta&&S.meta.appVersion)||"")} running in a sealed sandbox with no network and no access to your saved data.</p>
     </div>`);
   $("#mUnsaved").onclick=()=>{ const ch=ITEMS.filter(it=>itemStatus(it).edited);
     modal(ch.length+" edited",ch.length?ch.map(it=>`<div><b>${esc(it.label)}</b> <code>${esc(it.key)}</code></div>${diffHTML(origVal(it),itemVal(it))}`).join(""):`<div class="empty">Nothing edited yet.</div>`); };
   $("#mDraft").onclick=()=>{ if(S.orig) openPack(Object.assign({},S.orig,{prompts:S.orig.prompts,settings:S.orig.settings}),S.fileName); else { S.prompts={};S.frag={};S.tpl={};S.settings={}; saveDraft(); renderList(); renderEditor(); scheduleApply(); } $("#modalHost").innerHTML=""; toast("Edits discarded"); };
-  $("#mStart").onclick=()=>{ $("#modalHost").innerHTML=""; if(S.startPack) openPack(S.startPack,startPackName(S.startPack)); };
   $("#mApp").onclick=()=>{ $("#modalHost").innerHTML=""; $("#fileApp").click(); };
 };
 function saveDraft(){ clearTimeout(saveDraft._t); saveDraft._t=setTimeout(()=>{ lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,settings:S.settings}); },500); }
+function flushDraft(){ if(saveDraft._t){ clearTimeout(saveDraft._t); saveDraft._t=null; lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,settings:S.settings}); } }
+addEventListener("pagehide",flushDraft); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") flushDraft(); });
 function loadDraft(){ const d=lsGet("draft",null); if(!d) return false; Object.assign(S,{orig:d.orig||null,fileName:d.fileName||"",prompts:d.prompts||{},frag:d.frag||{},tpl:d.tpl||{},settings:d.settings||{}}); return true; }
 
 /* ---------------- Claude ---------------- */
@@ -4313,27 +4312,11 @@ function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("butto
 $("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setView(b.dataset.v); });
 
 /* ---------------- start ---------------- */
-/* The starting prompts: prompt-editor-start.json beside this page, when there is one. It is opened when
-   there is no draft yet, or when it is newer than the file the draft came from. A draft with edits is
-   never thrown away without asking. */
-async function fetchStartPack(){
-  try{ const r=await fetch("prompt-editor-start.json",{cache:"no-store"}); if(!r.ok) return null;
-    const b=await r.json(); return (b&&b.app==="StoryMind"&&b.kind==="prompts")?b:null; }catch(e){ return null; }
-}
-function startPackName(b){ const d=new Date(b.date||Date.now()),p=n=>String(n).padStart(2,"0");
-  return "Latest prompts · "+d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
-async function useStartPack(hadDraft){
-  const b=S.startPack||(S.startPack=await fetchStartPack()); if(!b) return;
-  if(hadDraft&&S.orig&&S.orig.date===b.date) return;          // the draft already comes from this file
-  const edits=hadDraft?ITEMS.filter(it=>itemStatus(it).edited).length:0;
-  if(!edits){ openPack(b,startPackName(b)); return; }
-  modal("Newer prompts are bundled",
-    `<p class="hint" style="margin:0">This editor comes with <b>${esc(startPackName(b))}</b>. You have ${edits} unsaved edit${edits>1?"s":""} on <b>${esc(S.fileName||"the shipped defaults")}</b>. Download them first if you want to keep them.</p>`,
-    [{label:"Keep my edits"},{label:"Open the latest prompts",pri:true,fn:()=>{ openPack(b,startPackName(b)); }}]);
-}
+/* No prompts file is bundled with the editor: it starts from your own draft in this browser, or from
+   the shipped defaults until you open a file. (A bundled file used to be opened over a draft that came
+   from another file, which put people back on an older export.) */
 async function afterEngine(hadDraft){
   ITEMS=allItems();
-  await useStartPack(hadDraft);
   await loadStory();
   /* a story picked while the editor was starting is already loaded: leave it */
   if(!STORY.picked){ S.world=STORY.w?await engCall("loadWorld",STORY.w,60000).catch(()=>null):null;

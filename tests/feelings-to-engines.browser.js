@@ -24,7 +24,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x===undefined?c:x).slice(0,900));} };
 
   /* The player's own layouts (the bundled latest prompts), with the six calls taken out of the reply ones. */
-  const pack=JSON.parse(fs.readFileSync(path.resolve(__dirname,'..','prompt-editor-start.json'),'utf8'));
+  const pack=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','latest-prompts.json'),'utf8'));
   const tpls=JSON.parse(pack.settings.payloadTemplates);
   /* both spellings: the fragment calls the player listed, and the whole-block calls the bundled layouts use */
   const GONE=/\{\{call\/\/(feel_lasting|feel_lasting_alt|feel_now_header|feel_now_body|intent_warm|intent_hostile|feelings|feelings_now|private_intent)(\/\/full)?\}\}\n?/g;

@@ -280,7 +280,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button class="btn sm" id="btnAllStop" type="button" hidden>Stop</button>
         <button class="btn sm" id="btnAllExport" type="button">Export results</button>
         <button class="btn sm" id="btnAllImport" type="button">Import results</button>
-        <label class="stat" title="How many Claude analysts read scenes and engines at the same time">Analysts at once <input type="number" id="teamSize" min="1" max="8" value="3" style="width:42px"></label>
+        <label class="stat" hidden title="Analysis now runs one by one">Analysts at once <input type="number" id="teamSize" min="1" max="8" value="3" style="width:42px"></label>
         <span class="stat" id="allStat"></span>
       </div>
       <div class="stat" id="allEstimate" style="padding:0 12px"></div>
@@ -1866,6 +1866,31 @@ function renderProvider(){
     b.querySelectorAll(".pmMode").forEach(r=>{ r.name="pmMode"+sel; r.onchange=e=>{ lsSet("testmode",e.target.value); pushModelToEngine(); renderProvider(); }; });
   });
 }
+/* Every analysis call to Claude goes through one queue: at most CQ.max at a time across the whole page
+   (sections, scenes and engines no longer pile up into "too many requests"). A rate limit waits and
+   tries again; an answer that was cut off or not JSON is asked again once, shorter. */
+const CQ={active:0,max:1,wait:[]};   // one by one
+function cqAcquire(){ if(CQ.active<CQ.max){ CQ.active++; return Promise.resolve(); } return new Promise(r=>CQ.wait.push(r)); }
+function cqRelease(){ const n=CQ.wait.shift(); if(n) n(); else CQ.active--; }
+const BRIEF="\n\nIMPORTANT: your previous answer was cut off or was not valid JSON. Answer again, much shorter: every note and quote one short line, at most 5 findings or edits, reasoning at most 80 words, and close the JSON.";
+async function claudeJson(input,opts){
+  if(!AI.sample) throw {code:"no_claude",message:ANALYSE_HERE};
+  await cqAcquire();
+  try{
+    let inp=input, shortened=false;
+    for(let attempt=0;;attempt++){
+      if(opts&&opts.signal&&opts.signal.aborted) throw {code:"cancelled"};
+      try{ return await AI.sample.json(inp,opts); }
+      catch(e){
+        const c=e&&e.code;
+        if(c==="cancelled"||c==="not_granted"||c==="prompt_too_large") throw e;
+        if(c==="rate_limited"&&attempt<4){ await new Promise(r=>setTimeout(r,(CQ.rlWait||20000)*(attempt+1))); continue; }
+        if((c==="invalid_json"||c==="upstream_error"||c==="empty_completion")&&!shortened){ shortened=true; if(typeof inp==="string") inp=inp+BRIEF; continue; }
+        throw e;
+      }
+    }
+  }finally{ cqRelease(); }
+}
 /* The analyst: Claude, through the Claude app (the sample capability). Never OpenRouter. */
 async function aiAsk(input,opts){
   opts=opts||{};
@@ -1954,12 +1979,14 @@ THE PROBES — the turns this scene is built around. Judge each one: "pass", "pa
 THE EXCHANGE:
 {{exchange}}
 
+Keep the answer compact: every note and quote one short line (at most 15 words), at most 6 findings, the reasoning at most 120 words; score only the criteria the scene gives evidence for.
+
 For each turn give a verdict: "good", "weak" (flat, generic, a step off) or "wrong" (the failure the scene is about, or a broken rule), with one short line. Then score the rubric with a one-line note and a short quote as evidence. Then list the FINDINGS: each concrete failure, its criterion and turn, the quote that shows it, and the payload words, piece or structure that most likely caused it (quote the payload and name the piece; "the payload never asks for this" is a valid cause). Judge the Turkish as a demanding native speaker and editor would, not as a grammar check. For every reply ask: would a real Turkish person of her age, background and mood say exactly this, here, to this person? Look at word choice (the word a native would pick, not a literal or translated one; collocations; bookish versus spoken), register (sen/siz, intimacy, anger, a text message, sex), sense in context (does the sentence follow from what was just said and fit the place and time), realism and culture (idioms used right, nothing a woman in her place would never say), rhythm and spoken particles, then grammar and suffixes. Quote the wrong words and give what a native would say instead in the finding.
 
 Reply with ONLY this JSON:
 {"turns":[{"verdict":"good|weak|wrong","note":"one short line"}],"criteria":{"turkish":{"score":7,"note":"…","evidence":"quote"}},"score":7,"summary":"two sentences","reasoning":"one paragraph: what drives the good and the bad replies in this scene, and which words or structure of the payload you think cause them, and why","probes":[{"turn":3,"result":"pass|partial|fail","evidence":"quote","note":"…"}],"findings":[{"criterion":"self","turn":5,"problem":"…","evidence":"quote from a reply","cause":"quoted payload words and the piece id, or what the payload is missing"}]}
 
-===== THE LAST PAYLOAD (as sent for the last reply) =====
+===== THE LAST PAYLOAD (as sent for the last reply; the transcript is left out: it is the exchange above) =====
 {{payload}}{{#applied}}
 
 CHANGES APPLIED SINCE THIS SCENE WAS PLAYED (the payload above shows the wording as it was then):
@@ -1976,6 +2003,8 @@ You are RE-EVALUATING the scene reports of one PAYLOAD KIND of the author's role
 3. Read the payload's STRUCTURE: what sits where, what is buried, duplicated or contradicting, what the model weighs too much or too little.
 4. Score the kind on the rubric (from the scenes' scores and your own reading).
 
+Keep the answer compact: every note one short line, at most 6 patterns and 6 payload notes, the reasoning at most 200 words.
+
 THE RUBRIC:
 {{criteria}}
 {{#rotation}}
@@ -1990,7 +2019,7 @@ Reply with ONLY this JSON:
 CHANGES APPLIED SINCE THESE SCENES WERE PLAYED (the payload below shows the wording as it was then):
 {{applied}}{{/applied}}
 
-===== ONE PAYLOAD OF THIS KIND (as sent for the last reply of "{{payload_scene}}") =====
+===== ONE PAYLOAD OF THIS KIND (as sent for the last reply of "{{payload_scene}}"; the transcript left out) =====
 {{payload}}`},
  {id:"engine",label:"E1 · Engine judge (one background engine in one scene, no fixes)",desc:"One judge per engine recorded in an engine scene. It reports problems and their causes in the prompt; the complete analysis makes the fixes.",
   vars:{context:"the method",engine:"the engine's name",prompt_key:"its prompt key (empty when it has none)",dbg:"its debug label",model:"the model that answered",focus:"what the scene was built to test",lines:"the script, numbered (scripted characters' lines included)",checks:"the engines the scene is aimed at",roleplay:"flag: this group is the characters' own replies",template:"the engine's prompt template (exact current text)",applied:"edits you applied to this prompt after the scene was played",calls:"up to two real calls: what the app sent and the answer"},
@@ -2010,7 +2039,7 @@ THE PLAYER'S LINES, IN ORDER:
 {{/lines}}{{#roleplay}}
 This group is the characters' own replies: judge realism, character, awareness and whether the right person answered.
 {{/roleplay}}
-Judge the ANSWER: does it keep the output contract exactly (format, JSON shape and field names); is every claim supported by the input (nothing invented); does it follow the prompt's rules and scope; would the next engine and the replies get something useful? For each problem, quote the evidence and name the prompt's words that most likely caused it (or what the prompt is missing).
+Judge the ANSWER: does it keep the output contract exactly (format, JSON shape and field names); is every claim supported by the input (nothing invented); does it follow the prompt's rules and scope; would the next engine and the replies get something useful? For each problem, quote the evidence and name the prompt's words that most likely caused it (or what the prompt is missing). Keep the answer compact: each problem and quote one short line, at most 6 problems, the reasoning at most 120 words.
 
 Reply with ONLY this JSON:
 {"verdict":"good|issues|broken","summary":"two sentences","reasoning":"one paragraph for the scene's report and the prompt's fixer, who never see these calls: what the engine got right and wrong, and which words of its prompt (or what it lacks) caused it","problems":[{"issue":"…","evidence":"short quote","cause":"the prompt's words responsible, or what it is missing"}]}
@@ -2023,7 +2052,7 @@ CHANGES APPLIED TO THIS PROMPT SINCE THE SCENE WAS PLAYED:
 
 {{calls}}`},
  {id:"fixer",fit:["catalogue","reports","payload"],label:"3 · Section fixer (one test section: its report, its payload once, its pieces)",desc:"One fixer per test section (Solo · Everyday voice, Solo · Desire over time, Solo · Memory, Several characters, Text messages, Heat). It reads that section's report and its scene reports, the section's payload once and the pieces that appear in it, and proposes edits for this section. The reconciler then merges every section's proposals.",
-  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the section's layout (the order of the pieces)",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length"},
+  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the section's layout (the order of the pieces)",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length",history:"every edit applied before to the pieces of this payload, oldest first",earlier:"what the section fixers that ran before this one proposed in this run"},
   def:`{{context}}
 
 You are the FIXER for ONE test section of the author's roleplay model: {{section}}. Its scenes were judged one by one (with probes on the turns each scene hinges on), then the section's analyst re-evaluated those reports against the payload. You get the section's report and every scene report under it, the payload once, its layout, and the current text of the pieces that appear in this payload. You do not get the dialogues: rely on the reports. Other sections have their own fixer; a reconciler merges all the proposals afterwards.
@@ -2039,7 +2068,15 @@ Reply with ONLY this JSON:
 {{#effect}}
 ===== WHAT THE LAST CHANGES DID (before → after) =====
 {{effect}}
-{{/effect}}{{#rotation}}
+{{/effect}}{{#history}}
+===== WHAT HAS BEEN CHANGED BEFORE (edits applied to these pieces, oldest first; the current text includes them) =====
+{{history}}
+Do not undo these or repeat them; build on them.
+{{/history}}{{#earlier}}
+===== WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED (not applied yet) =====
+{{earlier}}
+Do not duplicate these. When you need the same piece, build on their edit (say "builds on S:…" or "P:…") instead of contradicting it.
+{{/earlier}}{{#rotation}}
 ===== MODEL ROTATION =====
 {{rotation}}
 {{/rotation}}{{#applied}}
@@ -2055,13 +2092,13 @@ Reply with ONLY this JSON:
 ===== THE PIECES IN THIS PAYLOAD (current text) =====
 {{catalogue}}
 
-===== THE PAYLOAD (as sent) =====
+===== THE PAYLOAD (as sent; the transcript left out) =====
 {{payload}}`},
  {id:"overseer",fit:["prompts","engines","history","pieces","proposals"],label:"4 · The reconciler (every section's proposals, then the final edits)",desc:"Reads every section fixer's proposals (no payloads), which pieces each section shares, the current text of the pieces the proposals touch, the scores against earlier runs and the before → after verdict, and writes the final edits: keeping, merging or dropping each proposal.",
   vars:{context:"the method",proposals:"every section fixer's summary, proposed edits (with ids) and what it says to keep",usage:"which sections' payloads each touched piece appears in",pieces:"the current full text of every piece or layout a proposal touches",scores:"the rubric averaged over this run, next to earlier runs",history:"earlier runs and the edits applied between them",effect:"what the changes before this run did (before → after)",engines:"every engine judgement",prompts:"engine prompts that had problems (exact text)",applied:"edits applied after these tests ran",rotation:"with model rotation: each model's replies, speed and length"},
   def:`{{context}}
 
-You are the RECONCILER and you write the COMPLETE ANALYSIS of a test run. The scenes were judged one by one, each test section was re-evaluated by its analyst, and each section's fixer proposed edits for its own section from its own payload. You get every section's proposals, which sections share each piece, and the current text of every piece a proposal touches. Decide on every proposal and write the final edits.
+You are the RECONCILER and you write the COMPLETE ANALYSIS of a test run. The section fixers only SUGGESTED edits; nothing has been applied from them. Your final edits are the one complete change the author reviews and applies, so check every suggestion and consolidate them into a coherent whole. The scenes were judged one by one, each test section was re-evaluated by its analyst, and each section's fixer proposed edits for its own section from its own payload. You get every section's proposals, which sections share each piece, and the current text of every piece a proposal touches. Decide on every proposal and write the final edits.
 
 1. A piece shared by several sections changes all of them: two proposals on the same piece must become one edit that serves every section, or the weaker one dropped. A fix one section needs must not break what another section says to keep.
 2. Prefer fewer, stronger edits. Drop proposals that duplicate others, conflict, would break a "keep", or add text where a cut or a move would do.
@@ -2155,7 +2192,7 @@ Reply with ONLY this JSON:
 CHANGES APPLIED SINCE THE SCENE WAS PLAYED:
 {{applied}}{{/applied}}`},
  {id:"engfixer",fit:["example","judgements","reports"],label:"E3 · Engine prompt fixer (one engine prompt: its judgements, its text, one real call)",desc:"One fixer per engine prompt that had problems. It gets the prompt's current text, every judgement of it across the engine scenes, the reports of the scenes it ran in, and one real call, and proposes edits to that prompt. The engine reconciler then merges the proposals.",
-  vars:{context:"the method",engine:"the engine and its prompt key",prompt:"the prompt's current text",judgements:"every judgement of this prompt across the scenes",reports:"the reports of the scenes it ran in",example:"one real call: what the app sent and what the model answered",effect:"what the changes before this run did",applied:"edits applied to this prompt since the scenes were played"},
+  vars:{context:"the method",engine:"the engine and its prompt key",prompt:"the prompt's current text",judgements:"every judgement of this prompt across the scenes",reports:"the reports of the scenes it ran in",example:"one real call: what the app sent and what the model answered",effect:"what the changes before this run did",applied:"edits applied to this prompt since the scenes were played",history:"every edit applied before to this prompt, oldest first",earlier:"what the engine prompt fixers that ran before this one proposed in this run"},
   def:`{{context}}
 
 You are the FIXER for ONE ENGINE PROMPT of the app: {{engine}}. Its output is parsed and stored by the app, and other engines and the replies read it. You get its current text, every judgement of it across the engine scenes (with quoted evidence and the suspected cause), the reports of the scenes it ran in, and one real call.
@@ -2171,7 +2208,15 @@ Reply with ONLY this JSON:
 {{#effect}}
 ===== WHAT THE LAST CHANGES DID (before → after) =====
 {{effect}}
-{{/effect}}{{#applied}}
+{{/effect}}{{#history}}
+===== WHAT HAS BEEN CHANGED BEFORE (edits applied to these pieces, oldest first; the current text includes them) =====
+{{history}}
+Do not undo these or repeat them; build on them.
+{{/history}}{{#earlier}}
+===== WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED (not applied yet) =====
+{{earlier}}
+Do not duplicate these. When you need the same piece, build on their edit (say "builds on S:…" or "P:…") instead of contradicting it.
+{{/earlier}}{{#applied}}
 ===== CHANGES APPLIED TO THIS PROMPT SINCE THE SCENES WERE PLAYED =====
 {{applied}}
 {{/applied}}
@@ -2190,7 +2235,7 @@ Reply with ONLY this JSON:
   vars:{context:"the method",reports:"every engine scene's report: outcome, reasoning, engines",proposals:"every prompt fixer's summary, proposed edits (with ids) and what it says to keep",effect:"what the changes before this run did (before → after)",applied:"edits applied after these tests ran"},
   def:`{{context}}
 
-You are the ENGINE RECONCILER and you write the COMPLETE ANALYSIS of the BACKGROUND ENGINES. Each engine scene was built for one purpose and played; every engine was judged on its own calls, each scene re-evaluated its engines' judgements against its known outcome, and each engine prompt that had problems got its own fixer, who proposed edits to that prompt. Decide on every proposal and write the final edits.
+You are the ENGINE RECONCILER and you write the COMPLETE ANALYSIS of the BACKGROUND ENGINES. The prompt fixers only SUGGESTED edits; nothing has been applied from them. Your final edits are the one complete change the author reviews and applies. Each engine scene was built for one purpose and played; every engine was judged on its own calls, each scene re-evaluated its engines' judgements against its known outcome, and each engine prompt that had problems got its own fixer, who proposed edits to that prompt. Decide on every proposal and write the final edits.
 
 1. Engines feed each other: an edit to one engine's output can break the engine that reads it. Check that the proposals agree with each other (the same notion named the same way, a plan's status set by one engine and read by another).
 2. Prefer fewer, stronger edits. Drop proposals that duplicate others, conflict, would break a "keep", or rename a field the app parses.
@@ -2236,6 +2281,16 @@ Reply with ONLY this JSON:
 
 ===== WHAT CHANGED IN EACH ENGINE PROMPT (- before, + after) =====
 {{diffs}}`},
+ {id:"editrepair",label:"Repair edits whose text was not found",desc:"When an edit's \"find\" words are not in the piece as it reads now, Claude is shown the piece's current text and asked to copy the intended words again, exactly.",
+  vars:{edits:"each failed edit with the current full text of the piece it names"},
+  def:`Some proposed edits to the prompts of a roleplay app cannot be applied: their "find" text is not in the piece as it reads now. The usual reasons: it was copied from the filled payload (with the names, memories or numbers the app put in), it was copied from a different piece, or spacing, line breaks or quote marks differ.
+
+For each edit below, find the words it meant in the piece's CURRENT text and copy them EXACTLY (same spaces, line breaks, punctuation and {{…}} placeholders; never filled-in story data), keeping the change the edit wants: adjust "replace" so it fits the copied words. If the meant words are not in this piece at all, say so with "drop".
+
+Reply with ONLY this JSON:
+{"edits":[{"i":1,"find":"exact text copied from the piece","replace":"the new text"},{"i":2,"drop":true,"why":"…"}]}
+
+{{edits}}`},
  {id:"discuss",fit:["scenes","pieces","reports","catalogue","layouts"],label:"Discuss the fixes (chat under a complete analysis)",desc:"The first message of the conversation under the complete analysis (roleplay or engines). It is rebuilt for every message, so Claude always sees the current text and what has been applied. Your messages follow it.",
   vars:{context:"the method",which:"what is being fixed: the roleplay prompts or the background engine prompts",analysis:"the complete analysis: verdict, patterns, structure notes and every proposed edit with its state",reports:"roleplay: each payload kind's analysis report (no dialogues)",payloads:"roleplay: each payload kind's full payload, once",catalogue:"roleplay: every piece's key and opening words, and the template of pieces with {{…}} in them",layouts:"roleplay: each payload kind's layout",applied:"every edit applied so far, oldest first",scenes:"engines: each engine scene's purpose, script and judgements",pieces:"engines: the current text of every engine prompt that ran"},
   def:`{{context}}
@@ -2420,7 +2475,7 @@ function fragCatalog(since){
 async function runReview(output){
   const p=S.preview;
   const input=apBuild("review",{payload:payloadText(p).slice(0,160000),reply:output,catalogue:fragCatalog()});
-  if(AI.sample) return AI.sample.json(input,{signal:AI.ctl.signal,modelTier:"complex",cache:false});
+  if(AI.sample) return claudeJson(input,{signal:AI.ctl.signal,modelTier:"complex",cache:false});
   const t=await aiAsk([{role:"user",content:input}],{signal:AI.ctl.signal,maxTokens:6000,temperature:0.3});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The review did not come back as JSON."}; return JSON.parse(m[0]);
 }
@@ -2435,6 +2490,61 @@ function renderReview(r){
   el.innerHTML=h;
   (r.edits||[]).forEach(ed=>el.appendChild(editCard(ed)));
   if(!(r.edits||[]).length) el.insertAdjacentHTML("beforeend",`<div class="stat" style="margin-top:6px">No edits proposed.</div>`);
+}
+
+/* ---------------- edits whose text is not found ----------------
+   An edit replaces exact words in one piece. When those words are not in the piece as it reads now,
+   it is first repaired here: spacing, line breaks and quote marks are matched loosely, and words that
+   sit in another piece are re-targeted there. What is still missing is shown to Claude with the piece's
+   current text, to copy the words again. */
+function looseRx(find){ const esc2=x=>x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  return new RegExp(String(find).trim().split(/\s+/).map(w=>esc2(w).replace(/["“”„]/g,'["“”„]').replace(/['‘’]/g,"['‘’]")).join("\\s+")); }
+function locateEdit(ed){
+  if(!ed||!ed.find||isMove(ed)) return "ok";
+  const it=itemFromRef(ed.item);
+  if(it&&itemVal(it).indexOf(ed.find)>=0) return "ok";
+  if(it){ const m=itemVal(it).match(looseRx(ed.find)); if(m){ ed.find=m[0]; ed._fixed="spacing"; return "fixed"; } }
+  /* the same words in exactly one other piece: the edit named the wrong piece */
+  const hits=ITEMS.filter(x=>x!==it&&(itemVal(x).indexOf(ed.find)>=0||looseRx(ed.find).test(itemVal(x))));
+  if(hits.length===1){ const x=hits[0], v=itemVal(x), m=v.indexOf(ed.find)>=0?null:v.match(looseRx(ed.find)); if(m) ed.find=m[0];
+    ed._fixed="moved from "+ed.item; ed.item=x.type+":"+x.key; return "fixed"; }
+  return "missing";
+}
+async function repairEdits(edits,sig){
+  const list=(edits||[]).filter(Boolean); list.forEach(locateEdit);
+  const bad=list.filter(ed=>locateEdit(ed)==="missing"&&itemFromRef(ed.item)&&!isMove(ed)&&!(APPLIED[editKey(ed)]));
+  if(!bad.length||!claudeReachable()) return list;
+  const text=bad.map((ed,i)=>`===== EDIT ${i+1}: ${ed.item} (${ed.kind||"rewrite"}) =====\nFIND: «${ed.find}»\nREPLACE: «${ed.replace||""}»\nWHY: ${ed.why||""}\n===== CURRENT TEXT OF ${ed.item} =====\n${cutMiddle(itemVal(itemFromRef(ed.item)),40000)}`).join("\n\n");
+  try{
+    const o=await claudeJson(apBuild("editrepair",{edits:text}),{signal:sig,modelTier:"complex",cache:false});
+    (o.edits||[]).forEach(x=>{ const ed=bad[(+x.i||0)-1]; if(!ed) return;
+      if(x.drop){ ed._unfixable=x.why||"the meant words are not in this piece"; return; }
+      if(x.find){ ed.find=String(x.find); if(x.replace!=null) ed.replace=String(x.replace); ed._fixed="copied again"; if(locateEdit(ed)==="missing") ed._unfixable="still not found after copying it again"; } });
+  }catch(e){ if(e&&e.code==="cancelled") throw e; }
+  return list;
+}
+function saveAllEdits(){ try{ fxSave(); efxSave(); lsSet("overall",ALL.overall); lsSet("engoverall",ENGALL.overall); }catch(e){} }
+
+/* A fixer's suggestions, read-only: the final run consolidates them into the change you apply. */
+function suggestionsHTML(edits){ return `<ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${(edits||[]).map(ed=>`<li><code>${esc(ed._id||"")}</code> ${esc(ed.item||"")} <span class="vd bent">${esc(ed.kind||"rewrite")}</span> ${ed.find?`«${esc(String(ed.find).slice(0,120))}${String(ed.find).length>120?"…":""}»`:""}${ed.replace?` → «${esc(String(ed.replace).slice(0,160))}${String(ed.replace).length>160?"…":""}»`:""}${ed.why?` <span class="stat">— ${esc(ed.why)}</span>`:""}</li>`).join("")}</ul>`; }
+/* The complete change: every final edit with a checkbox, and one button to apply the selected ones. */
+function selectableEdits(host,edits,decorate){
+  if(!(edits||[]).length){ host.insertAdjacentHTML("beforeend",`<div class="stat" style="margin-top:6px">No change proposed.</div>`); return; }
+  const bar=document.createElement("div"); bar.className="acts"; bar.style.margin="8px 0 4px";
+  bar.innerHTML=`<b style="align-self:center">The complete change (${edits.length} edit${edits.length>1?"s":""})</b><span class="sp"></span><button class="btn sm" type="button" data-sall>Select all</button><button class="btn sm" type="button" data-snone>None</button><button class="btn sm pri" type="button" data-sapply>Apply selected</button>`;
+  host.appendChild(bar);
+  const cards=edits.map(ed=>{ const c=editCard(ed); decorate&&decorate(ed,c);
+    const lab=document.createElement("label"); lab.className="stat"; lab.style.display="block"; lab.innerHTML=`<input type="checkbox" data-pick checked> include in the change`;
+    c.insertAdjacentElement("afterbegin",lab); host.appendChild(c); return c; });
+  const picks=()=>cards.filter(c=>c.querySelector("[data-pick]").checked);
+  const paintBar=()=>{ const n=picks().filter(c=>{ const b=c.querySelector('[data-a="apply"]'); return b&&!b.disabled; }).length; const b=bar.querySelector("[data-sapply]"); b.textContent=`Apply selected (${n})`; b.disabled=!n; };
+  cards.forEach(c=>c.querySelector("[data-pick]").onchange=paintBar);
+  bar.querySelector("[data-sall]").onclick=()=>{ cards.forEach(c=>c.querySelector("[data-pick]").checked=true); paintBar(); };
+  bar.querySelector("[data-snone]").onclick=()=>{ cards.forEach(c=>c.querySelector("[data-pick]").checked=false); paintBar(); };
+  bar.querySelector("[data-sapply]").onclick=()=>{ let done=0, skip=0;
+    picks().forEach(c=>{ const b=c.querySelector('[data-a="apply"]'); if(b&&!b.disabled){ b.click(); done++; } else skip++; });
+    paintBar(); toast(`Applied ${done} edit${done===1?"":"s"}${skip?` · ${skip} skipped (already applied or text not found)`:""}`,5000); };
+  paintBar();
 }
 /* Applied edits are remembered (per browser), so a card that is rebuilt — every analysis re-renders its
    list — still knows it was applied. Pressing Apply twice used to do nothing at best and, when the new
@@ -2498,13 +2608,20 @@ function editCard(ed){
       <div class="why">${esc(ed.why||"")}</div>
       ${kind==="add"?`<div class="stat" style="color:var(--warn)">This adds text. Apply it only if nothing in the payload could be cut or rewritten instead.</div>`:""}
       ${mv?`<div class="stat">Moves <code>${esc(String(ed.find||"").trim())}</code> to just ${ed.before?"before":"after"} <code>${esc(String(ed.before||ed.after||"").trim())}</code> in ${esc(ed.item)}.</div>`:diffHTML(String(ed.find||""),String(ed.replace||""))}
-      <div class="acts"><button class="btn sm" type="button" data-a="open" ${it?"":"disabled"}>Open</button><button class="btn sm pri" type="button" data-a="apply"></button><button class="btn sm" type="button" data-a="undo" hidden>Undo</button></div>`;
+      <div class="acts"><button class="btn sm" type="button" data-a="open" ${it?"":"disabled"}>Open</button><button class="btn sm pri" type="button" data-a="apply"></button><button class="btn sm" type="button" data-a="undo" hidden>Undo</button><button class="btn sm" type="button" data-a="repair" hidden>Fix this edit</button></div>`;
     const btn=box.querySelector('[data-a="apply"]'), undo=box.querySelector('[data-a="undo"]');
     const paint=()=>{ const st=editState(ed,it);
       btn.disabled=st!=="ready"; btn.textContent=st==="applied"?"Applied":st==="ready"?"Apply":st==="superseded"?"Already changed":"Text not found";
-      btn.title=st==="superseded"?"These words were changed by an edit you applied after this test ran. Run the scene again to see the new wording judged.":"";
+      btn.title=st==="superseded"?"These words were changed by an edit you applied after this test ran. Run the scene again to see the new wording judged.":st==="missing"?"The words this edit replaces are not in "+ed.item+" as it reads now (copied from the filled payload or another piece, or spacing differs).":"";
+      const miss=box.querySelector(".missNote"); if(miss) miss.remove(); const rb=box.querySelector('[data-a="repair"]'); if(rb) rb.hidden=st!=="missing";
+      if(st==="missing") btn.insertAdjacentHTML("afterend",`<div class="stat missNote" style="color:var(--warn);flex-basis:100%">${ed._unfixable?"Claude could not find these words in "+esc(ed.item)+": "+esc(ed._unfixable)+". ":"The words to replace are not in "+esc(ed.item)+" as it reads now: they were copied from the filled payload or another piece, or the spacing differs. "}<b>Fix this edit</b> asks Claude to copy them again from the current text.</div>`);
+      else if(ed._fixed&&st==="ready") btn.insertAdjacentHTML("afterend",`<div class="stat missNote" style="flex-basis:100%">Repaired (${esc(ed._fixed)}): the words now match ${esc(ed.item)} exactly.</div>`);
       box.classList.toggle("done",st==="applied");
       undo.hidden=!(st==="applied"&&APPLIED[editKey(ed)]); };
+    box.querySelector('[data-a="repair"]').onclick=async e=>{ const b=e.currentTarget; if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
+      b.disabled=true; b.textContent="Fixing…"; delete ed._unfixable;
+      try{ await repairEdits([ed]); }finally{ b.disabled=false; b.textContent="Fix this edit"; }
+      const n=box.parentNode&&editCard(ed); if(n){ box.replaceWith(n); } saveAllEdits(); };
     box.querySelector('[data-a="open"]').onclick=()=>{ if(it){ select(it); if(matchMedia("(max-width:980px)").matches) setView("edit"); } };
     btn.onclick=()=>{
       if(editState(ed,it)!=="ready"){ paint(); return; }
@@ -2810,8 +2927,9 @@ function kindHeader(kd,list){
   const el=document.createElement("div"); el.className="scene"; el.id="kind_"+kd.k; el.style.borderLeft="3px solid var(--accent, #888)";
   el.innerHTML=`<h3><span style="text-transform:uppercase;letter-spacing:.06em">${esc(kd.label)}</span> <span class="stat">${esc(kd.desc)} · ${list.length} scene${list.length>1?"s":""} · ${played} played</span>${a&&typeof a.score==="number"?`<span class="score">${a.score}/10</span>`:""}<span class="sp"></span>
     <button class="btn sm" type="button" data-krun>Run these</button> <button class="btn sm pri" type="button" data-kan ${played?"":"disabled"}>${a&&a.at?"Analyse again":"Analyse these"}</button> <button class="btn sm" type="button" data-kfix title="Run this section's fixer only: its report, its payload, its pieces">Fix this section</button></h3>`;
-  if(a&&a.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">${a.step==="kind"?"Re-evaluating the scene reports of this kind against its payload…":"Judging each scene on its own…"}</div>`);
+  if(a&&a.judging) el.insertAdjacentHTML("beforeend",`<div class="stat">${a.step==="kind"?"Re-evaluating the scene reports of this section against its payload…":a.step==="fix"?"This section's fixer is writing the fixes…":"Judging each scene on its own, one by one…"}</div>`);
   if(a&&a.err) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">The analysis failed: ${esc(a.err)}</div>`);
+  if(a&&a.at&&(a.fails||[]).length) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">Not judged, so left out of this analysis: ${esc(a.fails.join(" · "))}. <b>Analyse again</b> retries them.</div>`);
   if(a&&a.at){
     if(a.summary) el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div><b>This kind.</b> ${esc(a.summary)}</div></div>`);
     if(a.reasoning) el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The kind's reasoning (what the fixer reads instead of the dialogues)</summary><div style="font-size:12.5px;white-space:pre-wrap">${esc(a.reasoning)}</div></details>`);
@@ -2824,8 +2942,8 @@ function kindHeader(kd,list){
   if(fx&&fx.running) el.insertAdjacentHTML("beforeend",`<div class="stat">This section's fixer is reading its report and payload…</div>`);
   else if(fx&&fx.err) el.insertAdjacentHTML("beforeend",`<div class="stat" style="color:var(--danger)">This section's fixer failed: ${esc(fx.err)}</div>`);
   else if(fx&&fx.at&&(fx.edits||[]).length){ const det=document.createElement("details"); det.className="turnRow";
-    det.innerHTML=`<summary class="stat" style="cursor:pointer">This section's fixer proposed ${fx.edits.length} edit${fx.edits.length>1?"s":""}${fx.summary?": "+esc(fx.summary):""} (the reconciler decides; you can also apply them here)</summary>`;
-    fx.edits.forEach(ed=>det.appendChild(editCard(ed))); el.appendChild(det); }
+    det.innerHTML=`<summary class="stat" style="cursor:pointer">This section's fixer suggested ${fx.edits.length} edit${fx.edits.length>1?"s":""}${fx.summary?": "+esc(fx.summary):""} (suggestions only: the final run consolidates them into the change you apply)</summary>${suggestionsHTML(fx.edits)}`;
+    el.appendChild(det); }
   const b=busyAll();
   const kr=el.querySelector("[data-krun]"); kr.disabled=b; kr.onclick=()=>{ const sel=new Set(selReply()), pick=list.filter(sc=>sel.has(sc.id)); runDriftScenes(pick.length?pick:list); };
   const kf=el.querySelector("[data-kfix]"); kf.disabled=b||!claudeReachable()||!(a&&a.at); if(!(a&&a.at)) kf.title="Analyse this section first"; kf.onclick=()=>fixSectionAlone(kd.k);
@@ -2881,8 +2999,8 @@ async function judgeScene(sc,sig){
   try{
     const rot=rotOf(sc);
     const input=apBuild("scene",{title:sc.title,tests:sc.tests,facts:sc.facts,expect:sc.expect||sc.pass||"",kind:KIND_DESC[sc.kind]||sc.kind,
-      criteria:criteriaText(sc.focus,rot.length>=2),probes:(sc.probes||[]).map(p=>`- turn ${p.turn}: ${p.pass}`).join("\n"),rotation:rot.join(", "),exchange:exchangeText(sc,r.turns),payload:r.payload?payloadText(r.payload):"(not available)",applied:appliedText(appliedSince(r.at||0))});
-    r.judge=await AI.sample.json(input,{signal:sig||(DR.ctl&&DR.ctl.signal),modelTier:"complex",cache:false});
+      criteria:criteriaText(sc.focus,rot.length>=2),probes:(sc.probes||[]).map(p=>`- turn ${p.turn}: ${p.pass}`).join("\n"),rotation:rot.join(", "),exchange:exchangeText(sc,r.turns),payload:r.payload?instrText(r.payload):"(not available)",applied:appliedText(appliedSince(r.at||0))});
+    r.judge=await claudeJson(input,{signal:sig||(DR.ctl&&DR.ctl.signal),modelTier:"complex",cache:false});
     return r.judge;
   }catch(e){ r.err=aiErr(e); throw e; }
   finally{ r.judging=false; driftSave(); renderDrift(); }
@@ -2902,20 +3020,23 @@ async function analyseKind(k,sig){
     const worker=async()=>{ while(next<todo.length&&!(sig&&sig.aborted)){ const sc=todo[next++];
       for(let attempt=0;;attempt++){ try{ await judgeScene(sc,sig); break; }
         catch(e){ if(e&&e.code==="rate_limited"&&attempt<3&&!(sig&&sig.aborted)){ await new Promise(r=>setTimeout(r,15000*(attempt+1))); continue; }
-          if(e&&(e.code==="cancelled"||e.code==="not_granted")) throw e; failed++; break; } } } };
-    await Promise.all(Array.from({length:Math.min(2,todo.length)},worker));
+          if(e&&(e.code==="cancelled"||e.code==="not_granted")) throw e; failed++; (KA[k].fails=KA[k].fails||[]).push(sc.title+": "+aiErr(e)); break; } } } };
+    await Promise.all(Array.from({length:Math.min(1,todo.length)},worker));
     if(sig&&sig.aborted) throw {code:"cancelled"};
     const judged=list.filter(sc=>DR.results[sc.id].judge);
-    if(!judged.length) throw {message:"No scene of this kind could be judged."};
+    if(!judged.length) throw {message:"No scene of this section could be judged. "+((KA[k].fails||[]).join(" · ")||"")};
     /* level 2: the kind re-evaluates its scene reports, with its payload once */
     KA[k].step="kind"; renderDrift();
     const ps=judged.find(sc=>DR.results[sc.id].payload)||judged[0], pay=DR.results[ps.id].payload;
     const rot=[...new Set(judged.flatMap(sc=>rotOf(sc)))], since=Math.min(...judged.map(sc=>DR.results[sc.id].at||0));
     const kd=KINDS.find(x=>x.k===k)||{label:k,desc:""};
     const input=apBuild("kind",{kind:`${kd.label} — ${KIND_DESC[kd.kind]||kd.desc}`,criteria:criteriaText([],rot.length>=2),rotation:rot.length>=2?rot.join(", "):"",
-      reports:judged.map(sceneReport).join("\n\n"),payload_scene:ps.title,payload:pay?payloadText(pay):"(not available)",applied:appliedText(appliedSince(since))});
-    const o=await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false});
-    KA[k]=Object.assign(o,{at:Date.now(),model:testLabel(),scenes:judged.map(sc=>sc.id),failed});
+      reports:judged.map(sceneReport).join("\n\n"),payload_scene:ps.title,payload:pay?instrText(pay):"(not available)",applied:appliedText(appliedSince(since))});
+    const o=await claudeJson(input,{signal:sig,modelTier:"complex",cache:false});
+    KA[k]=Object.assign(o,{at:Date.now(),model:testLabel(),scenes:judged.map(sc=>sc.id),failed,fails:KA[k].fails||[]});
+    /* the section's fixer gets this analysis and runs the fix now (a failure here leaves the analysis) */
+    KA[k].judging=false; KA[k].step="fix"; renderDrift();
+    try{ await fixSection(k,effectText(ALL.effect),sig); }catch(e){ if(e&&e.code==="cancelled") throw e; }
     return KA[k];
   }catch(e){ KA[k]=Object.assign({},KA[k]||{},{judging:false,err:aiErr(e)}); throw e; }
   finally{ if(KA[k]){ KA[k].judging=false; delete KA[k].step; } kaSave(); driftSave(); renderDrift(); }
@@ -3218,7 +3339,7 @@ async function judgeEngine(gr,cx){
     checks:cx.checks||"",roleplay:/^Roleplay reply/.test(gr.calls[0].dbg||""),template:promptText?promptText.slice(0,30000):"",
     applied:appliedText(appliedSince(cx.at||0).filter(a=>!gr.prompt||a.item==="prompt:"+gr.prompt)),
     calls:sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c).slice(0,50000)}\n\n===== CALL ${i+1}: THE ANSWER =====\n${String(c.output).slice(0,8000)}`).join("\n\n")});
-  if(AI.sample) return AI.sample.json(input,{signal:cx.signal,modelTier:"complex",cache:false});
+  if(AI.sample) return claudeJson(input,{signal:cx.signal,modelTier:"complex",cache:false});
   const t=await aiAsk([{role:"user",content:input}],{signal:cx.signal,maxTokens:4000,temperature:0.2});
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The analysis did not come back as JSON."}; return JSON.parse(m[0]);
 }
@@ -3282,7 +3403,7 @@ function renderOverall(){
   const ds=Array.isArray(o.decisions)?o.decisions:[];
   if(ds.length){ const n=v=>ds.filter(d=>d.verdict===v).length;
     el.insertAdjacentHTML("beforeend",`<details class="turnRow"><summary class="stat" style="cursor:pointer">The reconciler decided on ${ds.length} proposed edit${ds.length>1?"s":""}: ${n("keep")} kept · ${n("merge")} merged · ${n("drop")} dropped</summary><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${ds.map(d=>`<li><code>${esc(d.id||"")}</code> <span class="vd ${d.verdict==="keep"?"held":d.verdict==="drop"?"broke":"bent"}">${esc(d.verdict||"")}</span> ${esc(d.why||"")}</li>`).join("")}</ul></details>`); }
-  (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.map(h=>(CRITERIA.find(c=>c.id===h)||{label:h}).label).join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
+  selectableEdits(el,o.edits||[],(ed,c)=>{ if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.map(h=>(CRITERIA.find(c=>c.id===h)||{label:h}).label).join(", "))}${(ed.from||[]).length?` · from ${esc(ed.from.join(", "))}`:""}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); });
   el.appendChild(discussPanel("rp"));
   host.appendChild(el);
   const cb=el.querySelector("[data-clear-overall]"); if(cb) cb.onclick=()=>{ setOverall(null); toast("The complete analysis is cleared"); };
@@ -3295,7 +3416,7 @@ function renderOverall(){
 const DISC={rp:lsGet("disc_rp",[])||[],eng:lsGet("disc_eng",[])||[],draft:{rp:"",eng:""},busy:{rp:false,eng:false},ctl:{}};
 function discSave(key){ lsSet("disc_"+key,DISC[key].slice(-40)); }
 function discEdits(t){ const m=String(t).match(/```edits\s*\n([\s\S]*?)```/); if(!m) return [];
-  try{ const v=JSON.parse(m[1]); const a=Array.isArray(v)?v:(v&&Array.isArray(v.edits)?v.edits:[]); return a.filter(e=>e&&e.item); }catch(e){ return []; } }
+  try{ const v=JSON.parse(m[1]); const a=Array.isArray(v)?v:(v&&Array.isArray(v.edits)?v.edits:[]); const l=a.filter(e=>e&&e.item); l.forEach(locateEdit); return l; }catch(e){ return []; } }
 function analysisText(o){
   if(!o) return "(none)";
   const st=ed=>{ const it=itemFromRef(ed.item); return it?editState(ed,it):"missing"; };
@@ -3413,7 +3534,7 @@ async function checkEffect(sig){
   const prev=snapPrev(cur); if(!prev){ ALL.effect=null; lsSet("effect",null); return null; }
   const x=effectInput(prev,cur);
   const input=apBuild("effect",{applied:x.applied,scores:x.scores,diffs:x.diffs,reports:x.reports});
-  const e=await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false});
+  const e=await claudeJson(input,{signal:sig,modelTier:"complex",cache:false});
   e.at=Date.now(); e.prevAt=prev.at; e.prevModel=prev.model; e.applied=x.n; ALL.effect=e; lsSet("effect",e); return e;
 }
 function renderEffect(host){
@@ -3437,6 +3558,8 @@ function renderEffect(host){
       current text of the pieces the proposals touch. Each request stays small; a failed reconciler
       still leaves every section's proposals on screen to apply. */
 const FX=lsGet("fixers",{})||{};
+/* when this run's fixing started: fixers that ran since then are "before you in this run" */
+const FX_RUN={since:0,engSince:0};
 function fxSave(){ lsSet("fixers",FX); }
 /* the static wording of a piece (what stays when its {{…}} are filled), to find it in a payload */
 function staticBits(v){ return String(v).split(/\{\{[^}]*\}\}|\[\[[^\]]*\]\]/).map(x=>x.trim()).filter(x=>x.length>=24).sort((a,b)=>b.length-a.length).slice(0,2).map(x=>x.slice(0,60)); }
@@ -3446,7 +3569,7 @@ function piecesIn(text){
   Object.keys(S.meta.blockDefaults).forEach(k=>{ const v=itemVal({type:"frag",key:k}); if(v.trim()&&staticBits(v).some(b=>t.indexOf(b)>=0)) out.push("frag:"+k); });
   return out;
 }
-function sectionPayload(k){ const kp=kindPayload(k)||kindPayload(secKind(k)); return kp?{scene:kp.scene,p:kp.p,text:payloadText(kp.p)}:null; }
+function sectionPayload(k){ const kp=kindPayload(k)||kindPayload(secKind(k)); return kp?{scene:kp.scene,p:kp.p,text:instrText(kp.p)}:null; }
 function pieceUsage(){ const u={}; KINDS.forEach(kd=>{ const sp=sectionPayload(kd.k); if(!sp||!KA[kd.k]) return; piecesIn(sp.text).forEach(id=>{ (u[id]=u[id]||[]).push(kd.k); }); }); return u; }
 async function fixSection(k,eff,sig){
   const kd=KINDS.find(x=>x.k===k), sp=sectionPayload(k); if(!kd||!KA[k]||!KA[k].at) return null;
@@ -3456,14 +3579,20 @@ async function fixSection(k,eff,sig){
     const catalogue=ids.map(id=>{ const others=(usage[id]||[]).filter(x=>x!==k).map(secLabel); return `===== ${id}${others.length?` — SHARED with: ${others.join(", ")}`:" — this section only"} =====\n${itemVal(itemFromRef(id))}`; }).join("\n\n");
     const since=Math.min(...kindScenes(k).map(sc=>DR.results[sc.id]&&DR.results[sc.id].at).filter(Boolean),Date.now());
     const v={section:`${kd.label} (payload kind tpl:${kd.kind})`,report:kindReport(k),layout:`===== tpl:${kd.kind} =====\n${itemVal({type:"tpl",key:kd.kind})}`,catalogue:catalogue||"(no piece found in the payload)",
-      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText()};
+      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText(),history:historyFor(ids.concat(["tpl:"+kd.kind])),earlier:earlierText(FX,"S",k,FX_RUN.since||0)};
     v.payload=sp?cutMiddle(sp.text,Math.max(20000,AP_CAP-apBytes(apBuild("fixer",Object.assign({},v,{payload:""})))-4000)):"(not available)";
-    const o=await AI.sample.json(apBuild("fixer",v),{signal:sig,modelTier:"complex",cache:false});
-    (o.edits||[]).forEach((ed,i)=>{ ed._id=`S:${k}#${i+1}`; });
+    const o=await claudeJson(apBuild("fixer",v),{signal:sig,modelTier:"complex",cache:false});
+    (o.edits||[]).forEach((ed,i)=>{ ed._id=`S:${k}#${i+1}`; }); await repairEdits(o.edits,sig);
     FX[k]=Object.assign(o,{at:Date.now()}); return FX[k];
   }catch(e){ FX[k]={err:aiErr(e),at:Date.now()}; throw e; }
   finally{ if(FX[k]) delete FX[k].running; fxSave(); renderDrift(); }
 }
+/* every edit applied before to these items, oldest first (also from earlier runs) */
+function historyFor(ids){ const set=new Set(ids); return appliedText(Object.values(APPLIED).filter(a=>a&&a.item&&set.has(a.item)).sort((x,y)=>(x.t||0)-(y.t||0)).slice(-25)); }
+/* what the fixers that already ran in this run proposed */
+function earlierText(store,prefix,skip,since){ return Object.keys(store).filter(k=>k!==skip&&store[k]&&store[k].at&&!store[k].err&&!store[k].running&&(store[k].at>=since)).map(k=>{ const o=store[k];
+  return `## ${prefix==="S"?secLabel(k):"prompt:"+k}: ${o.summary||""}
+`+(o.edits||[]).map(ed=>`- ${ed._id||""} ${ed.item}: «${String(ed.find||"").slice(0,300)}» → «${String(ed.replace||"").slice(0,400)}»`).join("\n"); }).join("\n\n"); }
 function proposalsText(){
   return KINDS.filter(kd=>FX[kd.k]&&!FX[kd.k].err&&FX[kd.k].at).map(kd=>{ const o=FX[kd.k];
     return `## ${kd.label} (tpl:${kd.kind})\nSUMMARY: ${o.summary||""}`+((o.keep||[]).length?"\nKEEP: "+o.keep.join(" · "):"")+"\nPROPOSED EDITS:\n"+((o.edits||[]).map(ed=>
@@ -3527,14 +3656,14 @@ async function analyseTogether(){
   catch(e){ if(e&&e.code==="cancelled") throw e; ALL.effect=null; toast("The before → after check failed: "+aiErr(e),6000); }
   const effT=effectText(eff);
   /* 3. one fixer per analysed section, two at a time */
-  const secs=KINDS.filter(kd=>KA[kd.k]&&KA[kd.k].at).map(kd=>kd.k); let next=0, fails=[];
-  KINDS.forEach(kd=>{ if(secs.indexOf(kd.k)<0) delete FX[kd.k]; });
+  const secs=KINDS.filter(kd=>KA[kd.k]&&KA[kd.k].at&&!(FX[kd.k]&&FX[kd.k].at>=KA[kd.k].at&&!FX[kd.k].err&&!eff)).map(kd=>kd.k); let next=0, fails=[];
+  KINDS.forEach(kd=>{ if(!(KA[kd.k]&&KA[kd.k].at)) delete FX[kd.k]; });
   const worker=async()=>{ while(next<secs.length&&!(sig&&sig.aborted)){ const k=secs[next++]; st(`Fixing section by section: ${secLabel(k)}…`);
     for(let attempt=0;;attempt++){ try{ await fixSection(k,effT,sig); break; }
       catch(e){ if(e&&e.code==="cancelled") throw e; if(e&&e.code==="rate_limited"&&attempt<2){ await new Promise(r=>setTimeout(r,15000*(attempt+1))); continue; } fails.push(secLabel(k)+": "+aiErr(e)); break; } } } };
-  await Promise.all(Array.from({length:Math.min(2,secs.length)},worker));
+  await Promise.all(Array.from({length:Math.min(1,secs.length)},worker));
   if(sig&&sig.aborted) throw {code:"cancelled"};
-  if(secs.length&&fails.length===secs.length) throw {message:"Every section's fixer failed. "+fails.join(" · ")};
+  if(secs.length&&fails.length===secs.length&&!KINDS.some(kd=>FX[kd.k]&&FX[kd.k].at&&!FX[kd.k].err)) throw {message:"Every section's fixer failed. "+fails.join(" · ")};
   /* 4. the reconciler */
   st("The reconciler is merging every section's proposals…");
   const prop=KINDS.filter(kd=>FX[kd.k]&&!FX[kd.k].err).flatMap(kd=>FX[kd.k].edits||[]);
@@ -3542,7 +3671,8 @@ async function analyseTogether(){
   const v={proposals:proposalsText()||"(no section fixer ran)",usage:touched.map(id=>`- ${id}: ${/^tpl:/.test(id)?"every section on payload kind "+id.slice(4):((usage[id]||[]).map(secLabel).join(", ")||"(not found in a payload)")}`).join("\n"),
     pieces:touched.map(id=>{ const it=itemFromRef(id); return it?`===== ${id} =====\n${itemVal(it)}`:`===== ${id} ===== (unknown item)`; }).join("\n\n"),
     scores:scoresText(cur,prev),history:historyText(),effect:effT,engines:x.engines.slice(0,25000),prompts:x.prompts||"",applied:appliedText(appliedSince(since)),rotation:rotationText()};
-  const o=await AI.sample.json(apBuild("overseer",v),{signal:sig,modelTier:"complex",cache:false});
+  const o=await claudeJson(apBuild("overseer",v),{signal:sig,modelTier:"complex",cache:false});
+  await repairEdits(o.edits,sig);
   if(fails.length) o.fixerFailures=fails;
   const rots=[...new Set(DRIFT_SCENES.map(sc=>rotOf(sc).join(" → ")).filter(Boolean))];
   o.model=rots.length?"rotating "+rots.join(" / "):testLabel(); o.at=Date.now(); o.scores=cur; o.prevScores=prev; ALL.overall=o; lsSet("overall",o); snapKeep(snapNow()); DISC.rp=[]; discSave("rp");   // a new analysis, a new conversation
@@ -3575,7 +3705,7 @@ function engReportText(sc){ const r=ENGRUN.byScene[sc.id]||{}, rp=r.report;
 async function engSceneReport(sc,sig){
   const r=ENGRUN.byScene[sc.id]; if(!r||!(r.calls||[]).length||!Object.keys(r.judge||{}).length) return null;
   const input=apBuild("engscene",{scene:sc.label,focus:sc.focus,checks:sc.checks||"",lines:(r.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n"),judgements:engJudgementsOf(sc),applied:appliedText(appliedSince(r.at||0))});
-  r.report=Object.assign(await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false}),{at:Date.now()});
+  r.report=Object.assign(await claudeJson(input,{signal:sig,modelTier:"complex",cache:false}),{at:Date.now()});
   lsSet("engbyscene",ENGRUN.byScene); renderEngScenes(); return r.report;
 }
 /* the engine prompts some judge found problems in, with every judgement of them */
@@ -3606,9 +3736,9 @@ async function fixEnginePrompt(e,effT,sig){
     const input=apBuild("engfixer",{engine:`${e.label} (prompt:${e.key})`,prompt:itemVal({type:"prompt",key:e.key}),
       judgements:e.items.map(x=>`## In "${x.sc.label}"\n`+engJudgementText(x.g,x.j)).join("\n\n"),reports:e.scenes.map(engReportText).join("\n\n"),
       example:e.call?`===== WHAT THE APP SENT =====\n${cutMiddle(payloadText(e.call),40000)}\n\n===== THE ANSWER =====\n${String(e.call.output).slice(0,6000)}`:"(none recorded)",
-      effect:effT||"",applied:appliedText(appliedSince(since).filter(a=>a.item==="prompt:"+e.key))});
-    const o=await AI.sample.json(input,{signal:sig,modelTier:"complex",cache:false});
-    (o.edits||[]).forEach((ed,i)=>{ ed._id=`P:${e.key}#${i+1}`; if(!ed.item) ed.item="prompt:"+e.key; });
+      effect:effT||"",applied:appliedText(appliedSince(since).filter(a=>a.item==="prompt:"+e.key)),history:historyFor(["prompt:"+e.key]),earlier:earlierText(EFX,"P",e.key,FX_RUN.engSince||0)});
+    const o=await claudeJson(input,{signal:sig,modelTier:"complex",cache:false});
+    (o.edits||[]).forEach((ed,i)=>{ ed._id=`P:${e.key}#${i+1}`; if(!ed.item) ed.item="prompt:"+e.key; }); await repairEdits(o.edits,sig);
     EFX[e.key]=Object.assign(o,{at:Date.now(),label:e.label}); return EFX[e.key];
   }catch(err){ EFX[e.key]={err:aiErr(err),at:Date.now(),label:e.label}; throw err; }
   finally{ if(EFX[e.key]) delete EFX[e.key].running; efxSave(); renderEngOverall(); }
@@ -3633,7 +3763,7 @@ async function checkEngEffect(sig){
   const judgements=ids.map(id=>{ const a=(prev.scenes[id]||{}).verdicts||{}, b=(cur.scenes[id]||{}).verdicts||{}, ks=[...new Set(Object.keys(a).concat(Object.keys(b)))];
     return `## ${(cur.scenes[id]||prev.scenes[id]).label}\n`+ks.map(k=>`- ${k}: ${a[k]||"–"} → ${b[k]||"–"}`).join("\n"); }).join("\n\n");
   const diffs=Object.keys(cur.prompts).filter(k=>prev.prompts[k]!=null&&prev.prompts[k]!==cur.prompts[k]).map(k=>`## prompt:${k}\n${payloadDiff(prev.prompts[k],cur.prompts[k],15000)}`).join("\n\n")||"(no engine prompt changed)";
-  const e=await AI.sample.json(apBuild("engeffect",{applied:appliedText(applied)||"(none recorded in this browser)",scenes,judgements,diffs}),{signal:sig,modelTier:"complex",cache:false});
+  const e=await claudeJson(apBuild("engeffect",{applied:appliedText(applied)||"(none recorded in this browser)",scenes,judgements,diffs}),{signal:sig,modelTier:"complex",cache:false});
   e.at=Date.now(); e.prevAt=prev.at; ENGALL.effect=e; lsSet("engeffect",e); return e;
 }
 async function analyseEnginesTogether(){
@@ -3649,19 +3779,20 @@ async function analyseEnginesTogether(){
   catch(e){ if(e&&e.code==="cancelled") throw e; ENGALL.effect=null; toast("The engine before → after check failed: "+aiErr(e),6000); }
   const effT=effectText(eff);
   /* E3: one fixer per engine prompt with problems, two at a time */
-  const probs=engProblemPrompts(); Object.keys(EFX).forEach(k=>{ if(!probs.some(e=>e.key===k)) delete EFX[k]; });
+  const probs=engProblemPrompts(); Object.keys(EFX).forEach(k=>{ if(!probs.some(e=>e.key===k)) delete EFX[k]; }); FX_RUN.engSince=Date.now();
   let m=0; const fails=[];
   const w2=async()=>{ while(m<probs.length&&!(sig&&sig.aborted)){ const e=probs[m++]; st(`Fixing prompt by prompt: ${e.label}…`);
     for(let attempt=0;;attempt++){ try{ await fixEnginePrompt(e,effT,sig); break; }
       catch(err){ if(err&&err.code==="cancelled") throw err; if(err&&err.code==="rate_limited"&&attempt<2){ await new Promise(r=>setTimeout(r,15000*(attempt+1))); continue; } fails.push(e.label+": "+aiErr(err)); break; } } } };
-  await Promise.all(Array.from({length:Math.min(2,probs.length)},w2));
+  await Promise.all(Array.from({length:Math.min(1,probs.length)},w2));
   if(sig&&sig.aborted) throw {code:"cancelled"};
   if(probs.length&&fails.length===probs.length) throw {message:"Every engine prompt's fixer failed. "+fails.join(" · ")};
   /* E4: the engine reconciler */
   st("The engine reconciler is merging every prompt's proposals…");
   const since=Math.min(...Object.values(ENGRUN.byScene).map(r=>r&&r.at).filter(Boolean),Date.now());
-  const o=await AI.sample.json(apBuild("engfinal",{reports:ENGINE_SCENES.filter(sc=>ENGRUN.byScene[sc.id]).map(engReportText).join("\n\n"),proposals:engProposalsText()||"(no engine prompt had problems)",effect:effT,applied:appliedText(appliedSince(since))}),{signal:sig,modelTier:"complex",cache:false});
+  const o=await claudeJson(apBuild("engfinal",{reports:ENGINE_SCENES.filter(sc=>ENGRUN.byScene[sc.id]).map(engReportText).join("\n\n"),proposals:engProposalsText()||"(no engine prompt had problems)",effect:effT,applied:appliedText(appliedSince(since))}),{signal:sig,modelTier:"complex",cache:false});
   if(fails.length) o.fixerFailures=fails;
+  await repairEdits(o.edits,sig);
   o.at=Date.now(); o.model=testLabel(); ENGALL.overall=o; lsSet("engoverall",o); engSnapKeep(engSnapNow()); DISC.eng=[]; discSave("eng"); renderEngOverall(); return o;
 }
 function renderEngOverall(){
@@ -3674,10 +3805,10 @@ function renderEngOverall(){
   /* each prompt fixer's proposals: usable even without the reconciler */
   const ks=Object.keys(EFX).filter(k=>EFX[k]);
   if(ks.length){ const det=document.createElement("details"); det.className="scene"; det.id="engFixers";
-    det.innerHTML=`<summary class="stat" style="cursor:pointer"><b>Each engine prompt's fixer</b> (${ks.length}): proposals you can apply here; the reconciler decides below</summary>`;
+    det.innerHTML=`<summary class="stat" style="cursor:pointer"><b>Each engine prompt's fixer</b> (${ks.length}): suggestions only; the final run consolidates them into the change below</summary>`;
     ks.forEach(k=>{ const f=EFX[k], row=document.createElement("div"); row.className="turnRow"; row.style.display="block";
       row.innerHTML=`<div><b>${esc(f.label||k)}</b> <code>prompt:${esc(k)}</code> ${f.running?'<span class="stat">reading…</span>':f.err?`<span class="stat" style="color:var(--danger)">failed: ${esc(f.err)}</span>`:`<span class="stat">${esc(f.summary||"")}</span>`}</div>`;
-      (f.edits||[]).forEach(ed=>row.appendChild(editCard(ed)));
+      if((f.edits||[]).length) row.insertAdjacentHTML("beforeend",suggestionsHTML(f.edits));
       const fb=document.createElement("button"); fb.className="btn sm"; fb.type="button"; fb.textContent="Fix this prompt again"; fb.disabled=busyAll()||!claudeReachable()||!!f.running; fb.onclick=()=>fixEnginePromptAlone(k); row.appendChild(fb);
       det.appendChild(row); });
     host.appendChild(det); }
@@ -3690,7 +3821,7 @@ function renderEngOverall(){
     ${Array.isArray(o.scenes)&&o.scenes.length?`<ul style="margin:0;padding-left:18px;font-size:12.5px">${o.scenes.map(x=>`<li><span class="vd ${x.outcome==="right"?"held":x.outcome==="wrong"?"broke":"bent"}">${esc(x.outcome||"")}</span> <b>${esc(x.scene||"")}</b> — ${esc(x.note||"")}</li>`).join("")}</ul>`:""}
     ${Array.isArray(o.patterns)&&o.patterns.length?`<ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px">${o.patterns.map(x=>`<li>${x.engine?`<code>${esc(x.engine)}</code> `:""}<b>${esc(x.pattern||"")}</b>${x.cause?` <span class="stat">— cause: ${esc(x.cause)}</span>`:""}</li>`).join("")}</ul>`:""}
     ${ds.length?`<details class="turnRow"><summary class="stat" style="cursor:pointer">The engine reconciler decided on ${ds.length} proposed edit${ds.length>1?"s":""}</summary><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">${ds.map(d=>`<li><code>${esc(d.id||"")}</code> <span class="vd ${d.verdict==="keep"?"held":d.verdict==="drop"?"broke":"bent"}">${esc(d.verdict||"")}</span> ${esc(d.why||"")}</li>`).join("")}</ul></details>`:""}`;
-  (o.edits||[]).forEach(ed=>{ const c=editCard(ed); if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.join(", "))}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); el.appendChild(c); });
+  selectableEdits(el,o.edits||[],(ed,c)=>{ if(ed.helps&&ed.helps.length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Helps: ${esc(ed.helps.join(", "))}${(ed.from||[]).length?` · from ${esc(ed.from.join(", "))}`:""}${ed.risks?` · watch: ${esc(ed.risks)}`:""}</div>`); });
   el.appendChild(discussPanel("eng"));
   host.appendChild(el);
   el.querySelector("[data-clear]").onclick=()=>{ ENGALL.overall=null; lsSet("engoverall",null); renderEngOverall(); };
@@ -3798,7 +3929,8 @@ async function runTeam(sig,which){
       TEAM.busy.delete(t.key); TEAM.done++; paintTeam(); renderDrift(); renderEng();
     }
   };
-  try{ await Promise.all(Array.from({length:Math.min(teamSize(),tasks.length)},worker)); }
+  /* one by one: each section (and its fixer) sees what the ones before it changed */
+  try{ await Promise.all(Array.from({length:Math.min(1,tasks.length)},worker)); }
   finally{ TEAM.busy.clear(); driftSave(); engLoad(ENGRUN.cur||engPreset().id); }
 }
 async function analyseTeamAndOversee(which){
@@ -3842,7 +3974,7 @@ async function runEverything(){
   try{
     /* play every scene first (one sandbox, one scene at a time), then the judges read them all at once */
     setOverall(null);
-    rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; if(KA[sc.group]) KA[sc.group]=null; }); kaSave();
+    rs.forEach(sc=>{ if(DR.results[sc.id]) DR.results[sc.id].judge=null; if(KA[sc.group]) KA[sc.group]=null; }); kaSave(); FX_RUN.since=Date.now();
     $("#allStat").textContent=`Scenes (${rs.length})…`; await runDriftScenes(rs,true);
     if(!ALL.ctl.signal.aborted&&claudeReachable()) await analyseTeamAndOversee("reply");
     $("#allStat").textContent=ALL.ctl.signal.aborted?"Stopped.":!claudeReachable()?"Played. Export results, then Import results in the editor inside Claude to analyse.":"Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:"");
@@ -3851,6 +3983,7 @@ async function runEverything(){
 }
 async function analyseEverything(){
   if(busyAll()) return;
+  FX_RUN.since=Date.now();
   if(!claudeReachable()){ toast(ANALYSE_HERE,6000); return; }
   ALL.running=true; ALL.ctl=new AbortController(); DR.ctl=ALL.ctl; ENGRUN.ctl=ALL.ctl; paintAllButtons();
   try{ await analyseTeamAndOversee("reply"); if(!ALL.ctl.signal.aborted) $("#allStat").textContent="Done."+(ALL.overall&&ALL.overall.score!=null?` Across all scenes: ${ALL.overall.score}/10.`:""); }
@@ -4096,7 +4229,7 @@ async function judgeLlmField(f,F){
   const input=apBuild("compare",{job:d.label,setting:f,reply:F.kind==="reply",labels:labels.map(l=>"Model "+l).join(", "),
     times:F.models.map((m,i)=>`- Model ${labels[i]}: ${sp[m]?`average ${sp[m].avg.toFixed(1)} s, median ${sp[m].median.toFixed(1)} s over ${sp[m].n}`:"not measured"}`).join("\n"),results:body});
   let v;
-  if(AI.sample) v=await AI.sample.json(input.slice(0,250000),{signal:LLM.ctl.signal,modelTier:"complex",cache:false});
+  if(AI.sample) v=await claudeJson(input.slice(0,250000),{signal:LLM.ctl.signal,modelTier:"complex",cache:false});
   else { const t=await aiAsk([{role:"user",content:input}],{signal:LLM.ctl.signal,maxTokens:4000,temperature:0.2}); const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The comparison did not come back as JSON."}; v=JSON.parse(m[0]); }
   (v.models||[]).forEach(r=>{ r.model=name(String(r.label||"").replace(/^Model\s*/i,"")); });
   if(v.best) v.best=name(String(v.best).replace(/^Model\s*/i,""));
@@ -4218,7 +4351,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={selectableEdits,FX_RUN,historyFor,locateEdit,repairEdits,CQ,claudeJson,fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

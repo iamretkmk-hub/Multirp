@@ -339,8 +339,7 @@ several-character scenes are still answered through the gamemaster layout.
 1. **Run everything selected** plays every ticked scene. Each turn goes through the real payload and your
    model (or Claude standing in), and every speaker answers each line. The estimate counts replies as
    lines × speakers.
-2. **The analysis is hierarchical**, per section (`analyseKind`), with up to *Analysts at once* kinds in
-   parallel:
+2. **The analysis is hierarchical**, per section (`analyseKind`), one section at a time:
    - **Level 1: each scene on its own** (`scene`, `judgeScene`, two at a time within a kind). The judge
      gets that scene's dialogue and the payload it was played through. For every turn it gives a verdict,
      scores the rubric with a note and a quote, and lists findings with the evidence and the suspected
@@ -423,6 +422,45 @@ When you ask for a change, Claude puts the edits in an `edits` block. They show 
 with **Apply** and **Undo**, and the block itself is hidden. The conversation is kept in this browser
 (`disc_rp`, `disc_eng`), and the oldest exchanges are dropped when it would exceed one request. A new
 complete analysis starts a new conversation; **Clear the conversation** starts one by hand.
+
+**One request at a time.** Every analysis call to Claude goes through one queue (`claudeJson`, `CQ`):
+- **One at a time.** Scenes, sections and engines are analysed one by one, so they no longer pile up into
+  "too many requests".
+- **Rate limits.** A rate-limited call waits and tries again, up to four times.
+- **Cut-off answers.** An answer that was cut off or was not JSON is asked again once, with the
+  instruction to answer much shorter.
+- **Compact answers.** The judges are asked for one-line notes, at most six findings and short reasoning.
+- **No transcript twice.** Judges and fixers get the payload without the transcript (`instrText`), since
+  the dialogue is given separately.
+
+**What "Text not found" means.** An edit replaces exact words in one piece. "Text not found" means those
+words are not in that piece as it reads now: Claude copied them from the filled payload (with the names,
+memories or numbers the app put in), from a different piece, or with different spacing. Every edit is
+now checked when it arrives (`locateEdit`, `repairEdits`):
+- spacing, line breaks and quote marks are matched loosely to the piece's exact words;
+- words that sit in exactly one other piece re-target the edit there;
+- what is still missing is shown to Claude with the piece's current text, to copy again (`editrepair`).
+
+A card that is still missing says why, with a **Fix this edit** button that runs the repair for that edit.
+A repaired card says how it was repaired.
+
+**Each fixer knows what was changed before it.** Sections, and the engine prompts' fixers, run one by one.
+Each fixer gets every edit applied before to the pieces it can change, including those from earlier runs
+(`historyFor`), and what the fixers before it proposed in this run (`earlierText`). It is told not to undo
+or repeat them, and to build on an earlier proposal when it touches the same piece.
+
+**Suggestions per section, one change at the end.** Section fixers and engine-prompt fixers only
+**suggest** edits. Their suggestions are listed read-only in the section (or under "Each engine prompt's
+fixer"), and nothing is applied from them. After all the analysis, the final run (the reconciler) checks
+every suggestion, consolidates them and proposes **one complete change**. Every edit in it has an
+*include in the change* checkbox (all ticked), and there are **Select all**, **None** and **Apply
+selected (n)** buttons. Each card still has its own Apply and Undo.
+
+**The fixer runs right after its section's analysis.** When a section has been analysed (scenes judged
+one by one, then re-evaluated), its fixer runs straight away with that analysis, and its suggestions
+are listed in the section. The complete analysis reuses those fresh proposals instead of running the
+fixers again, and only the reconciler is left. When a scene cannot be judged, the section says which
+one and why, and **Analyse again** retries it.
 
 **Claude's input limit.** One request to Claude takes at most 256 KiB of text, counted in UTF-8 bytes
 (a Turkish letter can take two), and a larger one is refused (`prompt_too_large`). A full run of twelve

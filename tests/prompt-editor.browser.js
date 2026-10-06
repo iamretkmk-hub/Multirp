@@ -223,6 +223,7 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const msgs=body.messages||[]; const last=String((msgs.slice(-1)[0]||{}).content||"");
       if(SCENE_RX.test(last)) return SCENE(last);
       if(KIND_RX.test(last)) return KIND(last);
+      if(/You are the FIXER for ONE test section/.test(last)) return JSON.stringify({summary:"PE-SEC9",edits:[],keep:[]});
       seen.push(msgs.map(m=>m.content).join("\n")); return '"Hatırlamıyorum." *Gözlüğünü indiriyor.*'; };
     await pg.click('#rtabs button[data-r="tests"]');
     const sc9=await pg.evaluate(()=>({n:__PE.DRIFT_SCENES.length,ids:__PE.DRIFT_SCENES.map(x=>x.id),kinds:[...new Set(__PE.DRIFT_SCENES.map(x=>x.kind))].sort().join(","),
@@ -280,7 +281,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("an exported run imports, with its kind's Analyse button", imp9.n===4&&imp9.btn, JSON.stringify(imp9));
     OR.calls=[];
     await pg.evaluate(()=>__PE.analyseKinds(["solo_memory"]));
-    ok("judging sends it to Claude only (the scene, then its kind), never back to the model", OR.calls.length===2&&OR.calls.every(c=>c.claude)
+    ok("judging sends it to Claude only (the scene, then its section, then the section's fixer), never back to the model", OR.calls.length===3&&OR.calls.every(c=>c.claude)&&/FIXER for ONE test section/.test(OR.calls[2].body.messages[0].content)
        &&await pg.evaluate(()=>!!__PE.DR.results.memory_truth.judge), JSON.stringify(OR.calls.map(c=>c.body.model)));
 
     console.log("\n[10 — engine tests: their own tab, purpose-built scenes, scripted exchanges]");
@@ -352,7 +353,7 @@ const ROOT=path.resolve(__dirname,'..');
     ok("Fix this prompt runs that engine prompt's fixer only", !!efk&&efc.length===1&&new RegExp("FIXER for ONE ENGINE PROMPT of the app: [^\\n]*\\(prompt:"+efk+"\\)").test(efc[0]), efk+" | "+efc.map(x=>x.slice(0,120)).join(" | "));
     const ef2=await pg.evaluate(async()=>{ const P=__PE, orig=AI.sample.json; let n=0, effIn="";
       lsSet("engsnaps",[]);
-      AI.sample.json=async(input,o)=>{ if(/ENGINE RECONCILER/.test(input)){ n++; if(n===1) throw {code:"invalid_json",message:"cut"}; return {score:7,summary:"PE-ENG-FIXED",edits:[]}; }
+      AI.sample.json=async(input,o)=>{ if(/ENGINE RECONCILER/.test(input)){ n++; if(n===1) throw {code:"prompt_too_large",message:"too big"}; return {score:7,summary:"PE-ENG-FIXED",edits:[]}; }
         if(/WHAT THE LAST CHANGES DID to the BACKGROUND ENGINES/.test(input)){ effIn=input; return {summary:"PE-ENG-EFFECT",edits:[],regressions:[],keep:[],revert:[]}; }
         return orig(input,o); };
       await P.writeEngFixesAlone();
@@ -363,7 +364,7 @@ const ROOT=path.resolve(__dirname,'..');
       const key=Object.keys(P.engSnaps()[0].prompts)[0], it=P.findItem("prompt:"+key), old=P.itemVal(it); P.setVal(it,old+"\nPE-ENG-NEWLINE"); APPLIED["pe-eng"]={t:Date.now(),item:"prompt:"+key,find:"x",replace:"PE-ENG-NEWLINE"};
       Object.values(P.ENGRUN.byScene).forEach(r=>{ r.at=Date.now()+1000; if(r.report) r.report.at=Date.now()+2000; });
       await P.writeEngFixesAlone();
-      const res={failBox:/The engine analysis failed/.test(failBox)&&/cut short/.test(failBox)&&!!btn,fixed,snaps1,effIn:/^\+ PE-ENG-NEWLINE/m.test(effIn)&&/Plans|Comings|scene/i.test(effIn),effBox:/PE-ENG-EFFECT/.test((document.querySelector("#engOverallBox")||{}).textContent||"")};
+      const res={failBox:/The engine analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed,snaps1,effIn:/^\+ PE-ENG-NEWLINE/m.test(effIn)&&/Plans|Comings|scene/i.test(effIn),effBox:/PE-ENG-EFFECT/.test((document.querySelector("#engOverallBox")||{}).textContent||"")};
       P.setVal(it,old); delete APPLIED["pe-eng"]; AI.sample.json=orig; return res; });
     ok("a failed engine analysis stays on screen, and Write the fixes again runs it", ef2.failBox&&ef2.fixed, JSON.stringify(ef2));
     ok("the next engine run is compared with the earlier one first (prompt diff, outcomes, verdicts), and the verdict shows", ef2.snaps1===1&&ef2.effIn&&ef2.effBox, JSON.stringify(ef2));
@@ -390,7 +391,7 @@ const ROOT=path.resolve(__dirname,'..');
       box:(document.querySelector("#overallBox")||{}).textContent||""}));
     OR.delay=null;
     ok("both scenes were played and judged, and no engine scene ran with them", all.tn&&all.tn.judge&&all.dn&&all.dn.judge&&all.engRan===1, JSON.stringify({tn:!!(all.tn&&all.tn.judge),dn:!!(all.dn&&all.dn.judge),eng:all.engRan}));
-    ok("the two payload kinds (text, several characters) are analysed at the same time, one analyst each", OR.peak>=2, OR.peak);
+    ok("the analysis runs one request at a time (no pile-up into rate limits)", OR.peak===1, OR.peak);
     const kc=OR.calls.filter(c=>c.claude&&KIND_RX.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     const sc11=OR.calls.filter(c=>c.claude&&SCENE_RX.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     ok("each scene was judged on its own first, with its dialogue", sc11.length===2&&sc11.every(t=>/^TURN 1$/m.test(t))&&sc11.some(t=>/THE SCENE: Texting at night/.test(t))&&sc11.some(t=>/THE SCENE: Dinner with Sami/.test(t)), sc11.length);
@@ -399,16 +400,22 @@ const ROOT=path.resolve(__dirname,'..');
     const fin=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft=fin?fin.body.messages[0].content:"";
     const fx11=OR.calls.filter(c=>c.claude&&/You are the FIXER for ONE test section/.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     const fxT=fx11.find(x=>/## SECTION: Text messages/.test(x))||"", fxM=fx11.find(x=>/## SECTION: Several characters/.test(x))||"";
-    ok("each section has its own fixer: its report with the reasoning, its payload once, its pieces, no dialogue", !!fxT&&!!fxM&&[fxT,fxM].every(x=>(x.match(/MESSAGE 1 · SYSTEM/g)||[]).length===1&&/THE JUDGE'S REASONING: PE-SCENE-REASONING/.test(x)&&/THE SECTION'S REASONING|THE KIND'S REASONING: PE-KIND-REASONING/.test(x)&&/===== THE PIECES IN THIS PAYLOAD/.test(x)&&/(SHARED with: |this section only)/.test(x)&&!/^TURN \d+$/m.test(x))
+    ok("each section has its own fixer: its report with the reasoning, its payload once, its pieces, no dialogue", !!fxT&&!!fxM&&[fxT,fxM].every(x=>(x.match(/===== THE PAYLOAD \(as sent/g)||[]).length===1&&/===== SYSTEM =====/.test(x)&&/THE JUDGE'S REASONING: PE-SCENE-REASONING/.test(x)&&/THE SECTION'S REASONING|THE KIND'S REASONING: PE-KIND-REASONING/.test(x)&&/===== THE PIECES IN THIS PAYLOAD/.test(x)&&/(SHARED with: |this section only)/.test(x)&&!/^TURN \d+$/m.test(x))
        &&/### SCENE text_night/.test(fxT)&&!/### SCENE dinner/.test(fxT), (fxT||"none").slice(0,200)+" | "+fx11.length);
     ok("the reconciler gets every section's proposals and where each piece is used, but no payload and no dialogue", !!fin&&/===== EVERY SECTION'S PROPOSALS/.test(ft)&&/S:text#1 frag:style_header/.test(ft)&&/S:multi#1/.test(ft)&&/PE-SEC-KEEP/.test(ft)
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
+    const fxLater=fx11[fx11.length-1]||"", fxFirst=fx11[0]||"";
+    ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 frag:style_header/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*frag:style_header/.test(fxLater), fxLater.slice(0,200));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
-    ok("each section shows its own fixer's proposals, to apply even if the reconciler fails", /This section's fixer proposed 1 edit: PE-SEC-SUMMARY/.test(sec11), sec11.slice(0,300));
+    const secApply=await pg.evaluate(()=>!!document.querySelector("#kind_text .chg"));
+    ok("each section lists its fixer's suggestions, with nothing to apply there", /This section's fixer suggested 1 edit: PE-SEC-SUMMARY/.test(sec11)&&/S:text#1/.test(sec11)&&!secApply, sec11.slice(0,300));
     OR.calls=[];
     await pg.evaluate(async()=>{ const b=document.querySelector("#kind_text [data-kfix]"); b.click(); for(let i=0;i<50&&__PE.ALL.running!==false;i++) await new Promise(r=>setTimeout(r,100)); await new Promise(r=>setTimeout(r,200)); });
     const kfx=OR.calls.filter(c=>c.claude).map(c=>c.body.messages[0].content);
     ok("Fix this section runs that section's fixer only", kfx.length===1&&/You are the FIXER for ONE test section of the author's roleplay model: Text messages/.test(kfx[0]), kfx.map(x=>x.slice(0,80)).join(" | "));
+    const sel11=await pg.evaluate(()=>{ const box=document.querySelector("#overallBox"), bar=box.querySelector("[data-sapply]"), picks=box.querySelectorAll("[data-pick]");
+      return {bar:!!bar,label:bar&&bar.textContent,picks:picks.length,checked:[...picks].every(x=>x.checked),title:/The complete change \(2 edits\)/.test(box.textContent)}; });
+    ok("the final run proposes one complete change: every edit with a checkbox, and Apply selected", sel11.bar&&sel11.picks===2&&sel11.checked&&sel11.title&&/Apply selected \(\d\)/.test(sel11.label), JSON.stringify(sel11));
     ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
     const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
       b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
@@ -416,6 +423,13 @@ const ROOT=path.resolve(__dirname,'..');
     ok("a move edit takes the line out and puts it right before the named one", mv.ok&&mv.i===mv.j-1&&mv.label==="Applied"&&mv.undo, JSON.stringify(mv));
     const mvu=await pg.evaluate(soloTpl=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/Moves/.test(x.textContent)); c.querySelector('[data-a="undo"]').click(); return __PE.itemVal(__PE.findItem("tpl:solo"))===soloTpl; },soloTpl);
     ok("…and Undo puts the layout back exactly", mvu);
+    const as11=await pg.evaluate(()=>{ const box=document.querySelector("#overallBox"), cards=[...box.querySelectorAll(".chg")];
+      const mv=cards.find(c=>/Moves/.test(c.textContent)), rw=cards.find(c=>/PE-ALL-FIX/.test(c.textContent));
+      mv.querySelector("[data-pick]").checked=false; rw.querySelector("[data-pick]").checked=true; mv.querySelector("[data-pick]").dispatchEvent(new Event("change"));
+      const before=__PE.itemVal(__PE.findItem("tpl:solo")); box.querySelector("[data-sapply]").click();
+      const r={fix:/PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),moveUntouched:__PE.itemVal(__PE.findItem("tpl:solo"))===before};
+      const u=rw.querySelector('[data-a="undo"]'); if(u&&!u.hidden) u.click(); return r; });
+    ok("Apply selected applies the ticked edits only", as11.fix&&as11.moveUntouched, JSON.stringify(as11));
     ok("a rewrite edit applies once, and survives the list being rebuilt", await pg.evaluate(()=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return false; b.click();
       __PE.renderEstimate(); const b2=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)).querySelector('[data-a="apply"]');
       return b2.textContent==="Applied"&&b2.disabled&&(__PE.itemVal(__PE.findItem("frag:style_header")).match(/PE-ALL-FIX/g)||[]).length===1; }));
@@ -515,6 +529,40 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the fixer reads what the last changes did", /WHAT THE LAST CHANGES DID[\s\S]*PE-EFFECT-SUMMARY/.test(fxt)&&/PE-EFFECT-REGRESSION/.test(fxt), fxt.slice(0,200));
     ok("the verdict shows above the complete analysis, with a revert you can apply", ef.effect&&ef.box&&ef.revert&&ef.reverted&&ef.snaps===2, JSON.stringify(ef));
 
+    console.log("\n[11f — every analysis call is queued one at a time, retried when rate-limited, and asked again shorter when cut off]");
+    const q=await pg.evaluate(async()=>{ const P=__PE, orig=AI.sample.json; let peak=0, active=0; const seen=[]; P.CQ.rlWait=50;
+      let rl=0;
+      AI.sample.json=async(input)=>{ active++; peak=Math.max(peak,active); seen.push(input); await new Promise(r=>setTimeout(r,30)); active--;
+        if(/RL-TEST/.test(input)&&rl++<1) throw {code:"rate_limited",message:"slow"};
+        if(/CUT-TEST/.test(input)&&!/your previous answer was cut off/.test(input)) throw {code:"invalid_json",message:"cut"};
+        return {ok:true}; };
+      const r=await Promise.all([P.claudeJson("A RL-TEST",{}),P.claudeJson("B CUT-TEST",{}),P.claudeJson("C",{})]);
+      AI.sample.json=orig; P.CQ.rlWait=0;
+      return {peak,ok:r.every(x=>x&&x.ok),n:seen.length,shorter:seen.some(x=>/CUT-TEST[\s\S]*Answer again, much shorter/.test(x))}; });
+    ok("one Claude request at a time, a rate limit waits and retries, a cut-off answer is asked again shorter", q.peak===1&&q.ok&&q.n===5&&q.shorter, JSON.stringify(q));
+
+    console.log("\n[11g — an edit whose words are not found is repaired, or explained with a button to fix it]");
+    const rp=await pg.evaluate(async()=>{ const P=__PE, it=P.findItem("frag:style_header"), v=P.itemVal(it), line=v.split("\n").find(l=>l.trim().split(/\s+/).length>=6).trim();
+      const words=line.split(/\s+/), spaced=words.slice(0,6).join("   ");                       // spacing differs
+      const e1={item:"frag:style_header",kind:"rewrite",find:spaced,replace:"PE-RP1",why:"w"};
+      const other=P.ITEMS().find(x=>x.type==="frag"&&x.key!=="style_header"&&P.itemVal(x).trim().split("\n")[0].trim().length>30), oline=P.itemVal(other).trim().split("\n")[0].trim().slice(0,30);
+      const e2={item:"frag:style_header",kind:"rewrite",find:oline,replace:"PE-RP2",why:"w"};       // the wrong piece named
+      const e3={item:"frag:style_header",kind:"rewrite",find:"Buket Özüçak "+words.slice(0,4).join(" ")+" PE-FILLED",replace:"PE-RP3",why:"w"};   // filled story data
+      const r1=P.locateEdit(e1), r2=P.locateEdit(e2), r3=P.locateEdit(e3);
+      const host=document.createElement("div"); document.body.appendChild(host); const c3=editCard(e3); host.appendChild(c3);
+      const note=(c3.querySelector(".missNote")||{}).textContent||"", fixBtn=c3.querySelector('[data-a="repair"]'), applyTxt=c3.querySelector('[data-a="apply"]').textContent;
+      const orig=AI.sample.json; let sent="";
+      AI.sample.json=async(input)=>{ sent=input; return {edits:[{i:1,find:words.slice(0,4).join(" "),replace:"PE-RP3"}]}; };
+      fixBtn.click(); for(let i=0;i<30&&!/Repaired/.test(host.textContent);i++) await new Promise(r=>setTimeout(r,100));
+      AI.sample.json=orig;
+      const after=host.querySelector('[data-a="apply"]'), res={r1,find1:e1.find===words.slice(0,6).join(" ")||P.itemVal(it).indexOf(e1.find)>=0,r2,item2:e2.item,r3,applyTxt,note:/copied from the filled payload/.test(note),fixVisible:!fixBtn.hidden,
+        sent:/CURRENT TEXT OF frag:style_header/.test(sent)&&/PE-FILLED/.test(sent),repaired:/Repaired \(copied again\)/.test(host.textContent),ready:after&&!after.disabled&&after.textContent==="Apply"};
+      host.remove(); return res; });
+    ok("loose spacing is matched to the piece's exact words", rp.r1==="fixed"&&rp.find1, JSON.stringify(rp));
+    ok("words that sit in another piece re-target the edit to that piece", rp.r2==="fixed"&&rp.item2!=="frag:style_header", JSON.stringify(rp));
+    ok("words that are nowhere say why, with Fix this edit", rp.r3==="missing"&&rp.applyTxt==="Text not found"&&rp.note&&rp.fixVisible, JSON.stringify(rp));
+    ok("Fix this edit shows Claude the piece's current text, and the repaired edit can be applied", rp.sent&&rp.repaired&&rp.ready, JSON.stringify(rp));
+
     console.log("\n[11c — a long run still fits one request to Claude, and a failed fixing step can be run again]");
     const fit=await pg.evaluate(async()=>{ const P=__PE, long="Şöyle düşünüyorum, ağabeyciğim: gülüşün öğleden beri aklımdan çıkmıyor, işte böyle. ".repeat(40);
       const keep=JSON.stringify(P.DR.results), keepO=P.ALL.overall;
@@ -535,7 +583,7 @@ const ROOT=path.resolve(__dirname,'..');
       AI.sample.json=orig;
       const eng=P.apBuild("engfinal",{reports:"ş".repeat(150000),proposals:"ğ".repeat(150000),applied:""});
       const secs=P.KINDS.filter(kd=>P.KA[kd.k]&&P.KA[kd.k].at);
-      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&fixIns.length===2*secs.length&&secs.every(kd=>fixIns.some(x=>x.indexOf("## SECTION: "+kd.label)>=0)),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
+      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&secs.every(kd=>first.indexOf("## "+kd.label+" (tpl:")>=0),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
         failBox:/The complete analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed:/PE-FIXED/.test(okBox),calls,engBytes:P.apBytes(eng),engJson:/Reply with ONLY this JSON/.test(eng)&&/cut here to fit/.test(eng)};
       P.DR.results=JSON.parse(keep); P.ALL.overall=keepO; return res; });
     ok("a section fixer whose data is far over the limit is cut to fit, keeping the instructions, the layout and the reply format", fit.rawBytes>fit.cap&&fit.hugeOk, JSON.stringify({raw:fit.rawBytes,cap:fit.cap,ok:fit.hugeOk}));
@@ -626,7 +674,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,editrepair,discuss,compare,standin", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

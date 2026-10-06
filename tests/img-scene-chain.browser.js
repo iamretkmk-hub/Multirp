@@ -138,15 +138,31 @@ const {chromium}=require('playwright');
   const H2=await draw("*Sami is at the cafe.*");
   ok("a location change without a travel beat still starts from faces", JSON.stringify(H2.images)==='["data:S1","data:E1"]'&&H2.chain===null, JSON.stringify(H2.images));
 
-  console.log("\n[5. someone new to the frame still gets their clothes]");
+  /* v150.22 — reported: "images are mixing; sending the same image for edit should reset when a character
+     enters or exits." Someone arriving or leaving starts the chain again, from faces, like a change of place. */
+  console.log("\n[5. someone arriving or leaving starts again from faces]");
   await at({loc:"L_cafe",sub:"c1",day:2,present:["p_sami","p_burcu"]});
   await pg.evaluate(()=>{ window.__out="the man in IMAGE 1 turns to the woman in IMAGE 3"; });
   const N=await draw("*Burcu walks in and Sami turns to her.*");
-  ok("the previous picture goes last, after all three people's faces", N.images.length===4&&N.images[3]==="https://out/"+(await pg.evaluate(()=>window.__n-1))+".png", JSON.stringify(N.images));
-  ok("Burcu, not in the previous picture, is dressed", /NEW IN THE FRAME/.test(N.usr)&&/coral-pink cardigan/.test(N.usr), N.usr.slice(0,1400));
-  ok("Sami, who was, is not", !/cashmere/.test(N.usr), N.usr.slice(0,1400));
+  ok("Burcu arrives: no previous picture — faces only (the reported case)", N.images.length===3&&N.images.every(x=>!/^https:\/\/out\//.test(x))&&N.chain===null, JSON.stringify(N.images));
+  ok("and it is a base frame: both are dressed, the place is described", /coral-pink cardigan/.test(N.usr)&&/cashmere/.test(N.usr)&&/WHERE THIS FRAME HAPPENS/.test(N.usr), N.usr.slice(0,1400));
   const N2=await draw("*Burcu sits down.*",{who:"Burcu",id:"p_burcu"});
-  ok("once she has been in a picture, nobody's clothes are described", !/coral-pink/.test(N2.usr)&&!/cashmere/.test(N2.usr)&&!/NEW IN THE FRAME/.test(N2.usr)&&/WHAT EACH PERSON IN THE FRAME IS DOING/.test(N2.usr), N2.usr.slice(0,1400));
+  ok("the same two again: the chain picks up from that picture", N2.chain&&N2.chain.from===N.mid&&N2.images[N2.images.length-1]==="https://out/"+(await pg.evaluate(()=>window.__n-1))+".png", JSON.stringify(N2.images));
+  ok("and nobody's clothes are described", !/coral-pink/.test(N2.usr)&&!/cashmere/.test(N2.usr)&&/WHAT EACH PERSON IN THE FRAME IS DOING/.test(N2.usr), N2.usr.slice(0,1400));
+  // Burcu leaves: a presence note naming the exit, and the scene's cast is Sami alone
+  await pg.evaluate(()=>{ const c=curChat(); c.messages.push({mid:"pn"+c.messages.length,role:"assistant",speaker:"Narrator",presenceNote:true,exitedIds:["p_burcu"],content:"— Burcu has left —"}); });
+  await at({loc:"L_cafe",sub:"c1",day:2,present:["p_sami"]});
+  const X1=await draw("*Sami finishes his coffee.*");
+  ok("Burcu leaves: faces only again, no previous picture", X1.chain===null&&X1.images.every(x=>!/^https:\/\/out\//.test(x)), JSON.stringify(X1.images));
+  const X2=await draw("*Sami stretches.*");
+  ok("and the chain continues from there with the same company", X2.chain&&X2.chain.from===X1.mid, JSON.stringify(X2.chain));
+  // a presence note that names an arrival resets it even if the cast reads the same; a sub-area move note does not
+  const PN=await pg.evaluate(()=>{ const c=curChat(); const idx=c.messages.length;
+    c.messages.push({mid:"pq"+idx,role:"assistant",speaker:"Narrator",presenceNote:true,enteredIds:["p_burcu"],content:"— Burcu arrives —"});
+    const a=_imgChainPrev(c,c.messages.length); c.messages.pop();
+    c.messages.push({mid:"pr"+idx,role:"assistant",speaker:"Narrator",presenceNote:true,subTo:"c1",content:"— you step inside —"});
+    const b=_imgChainPrev(c,c.messages.length); c.messages.pop(); return {a,b:!!b}; });
+  ok("a note naming an arrival resets; a note that only moves the player between areas does not", PN.a===null&&PN.b===true, JSON.stringify(PN));
 
   console.log("\n[6. only edit models chain]");
   await at({loc:"L_cafe",sub:"c1",day:2,present:["p_sami"]});

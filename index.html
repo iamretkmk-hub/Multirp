@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.23</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.24</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3619,7 +3619,7 @@ RULES
 
   x_wearing_tracker:{label:"Wearing tracker",json:true,
     hint:"After a turn whose text mentions clothes, records what anybody present is now wearing \u2014 so the payload and the image writer follow the scene rather than the table. Only runs when the text actually hints at it.",
-    def:`You track CLOTHING across a roleplay scene. You are given who is present and what each of them had on, then the last few lines of the scene. Decide whether those lines CHANGED what anybody is wearing.
+    def:`You track CLOTHING across a roleplay scene. You are given where and when the scene is, who is present and what each of them had on, then the last few lines of the scene. Decide whether those lines CHANGED what anybody is wearing.
 
 Return ONLY:
 {"changed":[{"name":"<exact name as given>","wearing":"<what they have on NOW, one short phrase>"}]}
@@ -11788,6 +11788,13 @@ async function chatCompletion(messages,model,opts={}){
       if(e&&e.kind==="timeout"){ dbgDone(entry,"error","Empty response, and the recovery call timed out"); throw{friendly:"The model returned nothing, and the retry timed out. Try again, or switch the model for this job.",timeout:true,emptyRescue:true}; }
       /* otherwise fall through to the soft-error below */
     }
+  }
+  /* (!) v150.24 — A CHARACTER'S REPLY THAT HIT THE TOKEN CEILING ENDS WHERE THE CEILING FELL: mid-word
+     ("… herkes"). Not asked again (v148.7); cut back to its last finished sentence instead, when that
+     keeps most of it (_trimCutReply). */
+  if(opts.rp&&out.trim()){
+    const _fin=d&&d.choices&&d.choices[0]&&d.choices[0].finish_reason;
+    if(_fin==="length"){ const t=_trimCutReply(out); if(t!==out){ try{ _alog("reply.cut","reply hit the token limit; trimmed to its last full sentence"); }catch(_){} out=t; } }
   }
   // Surface an empty-but-OK response as a soft error in the log so it's diagnosable instead of
   // looking like a success that did nothing (the old behaviour). The caller still gets "".
@@ -26447,8 +26454,15 @@ function memStripDayLead(s){
   const t=s.replace(_MEM_DAY_LEAD,"");
   return t.trim()?t:s;
 }
+// a recent memory (two to four sentences) and a condensed one (the gist of several), in characters
+const MEM_RECALL_MAX=700, MEM_RECALL_MAX_OLD=1100;
+/* (!) v150.24 — opts.max: the recall block's ceiling on one memory. memBuild asks for two to four dense
+   sentences, but entries written before it said so, and any the model overran, went into MEMORIES YOU
+   RECALL whole, a paragraph the character then quotes. Cut at a sentence end (memPayloadText); the stored
+   memory is untouched. */
 function memInjectText(m,opts){
   let s=memStripDayLead(memText(m));
+  if(opts&&opts.max) s=memPayloadText(s,opts.max);
   if(m.feelings) s+=` (${String(m.feelings).trim()})`;
   else if(!(opts&&opts.noEnum) && m.emotion && m.emotion!=="neutral") s+=` (felt: ${m.emotion})`;
   return s;
@@ -26796,11 +26810,11 @@ function memoryBlocks(injectedMemories,which){
      place is always named now: in a sentence it is not a tag repeating the room, it is where it
      happened. */
   const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
-  const fmt=(m,i)=>`Memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
+  const fmt=(m,i)=>`Memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true,max:MEM_RECALL_MAX})}`;
   /* (!) v150.23 — the two tiers are rendered as two blocks and each counted from 1, so one payload
      carried "Memory 1" twice for two different events and the model was left to guess which one a
      line meant. The older tier is labelled on its own ("Earlier memory 1"), so every label is unique. */
-  const fmtOld=(m,i)=>`Earlier memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
+  const fmtOld=(m,i)=>`Earlier memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true,max:MEM_RECALL_MAX_OLD})}`;
   const out=[];
   // v38.1 — outParts, when handed one, collects the numbered entries on their own (no heading, no
   // instruction) so the payload template can print those two as its own prose and call just this.
@@ -26824,7 +26838,7 @@ function latestArcsBlock(ownerId,injectedMemories,outParts,chatArg){
   const arcs=latestArcs(ownerId,used,RECENT_ARCS_N,chatArg);
   if(!arcs.length)return "";
   const _today=(()=>{ try{ return (chatArg||curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
-  const fmt=(m,i)=>`Latest ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
+  const fmt=(m,i)=>`Latest ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true,max:MEM_RECALL_MAX})}`;
   // v38.1 — outParts, when handed one, collects the numbered entries on their own; see memoryBlocks.
   const op=arguments.length>2&&arguments[2]?arguments[2]:{};
   op.mem_latest_entries=arcs.map(fmt).join("\n");
@@ -27522,6 +27536,34 @@ function lastPlayerLine(chat,selfP,textMode){
   }catch(e){}
   return null;
 }
+/* (!) v150.24 — THE TURNS IN BETWEEN. The line you are responding to is the newest one aimed at the room,
+   and in a room of three that is often the reply to something said to YOU: Emre provokes Sami, Buket
+   answers first, and Sami is handed Buket's line alone, so the provocation goes unanswered and what
+   Emre did is read as Buket's. These are the other lines said since this character last spoke (the
+   same walk and the same filters as lastDialogueLine, stopping at their own line), newest first, the
+   newest one being the highlighted line itself. */
+function linesSinceSelf(chat,selfP,textMode,max){
+  const out=[];
+  try{
+    const msgs=(chat&&chat.messages)||[];
+    const floor=_lineWalkFloor(chat,selfP,textMode);
+    for(let i=msgs.length-1;i>=floor&&out.length<(max||4);i--){
+      const m=msgs[i];
+      if(m&&m.dayMarker&&selfP&&!textMode)break;
+      if(!m||m.role==='system'||m.sysError||m.narratorEvent||m.dayMarker||m.presenceNote||m.travelBeat)continue;
+      if(!m.content||!String(m.content).trim())continue;
+      if(!_lineReachable(m,selfP,textMode))continue;
+      if(m.role==='user'){ out.push({name:state.user,text:(m.whisperTo&&selfP)?whisperForTarget(m):String(m.content).trim(),mid:m.mid||null}); continue; }
+      const sp=m.speaker||"";
+      if(!sp||/^Narrator$/i.test(sp))continue;
+      if(selfP && ((m.speakerId&&m.speakerId===selfP.id)||sp===selfP.name))break;   // your own line: the window ends
+      let text=String(m.content);
+      if(selfP){ text=crossHeard(text)||""; if(!text.trim())continue; }
+      out.push({name:sp,text:text.trim(),mid:m.mid||null});
+    }
+  }catch(e){}
+  return out;
+}
 /* v27.4 — the line a continuation picks up from, or null. (v27.9: no longer heat-only.)
    While the player is quiet lastDialogueLine() keeps returning the SAME player line beat after
    beat, so every continuation was told it was "responding to" a line that had already been
@@ -28147,7 +28189,16 @@ function _ptIsHead(key){ try{ return LY_ORDER.indexOf(String(key).split("//")[0]
 function ptExpand(text,srcs,vars,report){
   const paras=String(text==null?"":text).split(/\n[ \t]*\n/);
   const keep=[];
+  /* (!) v150.24 — A HEADING TYPED INTO THE LAYOUT IS ONLY AS ALIVE AS WHAT FOLLOWS IT. A group heading
+     written as plain text ("# WHAT YOU DECIDED") in a paragraph of its own has no call to die with, so it
+     printed even when every block under it came back empty, straight above the next heading: a promised
+     section with nothing in it, which the model then fills itself. Such a paragraph is held back and goes
+     out only in front of the next paragraph that has content; reaching another such heading first drops
+     it. At the end of a segment it stays: the history or appended data it heads comes after it. */
+  let _heldHead=null;
+  const _isLiteralHead=p=>!/\{\{call\/\//.test(p)&&p.trim()!==""&&p.split("\n").every(l=>!l.trim()||/^\s*#/.test(l));
   paras.forEach(p=>{
+    const _litHead=_isLiteralHead(p);
     /* pass 1 — resolve every call in this paragraph up front, so pass 2 can tell an empty call
        from a filled one without re-running the lookup. */
     const vals={}; let anyCall=false, anyFilled=false, anyOther=false, m;
@@ -28175,7 +28226,25 @@ function ptExpand(text,srcs,vars,report){
     /* pass 2 — drop lines that hold nothing but empty calls, so a filled paragraph does not keep
        a stray blank where an empty call sat. Done on the TEMPLATE, before substitution, so the
        internal blank lines of a filled block are never touched. */
-    const lines=p.split("\n").filter(ln=>{
+    /* (!) v150.24 — and the same inside a paragraph: a literal "# HEADING" line, with the prose under it,
+       heads only the calls that follow it up to the next heading line. When it heads calls and every one
+       of them came back empty, the heading and its prose go too. A layout that wrote the after-heat
+       heading out as text above {{call//after_heat}}, in the paragraph that also holds "# SCENE RIGHT
+       NOW", printed "# WHAT YOU DECIDED…" over nothing on every turn that had no decision. */
+    const _pl=p.split("\n");
+    { const isHeadLn=ln=>/^\s*#/.test(ln); let i=0;
+      while(i<_pl.length){
+        if(!isHeadLn(_pl[i])||(PT_CALL.lastIndex=0,PT_CALL.test(_pl[i]))){ i++; continue; }
+        let j=i+1, calls=0, filled=0;
+        while(j<_pl.length&&!isHeadLn(_pl[j])){
+          let mm; PT_CALL.lastIndex=0;
+          while((mm=PT_CALL.exec(_pl[j]))){ const k=mm[2]?(mm[1]+"//"+mm[2]):mm[1]; if(k==="gap")continue; calls++; if(vals[k])filled++; }
+          j++;
+        }
+        if(calls&&!filled){ _pl.splice(i,j-i); continue; }
+        i=j;
+      } }
+    const lines=_pl.filter(ln=>{
       let has=false,filled=false,mm; PT_CALL.lastIndex=0;
       while((mm=PT_CALL.exec(ln))){ has=true; const k=mm[2]?(mm[1]+"//"+mm[2]):mm[1];
         // the paragraph survived, so a heading in it is introducing something — keep it.
@@ -28225,8 +28294,12 @@ function ptExpand(text,srcs,vars,report){
       return mm;                                       // left visible on purpose
     });
     out=out.replace(/[ \t]+$/gm,"").replace(/\n{3,}/g,"\n\n");
-    if(out.trim()) keep.push(out.trim());
+    if(!out.trim()) return;
+    if(_litHead){ _heldHead=out.trim(); return; }
+    if(_heldHead){ keep.push(_heldHead); _heldHead=null; }
+    keep.push(out.trim());
   });
+  if(_heldHead) keep.push(_heldHead);   // last in its segment: what it heads may come after (the history)
   return keep.join("\n\n");
 }
 
@@ -29447,7 +29520,7 @@ function epSend(key,systemText,parts,vars){
     response_target:["target_header","target_player","target_char","target_bg","target_known","target_look","target_wearing","heat_target_header","heat_target_self","cont_target_header","cont_target_self"],
     player:["player_intro","player_bg","player_look","player_wearing"],
     situation:["situation_leaving","situation_arriving","narr_move_self","narr_move_with","narr_move_char","narr_move_away","narr_move_why"],
-    last_line:["last_line_header","last_line_footer","heat_self_header","heat_self_footer"],
+    last_line:["last_line_header","last_line_since","last_line_since_then","last_line_footer","heat_self_header","heat_self_footer"],
     already_said:["already_said_header","already_said_instr","already_said_continues","already_said_stalled","already_said_thought_stuck",
       "already_said_shortened","already_said_which_last","already_said_which_above","already_said_which_older","already_said_which_plain"],
     rumors:["rumor_stake_header","rumor_stake_instr","rumor_stake_spent","rumor_stake_label","rumor_carrier_header","rumor_carrier_instr"],
@@ -30562,6 +30635,9 @@ Keep proper nouns exactly as they appear in the conversation — names of people
   guidance_reply:`React to the highlighted line above: that is what {{target}} just said or did, and you answer it from your own side. If it was aimed at someone else, react to it as yourself — do not answer in their place, and do not answer a question that was not put to you.`,
   // Rendered right after the transcript so the model reacts to the LINE, not to the narration around it.
   last_line_header:`# ⚠️ THIS IS THE LINE YOU ARE RESPONDING TO ⚠️`,
+  // v150.24 — when others spoke since your last line, their turns go above the line, oldest first
+  last_line_since:`Said since your last line, oldest first:`,
+  last_line_since_then:`And the newest, the line you are responding to:`,
   last_line_footer:`Everything above this is context. THIS is the line you are reacting to.
 React to it — do not recap it. Never quote it back, never paraphrase it, never open by restating what they just said before adding your own ("you say X, but…", "so you're telling me X", "X, is it?"). They know what they said. Start from your side of it: the thing their words did to you, or what you do about it.`,
   style_header:`# ⚠️ HOW YOU SPEAK — THIS GOVERNS THE LINE ⚠️\nEverything else told you what you know. This tells you how it comes out of your mouth, and it wins over all of it: rhythm, vocabulary, what you say out loud and what you refuse to. If a fact and this voice pull different ways, the voice decides — a thing you would not say plainly does not get said plainly:`,
@@ -31553,10 +31629,13 @@ function buildTailBlocks(opts){
     // v27.4/v27.9 — when this turn continues the character's OWN last line, that is the line to
     // highlight. Otherwise it's the freshest line actually aimed at them.
     const hs=selfContinueLine(chat,selfP,_tm);
-    const _mkLL=(line,hk,fk)=>{
+    const _mkLL=(line,hk,fk,before)=>{
       _answering=line;
       // v62.1 — the line is quoted verbatim here by design; the voice machinery is not part of it.
       const _l={}; _l[hk]=blkTpl(hk); _l.last_line_body=`${line.name}: ${stripDeliveryTags(line.text)}`; _l[fk]=blkTpl(fk);
+      /* v150.24 — the turns said since your last line, ahead of it (linesSinceSelf), each with its speaker */
+      if(before&&before.length) _l.last_line_body=`${blkTpl("last_line_since")}\n`
+        +before.map(x=>`${x.name}: ${clipAtSentence(stripDeliveryTags(x.text),400)}`).join("\n")+`\n\n${blkTpl("last_line_since_then")}\n`+_l.last_line_body;
       B._ll=_l;
       B.last_line=`${_l[hk]}\n${_l.last_line_body}\n\n${_l[fk]}`;
     };
@@ -31568,7 +31647,12 @@ function buildTailBlocks(opts){
       const _pin=opts&&opts.answerTo;
       const ll=(_pin==="__user__"?(lastPlayerLine(chat,selfP,_tm)||lastDialogueLine(chat,selfP,_tm))
                                  :lastDialogueLine(chat,selfP,_tm));
-      if(ll)_mkLL(ll,"last_line_header","last_line_footer");
+      /* the turns before it are added only when nothing pinned this turn to the player's line: a pinned
+         responder answers the player, not the reply that came between (see lastPlayerLine) */
+      let _before=null;
+      if(ll&&_pin!=="__user__"){ const since=linesSinceSelf(chat,selfP,_tm,4);
+        if(since.length>1&&since[0].mid===ll.mid&&since[0].text===ll.text) _before=since.slice(1).reverse(); }
+      if(ll)_mkLL(ll,"last_line_header","last_line_footer",_before);
     }
   }
 
@@ -35372,6 +35456,7 @@ async function _replyToText(chat,p,out){
     let reply=await chatCompletion(msgs, rpModel(), {rp:true,dbg:"Text reply — "+p.name});
     _textTyping(p,false);
     reply=_cleanTextReply(reply,p.name);
+    reply=_dropReprintedTurns({messages:textThreadMsgs(chat,p.id)},reply).trim();   // v150.24 — a text that copied the thread
     if(!reply){ toast(p.name+": no reply (try again)"); return; }
     const msg=_stampText(chat,{mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,content:reply,textMsg:true,textWith:p.id,present:[],unread:(_openTextPid!==p.id),img:null,imgState:"idle",vidState:"idle",video:null});
     chat.messages.push(msg); markChatDirty(chat); persistChats();
@@ -38732,6 +38817,7 @@ async function generateCharacterReply(chat,p,messages,opts){
   try{ noteRumorRaise(chat,p,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
   const refused=looksLikeRefusal(reply);
   if(refused) return {text:"",raw:reply,refused:true,model};
+  if(reply){ const r2=_dropReprintedTurns(chat,reply); if(r2!==reply){ try{ _alog("reply.reprint",p.name+": dropped text reprinted from earlier turns"); }catch(_){} reply=r2; } }
   // strip a leading "Name:" prefix if the model added one (regex-safe); v38.6 — a spoken line never
   // carries the transcript's "(text message)" tag; v62.1 — the channels are repaired before it is
   // stored (heat has no narration channel, so it is exempt) — see normalizeChannels.
@@ -38740,6 +38826,35 @@ async function generateCharacterReply(chat,p,messages,opts){
     stripChannelLabel(stripChannelLabel(reply||"").replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"")).trim(),
     {heat:wasHeat});
   return {text:text||"",raw:reply,refused:false,model};
+}
+/* v150.24 — a reply cut by the token limit, back to the end of its last finished sentence, beat or quote.
+   Left whole when it already ends on one, or when the cut would lose more than half of it. */
+function _trimCutReply(s){
+  const t=String(s||"").replace(/\s+$/,"");
+  if(!t||/[.!?…"”'’)\]*]$/.test(t))return t;
+  const re=/[.!?…](?:["”'’)\]]|\*)?(?=\s|$)|\*(?=\s|$)|["”](?=\s|$)/g; let m, end=-1;
+  while((m=re.exec(t))) end=m.index+m[0].length;
+  return (end>=Math.floor(t.length*0.5))?t.slice(0,end):t;
+}
+/* (!) v150.24 — PARAGRAPHS THE REPLY COPIED FROM THE TRANSCRIPT. A model can open its turn by reprinting
+   earlier turns word for word, its own or someone else's, sometimes with the speaker's "Name:" in front,
+   and the copies were posted as the new line. A paragraph that is one of the last few turns again
+   (same words, or 0.9 alike, at least 40 characters) is dropped; what is left is the reply. A reply that
+   is nothing but a copy is the model's answer and is posted as it gave it (v148.7: the reply is the reply). */
+function _dropReprintedTurns(chat,text){
+  try{
+    const msgs=((chat&&chat.messages)||[]).filter(m=>m&&!m.sysError&&!m.dayMarker&&!m.presenceNote&&m.content).slice(-12);
+    if(!msgs.length)return text;
+    const norm=x=>String(x||"").replace(/\s+/g," ").trim();
+    const prior=[]; msgs.forEach(m=>{ const c=norm(m.content); if(c)prior.push(c);
+      String(m.content).split(/\n\s*\n/).forEach(pp=>{ const q=norm(pp); if(q&&q!==c)prior.push(q); }); });
+    const keep=String(text||"").split(/\n\s*\n/).filter(pp=>{
+      const q=norm(pp).replace(/^[^\s:*"“]{1,40}(?:\s[^\s:*"“]{1,40})?\s*:\s*/,"");   // a reprinted "Name:" label
+      if(q.length<40)return true;
+      return !prior.some(x=>x===q||x===norm(pp)||(x.length>=40&&replySimilarity(x,q)>=0.9));
+    });
+    return keep.some(pp=>pp.trim())?keep.join("\n\n"):text;
+  }catch(e){ return text; }
 }
 /* v146.1 — a player-facing notice the Retry button can act on: after a Stop, a refusal, an empty reply
    or a failed reply. `extra` may name the one character to ask again (retrySpeakerId / retryToId);
@@ -39060,6 +39175,18 @@ function hasClothingCue(chat){
     return CLOTHING_CUES.some(c=>low.indexOf(_outfitFold(c))>-1);
   }catch(e){ return false; }
 }
+/* v150.24 — where and when the scene is, ahead of what everybody had on: the engine reads a line like
+   "she came in from the rain" against a place and an hour, not only against the last few lines. */
+function _wearWhere(chat){
+  try{
+    const c=chat||curChat(); if(!c)return "";
+    const loc=(c.locationId&&locById(c.locationId))?locById(c.locationId).name:(c.location||"");
+    const sub=(typeof curSubId==="function"&&loc)?subById(locById(c.locationId),curSubId(c)):null;
+    const per=(typeof chatPeriod==="function")?chatPeriod(c):(c.period||"");
+    const parts=[loc?(loc+(sub&&sub.name?" — "+sub.name:"")):"", c.gameDay?("Day "+c.gameDay+(per?", "+per:"")):per].filter(Boolean);
+    return parts.length?`WHERE AND WHEN: ${parts.join(" · ")}\n\n`:"";
+  }catch(e){ return ""; }
+}
 /* Reads the last exchange and records what anybody present is now wearing, but ONLY where the
    scene actually changed it. A character it does not mention keeps whatever the table says. */
 async function runWearingTracker(chat){
@@ -39074,7 +39201,7 @@ async function runWearingTracker(chat){
       return `- ${c.name}: ${f.text||"(nothing recorded)"}`; }).join("\n");
     // v147.2 — this chat's prompt and player (the chain runs this after its awaits)
     const out=await chatCompletion(inChatWorld(chat,()=>epSend("x_wearing_tracker",up("x_wearing_tracker"),
-      {data:`WHO IS HERE AND WHAT THEY HAD ON:\n${now}\n\nTHE LAST FEW LINES:\n${castConvoText(chat,4)}\n\nReturn only the JSON.`})),
+      {data:`${_wearWhere(chat)}WHO IS HERE AND WHAT THEY HAD ON:\n${now}\n\nTHE LAST FEW LINES:\n${castConvoText(chat,4)}\n\nReturn only the JSON.`})),
       state.mcModel,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",220),dbg:"Wearing tracker"});
     const j=parseJSON(out);
     if(!j||!Array.isArray(j.changed))return null;
@@ -53730,9 +53857,14 @@ async function retrieveMemories(userText,chat,ownerId){
      dozen tellings of one long scene cannot take every slot. The first of a cluster keeps its place. */
   const _dupSig=m=>{ const t=new Set((m.tags||[]).map(x=>String(x).toLowerCase())); memTokens(m.content||"").forEach(w=>t.add(w)); return t; };
   const _dupSim=(a,b)=>{ if(!a.size||!b.size)return 0; let i=0; a.forEach(w=>{ if(b.has(w))i++; }); return i/Math.min(a.size,b.size); };
+  /* (!) v150.24 — and a memory that is nearly ALL a memory ranked above it (0.8 of the smaller one's words)
+     is the same event told twice, one telling with a different stamp (both at least eight words, so two short
+     memories that share their tags are not mistaken for one). It is left out of the pool rather
+     than demoted, so one hand-over does not arrive as Memory 2 and Memory 3 and pull itself into "today". */
   const recentRanked=(()=>{ const sc=recentPool.map(m=>({m,s:facetScore(m)})).sort((a,b)=>b.s-a.s); const acc=[];
-    sc.forEach(x=>{ const g=_dupSig(x.m); let d=0; acc.forEach(a=>{ if(_dupSim(g,a)>=0.6)d++; }); x.s-=d*0.25; acc.push(g); });
-    return sc.sort((a,b)=>b.s-a.s).map(x=>x.m); })();
+    sc.forEach(x=>{ const g=_dupSig(x.m); let d=0, top=0; acc.forEach(a=>{ const v=_dupSim(g,a); if(v>=0.6)d++; if(v>top&&Math.min(g.size,a.size)>=8)top=v; });
+      if(top>=0.8){ x.dup=true; return; } x.s-=d*0.25; acc.push(g); });
+    return sc.filter(x=>!x.dup).sort((a,b)=>b.s-a.s).map(x=>x.m); })();
   const recent0 = recentRanked.slice(0,recCount);
   const diary = rankPool(diaryPool,disCount);
   const longterm = rankPool(longtermPool,ltCount);

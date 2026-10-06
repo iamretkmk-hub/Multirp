@@ -296,6 +296,11 @@ In the multi-character scenes her husband Sami answers every line too, since in 
 present character replies. Gamemaster beats (`{gm:"…"}`) go into the transcript as events, and the
 characters react to them.
 
+Each reply goes through StoryMind's own clean-up before it enters the transcript (the bridge's `clean`
+op: a reprinted earlier turn is dropped, the "Name:" label and channel tags are stripped, the channels
+are repaired; for a text, `_cleanTextReply`). So the judge reads what the phone would post, not the raw
+answer.
+
 The scenes are grouped into six **sections**, each testing one thing through one payload kind (`KINDS`):
 
 | Section | Payload | Scenes | What it tests |

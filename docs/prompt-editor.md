@@ -449,9 +449,16 @@ Each fixer gets every edit applied before to the pieces it can change, including
 (`historyFor`), and what the fixers before it proposed in this run (`earlierText`). It is told not to undo
 or repeat them, and to build on an earlier proposal when it touches the same piece.
 
+**Suggestions per section, one change at the end.** Section fixers and engine-prompt fixers only
+**suggest** edits. Their suggestions are listed read-only in the section (or under "Each engine prompt's
+fixer"), and nothing is applied from them. After all the analysis, the final run (the reconciler) checks
+every suggestion, consolidates them and proposes **one complete change**. Every edit in it has an
+*include in the change* checkbox (all ticked), and there are **Select all**, **None** and **Apply
+selected (n)** buttons. Each card still has its own Apply and Undo.
+
 **The fixer runs right after its section's analysis.** When a section has been analysed (scenes judged
-one by one, then re-evaluated), its fixer runs straight away with that analysis, and its proposals
-appear in the section. The complete analysis reuses those fresh proposals instead of running the
+one by one, then re-evaluated), its fixer runs straight away with that analysis, and its suggestions
+are listed in the section. The complete analysis reuses those fresh proposals instead of running the
 fixers again, and only the reconciler is left. When a scene cannot be judged, the section says which
 one and why, and **Analyse again** retries it.
 

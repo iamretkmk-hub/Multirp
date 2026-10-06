@@ -466,6 +466,16 @@ selected, privacy, order, cut text, timing).
   - `backend`: the code change and why it would be effective.
 
   Engine prompt fixers report `backend` too.
+- **The engine side does the same.** Engine judges label each problem:
+  - *wording*: this prompt;
+  - *input*: what another engine wrote and this one was given (named in `origin`);
+  - *story*;
+  - *code*: how the app calls the engine or uses its answer.
+
+  Engine prompt fixers turn only wording into edits and report `generated` (the upstream engine's prompt
+  key), `story` and `backend`. The engine reconciler consolidates them, and the engine tab shows the same
+  **Outside the wording** lists, with **Fix this engine prompt** for an upstream engine. The downloaded
+  list carries both tabs.
 - **The reconcilers** consolidate the lists and drop a wording edit that only compensates for one of
   them.
 - **The complete analysis** shows them under **Outside the wording**:

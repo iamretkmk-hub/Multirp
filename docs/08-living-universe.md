@@ -196,6 +196,12 @@ payload as `<goals_and_ambitions>` (doc 05). It replaced three payload sections 
 the authored goals field frozen at creation, a `<your_quests>` dump re-stating every pursuit and its
 whole progress log, and a `<what_you_quietly_want>` line from the live intent.
 
+**Pursuit status (v150.25).** Where each pursuit or agreed task stands — asked yet, still hanging,
+what moved last, what just resolved — is never put in a reply payload. `pursuitStatusBlock(chars,
+chat)` renders it in the third person for the engines that decide what characters do: the
+Gamemaster, the Scene Writer, `worldRound`, `offstageEvent`, `calExec`, `goalPursuit`, `intentForm`
+and `intentTick` (each as a `pursuits` engine part), and `{{call//pursuits}}` in any engine template.
+
 `runGoalsCurator(chat, day, uni)` runs at **End Day, after the quest passes and the intent engine**
 (the two things most likely to have changed what somebody wants) and **before the chronicler**.
 It is a REWRITE, not an append — the `goalsCurator` prompt's whole job is deciding what to DROP:

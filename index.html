@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.22</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.23</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7494,8 +7494,8 @@ function _subCapsules(title,body){
     const kids=[]; const lines=b.split("\n"); let buf=[],lbl="instruction";
     const flush=()=>{ if(buf.length){const x=buf.join("\n").trim(); if(x)kids.push({label:lbl,text:x}); buf=[];} };
     for(const ln of lines){
-      const m3=ln.match(/^Memory\s+(\d+):/i);
-      if(m3){ flush(); lbl="Memory "+m3[1]; buf.push(ln); }
+      const m3=ln.match(/^(Earlier memory|Memory)\s+(\d+):/i);
+      if(m3){ flush(); lbl=m3[1]+" "+m3[2]; buf.push(ln); }
       else buf.push(ln);
     }
     flush();
@@ -26797,6 +26797,10 @@ function memoryBlocks(injectedMemories,which){
      happened. */
   const _today=(()=>{ try{ return (curChat()||{}).gameDay||0; }catch(e){ return 0; } })();
   const fmt=(m,i)=>`Memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
+  /* (!) v150.23 — the two tiers are rendered as two blocks and each counted from 1, so one payload
+     carried "Memory 1" twice for two different events and the model was left to guess which one a
+     line meant. The older tier is labelled on its own ("Earlier memory 1"), so every label is unique. */
+  const fmtOld=(m,i)=>`Earlier memory ${i+1}: ${_memLead(m,_today)}${memInjectText(m,{noEnum:true})}`;
   const out=[];
   // v38.1 — outParts, when handed one, collects the numbered entries on their own (no heading, no
   // instruction) so the payload template can print those two as its own prose and call just this.
@@ -26808,7 +26812,7 @@ function memoryBlocks(injectedMemories,which){
   // v26 — the DIARY tier is no longer injected anywhere: diaries are the player's artifact, not
   // payload material. `diary` stays parsed above so retrieval callers don't have to change shape.
   if((which==="longterm"||which==="distant"||which==="all") && longterm.length){
-    op.mem_distant_entries=longterm.map(fmt).join("\n");
+    op.mem_distant_entries=longterm.map(fmtOld).join("\n");
     out.push(blkTpl("mem_distant_header")+"\n"+blkTpl("mem_distant_instr")+"\n\n"+op.mem_distant_entries);
   }
   return out;
@@ -27285,7 +27289,7 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
         fillTpl(blkTpl(it.valence==="warm"?"intent_aim_warm"
                        :it.valence==="hostile"?"intent_aim_cool":"intent_aim_self"),
           {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),
-           kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)})).join(" ");
+           kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)})).join("\n");   // v150.23 — one want per line: joined with a space, a second want (or a heading in an edited fragment) ran on inside the first
     }
   }catch(e){}
   return out;
@@ -31694,7 +31698,10 @@ function buildTailBlocks(opts){
         {const seen=new Set();
          _hosts=_hosts.filter(n=>{ const k=asciiFold(String(n)).toLowerCase().trim();
                                    if(!k||seen.has(k))return false; seen.add(k); return true; });}
-        if(selfId && _res.some(r=>r.id===selfId)) loc+=`\n${blkTpl("scene_here_yours")}`;
+        /* v150.23 — not in the heat of the moment: "their kitchen, their kettle" is framing for a visit,
+           and inside a sex beat it was the loudest thing about the room. */
+        if(chat&&chat._heatBeat){}
+        else if(selfId && _res.some(r=>r.id===selfId)) loc+=`\n${blkTpl("scene_here_yours")}`;
         else if(_hosts.length) loc+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_hosts.join(" & ")})}`;
       }catch(e){}
       lines.push(loc);
@@ -32734,7 +32741,13 @@ function earshotSplit(chat,selfId){
     const l=(c&&c.locationId)?chatLocById(c,c.locationId):null;
     if(!l||!Array.isArray(l.sublocations)||l.sublocations.length<=1){ out.here=ids; return out; }
     const pSub=curSubId(c);
-    const subOf=id=>(c.subPos&&c.subPos[id])||pSub;
+    /* (!) v150.23 — WHERE IS SOMEONE WHOSE AREA WAS NEVER RECORDED? They were put in the player's area,
+       so a person merely at the same house was "[here now]" in a two-person bedroom scene. They count
+       as in the player's area only while they are taking part (spoke in the last lines); otherwise
+       they are where charSubId puts them, at the entrance, like everywhere else in the app. */
+    const _talking=new Set(); try{ (c.messages||[]).slice(-12).forEach(m=>{ if(m&&m.speakerId) _talking.add(m.speakerId); }); }catch(e){}
+    const _entr=(()=>{ try{ return entranceSubId(l); }catch(e){ return pSub; } })();
+    const subOf=id=>(c.subPos&&c.subPos[id])||(_talking.has(id)?pSub:_entr);
     const vSub=selfId?subOf(selfId):pSub;
     ids.forEach(id=>{ (subOf(id)===vSub?out.here:out.apart).push(id); });
     out.playerHere=(vSub===pSub);
@@ -35301,9 +35314,10 @@ function normalizeChannels(s,opts){
   return t.replace(_chanThoughtRx(),(m,pre,body)=>pre+"*"+body+"*");
 }
 const TEXT_LABEL_RX=/^\s*\((?:[^()]{0,40}?'s\s+)?text\s+message\)\s*/i;
+const TEXT_LABEL_TAIL_RX=/\s*\((?:sent as a text|text message)\)\s*$/i;   // v150.23 — the label a text reply's own lines carry at the end
 function stripChannelLabel(s){
   let t=String(s==null?"":s);
-  for(let i=0;i<6;i++){ const n=t.replace(TEXT_LABEL_RX,""); if(n===t)break; t=n; }
+  for(let i=0;i<6;i++){ const n=t.replace(TEXT_LABEL_RX,"").replace(TEXT_LABEL_TAIL_RX,""); if(n===t)break; t=n; }
   return t;
 }
 // Strip anything that belongs to a spoken scene but never to a typed message.
@@ -35345,7 +35359,7 @@ async function _replyToText(chat,p,out){
     // The thread is not a separate conversation: it is the same one, on a different channel.
     const _pl=await buildTextPayload(chat,p);
     // v147.2 — this chat's world and player (the thread may be answered while another story is open)
-    const _hist=inChatWorld(chat,()=>tagLastForTarget(castHistory(chat,p)));
+    const _hist=inChatWorld(chat,()=>tagLastForTarget(castHistory(chat,p,{textReply:true})));
     let msgs=inChatWorld(chat,()=>ptBuildMessages("text",_pl.blocks||{},_hist,{chat,npc:p,targetName:chatUserName(chat)},_pl.rawFn));
     if(!msgs){
       msgs=[];
@@ -36851,6 +36865,10 @@ function castHistory(chat,forP,opts){
     // said out loud in the room. Their own texts keep their voice (assistant); the player's stay user.
     if(m.textMsg){
       if(m.role==='assistant'){
+        /* v150.23 — in a TEXT REPLY the character's own texts carry the label at the end: every one of
+           its recent lines opened "(text message) …", the strongest example in the payload of how a
+           reply starts, and the model copied it. The label still tells texts from spoken lines. */
+        if(opts&&opts.textReply) return {role:"assistant",name:sanitizeName(m.speaker||(forP&&forP.name)||"char"),content:`${m.content} (sent as a text)`};
         return {role:"assistant",name:sanitizeName(m.speaker||(forP&&forP.name)||"char"),content:`(text message) ${m.content}`};
       }
       return {role:"user",name:sanitizeName(state.user),content:`(${state.user}'s text message) ${m.content}`};
@@ -45369,12 +45387,22 @@ function normalizeEmotion(x){
 /* v144.1 — `period`: the part of the day the event happened in, captured before the engine's model
    call. Without it rememberMemory stamped whatever the open chat's clock read when the answer landed
    (the next period, or the next day's Morning at day end). */
+/* (!) v150.23 — A MEMORY IS NEVER CUT MID-WORD. Generated memories were stored with a bare .slice(0,600)
+   (or 240), so a longer answer was kept as "…I could bid f" and every later payload carried a half
+   sentence the model then had to finish by inventing. Text over the limit now ends at the last full
+   sentence that fits (or the last whole word, with an ellipsis, when no sentence ends inside it). */
+function clipAtSentence(s,max){
+  const t=String(s==null?"":s).trim(); if(t.length<=max) return t;
+  const head=t.slice(0,max), m=head.match(/^[\s\S]*[.!?…](?=["'”’»)\]]*(\s|$))["'”’»)\]]*/);
+  if(m&&m[0].length>=max*0.5) return m[0].trim();
+  const sp=head.lastIndexOf(" "); return (sp>max*0.5?head.slice(0,sp):head).replace(/[\s,;:—–-]+$/,"")+"…";
+}
 function _plantWorldMemory(chat,uni,p,m,day,placeName,who,period,extra){
   if(!p||!m||!m.content)return null;
   const rec=rememberMemory(Object.assign({
     people:memPeople(p.name, Array.isArray(m.people)?m.people:[], who||[]),
     id:"m_"+Date.now()+Math.random().toString(36).slice(2,6)+String(p.id).slice(-3),
-    content:String(m.content).slice(0,600), location:placeName||"",
+    content:clipAtSentence(m.content,900), location:placeName||"",
     emotion:normalizeEmotion(m.emotion),
     importance:Math.max(0.3,Math.min(1,+m.importance||0.6)),
     tags:[], type:"EXPERIENCE", ownerId:p.id, character:p.name,
@@ -46409,7 +46437,7 @@ async function runGoalPursuit(chat,day,uni,period){
       _pushWorldEvent(chat,j.headline,j.event,[p.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
       if(!mems.some(m=>m&&m.name&&String(m.name).toLowerCase()===p.name.toLowerCase())){
-        mems.unshift({name:p.name,content:String(j.event||"").slice(0,240),emotion:"determined",importance:0.6});
+        mems.unshift({name:p.name,content:clipAtSentence(j.event||"",360),emotion:"determined",importance:0.6});
       }
       mems.forEach(m=>{ const q=byName(m&&m.name); if(q)_plantWorldMemory(chat,uni,q,m,day,place,mems.map(x=>x&&x.name),nowPer); });
       _applyWorldRel(chat,j.rel,byName);
@@ -50160,7 +50188,7 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
       _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&target.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
       if(!mems.some(m=>m&&m.name&&sameName(m.name,holder.name))){
-        mems.unshift({name:holder.name,content:String(j.event||"").slice(0,240),emotion:"determined",importance:0.6});
+        mems.unshift({name:holder.name,content:clipAtSentence(j.event||"",360),emotion:"determined",importance:0.6});
       }
       mems.forEach(m=>{ const who=byName(m&&m.name); if(who)_plantWorldMemory(chat,uni,who,m,day,place,mems.map(x=>x&&x.name),period||""); });   // v147.2 — filed under the stretch it closed, not the clock's
       _applyWorldRel(chat,j.rel,byName);

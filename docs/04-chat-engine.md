@@ -260,7 +260,8 @@ with no `{{if}}` is unchanged (payload parity holds).
 speaker's own latest memories of today, so a fight this morning colours the emotion now),
 `people_they_answer_to` (spouse, partner, lover, family, read off their own ties whether or not those people
 are here) and `who_else_can_see_or_hear` (or "nobody — they are alone with …"). The id/superego prompt weighs
-the feelings against those stakes.
+the feelings against those stakes. (v150.42: `who_else_can_see_or_hear` also names the public at a place that is not
+someone's home — "strangers and staff at <place> (<exposure>)" — instead of "alone with" on a beach club boardwalk.)
 
 ## v150.38 — the drives writer is gone; spoken limits are read in the reply's request
 

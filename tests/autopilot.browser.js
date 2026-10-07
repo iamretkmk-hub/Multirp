@@ -155,6 +155,9 @@ const {chromium}=require('playwright');
   /* The four things a world move can reach for, stubbed so the ORDER is what is checked. */
   await pg.evaluate(()=>{
     window.__w=[]; window.__meet=false; window.__cut=true;
+    // the after-turn Decisions requests (v150.42's movement, the reply's emotion pick) answer at once, never over the network
+    { const realF=window.fetch; window.fetch=async(u,o)=>String(u).indexOf("/api/alpha/decisions")>-1
+        ? new Response(JSON.stringify({answers:{}}),{status:200,headers:{'content-type':'application/json'}}) : realF(u,o); }
     window.__real={rdm:window.resolveDueMeetings,cut:window.runSceneCut,gm:window.maybeGamemaster,fgm:window.forceGamemaster,txt:window.maybeProactiveTextTick};
     window.resolveDueMeetings=async()=>{ __w.push("meeting"); return window.__meet; };
     window.maybeProactiveTextTick=()=>{ __w.push("texts"); };

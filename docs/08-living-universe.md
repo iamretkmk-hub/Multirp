@@ -70,6 +70,22 @@ fire.
   - The picked kind becomes the author's `trigger_context` ("The kind of beat that fits: …").
   - A failed or empty answer falls back to the chat judge. A forced beat skips both.
   - Pinned by `tests/gm-decisions.browser.js`.
+- **v150.42 — movement inside a place** (`maybeMoveDecision`, switch `moveDecOn`, bar `moveAt`, default
+  0.75). It runs from `postTurn` beside the Gamemaster, at a place with two or more areas.
+  - **Who is asked:** every character there gets a pick (`x_move_pick`: stay, or another area, each listed
+    with what it is and who is there) and a reason (`x_move_why`). At most six are asked; left out are the
+    one an active event brings in, anyone who promised to come back (`chat.expected` has its own path) and
+    anyone who moved within `MOVE_COOLDOWN` (3) turns.
+  - **What the request sees:** the place, every area with its exposure and who is in it, where the player
+    is (and whether they are alone there), each person's area, tie to the player and last line, the latest
+    exchange, and whether the moment is private. In a private moment the player's area is not offered.
+  - **When someone moves:** a move counts at 1 − P(stay) ≥ the bar, to the likeliest area. At most
+    `MOVE_MAX` (2) move per turn. A move is applied like a presence-tracker move: `subPos`, one narrated
+    beat told the reason, the terse note when that fails, then `syncPlayerSubArea`.
+  - **One beat per turn:** a Gamemaster about to write a beat first awaits that turn's move decision
+    (`_moveDecJobs`) and stands down if someone moved.
+  - **Unchanged:** moves a line asks for are still read by the presence tracker.
+  - Pinned by `tests/move-decision.browser.js`.
 - **Stage 2 — author** (`gmAuthor`): writes the hidden nudge, grounded in
   `directorContext(chat,"gm")` (tie-only roster, scene/privacy lines, trackers, calendar,
   offstage positions), the shared recent-exchange window (`recentExchangeText` — texts

@@ -116,6 +116,7 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Reply check (Decisions API, v150.30) | `replyCheckModel` | → `openai/gpt-6-luna-decisions` |
 | Trackers in one request (Decisions API, v150.31) | `trackDecModel` | → `openai/gpt-6-luna-decisions` |
 | Strict gates: promise / task / meeting / quest / motive (Decisions API, v150.33) | `gateModel` | → `openai/gpt-6-luna-decisions` |
+| Emotion pick (Decisions API, v150.34) | `emoModel` | → `openai/gpt-6-luna-decisions` |
 | Gamemaster / Scene Writer / judges | `gmModel` | — |
 | Character generator & background tasks | `bioModel` | — |
 | Authoring model (universe gen, director notes, genre packs, prompt tuner) | `authorModel` | — |

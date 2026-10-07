@@ -230,6 +230,21 @@ memory retrieval scoped to them, target resolution from the *freshest real line 
 transcript* (not the router's stale `addressed`), witness-scoped history, refusal fallback,
 `Name:` prefix stripping, and awaits the on-screen reveal so chains pace correctly.
 
+## The emotion pick (v150.34)
+
+Before each character reply (solo, multi, Gamemaster reaction, text), `emotionEnsure(chat, p, line)` asks the
+Decisions API two typed questions in one request, started beside the memory search and awaited with it:
+which **base emotion** the speaker is feeling (a choice over the editable list in Settings → Emotions — each
+entry a name, a description the model reads, and three tones mild / clear / intense) and **how strongly**.
+The state is the speaker's name and personality, this scene as they heard it (`_memJudgeScene`) and their
+previous pick in this scene. The result is stored on `chat.emo[id]` `{emotion, intensity, tone}` (Anger +
+intense → "furious") and exposed as the `emotion` / `intensity` / `tone` flags of the reply payload's
+`{{if}}` conditions. The same moment is never asked twice; a failure keeps the last pick. Shipped list
+(`EMOTIONS_DEFAULT`): Calm, Joy, Affection, Desire, Sadness, Anger, Fear, Disgust, Surprise, Shame, Guilt,
+Jealousy, Pride. Prompts `x_emotion_pick`, `x_emotion_intensity` (Payloads → Emotion pick); model
+`emoModel`. Pinned by `tests/emotion-pick.browser.js`. Nothing reads it yet beyond the flags — the speaking
+style per emotion comes with the fragment model.
+
 ## Refusal & empty-reply handling (both reply paths)
 
 - `looksLikeRefusal()` catches canned refusals (CJK "无法…" patterns, English "I can't…", or a

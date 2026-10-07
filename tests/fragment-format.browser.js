@@ -22,7 +22,10 @@ const {chromium}=require('playwright');
     const uni=state.universes[0];
     window.__CONV=["target","target_sheet","last_line","guidance","rumors","situation","brief","delivery","promises","threads","others","style","respond_as","memories"];
     // the v150.56 shipped list: today's defaults with the frozen old copies swapped back in, and no target_sheet
-    window.__oldList=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||f)));
+    // (v150.59: the v150.58 copies first, then the v150.56 ones; their path texts replaced the main body, so for building a
+    // payload they are converted to today's "adds under the main body", exactly as a saved list is)
+    window.__oldRaw=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||FRAG_DEFAULTS_V150_58[f.id]||f)));
+    window.__oldList=()=>__oldRaw().map(f=>{ _fragByPathToAdd(f,f.paths||FRAG_PATHS); (f.options||[]).forEach(o=>_fragByPathToAdd(o,(o.paths&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS))); return f; });
     window.__base=(frags)=>{
       state.personas=[
         {id:"p_a",name:"Ayla",universeId:uni.id,personality:"Ayla is sharp.",look:{},style:"Short, dry sentences.",instructions:"Hold the pause before answering.",relationships:{p_b:{tie:"my older brother"}}},
@@ -112,7 +115,8 @@ const {chromium}=require('playwright');
 
   console.log("\n[the same sentences as the v150.56 fragments, on every path and in every case]");
   const cmp=await pg.evaluate(()=>{
-    const norm=t=>t.split("\n").map(l=>l.trim()).filter(Boolean).join("\n");
+    // (v150.59 fixed one line: the v150.58 "already said" box sent a literal "\u2014" where it meant a dash)
+    const norm=t=>t.split("\\u2014").join("\u2014").split("\n").map(l=>l.trim()).filter(Boolean).join("\n");
     const out={diff:[],n:0,raw:0,left:[]};
     __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,null); out.n++;
       if(a!==b)out.raw++;
@@ -188,7 +192,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[a saved list]");
   const M=await pg.evaluate(()=>{
-    const old=__oldList(); const ed=old.find(f=>f.id==="others"); ed.text=ed.text+"\nNobody else is here.";
+    const old=__oldRaw(); const ed=old.find(f=>f.id==="others"); ed.text=ed.text+"\nNobody else is here.";
     state.fragments=old; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
     const L=fragList(), ids=L.map(f=>f.id);
     const same=id=>_fragCanon(L.find(f=>f.id===id))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id===id));
@@ -200,8 +204,9 @@ const {chromium}=require('playwright');
     const L2=L.filter(f=>f.id!=="target_sheet"); state.fragments=L2; _fragMigratedFor=null; fragList();
     r.once=!state.fragments.some(f=>f.id==="target_sheet");
     // an edited "Who you are answering" is left alone and gets no sheet
-    const old2=__oldList(); old2.find(f=>f.id==="target").text+="\n(mine)"; state.fragments=old2; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
-    const L3=fragList(); r.editedTarget=/\(mine\)/.test(L3.find(f=>f.id==="target").text)&&!L3.some(f=>f.id==="target_sheet")&&_fragCanon(L3.find(f=>f.id==="guidance"))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id==="guidance"));
+    const old2=__oldRaw(); old2.find(f=>f.id==="target").text+="\n(mine)"; state.fragments=old2; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
+    // (v150.59: kept as the user wrote it, its path text converted to "adds under the main body" — see fragment-wording)
+    const L3=fragList(); r.editedTarget=/\(mine\)/.test(JSON.stringify(L3.find(f=>f.id==="target")))&&!L3.some(f=>f.id==="target_sheet")&&_fragCanon(L3.find(f=>f.id==="guidance"))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id==="guidance"));
     state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,"");
     return r; });
   ok("an untouched old default is replaced by the new one, with \"What you know of them\" inserted after it, and saved",
@@ -221,7 +226,7 @@ const {chromium}=require('playwright');
     const none=(ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B)||[]).map(x=>x.content).join("\n");
     return {f,at:ids.indexOf("already_said")===ids.indexOf("last_line")+1&&ids.indexOf("stuck")===ids.indexOf("already_said")+1,plain,cont,heat,none}; });
   ok("a fragment of its own on every path, between the last line and 'when it goes in circles', with its data as a call",
-     AS.f&&AS.f.paths.length===5&&AS.at&&/\{\{call\/\/already_said_lines\}\}/.test(AS.f.text)&&/YOU ALREADY SAID THIS/.test(AS.f.text), JSON.stringify(AS.f).slice(0,300));
+     AS.f&&AS.f.paths.length===5&&AS.at&&/\{\{call\/\/said_line1_raw\}\}/.test(AS.f.text)&&/YOU ALREADY SAID THIS/.test(AS.f.text), JSON.stringify(AS.f).slice(0,300));   // v150.59 — the lines as data, the labels in the box
   ok("a reply after their own earlier line quotes it under the heading", /YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN[\s\S]*your last line, word for word[\s\S]*Hello\./.test(AS.plain), AS.plain.slice(-1500));
   ok("carrying on: the 'continues' sentence, and the window slides past the newest line", /Your newest line is the one quoted above[\s\S]*the line before the one quoted above[\s\S]*Hello\./.test(AS.cont)&&!/\{\{(if|endif|gap)/.test(AS.cont), AS.cont.slice(-1500));
   ok("on heat too", /YOU ALREADY SAID THIS/.test(AS.heat), "");

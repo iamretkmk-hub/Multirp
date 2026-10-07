@@ -1054,7 +1054,8 @@ A fragment (`FRAG_DEFAULTS`, 38 shipped, built from the user's own layouts) has:
 
 - **paths**: which reply paths it appears on: `solo`, `multi`, `gm`, `text`, `heat`.
 - **seg**: before the conversation history (`head`) or after it (`tail`).
-- **text**: its main body, always injected on its paths. `byPath[path]` replaces it on one path.
+- **text**: its main body, always injected on its paths. `byPath[path]` is added under it on one path (v150.59; it used
+  to replace it).
 - **options**: the *choose when* parts, injected only when they apply. An option has:
   - a **code condition**, for a fact the app knows (`render_mode`, `emotion`, `intensity`, `tone`, `ego`,
     `stalled`, `thought_stuck`, `continuing`, `voicing`, `scene_start`, `has_motive`, `alone`,
@@ -1190,3 +1191,79 @@ The paragraph drops as a whole when there is nothing to quote. A saved fragment 
 `ptResolveConds` also had an off-by-one: an `{{endif}}` written directly before another token
 (`…{{endif}}{{call//x}}`) was left in the text. It searches back from `end-1` now.
 
+
+## v150.59 — every word in its fragment
+
+Open a fragment and you see everything it sends: its paths, the main body, the conditions and what each one
+injects. No `{{call//…}}` in a shipped fragment brings in app wording any more. A call brings in only data: the
+card's own text, the world's setting, names, lists, memories, plan and tracker entries, quest lines.
+
+The fragments that still called a worded piece now hold its wording themselves. The data comes in by a data-only
+name (`*_raw`, in `RAW_DATA_KEYS`), keyed on its producer's map beside the worded piece and in no ORDER list, as in
+v150.57. Code choices became options with code conditions.
+
+| Fragment | Main box | Options (code condition) | Data names |
+|---|---|---|---|
+| `task` | the task (was `rp_task`) | — | — |
+| `world` | `# UNIVERSE SETTING` + the setting | — | `world_setting_raw` (`_wd`) |
+| `bio` *Who you are* | — | `sheet` (`has_bio`): the heading and one paragraph per tag, with the behaviour rule, the live-goals intro and the wearing / wardrobe sentences written out; the quiet wants worded by `want1` / `want2` (warm / hostile / self) | `bio_backstory_raw`, `bio_personality_raw`, `bio_traits_raw`, `bio_goals_live_raw`, `bio_goals_raw`, `want1_*_raw`, `want2_*_raw` (target, aim, a_kind, kind), `bio_look_raw`, `bio_wearing_raw`, `bio_wardrobe_raw`, `bio_home_raw` (`_yb`) |
+| `ties` | — | `ties` (`has_ties`): heading, intro, what you found out, the tie lines, everyone else | `rel_learned_raw`, `rel_notes_raw`, `rel_sheet_raw`, `rel_elsewhere_raw` (`_rl`) |
+| `format` | — (each path has its own box) | heat: `breaks_voiced` (`voicing`), `breaks_silent` (`not voicing`), `thought_superego` / `thought_physical` (`heat_narr`), `beat_end` (`render_mode = heat`, with `{{if heat_last_beat}}`) | — (text and heat formats written out) |
+| `already_said` | the box, each quoted line with its label (`{{if continuing}}`) | — | `said_line1_raw`, `said_line2_raw` (`_as`) |
+| `scene_now` | `# SCENE RIGHT NOW` | `changed` (`scene_changed`), `live` (`render_mode != text`), `yours` / `host` (`scene_home`), `subareas`, `live_text` (`render_mode = text`) | `scene_*_raw`, `subarea*_raw`, `moved_*`, `jump_*`, `period_*`, `arrived_raw`, `left_raw` (`_sc`) |
+| `privacy` | `# PRIVACY — WHO CAN HEAR YOU` | `with_others`, `others_only`, `alone`, `alone_public`, `apart`, `text` (`privacy = …`), `nearby`, `area_exposure` / `place_exposure` (`privacy_exposure`) | `privacy_*_raw` (`_sc`) |
+| `arrangements` | — | `plans` (`has_plans`): heading, intro, one paragraph per group (unkept, now, late, today, soon, further off) | `plans_*_raw` (`_cl`) |
+| `motive` | — | `bears` (as before): the wording per `motive` (warm / hostile), and the aside | `motive_target_raw`, `motive_aim_raw`, `motive_a_kind_raw`, `motive_kind_raw`, `motive_aside_raw` (`_pi`) |
+| `limits` | the heading and the lines | — | `limits_lines_raw` (`_drives`) |
+| `biology` | — | `trackers` (`has_trackers`): heading, the three groups with their labels | `trackers_story_raw`, `trackers_seen_raw`, `trackers_own_raw` (`_tk`) |
+| `guardrails` | — | the consistency note as four options: `broke_character`, `spoke_for_player`, `repeated`, `lost_track` | — |
+
+**Flags.** `buildCharPromptBlocks` adds `has_bio`, `has_ties`, `want1`, `want2` to `_headFlags`. `buildTailBlocks` adds
+`scene_changed`, `scene_home`, `privacy`, `privacy_exposure`, `has_plans`, `has_trackers`, `motive` and `heat_narr` to
+`_railFlags`. Every data name is a flag too, true when it has data this turn (`_ptDataFlags`), so a box can say
+`{{if said_line2_raw}}`. The editor's flag list has them all.
+
+**What stays in the data.** A list with one line per entry keeps each entry's own note, because the fragment model has
+no loop: a plan's "agreed / not firmly agreed / you are the one who goes / no reason was given", a memory's "This
+happened … ago", a tracker's stage, a limit's "holds for today". Headings, intros and group labels are in the boxes.
+
+**A path's text adds.** `byPath[path]` is added under the main body, after a blank line; it used to replace it. The
+main body is what every path shares (the leading part they have in common); a path box is only what that path adds.
+Paths that share nothing have an empty main body and a box each. Ticking a path in the editor opens an empty box,
+"added under the main body on this path". Ticking anything leaves the list and the page where they were.
+
+**Faithfulness.** 299 situations over all five paths were compared with the v150.58 build, line by line (blank lines
+and the indent at the start of a paragraph ignored): continuing or not, player or character target, a brief,
+arriving, leaving, an opener, stalled, voiced or not, a stale voice session, heat beats first and last, text, promises,
+rumors, plans, threads, motives with and without an aside, two quiet wants, trackers, limits, the consistency flags,
+each privacy case, a scene that changed, whereabouts, memories, outfits, the user's format rules, asks answered, and
+rewritten pieces carried in. Two lines differ on purpose, both v150.58 bugs: the "already said" box sent a literal
+`—`, and the ties lost what the character had found out about people (the bare `relationships` call rebuilt with
+the wording silenced, and that wording carried the facts).
+
+**Migration.** `FRAG_DEFAULTS_V150_58` keeps the old default of every fragment v150.59 changed. Each rewrite entry in
+`FRAG_SHIPPED_ADDS` names its own old table (`old`). `v150.59.format` replaces a saved fragment only while it is still
+exactly its v150.58 default, then carries in any piece the user had rewritten (`state.blockTpls`), from
+`FRAG_TPL_CARRY`: the piece's text replaces the shipped wording where it appears word for word, with its placeholders
+renamed (`map`) and cut where the fragment holds it in parts (`split`). `v150.59.bypath` then converts the path texts
+of every fragment the user edited, once: when every path's text starts with the main body (followed by a blank line),
+the main body stays and each path keeps only the rest; otherwise the main body goes empty and each path gets its
+whole text. Each path is sent exactly what it was before. With no saved list, a rewritten piece is carried into a
+copy of the shipped list, which is saved once (`_fragCarryDefaults`).
+
+| Pieces | Go to |
+|---|---|
+| `rp_task` | `task` |
+| `world_header` | `world` |
+| `bio_behave_self`, `goals_live_intro`, `bio_wearing_self`, `bio_wardrobe_self`, `intent_aim_warm/cool/self` | `bio` |
+| `rel_learned`, `rel_elsewhere` | `ties` |
+| `text_format`, `heat_format`, `heat_breaks_voiced/silent`, `heat_narr_superego/physical`, `heat_more_yes/no` | `format` |
+| `already_said_shortened`, `already_said_which_*` | `already_said` |
+| `scene_header`, `scene_intro(_text)`, `scene_loc(_sub/_text)`, `scene_here_yours/host`, `scene_subareas`, `scene_changed_*` | `scene_now` |
+| `privacy_header`, `privacy_text`, `scene_present(_others)`, `scene_alone(_public)`, `scene_apart`, `scene_nearby`, `scene_privacy`, `scene_area_privacy/quieter` | `privacy` |
+| `intent_warm`, `intent_hostile`, `intent_side` | `motive` |
+| `limits_header` | `limits` |
+| `consistency_character/player/repeat/continuity` | `guardrails` |
+
+The classic layout and the templates are unchanged: every worded piece is still built. Pinned by
+`tests/fragment-wording.browser.js`.

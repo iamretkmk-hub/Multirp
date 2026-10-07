@@ -112,6 +112,9 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Rolling recap (calls) | `recapModel` | → `memModel` |
 | Gossip & offstage intent | `gossipModel` | → `memModel` |
 | Embeddings | `embedModel` | → `openai/text-embedding-3-small` |
+| Memory relevance judge (Decisions API, v150.29) | `memJudgeModel` | → `openai/gpt-6-luna-decisions` |
+| Reply check (Decisions API, v150.30) | `replyCheckModel` | → `openai/gpt-6-luna-decisions` |
+| Trackers in one request (Decisions API, v150.31) | `trackDecModel` | → `openai/gpt-6-luna-decisions` |
 | Gamemaster / Scene Writer / judges | `gmModel` | — |
 | Character generator & background tasks | `bioModel` | — |
 | Authoring model (universe gen, director notes, genre packs, prompt tuner) | `authorModel` | — |
@@ -119,6 +122,16 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Voice calls | `callModel` | — |
 | STT fixer | `sttFixModel` | → `callModel` |
 | Tracker with its own model | `tracker.model` | → `memModel` |
+
+**The Decisions API** (v150.29) is the one kind of text-model call that does not go through
+`chatCompletion`: it is not a chat completion. `decisionsCall(breaker, body, dbgEntry, timeoutMs)` posts
+`{model, state, questions}` to `https://openrouter.ai/api/alpha/decisions` (`DECISIONS_URL`) with the
+OpenRouter key and returns `answers` (or null on any failure); `_decYes` reads a noul answer's
+probability. Output is free; input is billed. Each feature has its own pause (`_decBreaker`): a 401/402
+pauses it 2 minutes, a 400/404/405 30 minutes, three failures in a row 10 minutes, one toast each, lifted
+by a key change — so a reply check refused on one scene's content never stops memory recall. Users: the
+memory relevance judge (doc 07), the reply check (doc 04) and trackers in one request (doc 09). The path
+is `alpha`, so all parsing lives in `decisionsCall` / `_decYes` and each feature's own reader.
 
 **Model rotation** (`rpRotation`, comma-separated): each roleplay reply uses the next model in
 the list, cycling; index persists (`sm_rprotidx`). Rotation picks only the *primary* model —

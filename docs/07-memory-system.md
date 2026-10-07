@@ -216,6 +216,54 @@ Also: the per-type/intimate cap refills from the pool in **rank** order (it walk
 and the Debug trace shows every injected memory with its `rank` out of the pool size and the raw
 semantic match, not only the top twelve.
 
+### The relevance judge (v150.29) — relevance is asked, not guessed
+
+Every fix above tuned a proxy. None of the facets can tell whether a memory *matters to this
+moment*: the cosine compares a keyword line to a memory, and people-present, recency and importance
+know nothing about the topic. So retrieval now asks.
+
+`memRelevanceJudge(chat, ownerId, userText, cands)` sends ONE request to OpenRouter's **Decisions API**
+(`POST https://openrouter.ai/api/alpha/decisions`, model `memJudgeModel` → `openai/gpt-6-luna-decisions`;
+`typesafe/jev-1.13` takes the same request). A decision model answers typed questions with calibrated
+probabilities instead of writing text. The request carries:
+
+- `state` — the scene as the owner took it in (`_memJudgeScene`: the last 8 lines they witnessed, by
+  `memHeardLine`, ending on the line being answered);
+- `questions` — one `noul` (yes/no) question per shortlisted memory, `m0…mN`. Its `instructions` are the
+  `x_mem_relevance` prompt with `{{memory}}` filled (`_memJudgeText`: `memSearchText` + where it happened),
+  its `criteria.true` / `criteria.false` are `x_mem_relevance_yes` / `_no`. All three are registry prompts
+  (Payloads → Memory Retrieval) and fill `{{char}}`, `{{user}}`, `{{memory}}`.
+
+**The shortlist.** Per tier, the top 20 (today) / 10 (long-term) by the weights, united with the top 20 /
+10 by the semantic facet alone, so an old memory nobody present is in can still reach the judge when
+the query points at it. At most `MEM_JUDGE_MAX_Q` = 60 questions (the API allows 200). Diary entries
+are not asked about: `memoryBlocks` never injects them (v26).
+
+**How the answer ranks.** With an answer, a memory's probability `rel` replaces the semantic facet and
+scales the others: `total = wSem·rel + rest·(0.25 + 0.75·rel)`, where `rest` is the weighted people,
+location, recency, emotion and importance facets. Among memories that are all irrelevant the old order
+survives (each is scaled by the same 0.25), but those facets can no longer lift an unrelated memory over
+one that answers the moment. A shortlisted memory the answer skipped, or one outside the shortlist,
+counts as `rel = 0`.
+
+**The floor.** `memJudgeMin` (Settings → Memory → Minimum relevance, default 0.15): a today or long-term
+memory rated below it is not recalled at all, even if that leaves a slot empty. Injecting an unrelated
+memory is not neutral; it is the material characters repeat and drift toward. 0 fills every slot.
+
+**Failure never blocks a reply.** No key, the switch off (`memJudgeOn`, on by default), a timeout
+(`MEM_JUDGE_TIMEOUT_MS` = 8 s), CORS or network error, a non-2xx status, or an answer with no
+probabilities: `null`, and retrieval ranks by the weights alone, exactly as before. Failures that will
+repeat pause the judge (`_memJudgeBreak`, one toast) rather than cost every reply a dead request: a
+401/402 for 2 minutes, a 400/404/405 (model or endpoint refused) for 30 minutes, any three failures in a
+row for 10 minutes. A pause is tied to the key; changing the key lifts it.
+
+**Cost.** Billed on input only (the model writes nothing): about 20 KB of request for 24 questions in the
+test bank, so roughly $0.0005–0.0015 per character reply at $0.10 per million input tokens.
+
+**Debug.** The judge's own request is a row ("Memory relevance judge — N memories"), its result the
+probability per question. The retrieval trace gains `relevanceJudge` (asked, answered, model, floor, which
+ranking ran) and a `relevance` facet per candidate. Pinned by `tests/memory-relevance.browser.js`.
+
 ## Embeddings (semantic memory)
 
 Opt-in (`embedOn`). `embedText` calls the OpenRouter embeddings endpoint (model

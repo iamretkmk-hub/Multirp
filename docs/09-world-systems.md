@@ -143,7 +143,34 @@ with manual nudge controls (`nudgeTracker`, `setTrackerVal`).
 - Deleting a location that is someone's home/visit target leaves dangling ids —
   `resolveWorldPositions` falls back safely, but clean up residents/visitLocs when editing.
 - Trackers with `method:llm` cost one engine call per turn each — many active trackers =
-  latency + spend. Prefer endday/trigger methods where possible.
+  latency + spend. Prefer endday/trigger methods where possible. **v150.31:** with "Trackers in one
+  request" on (default), every eligible tracker due this turn is one typed question in a single
+  Decisions-API request instead (below), so the count stops mattering for those.
+
+### Trackers in one request (v150.31, `trackerDecisions`)
+
+`runTrackerEngine` builds its jobs exactly as before (who is present, minors, the intimate cue, the
+lines each (tracker, owner) has already judged in `chat.trkRead`). Then the **eligible** jobs go out as
+ONE request to OpenRouter's Decisions API (`decisionsCall`, doc 06; model `trackDecModel` →
+`openai/gpt-6-luna-decisions`):
+
+- `state` — the last six exchange lines, numbered (`1. Emre: …`), sent once for every tracker;
+- a judged tracker (`llm`) is a **choice** question (`x_tracker_dec_change`) between moves built by
+  `_trackDecMoves`: `none` and up to three sizes each way as the behaviour allows — 3 %, 8 %, 20 % of the
+  range (at least 1, 2, 3); a `counter` picks once / twice / three times. The **most likely** move is
+  applied (through `applyBehavior`, as before): an expected value would nudge every tracker by a fraction
+  each turn, the drift-on-vibes the tracker prompt forbids;
+- an event tracker (`trigger_then_day`) is a **noul** question (`x_tracker_dec_trigger`, question +
+  `YES:` + `NO:` lines), `triggered` at ≥ 0.5, then the same on-hit value and dice;
+- each question names `{{from}}`, the first line that (tracker, owner) has not judged — earlier lines are
+  context — and `trkRead` advances only for the questions answered.
+
+**Not eligible** (keep their own chat call, unchanged): a tracker with its own `model` or `prompt`, any
+method other than `llm`/`trigger_then_day`, and every tracker in a story whose `trackPrompt` or
+`x_tracker_ask` was edited — those are deliberate choices only the chat path honours. **Failure**: a
+failed request, or a question it did not answer, sends that tracker through its own call exactly as
+before; repeated failures pause it (`_trackDecBreak`, one toast). Pinned by
+`tests/tracker-decisions.browser.js`.
 
 ## Left behind means left behind (v123.1)
 

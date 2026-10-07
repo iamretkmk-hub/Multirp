@@ -172,6 +172,14 @@ failed request, or a question it did not answer, sends that tracker through its 
 before; repeated failures pause it (`_trackDecBreak`, one toast). Pinned by
 `tests/tracker-decisions.browser.js`.
 
+**v150.33 — every tracker, and a strictness bar.** Trackers with their own prompt were the ones giving
+false positives, and they were the ones kept off the request. Now every `llm` / `trigger_then_day`
+tracker is asked (`trackDecEligible`); a tracker's own prompt rides in its question as "Its rule: …", and
+its own chat model, `trackPrompt` and `x_tracker_ask` apply only on the chat path (switch off, or the
+request failed). A judged tracker moves only when the answer is at least `trackDecStrict()` sure it moved
+at all (1 − P(none), default 0.7 — Settings → Features → Tracker strictness), then by the most likely move;
+an event fires only at that certainty too.
+
 ## Left behind means left behind (v123.1)
 
 Reported: characters the player was placed with automatically "followed wherever I go, even when I

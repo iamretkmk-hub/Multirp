@@ -256,6 +256,33 @@ is worse than none at all:
 UI: a read-only section in the Meetings modal (`_calPromiseSection`) with release and delete.
 Off via `state.promiseOn`.
 
+## Strict gates (v150.33) — is it real?
+
+Promises, tasks, meetings, character quests and motives were filed far too easily: every future tense
+became a promise ("I'll make a salad"), every errand a task, every flicker a motive. Each **new** one is
+now put to the Decisions API (doc 06) as a yes/no question and filed only at `gateAt()` certainty
+(Settings → Features → Gate strictness, default 0.8). `strictGate(chat, label, state, items)` sends one
+request per batch; the prompts are registry prompts (Payloads → Strict gates), each the question plus a
+`YES:` and a `NO:` line:
+
+| Gate | Where it sits | What fails |
+|---|---|---|
+| `x_gate_promise` | future tracker, before `runPromiseEngine` | not bound past this scene: plain future tense, a wish, small talk |
+| `x_gate_task` | future tracker, before `runTaskExtract` | done on the spot, an errand nobody would remember, unaccepted |
+| `x_gate_meeting` | future tracker, before `runCalendarEngine` | only suggested, unanswered, a "maybe", or already together |
+| `x_gate_quest` | `runCharQuestSpawn`, on the designer's proposal | a mood, a standing goal with nothing new, an errand |
+| `x_gate_intent` | `runIntentEngine` FORM, on each proposed new motive | a passing feeling, small friction or warmth |
+
+- The future-tracker gate asks only about **new agreed** items; planning items, updates and endings of
+  entries on record, and lines already read are not gated. A promise/task/meeting that fails is kept on
+  `futureWatch` as if still being planned, so a later real agreement still finds where it began.
+- Quests and motives are gated on what the generator proposed (the concrete title / aim), so the gate
+  judges the real thing. A refused motive also feeds nothing it would have merged into.
+- Any failure (no key, a non-2xx, no probabilities) files as before; an unanswered question passes. Repeated
+  failures pause the gates (`_gateBreak`). The Debug row "Strict gate — …" lists each item's probability and
+  whether it was filed. Model: `gateModel` → `openai/gpt-6-luna-decisions`. Pinned by
+  `tests/strict-gates.browser.js`.
+
 ## The future-event tracker (v130.1)
 
 `runFutureTracker(chat)` replaces the per-turn Meetings detector and the every-other-turn Promises

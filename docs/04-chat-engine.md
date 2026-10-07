@@ -339,6 +339,21 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   (`broke_character or spoke_for_player`). It lasts one reply: it reads only the speaker's own latest
   reply, so once they answer again unflagged it is gone, and another character never carries it.
   Pinned by `tests/consistency-note.browser.js`.
+- **Fixes from a live export (v150.48):**
+  - **The spoken limits reach the reply under the fragment model.** No shipped fragment called
+    `{{call//limits//full}}`, so the limits were judged every turn and then dropped. There is a `limits`
+    fragment before the guidance now. `fragMigrateStored` adds it, and the guardrails `consistency` option,
+    once to a list saved before them (`FRAG_SHIPPED_ADDS`, remembered in `sm_fragadds`), so deleting either
+    afterwards sticks.
+  - `relTieKind`: an "X of Y" tie is X only for a friend ("friend of the family"). "Son of my best friend"
+    is `via`, not one's own son, as `relTieSeed` already read it.
+  - `_limitSpoken` clips at a sentence or a word (`clipAtSentence`, 240), never mid-word.
+  - `_trackDecMoves(t, cur)` offers only the moves the range allows: steps capped at the span and
+    deduplicated, no fall at the floor and no rise at the ceiling.
+  - The memory judge reads the memory as written, with who and where (`_memJudgeText`), not its search keys.
+  - The player memory files only threads that are new (`_playerNewOpen`). Re-listing old ones re-dated
+    them, so they never aged out.
+  - The familiarity reading says "little that X does surprises them".
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

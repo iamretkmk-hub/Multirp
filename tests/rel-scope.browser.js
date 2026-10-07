@@ -159,6 +159,10 @@ const {chromium}=require('playwright');
       const pins=["p_ha","p_bk","p_ba","p_ay"].map(id=>relPinned(bu,id));
       return (who==='["Burak — husband"]'&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
 
+  ok("(v150.48) 'son of my best friend' is known through the friend, not one's own son; 'friend of the family' is still a friend", await pg.evaluate(()=>{
+      const r=["son of my best friend","Son of best friend","daughter of the Brandts","friend of the family","son","best friend"].map(t=>relTieKind(t,""));
+      return JSON.stringify(r)===JSON.stringify(["via","via","via",relTieKind("friend",""),relTieKind("son",""),relTieKind("best friend","")])&&r[4]!=="via"&&r[3]!=="via"?true:JSON.stringify(r); }));
+
   console.log("\n[the setting]");
   ok("a fresh install, and an old \"present\" or \"brief\", read as dynamic", await pg.evaluate(()=>{
       const r=[]; [null,"present","brief","everyone"].forEach(v=>{ if(v==null)localStorage.removeItem(K.relScope); else localStorage.setItem(K.relScope,v); loadState(); r.push(state.relScope); });

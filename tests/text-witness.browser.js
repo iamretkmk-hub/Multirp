@@ -93,6 +93,37 @@ NO: It is still open: only talked about, promised, half done or not touched in t
       const g=goalDoneQuestions(c,p,{char:p.name,user:"Emre Tokmak"}); const q=g.questions.goal_done_G1;
       return (/AND from Duygu Akbaba's own memories/.test(q.instructions)&&/the newest one is what is true now/.test(q.instructions)&&/the call was made/.test(q.criteria.true))?true:JSON.stringify(q); }));
 
+  console.log("\n[a texter reads none of the player's room]");
+  const X=await pg.evaluate(async()=>{ const c=__setup(); const uni=state.universes[0];
+    state.personas.push({id:"p_b",name:"Burcu Atan",universeId:uni.id,personality:"x",style:"x",goals:"x",look:{}},
+                        {id:"p_o",name:"Özlem Özüçak",universeId:uni.id,personality:"x",style:"x",goals:"x",look:{}});
+    uni.locations.push({id:"l_bu",name:"Atan's House",description:"x",residents:["p_b"],sublocations:[],type:"home"});
+    c.presentIds=["p_o"];
+    c.messages=[
+      {mid:"r1",role:"assistant",speaker:"Narrator",narratorEvent:true,content:"ROOMNARR Özlem Özüçak bahçe kapısından içeri girip mutfağa geçti."},
+      {mid:"r2",role:"assistant",speaker:"Narrator",presenceNote:true,subTo:"kitchen",content:"— ROOMMOVE Emre Tokmak, Özlem Özüçak ile birlikte şuraya geçti: Kitchen —"},
+      {mid:"r3",role:"assistant",speaker:"Narrator",narratorEvent:true,present:["p_o"],content:"ROOMTAGGED Özlem yatak odasına geçti."},
+      {mid:"r4",role:"assistant",speaker:"Özlem Özüçak",speakerId:"p_o",present:["p_o"],content:'"ROOMLINE Gel buraya."'},
+      {mid:"r5",role:"user",content:"Selam Burcu",textMsg:true,textWith:"p_b",present:[]},
+      {mid:"r6",role:"assistant",speaker:"Burcu Atan",speakerId:"p_b",content:"Selam. Hayırdır, bi şey mi oldu?",textMsg:true,textWith:"p_b",present:[]},
+      {mid:"r7",role:"user",content:"Yok, öyle yazdım",textMsg:true,textWith:"p_b",present:[]}];
+    state.memory=[{id:"mb",ownerId:"p_b",character:"Burcu Atan",content:"I made Aslan help me with the laundry.",type:"EXPERIENCE",importance:0.4,gameDay:4,gamePeriod:"Morning",chatId:c.id,universeId:uni.id,date:Date.now()-9000}];
+    const p=state.personas.find(x=>x.id==="p_b");
+    __dec=[]; __sent={};
+    await buildTextPayload(c,p);
+    const emo=__dec.find(x=>x.questions&&x.questions.emotion)||{state:{}};
+    const judge=__dec.find(x=>x.questions&&x.questions.m0);
+    const hist=JSON.stringify(castHistory(c,p,{textReply:true}));
+    const rex=JSON.stringify(recentExchangeFor(c,p,6));
+    return {scene:emo.state.scene||"",who:emo.state.who_else_can_see_or_hear,judge:JSON.stringify(judge&&judge.state||""),
+      q:__sent["Memory query generator"]||"",hist,rex,gq:JSON.stringify(_goalDoneEvidence(c,p,["laundry and Aslan"]))}; });
+  const room=/ROOM(NARR|MOVE|TAGGED|LINE)/;
+  ok("the texter's emotion state has the thread and none of the player's room (narration, move notes, lines)",
+     /Selam\. Hayırdır/.test(X.scene)&&/Yok, öyle yazdım$/.test(X.scene)&&!room.test(X.scene), X.scene);
+  ok("and does not call it being alone with him", Array.isArray(X.who)&&/texting, not together/.test(X.who[0])&&/at Atan's House/.test(X.who[0])&&!/alone with/.test(X.who.join(" ")), JSON.stringify(X.who));
+  ok("nor does the relevance judge, the query writer or the goal check", /Hayırdır/.test(X.judge)&&/Hayırdır/.test(X.q)&&!room.test(X.judge)&&!room.test(X.q)&&!room.test(X.gq), (X.judge+X.q+X.gq).slice(0,600));
+  ok("nor the text reply's own history, nor the fast read of her moment", !room.test(X.hist)&&/Hayırdır/.test(X.hist)&&!room.test(X.rex), X.hist.slice(0,600)+" | "+X.rex.slice(0,300));
+
   console.log("\n[the text memory query]");
   ok("_textMemQuery puts the thread last and cuts from the front", await pg.evaluate(()=>{ const c=__setup(); const p=state.personas[0];
       for(let i=0;i<6;i++)c.messages.push({mid:"x"+i,role:i%2?"assistant":"user",speaker:i%2?p.name:undefined,speakerId:i%2?p.id:undefined,content:"mesaj "+i+" "+"uzun ".repeat(40),textMsg:true,textWith:"p_d",present:[]});

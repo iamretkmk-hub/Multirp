@@ -21853,7 +21853,7 @@ function recentExchangeFor(chat,p,n){
   const head=all[cut]&&all[cut].dayMarker?all[cut]:null;
   const lines=all.slice(cut).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.textMsg&&!m.uiNote
       &&!m.worldEvent&&!m.questNote&&!m.calNote&&!m.dayMarker
-      &&(!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-(n||6));
+      &&((!Array.isArray(m.present)&&_untaggedReaches(chat,p))||witnessedBy(m,p)||m.speakerId===p.id)).slice(-(n||6));
   if(head&&lines.length<(n||6))lines.unshift(head);
   return lines
     .map(m=>{ if(m.dayMarker)return {role:'user',name:"Narrator",content:`[${m.content}]${m.narration?" "+m.narration:""}`};
@@ -23161,7 +23161,7 @@ function _replyCheckState(chat,msg,p){
   const msgs=(chat&&chat.messages)||[], i=msgs.indexOf(msg);
   const _upto=i>=0?msgs.slice(0,i):msgs;
   // v150.32 — this scene only, as the relevance judge
-  const before=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&(!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-6)
+  const before=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&((!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-6)
     .map(m=>memHeardLine(m,p,p.name)).filter(Boolean).map(t=>memPayloadText(t,700));
   // v150.49 — for the repeat and continuity questions: their own earlier lines in this scene, and where and who
   const own=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role==="assistant"&&!m.sysError&&m.speakerId===p.id&&m.content).slice(-4)
@@ -38074,6 +38074,10 @@ function _textMemQuery(chat,p,max){
   const t=_textSceneLines(chat,p).join("\n"), cap=max||1600;
   return t.length>cap?"…"+t.slice(t.length-cap).replace(/^[^\n]*\n/,""):t;
 }
+/* (!) v150.59 — A LINE WITH NO WITNESS LIST reaches only someone IN the player's scene. Narration and move notes are
+   often untagged, and every per-character reader let them through: Burcu, at home and only texting, had "Özlem was
+   carried into the bedroom" and the player's moves through his house as her emotion pick's "scene". */
+function _untaggedReaches(chat,p){ try{ return !!p&&presentIds(chat).indexOf(p.id)>=0; }catch(e){ return false; } }
 /* A text exchange is heard by the one on the other end: the player's text to them (textWith) and their own. */
 function _heardByOwner(m,p){
   if(!m||!p)return false;
@@ -39743,6 +39747,7 @@ function castHistory(chat,forP,opts){
     if(m.narratorEvent){
       if(forP && (m.worldEvent||m.questNote||m.calNote)) return false;
       if(forP && Array.isArray(m.present) && !witnessedBy(m,forP)) return false;
+      if(forP && _absent && !witnessedBy(m,forP)) return false;   // v150.59 — an untagged beat of the room never reaches a texter
       return idx>=arrivalCut;
     }
     // TEXT MESSAGES: a phone thread is private (present:[]) so the witness filter below would drop it.
@@ -56797,7 +56802,7 @@ async function condenseAllNow(){
 async function genQuery(userText,chat,ownerId,opts){
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
   const recent=(opts&&opts.text&&ownerId)?_textSceneLines(chat,p,{spoken:2,thread:6}).join("\n")
-    :chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||_heardByOwner(m,p))).slice(-4)
+    :chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||(!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-4)
     .map(m=>ownerId?_heardLineOwner(chat,m,p):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean).join("\n");
   const out=await chatCompletion([
     /* (!) v30.5 — THE QUERY MUST BE IN THE LANGUAGE THE MEMORIES ARE IN, and since v30.3 that is
@@ -57282,7 +57287,7 @@ function _memJudgeScene(chat,ownerId,userText,opts){
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
   const _all=(chat&&chat.messages)||[];
   const lines=(opts&&opts.text&&ownerId)?_textSceneLines(chat,p)
-    :_all.slice(_playerSceneStart(_all)).filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||_heardByOwner(m,p))).slice(-8)
+    :_all.slice(_playerSceneStart(_all)).filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||(!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-8)
     .map(m=>ownerId?_heardLineOwner(chat,m,p):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean)
     .map(t=>memPayloadText(t,700));
   /* (!) v150.52 — compared as the lines are written (whitespace collapsed, markup gone): the raw text kept its "\n\n",

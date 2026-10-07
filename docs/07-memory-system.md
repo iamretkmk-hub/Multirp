@@ -354,6 +354,11 @@ From a texting export (Duygu Akbaba):
   (`genQuery`) dropped them; on the first text of a thread the scene was empty and the emotion pick never ran.
   `_heardByOwner(m,p)` (witnessed, their own line, or a text in the thread with them) and `_heardLineOwner` (a
   text labelled "(text message to …)", delivery tags stripped) replace the filter in those readers.
+- **A texter reads none of the player's room.** A line with no witness list (narration, move notes) reached every
+  per-character reader on position alone, so Burcu, at home and texting, had the player's house — Özlem carried to
+  the bedroom — as her emotion pick's scene. `_untaggedReaches(chat,p)`: an untagged line reaches only someone in
+  the player's scene (recentExchangeFor, the reply check, the judge, the query writer), and `castHistory` drops an
+  unwitnessed narrator beat for a reader who is not there.
 - **A text reply reads the thread.** `_textSceneLines` — a few in-person lines they heard, then the thread,
   newest last. `_memJudgeScene(...,{text:true})`, `genQuery(...,{text:true})` and `retrieveMemories(q,chat,id,
   {line,text})` use it; the line answered is the newest player text (`_newestPlayerText`), not "". `_textMemQuery`

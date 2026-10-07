@@ -130,7 +130,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[the fragment editor]");
   ok("the editor lists every fragment and opens one for editing", await pg.evaluate(()=>{
-      window.confirm=()=>true; _fragDraft=null; _fragOpen=null; state.fragments=null;
+      window.uiConfirm=async()=>true; _fragDraft=null; _fragOpen=null; state.fragments=null;
       const d=document.getElementById('fragDetails'); if(!d) return "no #fragDetails";
       renderFragEditor(); const host=document.getElementById('fragHost');
       const n=host.querySelectorAll('button[onclick^="fragEdOpen"]').length;
@@ -139,14 +139,14 @@ const {chromium}=require('playwright');
       const ta=host.querySelector(`textarea[data-fp="${i}.text"]`); if(!ta) return "no main body box";
       const opts=host.querySelectorAll(`button[onclick^="fragEdOptDel(${i},"]`).length;
       return opts===(FRAG_DEFAULTS[i].options||[]).length ? true : opts+" option forms"; }));
-  ok("typing, adding and deleting a condition, ticking a path and saving land in the saved list", await pg.evaluate(()=>{
+  ok("typing, adding and deleting a condition, ticking a path and saving land in the saved list", await pg.evaluate(async()=>{
       const host=document.getElementById('fragHost'), i=FRAG_DEFAULTS.findIndex(f=>f.id==="say_no");
       const ta=host.querySelector(`textarea[data-fp="${i}.text"]`); ta.value="EDITED MAIN"; fragEdInput(ta);
       const before=_fragDraft[i].options.length;
       fragEdOptAdd(i); const j=_fragDraft[i].options.length-1;
       const code=host.querySelector(`input[data-fp="${i}.o.${j}.code"]`); code.value="emotion = anger"; fragEdInput(code);
       const txt=host.querySelector(`textarea[data-fp="${i}.o.${j}.text"]`); txt.value="ANGRY NO"; fragEdInput(txt);
-      fragEdOptDel(i,0);
+      await fragEdOptDel(i,0);
       fragEdByPath(String(i),"heat",true); const hb=host.querySelector(`textarea[data-fp="${i}.byPath.heat"]`); hb.value="HEAT MAIN"; fragEdInput(hb);
       fragEdSave();
       const f=state.fragments&&state.fragments[i], st=JSON.parse(localStorage.getItem(K.fragments)||"null");
@@ -158,8 +158,8 @@ const {chromium}=require('playwright');
       if(L[k-1].text!=="NEW ONE") return "move failed";
       ["solo","multi","gm","heat"].forEach(p=>fragEdPath(String(k-1),p,false)); fragEdSave();
       return (/NEW ONE/.test(fragCompile("text",{},{}))&&!/NEW ONE/.test(fragCompile("solo",{},{}))) ? true : JSON.stringify(L[k-1].paths); }));
-  ok("reset puts the shipped fragments back, and saving that clears the stored copy", await pg.evaluate(()=>{
-      fragEdReset(); fragEdSave();
+  ok("reset puts the shipped fragments back, and saving that clears the stored copy", await pg.evaluate(async()=>{
+      await fragEdReset(); fragEdSave();
       return (state.fragments===null&&(localStorage.getItem(K.fragments)||"")===""&&fragList()===FRAG_DEFAULTS) ? true : "stored: "+String(localStorage.getItem(K.fragments)).slice(0,60); }));
   ok("the switch and the threshold are saved", await pg.evaluate(()=>{
       fragToggle(true); const on=localStorage.getItem(K.fragOn)==="1"&&document.getElementById('fragOnSw').checked;

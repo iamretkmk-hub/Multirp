@@ -1,8 +1,7 @@
 /* v149.1 — THE PRIVATE READINGS AS BEHAVIOUR. Reported: "trust: 30, desire: 0, fear: 0…" is terrible for a model —
    it ignores the numbers or overplays them. Asked for: a few bands per axis, each saying what the reading CHANGES in
    how the character acts (not a feeling); one-sided scales for familiarity, jealousy, fear and agitation; empty and
-   faint readings left out; and the readings placed right before the risk in the drives writer — everywhere they are
-   used.
+   faint readings left out — everywhere they are used (v150.38: the drives writer is gone; the reply's decisions read them).
    Run: NODE_PATH=/path/to/node_modules node tests/rel-readings.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -47,20 +46,16 @@ const {chromium}=require('playwright');
   ok("a pair with nothing in it sends nothing", R.empty.length===0);
   ok("unease and fear are one nerve: only the stronger is written", R.nerve.length===1&&/physical distance/.test(R.nerve[0]), JSON.stringify(R.nerve));
 
-  console.log("\n[the drives writer]");
-  const D=await pg.evaluate(new Function("return ("+`async()=>{ const mk=${rec};
-    let sent=null; window.chatCompletion=async(m,mo,o)=>{ if(/Drives/.test((o&&o.dbg)||""))sent=m; return '{"toward":"x","against":"y"}'; };
+  console.log("\n[the reply's decisions (v150.38: the drives writer is gone)]");
+  const D=await pg.evaluate(new Function("return ("+`()=>{ const mk=${rec};
     const uni=state.universes[0]; state.curUniverse=uni.id;
     state.personas=[{id:"p_a",name:"Ayla",universeId:uni.id,personality:"x",instructions:"x",look:{},relationships:{}}];
-    state.user="Emre"; state.key="k"; state.relOn=true;
+    state.user="Emre"; state.relOn=true;
     const c=curChat(); c.universeId=uni.id; c.presentIds=["p_a"]; c.messages=[{mid:"z1",role:"user",content:"Hi.",present:["p_a"]}];
     c.rel={}; c.rel[relDirKey("p_a","__user__")]=mk({trust:35,familiarity:55,desire:0,fear:0,comfort:10});
-    await _writePsyche(c,state.personas[0],"__user__","Emre","sig",{line:{name:"Emre",text:"Hi."}});
-    return sent?sent.map(x=>x.content).join("\\n\\n"):""; }`+")")());
-  ok("no numbers, no \"desire: 0\"", !!D&&!/\b(trust|desire|fear|comfort|familiarity):\s*-?\d/.test(D)&&!/PRIVATE READINGS/.test(D), D.slice(-900));
-  ok("the readings as behaviour, under HOW Ayla STANDS WITH Emre", /HOW Ayla STANDS WITH Emre — private, never stated/.test(D)&&/Ayla takes Emre at face value/.test(D)&&/Ayla knows Emre's habits/.test(D), D.slice(-900));
-  ok("placed right before the risk", D.indexOf("STANDS WITH")>0&&D.indexOf("WHAT IS AT RISK RIGHT NOW")>D.indexOf("STANDS WITH")&&!/STANDS WITH[\s\S]*WHAT HAS JUST BEEN HAPPENING[\s\S]*WHAT IS AT RISK/.test(D), D.slice(D.indexOf("WHERE THEY ARE"),D.indexOf("WHERE THEY ARE")+1500));
-  ok("the prompt's TRUST line points at it", /- TRUST — HOW \{\{self\}\} STANDS WITH \{\{target\}\} \(just above the risk\)/.test(await pg.evaluate(()=>DEFAULT_PSYCHE)));
+    return JSON.stringify(_emoFeelState(c,state.personas[0],"__user__","Emre")||{}); }`+")")());
+  ok("the feelings the id / superego pick reads: no numbers, no \"desire: 0\"", !!D&&!/\b(trust|desire|fear|comfort|familiarity)"?:\s*-?\d/.test(D), D.slice(0,900));
+  ok("the readings as behaviour", /Ayla takes Emre at face value/.test(D)&&/Ayla knows Emre's habits/.test(D), D.slice(0,900));
 
   console.log("\n[everywhere else a model reads a reading]");
   const E=await pg.evaluate(new Function("return ("+`()=>{ const mk=${rec};
@@ -83,12 +78,7 @@ const {chromium}=require('playwright');
   const F=await pg.evaluate(()=>{ const src=String(runShortTermRel); return {nums:/REL_SLOW\.map\(k=>`\$\{k\} \$\{o\[k\]\|\|0\}`\)/.test(src), readings:/relReadings\(o,\{self:fromP\.name,target:_u,which:"slow"\}\)/.test(src)}; });
   ok("its settled context is readings (its own four scored axes stay numbers)", !F.nums&&F.readings, JSON.stringify(F));
 
-  console.log("\n[a stored drives prompt is updated in place]");
-  await pg.evaluate(()=>{ const B=(DEFAULT_PSYCHE.match(/- TRUST — HOW \{\{self\}\} STANDS WITH[^\n]*/)||[""])[0];
-    store.setRaw(K.psychePrompt,DEFAULT_PSYCHE.replace(B,"- TRUST — the PRIVATE READINGS and the settled view of {{target}}: a risk with someone trusted weighs less than the same risk with someone they are wary of.")+"\nMY PSYCHE EDIT"); });
-  await pg.reload(); await pg.waitForTimeout(2400);
-  const M=await pg.evaluate(()=>({moved:/- TRUST — HOW \{\{self\}\} STANDS WITH/.test(state.psychePrompt)&&!/PRIVATE READINGS/.test(state.psychePrompt), kept:/MY PSYCHE EDIT/.test(state.psychePrompt)}));
-  ok("the TRUST line is swapped, the player's edit kept", M.moved&&M.kept, JSON.stringify(M));
+  // v150.38 — the stored drives prompt migration went with the drives writer.
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

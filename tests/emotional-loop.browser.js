@@ -41,10 +41,7 @@ const {chromium}=require('playwright');
   ok("the fast read is handed it, and told the moment leans off it",
      await pg.evaluate(()=>/settledViewOf\(o\)/.test(String(runShortTermRel))
        && /cannot contradict it/.test(String(runShortTermRel))));
-  ok("so is the psyche writer, as its own declared piece", await pg.evaluate(()=>
-      /bits\.settled=settledViewOf/.test(String(_writePsyche))
-   && ((epDef("psychePrompt")||{}).parts||[]).some(x=>x&&x.name==="settled")
-   && /The SETTLED view of \{\{target\}\}/.test(DEFAULT_PSYCHE)));
+  // v150.38 — the psyche (drives) writer is gone.
   ok("the note is the body only — no names, no visible actions", await pg.evaluate(()=>
       /IT IS THE BODY, AND ONLY THE BODY/.test(DEFAULT_REL_SHORT)
    && /NO NAMES/.test(DEFAULT_REL_SHORT)

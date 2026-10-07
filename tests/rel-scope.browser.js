@@ -60,8 +60,7 @@ const {chromium}=require('playwright');
   ok("everyone still sends every paragraph", await pg.evaluate(()=>{
       const v=relSheetBlockFull((state.personas||[]).find(p=>p.id==="p_h"),{scope:"everyone"});
       return /cannot bear the disappointment/.test(v) && /teenage girl/.test(v); }));
-  ok("the conscience keeps everyone — a brake needs the absent by name", await pg.evaluate(()=>
-      /everyone:true/.test(String(_writePsyche))));
+  // v150.38 — the drives writer (the conscience that kept everyone) is gone.
 
   console.log("\n[the reply payload uses the setting]");
   ok("it defaults to present", await pg.evaluate(()=>state.relScope==="present"));

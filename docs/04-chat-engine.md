@@ -230,6 +230,68 @@ memory retrieval scoped to them, target resolution from the *freshest real line 
 transcript* (not the router's stale `addressed`), witness-scoped history, refusal fallback,
 `Name:` prefix stripping, and awaits the on-screen reveal so chains pace correctly.
 
+## The emotion pick (v150.34)
+
+Before each character reply (solo, multi, Gamemaster reaction, text), `emotionEnsure(chat, p, line)` asks the
+Decisions API two typed questions in one request, started beside the memory search and awaited with it:
+which **base emotion** the speaker is feeling (a choice over the editable list in Settings → Emotions — each
+entry a name, a description the model reads, and three tones mild / clear / intense) and **how strongly**.
+The state is the speaker's name and personality, this scene as they heard it (`_memJudgeScene`) and their
+previous pick in this scene. The result is stored on `chat.emo[id]` `{emotion, intensity, tone}` (Anger +
+intense → "furious") and exposed as the `emotion` / `intensity` / `tone` flags of the reply payload's
+`{{if}}` conditions. The same moment is never asked twice; a failure keeps the last pick. Shipped list
+(`EMOTIONS_DEFAULT`): Calm, Joy, Affection, Desire, Sadness, Anger, Fear, Disgust, Surprise, Shame, Guilt,
+Jealousy, Pride. Prompts `x_emotion_pick`, `x_emotion_intensity` (Payloads → Emotion pick); model
+`emoModel`. Pinned by `tests/emotion-pick.browser.js`. Since v150.37 the speaking style has a part
+per emotion and the fragment model's choose-when conditions read it (docs/05, the fragment model).
+
+**v150.35 — id or superego, in the same request.** A third question (`x_ego_pick`, a choice) asks who is
+winning in this moment with the one they answer: `no_conflict`, `superego_firm`, `superego_ahead`, `torn`,
+`id_ahead`, `id_winning`. So it does not default to conscience, the state carries the feelings toward that
+person (`_emoFeelState`): the fast axes read as words (feelings right now), the slow axes (lasting
+feelings), the tie from the relationship sheet and the settled view; and the prompt says not to lean on
+conscience by default and that most moments have no conflict at all. The answer is `chat.emo[id].ego` and
+the `ego` flag. **Layouts can use the flags now:** a payload template's own `{{if}} … {{else}} … {{endif}}`
+is resolved with this reply's flags (render mode, emotion, intensity, tone, ego), e.g.
+`{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{endif}}`. A layout
+with no `{{if}}` is unchanged (payload parity holds).
+
+**v150.36 — what the feeling and the choice are made of.** The state also carries `earlier_today` (the
+speaker's own latest memories of today, so a fight this morning colours the emotion now),
+`people_they_answer_to` (spouse, partner, lover, family, read off their own ties whether or not those people
+are here) and `who_else_can_see_or_hear` (or "nobody — they are alone with …"). The id/superego prompt weighs
+the feelings against those stakes.
+
+## v150.38 — the drives writer is gone; spoken limits are read in the reply's request
+
+The drives writer (`psycheEnsure` → `_writePsyche`, prompt `psychePrompt`) wrote two passages per line
+answered, "what pulls you toward it" and "what holds you back". It ran on the gamemaster model, about
+fifteen seconds per reply, and made characters fixate on things that did not matter. It is removed, along
+with its prompt, its migrations, and the `drive_header` / `drive_toward` / `drive_against` / `drive_ego` /
+`drive_empty` fragments. The weighing now comes from the id / superego pick (v150.35) and, with the fragment
+model, from the compass options chosen by it.
+
+**Spoken limits** ("to that bench, no further") used to be extracted by that writer. They are now read
+in the reply's own Decisions request (`emotionEnsure` → `limitAskQuestions` / `limitApplyAnswers`), before
+the character's next reply. Questions:
+- **Each of their own lines since the last read** (at most three, this scene, today) is one `choice`
+  (`x_limit_read`). The options are: none, a limit, or a commitment, each for this scene, for today, or
+  until they say otherwise.
+- **Each limit on record** is one yes/no (`x_limit_release`): did they take it back themselves? This is
+  asked only when they have said something new.
+
+The state carries their new lines and the limits already on record, and the prompt counts a repeated one
+as none. Both questions pass only at the strict gates' certainty (`gateAt`, 0.8). What is kept is the
+line's spoken part (`_limitSpoken`). The read pointer moves only when the request answers; a failure files
+nothing and the lines are read again next time. The request now also runs for a character with new lines
+when the emotion pick is off.
+
+Switch: Settings → Features → **Spoken limits** (`limitsOn`, on by default). Questions: Payloads → Strict
+gates. Limits are stored, expire, and reach the reply and the analysers exactly as before (`limitsBlock`,
+`limitsJudgeNote`). The `drives` payload piece is now just the limits, so a template that calls
+`{{call//drives//full}}` still gets them. Pinned by `tests/spoken-limits.browser.js`, which replaces
+`drives-brakes` and `drives-limits`.
+
 ## Refusal & empty-reply handling (both reply paths)
 
 - `looksLikeRefusal()` catches canned refusals (CJK "无法…" patterns, English "I can't…", or a
@@ -242,7 +304,7 @@ transcript* (not the router's stale `addressed`), witness-scoped history, refusa
   yes/no questions about it — `refusal` (the AI declining in a way the regex missed), `player` (it
   writes the player's words, actions, thoughts or decisions) and `character` (out of character for
   the sheet). The state is the character's name, personality and speaking style, the player, the six
-  lines before the reply as the character heard them, and the reply. Each question is one editable
+  lines before the reply as the character heard them (this scene only, v150.32), and the reply. Each question is one editable
   prompt (`x_reply_check_*`, Payloads → Reply check): the question, a `YES:` line and a `NO:` line,
   split into the noul question's instructions and criteria (`_decQuestionFrom`; no YES/NO lines →
   "Yes."/"No."). A probability at or above `replyCheckAt` (default 0.7) is stored on the message

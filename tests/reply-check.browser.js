@@ -65,6 +65,15 @@ const {chromium}=require('playwright');
   ok("the state: sheet, player, the scene before the reply, the reply", q.state&&q.state.character&&q.state.character.name==="Burcu"&&/guarded/.test(q.state.character.personality)&&/Short sentences/.test(q.state.character.speaking_style)
       &&q.state.player==="Emre"&&/Kahve ister misin/.test(q.state.scene_before_the_reply)&&!/fincanı/.test(q.state.scene_before_the_reply)&&/sarılır/.test(q.state.reply), JSON.stringify(q.state));
 
+  ok("the scene before the reply stops at the last scene cut", await pg.evaluate(async()=>{
+      const c=curChat(), keep=c.messages.slice();
+      c.messages=[{mid:"s1",role:"assistant",speaker:"Narrator",narratorEvent:true,content:"Plajda dalgalar."},
+        {mid:"s2",role:"assistant",speaker:"Narrator",narratorEvent:true,sceneCut:true,content:"Akşam, Emre'nin evi."},
+        {mid:"s3",role:"user",content:"Çay?",speaker:"Emre"}];
+      window.__reqs=[]; const m=__mkReply('"Olur."'); await runReplyCheck(c,m,state.personas.find(p=>p.id==="p_b"));
+      const st=window.__reqs[0].body.state.scene_before_the_reply; c.messages=keep;
+      return (!/Plajda/.test(st)&&/Emre'nin evi/.test(st)&&/Çay\?/.test(st)) ? true : JSON.stringify(st); }));
+
   console.log("\n[it marks, and only marks]");
   ok("above the threshold: flagged on the message with its probabilities", JSON.stringify(r.m.replyFlags)==='["player"]'&&r.m.replyCheck.player===0.91&&r.m.replyCheck.character===0.4, JSON.stringify([r.m.replyFlags,r.m.replyCheck]));
   ok("the bubble shows one pill naming the doubt and its likelihood", await pg.evaluate(()=>{
@@ -96,8 +105,10 @@ const {chromium}=require('playwright');
       const rp=calls.filter(d=>/^Roleplay reply/.test(d)).length;
       const m=c.messages.filter(x=>x.role==="assistant"&&!x.sysError).pop();
       if(!m) return "no reply posted; calls="+JSON.stringify(calls);
-      return (window.__reqs.length===1&&rp===1&&JSON.stringify(m.replyFlags)==='["refusal"]'&&window.__reqs[0].body.state.reply===m.content) ? true
-        : JSON.stringify({reqs:window.__reqs.length,rp,flags:m.replyFlags,content:m.content}); }));
+      // the turn also sends the emotion pick (its own Decisions request); only the reply check's is counted here
+      const rc=window.__reqs.filter(r=>r.body&&r.body.questions&&r.body.questions.refusal);
+      return (rc.length===1&&rp===1&&JSON.stringify(m.replyFlags)==='["refusal"]'&&rc[0].body.state.reply===m.content) ? true
+        : JSON.stringify({reqs:rc.length,rp,flags:m.replyFlags,content:m.content}); }));
 
   console.log("\n[failures, pauses, switches]");
   for(const mode of ["500","network"]){

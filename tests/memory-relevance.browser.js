@@ -119,6 +119,15 @@ const {chromium}=require('playwright');
       const q=Object.values(window.__judgeReqs[0].body.questions);
       return q.some(x=>/Şu an kafede/.test(x.instructions)) ? "asked about the current scene" : true; }));
 
+  ok("the scene stops at the last travel beat: an earlier scene is not sent", await pg.evaluate(async()=>{
+      const c=curChat(), keep=c.messages.slice();
+      c.messages=[{mid:"b1",role:"assistant",speaker:"Narrator",narratorEvent:true,content:"Özlem plajda denize giriyor."},
+        {mid:"b2",role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,content:"Emre eve döner."},
+        {mid:"b3",role:"user",content:"Annemin verdiği kolyeyi hatırlıyor musun?",speaker:state.user}];
+      window.__judgeReqs=[]; await retrieveMemories("Annemin kolyesi",c,"p_b"); c.messages=keep;
+      const st=window.__judgeReqs[0].body.state;
+      return (!/plajda/.test(st)&&/eve döner/.test(st)&&/kolyeyi/.test(st)) ? true : JSON.stringify(st); }));
+
   console.log("\n[a large bank: a shortlist, under the cap]");
   const big=await pg.evaluate(async()=>{
     const keep=state.memory.slice(), uni=state.universes[0];

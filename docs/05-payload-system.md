@@ -1041,3 +1041,53 @@ works. Both call sites supply it now.
 `epDefine` separator or fixed text must be either in the engine vocabulary or supplied by every
 `epSend` call site for that key.** It also pins that `self` stayed reply-scoped — the fix is the
 call site declaring what it has, not the vocabulary growing a name most engines cannot mean.
+
+## v150.37 — the fragment model (Payloads → Fragments)
+
+The reply payload can be built from an ordered list of **fragments** instead of one free-form layout per
+path. Headers, intros and bodies that used to be scattered across pieces sit together in one box each,
+and the loose instructions that belonged to no piece are fragments of their own. Off by default
+(`state.fragOn`, `sm_fragon`); while off, the templates and the classic builder are untouched (payload
+parity holds).
+
+A fragment (`FRAG_DEFAULTS`, 38 shipped, built from the user's own layouts) has:
+
+- **paths**: which reply paths it appears on: `solo`, `multi`, `gm`, `text`, `heat`.
+- **seg**: before the conversation history (`head`) or after it (`tail`).
+- **text**: its main body, always injected on its paths. `byPath[path]` replaces it on one path.
+- **options**: the *choose when* parts, injected only when they apply. An option has:
+  - a **code condition**, for a fact the app knows (`render_mode`, `emotion`, `intensity`, `tone`, `ego`,
+    `stalled`, `thought_stuck`, `continuing`, `voicing`, `scene_start`, `has_motive`, `alone`,
+    `target_tie`, `target_kind`), written like `{{if}}` (`emotion = anger and intensity = intense`);
+  - an **ask**: a yes/no question for the decision model, answered before the reply;
+  - **ctx**: what the ask needs beyond the scene, the character, their feelings, their day and the stakes
+    (plans and meetings, promises, private motives, pursuits, latest memories);
+  - its own text and `byPath`, and optionally a subset of the fragment's paths.
+
+  With both a code condition and an ask, both must hold. An option with neither is never injected.
+- **mode**: `any` injects every option that applies; `one` injects only the most likely.
+
+**Code decides fixed facts, the decision model decides dynamic ones.** The asks of the path are added to
+the speaker's emotion request (`emotionEnsure`, which now also runs when only the fragments need it), in
+the same Decisions call. Their answers are stored on `chat.emo[id].asks`, and an ask counts as yes at
+`fragAt` (default 0.7). Code facts come from `fragCodeFacts` and `B._railFlags`.
+
+`fragCompile(kind, flags, asks)` turns the path's fragments into a layout text (`[system]` head,
+`{{call//dialogue_history}}`, `[user]` tail). `ptBuildMessages` then expands it like any template, so
+`{{call//…}}` data and `{{if}}` keep working.
+
+**Speaking style.** The style fragment carries the character's main style plus one option per emotion
+(`emotion = X` → `{{call//style_emotion}}`). On the character card, *More speaking styles* holds a main
+style per path (`p.styleBy`) and a style per emotion, either for all paths or per path (`p.styleEmoBy`).
+The path's own text wins over "all paths". `render_mode` is now `multi` / `gm` on those paths; it used to
+read `solo` everywhere but text and heat.
+
+**The editor** (Payloads → Fragments) does the following:
+- Switches the model on and sets the threshold.
+- Lists every fragment, with move up and down.
+- Edits a fragment: name, paths, placement, mode, main body, per-path text.
+- Adds, edits and deletes choose-when conditions (code, ask, ctx, text, paths, per-path text).
+- Adds and deletes fragments, and resets to the shipped list.
+
+Save writes `state.fragments` / `sm_fragments`. When the list equals the shipped one, nothing is stored,
+so later shipped improvements still arrive. Pinned by `tests/fragments.browser.js`.

@@ -3,7 +3,7 @@
      - a universe switch mid-turn: the old chat's turn keeps its own world setting, places (earshot) and
        player name — in the payload, the reply's toName and the day ledger (R3);
      - the Scene Writer never stages a same-named character from another universe (R1);
-     - a whisper never reaches a non-recipient's drives & brakes prompt (R2);
+     - a whisper never reaches a non-recipient's reply decisions (the scene the Decisions request carries) (R2);
      - unclosed _thought_ spans are removed like unclosed *narration* (per line, snake_case kept);
      - `present` is stamped by earshot: the back room does not hear the counter;
      - Stop ends a multi-character chain (one toast, no postTurn), never leaks into the next turn, and
@@ -169,20 +169,18 @@ const {chromium}=require('playwright');
   ok("the setup prompt lists this story's cast and player", /Ayla Demir/.test(sw.setupPrompt)&&/Player: Emre/.test(sw.setupPrompt)&&!/Xan/.test(sw.setupPrompt), sw.setupPrompt.slice(0,300));
   ok("the writer's bring_in cannot pull another universe's character in", sw.bringIn.indexOf("p2_x")<0, JSON.stringify(sw.bringIn));
 
-  console.log("\n[#9 / R2 — a whisper never reaches a non-recipient's drives & brakes]");
+  console.log("\n[#9 / R2 — a whisper never reaches a non-recipient's reply decisions]");
   const ps=await pg.evaluate(async()=>{
     __setup(); const c=__scene(["p_a","p_b"]);
     c.messages.push({mid:"w1",role:"user",content:"ZUMRUT7731 is the door code, don't tell Ayla.",present:["p_a","p_b"],whisperTo:"p_b",whisperToName:"Berk Kaya"});
     c.messages.push({mid:"w2",role:"assistant",speaker:"Berk Kaya",speakerId:"p_b",content:'"Okay." _ZUMRUT7731, got it._',present:["p_a","p_b"],whisperTo:"__user__"});
     c.messages.push({mid:"w3",role:"assistant",speaker:"Berk Kaya",speakerId:"p_b",content:'"Nice weather." _I must remember QUARTZ55._',present:["p_a","p_b"],toId:"__user__"});
-    __stub.bg["Drives & brakes"]={toward:"x",against:"y"};
-    await _writePsyche(c,state.personas[0],"__user__","Emre","sig-a");
-    const a=__sent["Drives & brakes (id / superego)"]||""; __sent={};
-    await _writePsyche(c,state.personas[1],"__user__","Emre","sig-b");
-    const bb=__sent["Drives & brakes (id / superego)"]||"";
+    // v150.38 — the drives writer is gone; the scene each character's reply decisions are asked from is the one to keep clean
+    const a=JSON.stringify(_memJudgeScene(c,state.personas[0].id,"")||"");
+    const bb=JSON.stringify(_memJudgeScene(c,state.personas[1].id,"")||"");
     return {aSecret:a.indexOf("ZUMRUT7731")>=0, aThought:a.indexOf("QUARTZ55")>=0, aWeather:/Nice weather/.test(a), bSecret:bb.indexOf("ZUMRUT7731")>=0, bMarked:/whispered to Berk Kaya alone/.test(bb)};
   });
-  ok("the non-recipient's psyche prompt has neither the whisper nor Berk's thoughts (R2)", !ps.aSecret&&!ps.aThought&&ps.aWeather, JSON.stringify(ps));
+  ok("the non-recipient's reply decisions have neither the whisper nor Berk's thoughts (R2)", !ps.aSecret&&!ps.aThought&&ps.aWeather, JSON.stringify(ps));
   ok("the recipient's has it, marked as whispered to them", ps.bSecret&&ps.bMarked, JSON.stringify(ps));
 
   console.log("\n[unclosed _thought_ spans]");

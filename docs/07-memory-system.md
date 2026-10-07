@@ -228,7 +228,9 @@ know nothing about the topic. So retrieval now asks.
 probabilities instead of writing text. The request carries:
 
 - `state` — the scene as the owner took it in (`_memJudgeScene`: the last 8 lines they witnessed, by
-  `memHeardLine`, ending on the line being answered);
+  `memHeardLine`, ending on the line being answered). v150.32: **this scene only** — from the last travel
+  beat or scene cut, or after the last day marker (`_playerSceneStart`). The first live run sent a beach
+  scene with someone else ahead of the door scene being judged: narrator lines carry no witness list;
 - `questions` — one `noul` (yes/no) question per shortlisted memory, `m0…mN`. Its `instructions` are the
   `x_mem_relevance` prompt with `{{memory}}` filled (`_memJudgeText`: `memSearchText` + where it happened),
   its `criteria.true` / `criteria.false` are `x_mem_relevance_yes` / `_no`. All three are registry prompts

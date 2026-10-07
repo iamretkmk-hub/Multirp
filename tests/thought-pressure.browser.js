@@ -60,45 +60,15 @@ const {chromium}=require('playwright');
   await pg.evaluate(()=>store.setRaw(K.relShortPrompt,DEFAULT_REL_SHORT));
   await pg.reload(); await pg.waitForTimeout(2400);
 
-  // ---------- F: the drives cache notices that the bodies moved
-  const sig=await pg.evaluate(()=>{
+  // ---------- F: (v150.38) the drives cache and its body signature went with the drives writer
+
+  // ---------- C: the thought that repeats
+  const th=await pg.evaluate(()=>{
     const uni=state.universes[0];
     const p={id:"p_d",name:"Duygu",universeId:uni.id,instructions:"x",personality:"x",
              backstory:"x",style:"x",goals:"x",look:{}};
     state.personas=[p];
     const chat=curChat(); chat.presentIds=[p.id]; chat.messages=[];
-    const push=c=>chat.messages.push({mid:newMid(),role:"assistant",speaker:"Duygu",speakerId:p.id,content:c});
-    push('"Tut bakalım." *Avuçları belime değiyor, kendimi bırakıyorum.*');
-    const a=psycheSig(chat,p,"__user__");
-    const again=psycheSig(chat,p,"__user__");
-    push('"Böyle mi?" *Avuçları belimde duruyor, kendimi bırakıyorum.*');   // same action, said again
-    const b=psycheSig(chat,p,"__user__");
-    push('"Ders bayağı ilerledi." *Eli göğsümü kavrıyor, parmakları sıkışıyor.*');  // a NEW action
-    const c=psycheSig(chat,p,"__user__");
-    chat.messages=[]; push('"Nasılsın?"'); push('"İyiyim, sen?"');          // talk, no narration
-    const d=psycheSig(chat,p,"__user__"); push('"Havalar da güzel."');
-    const e=psycheSig(chat,p,"__user__");
-    return {a,again,b,c,d,e,body:_psycheBodySig(chat)};
-  });
-  ok("the signature is stable when nothing changes", sig.a===sig.again, "");
-  ok("a hand arriving somewhere new moves it", sig.b!==sig.c, "same sig across a new action");
-  /* (!) sig.b re-words the same beat ("belime değiyor" → "belimde duruyor") and DOES move the
-     signature, because the word set genuinely changed — Turkish agglutination alone guarantees
-     that. That is deliberate and it is the cost of this fix: in a scene where bodies are moving,
-     DRIVES & BRAKES is rewritten most turns instead of once. The old behaviour was one snapshot
-     for the whole scene, which is the bug. Stability is only claimed for text that is actually
-     identical (sig.a === sig.again, above) and for turns with no narration at all (below). */
-  ok("a re-wording of the same beat also moves it, and that is the accepted cost",
-     sig.a!==sig.b, "a re-wording left it frozen");
-  /* (!) v148.6 — the body term is no longer part of psycheSig (the passages are written per line now, and
-     every new line moves the signature — sig.d !== sig.e is that, not the body). What is pinned is that
-     talk alone still carries no body term. */
-  ok("talk alone carries no body term at all", sig.body==="", sig.body);
-
-  // ---------- C: the thought that repeats
-  const th=await pg.evaluate(()=>{
-    const p=state.personas[0];
-    const chat=curChat(); chat.messages=[];
     const push=c=>chat.messages.push({mid:newMid(),role:"assistant",speaker:"Duygu",speakerId:p.id,content:c});
     const out={};
     push('*Bacaklarımı çırpıyorum.* "Böyle mi?"\n\n_Eli orada. Farkındayım ama çekersem daha tuhaf olur._');
@@ -150,17 +120,11 @@ const {chromium}=require('playwright');
      block was defining output format. The rails box is the one place BOTH payload paths render
      (the authored layouts and the generated default), and it is the closest to generation. The ban
      on narrating the weighing stays in `drive_ego`, where it belongs. */
-  const ego=await pg.evaluate(()=>blkTpl("drive_ego"));
   const thc=await pg.evaluate(()=>blkTpl("rails_header"));
   /* v93.1 — same rule, said in four fewer lines. The old wording spelled out HOW an unspoken
      weighing shows on the page, which was a list of indirection techniques, and the model was
      copying the list rather than obeying the rule. */
-  ok("the weighing is banned only where people can see it",
-     /nobody watches you deliberate/i.test(ego)
-     &&/part of me wants to/i.test(ego), ego.slice(0,200));
-  ok("and drive_ego no longer carries the thought rules itself",
-     !/AND IT DOES NOT EXPIRE WHEN THE TURN DOES/.test(ego)
-     &&!/A THOUGHT POINTS SOMEWHERE/.test(ego), ego.slice(0,200));
+  // v150.38 — drive_ego is gone with the drives writer; the thought rules below live in the guardrails box.
   ok("the thought is given the job, with the condition that makes it matter",
      /\[\[rail_thought\]\]/.test(thc)
      &&/A THOUGHT POINTS SOMEWHERE/.test(thc)

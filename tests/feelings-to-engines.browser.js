@@ -6,7 +6,7 @@
    and keeps {{call//drives}} and the after-heat decision in the reply instead. So the drives writer and the
    after-heat reckoning must SEE all three, even when no reply layout calls them.
    Pinned:
-     1  the drives writer receives the settled view, the live charge (with the fast read's note) and the motives
+     1  (v150.38: the drives writer is gone — the id / superego pick in the reply's Decisions request weighs them)
      2  the after-heat reckoning (the player's own engine layout) receives the settled view, the live charge and the motive
      3  with the calls gone from the reply layout, none of the three is in the reply — and the drives passages are
    Run: node tests/feelings-to-engines.browser.js   (needs playwright; see tests/README.md) */
@@ -57,16 +57,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       {id:"i2",holderId:"p_b",holderName:"Buket Ozucak",targetId:"__user__",targetName:"Emre",valence:"warm",kind:"alliance",aim:"MOTIVE_EMRE_MARKER get Emre to tell her the truth",strength:0.6,status:"live",day:3}];
   },{tpls});
 
-  console.log("\n[1 — the drives writer weighs all three]");
-  const d=await pg.evaluate(async()=>{
-    const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); window.__calls=[];
-    await _writePsyche(c,p,"__user__","Emre","SIG");
-    const call=window.__calls.find(x=>/Drives/.test(x.dbg)); return call?call.t:"(no drives call)"; });
-  ok("the settled view of the person answered", /SETTLED_EMRE_MARKER/.test(d), d.slice(0,600));
-  ok("the live charge, written as a state", /WHAT Buket Ozucak FEELS RIGHT NOW about Emre/.test(d), d.slice(-1600));
-  ok("…with the fast read's playable note", /PLAYABLE_NOTE_MARKER/.test(d), d.slice(-1600));
-  ok("every private motive, marked here or not here", /MOTIVE_SAMI_MARKER/.test(d)&&/MOTIVE_EMRE_MARKER/.test(d)
-     &&/suspicion toward Sami Ozucak \(hostile; here now\)/.test(d)&&/alliance toward Emre \(warm; not here\)/.test(d), d.slice(-1600));
+  // v150.38 — section 1 (the drives writer) is gone with the writer; the id / superego pick weighs the feelings now (emotion-pick).
 
   console.log("\n[2 — the after-heat reckoning weighs them too (the player's own engine layout)]");
   const ah=await pg.evaluate(async()=>{
@@ -79,11 +70,10 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("the live charge, with the playable note", /PLAYABLE_SAMI_MARKER/.test(ah), ah.slice(0,1600));
   ok("the private motive toward him", /MOTIVE_SAMI_MARKER/.test(ah), ah.slice(0,2400));
 
-  console.log("\n[3 — the reply carries the drives, not the raw feelings]");
+  console.log("\n[3 — the reply does not carry the raw feelings]");
   const r=await pg.evaluate(()=>{
     const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
     c.messages=c.messages.filter(m=>m.mid==="u1");
-    c._psyche={p_b:{toward:"PULL_MARKER tell him a date",against:"BRAKE_MARKER Buket is right there"}};   // no signature: always fresh
     const opts={chat:c,targetName:"Emre",targetId:"__user__",payloadKind:"multi"};
     const others=state.personas.filter(x=>x.id==="p_s");
     const hb=buildCharPromptBlocks(p,others,{recent:[],diary:[],longterm:[]},null,opts);
@@ -92,7 +82,6 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       ()=>Object.assign({},buildCharPromptBlocks(p,others,{recent:[],diary:[],longterm:[]},null,opts),
         buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",multi:true,injected:{recent:[],diary:[],longterm:[]}})));
     return (msgs||[]).map(m=>m.content).join("\n"); });
-  ok("the drives passages are in the reply", /PULL_MARKER/.test(r)&&/BRAKE_MARKER/.test(r), r.slice(-1500));
   ok("the settled view is not", !/SETTLED_EMRE_MARKER/.test(r), (r.match(/.{0,120}SETTLED_EMRE_MARKER.{0,120}/)||[""])[0]);
   ok("the live charge's playable note is not", !/PLAYABLE_NOTE_MARKER/.test(r), (r.match(/.{0,120}PLAYABLE_NOTE_MARKER.{0,120}/)||[""])[0]);
   ok("the motive toward Sami is not", !/MOTIVE_SAMI_MARKER/.test(r), (r.match(/.{0,160}MOTIVE_SAMI_MARKER.{0,120}/)||[""])[0]);

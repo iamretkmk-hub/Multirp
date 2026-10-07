@@ -24,7 +24,7 @@ const {chromium}=require('playwright');
     // the v150.56 shipped list: today's defaults with the frozen old copies swapped back in, and no target_sheet
     // (v150.59: the v150.58 copies first, then the v150.56 ones; their path texts replaced the main body, so for building a
     // payload they are converted to today's "adds under the main body", exactly as a saved list is)
-    window.__oldRaw=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||FRAG_DEFAULTS_V150_58[f.id]||f)));
+    window.__oldRaw=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||FRAG_DEFAULTS_V150_58[f.id]||FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));   // v150.60: the v150.59 wording of what it rewrote
     window.__oldList=()=>__oldRaw().map(f=>{ _fragByPathToAdd(f,f.paths||FRAG_PATHS); (f.options||[]).forEach(o=>_fragByPathToAdd(o,(o.paths&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS))); return f; });
     window.__base=(frags)=>{
       state.personas=[
@@ -123,7 +123,10 @@ const {chromium}=require('playwright');
       let e=g+1; while(e<L.length&&!/^# /.test(L[e]))e++;
       return L.slice(0,g+1).concat(L.slice(g+1,e).sort(),L.slice(e)).join("\n"); };
     const out={diff:[],n:0,raw:0,left:[]};
-    __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,null); out.n++;
+    /* v150.60 — last_before, language and privacy have their own text-path wording on purpose; this check holds the rest
+       of the payload to v150.56, so those three are compared at their v150.59 wording */
+    const at59=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
+    __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,at59); out.n++;
       if(a!==b)out.raw++;
       if(norm(a)!==norm(b)){ const A=norm(a).split("\n"), B=norm(b).split("\n"); let i=0; while(i<A.length&&A[i]===B[i])i++;
         out.diff.push(k+"_"+n+" @"+i+": OLD «"+(A[i]||"").slice(0,120)+"» NEW «"+(B[i]||"").slice(0,120)+"»"); }

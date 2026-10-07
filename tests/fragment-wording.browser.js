@@ -231,7 +231,7 @@ const {chromium}=require('playwright');
     &&/- Time has just JUMPED forward — it is now Day 3, Evening \(the next day\)\./.test(P.changed)&&/- Just LEFT the scene: Deniz\./.test(P.changed)&&!/Just ARRIVED/.test(P.changed), (P.changed.match(/WHAT JUST CHANGED[\s\S]{0,900}/)||[""])[0]);
   ok("text: the texting format written out, the texter's own place, privacy of a text",
     /# FORMAT — YOU ARE TEXTING \(this reply only\)\nEmre has sent you a message on your phone/.test(P.text)&&/WHERE YOU ARE right now, while you type this: Ayla's Flat\./.test(P.text)
-    &&/# PRIVACY — WHO CAN HEAR YOU\n+Nobody can overhear a text\. Whatever you would only say to Emre/.test(P.text)&&!/SUB-AREAS/.test(P.text), (P.text.match(/# FORMAT[\s\S]{0,300}/)||[""])[0]);
+    &&/# PRIVACY — WHO CAN READ THIS\n+Nobody can overhear a text\. Whatever you would only say to Emre/.test(P.text)&&/Type only what you would send from your phone/.test(P.text)&&!/Narration in the first person/.test(P.text)&&/every message you type/.test(P.text)&&!/SUB-AREAS/.test(P.text), (P.text.match(/# FORMAT[\s\S]{0,300}/)||[""])[0]);
   ok("heat: its format with the sound breaks and this beat's thought, beat 2 of 5 still going; the trackers by group",
     /# FORMAT — HEAT OF THE MOMENT \(this reply only\)[\s\S]*MANY separate short lines rather than a few long ones, 6 or more/.test(P.heat)&&/### THE BREAKS ARE SOUNDS, NOT PUNCTUATION/.test(P.heat)&&!/THE BREAKS ARE IN THE WORDS/.test(P.heat)
     &&/### THIS BEAT'S THOUGHT:/.test(P.heat)&&/This is beat 2 of 5, in a run that is still going — the next beat is generated separately, after this one lands\. Write this beat and STOP\./.test(P.heat)
@@ -317,6 +317,16 @@ const {chromium}=require('playwright');
       state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); store.setRaw(K.fragAdds,""); state.blockTpls={};
       const c=fragList()===FRAG_DEFAULTS&&(store.raw(K.fragments,"")||"")==="";
       return (a&&b2&&c)?true:JSON.stringify({a,b2,c,lim:lim&&lim.text}); }));
+  // v150.60 — the text path's own wording reaches a saved list that still holds the v150.59 last_before / language /
+  // privacy; an edited one stays the user's
+  ok("v150.60.text: an unedited v150.59 last_before, language and privacy are replaced; an edited one is kept", await pg.evaluate(()=>{
+      const L0=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
+      const li=L0.findIndex(f=>f.id==="language"); L0[li].text+="\n- MINE.";
+      state.fragments=L0; store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).filter(k=>k!=="v150.60.text").join(",")); _fragMigratedFor=null;
+      const L=fragList(), g=id=>L.find(f=>f.id===id);
+      const r={lb:(g("last_before").options||[]).map(o=>o.id).join(), pv:/WHO CAN READ THIS/.test(g("privacy").text), lang:/- MINE\.$/.test(g("language").text)&&!/every message you type/.test(g("language").text)};
+      state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
+      return (r.lb==="spoken,texting,heat"&&r.pv&&r.lang)?true:JSON.stringify(r); }));
 
   console.log("\n[the editor]");
   ok("ticking a path opens an EMPTY box, labelled as added under the main body", await pg.evaluate(()=>{

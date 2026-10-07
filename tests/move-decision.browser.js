@@ -121,6 +121,21 @@ const {chromium}=require('playwright');
       window.chatCompletion=realCC; window.playGamemasterBeat=realB; state.gmOn=false; state.gmDecOn=true;
       return event===1?true:"events "+event; }));
 
+  // v150.47 — the move note never holds the turn
+  ok("the move narration has its own ceiling (45 s, one retry, 30 s rescue)", await pg.evaluate(async()=>{ const c=__setup(); __plan={Berk:{to:"Living Room",p:0.9}};
+      const realCC=window.chatCompletion; let seen=null; window.chatCompletion=async(m,mo,o)=>{ if(/^Character move/.test((o&&o.dbg)||""))seen=o; return realCC(m,mo,o); };
+      await maybeMoveDecision(c); window.chatCompletion=realCC;
+      return (seen&&seen.timeoutMs===45000&&seen.rescueTimeoutMs===30000&&seen.retries===1)?true:JSON.stringify(seen&&{t:seen.timeoutMs,r:seen.rescueTimeoutMs,n:seen.retries}); }));
+  ok("a Gamemaster waits a bounded time, and stands down on a move already applied while the narration is still out", await pg.evaluate(async()=>{
+      const c=__setup(); state.gmOn=true; state.gmEvery=3; state.gmDecOn=false; c.gmLastCheck=0; const keep=MOVE_GM_WAIT_MS; MOVE_GM_WAIT_MS=120;
+      ["x","y"].forEach(t=>{ c.messages.push({mid:"u"+t,role:"user",content:t}); c.messages.push({mid:"a"+t,role:"assistant",speaker:"Ayla",speakerId:"p_a",content:t}); });
+      const realCC=window.chatCompletion; let event=0;
+      window.chatCompletion=async(m,mo,o)=>{ const d=(o&&o.dbg)||""; if(d==="Gamemaster: judge")return JSON.stringify({stale:true,trigger:false}); if(d==="Gamemaster: event"){ event++; return "A door slams."; } return realCC(m,mo,o); };
+      _moveDecJobs.set(c.id,new Promise(()=>{})); c._movedAtTurn=_playerTurns(c);
+      const t0=Date.now(); await maybeGamemaster(c,false); const ms=Date.now()-t0;
+      _moveDecJobs.delete(c.id); delete c._movedAtTurn; window.chatCompletion=realCC; state.gmOn=false; state.gmDecOn=true; MOVE_GM_WAIT_MS=keep;
+      return (event===0&&ms<3000)?true:JSON.stringify({event,ms}); }));
+
   console.log("\n[settings and prompts]");
   ok("on by default at 0.75; Settings shows and saves both", await pg.evaluate(()=>{ localStorage.removeItem(K.moveDecOn); localStorage.removeItem(K.moveAt); loadState();
       const d=state.moveDecOn===true&&moveAt()===0.75; syncSettingsUI(); const on=document.getElementById('setMoveDecOn'), at=document.getElementById('setMoveAt');

@@ -83,7 +83,13 @@ fire.
     `MOVE_MAX` (2) move per turn. A move is applied like a presence-tracker move: `subPos`, one narrated
     beat told the reason, the terse note when that fails, then `syncPlayerSubArea`.
   - **One beat per turn:** a Gamemaster about to write a beat first awaits that turn's move decision
-    (`_moveDecJobs`) and stands down if someone moved.
+    (`_moveDecJobs`) and stands down if someone moved. (v150.47) It waits at most `MOVE_GM_WAIT_MS`
+    (15 s), and a move already applied (`chat._movedAtTurn`, set before the narration is asked for) is
+    enough to stand down on.
+  - **The move note never holds the turn** (v150.47): `narrateCharMove` / `narrateCharMoveGroup` call
+    with `MOVE_NARR_TIMEOUT_MS` (45 s), one retry and `MOVE_NARR_RESCUE_MS` (30 s) for the empty-response
+    rescue, instead of the 180 s default twice over (one narration was seen taking 246 s). The terse
+    note stands in when it fails. This covers the presence tracker's moves too.
   - **Unchanged:** moves a line asks for are still read by the presence tracker.
   - Pinned by `tests/move-decision.browser.js`.
 - **Stage 2 — author** (`gmAuthor`): writes the hidden nudge, grounded in

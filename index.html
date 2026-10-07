@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.46</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.47</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -34733,6 +34733,11 @@ function _nameTheBeat(beat,people,chat){
 // Generate a SHORT Turkish movement beat for a character. `dir` ∈ "enter" | "exit" | "submove".
 // `why` is a compact reason string (recent exchange, an event summary, a due plan). Returns "" on
 // any failure so callers cleanly fall back to the terse presence note.
+/* (!) v150.47 — A MOVE NOTE NEVER HOLDS THE TURN. Narration of a move inherited chatCompletion's 180-second ceiling and an
+   empty-response rescue with the same ceiling: one move narration was seen taking 246 s, and the Gamemaster, which waits
+   for this turn's movement, waited with it. It is one short beat with a terse note standing by, so it gets 45 s, one
+   retry, and 30 s for the rescue. */
+const MOVE_NARR_TIMEOUT_MS=45000, MOVE_NARR_RESCUE_MS=30000;
 async function narrateCharMove(chat,mover,opts){
   opts=opts||{};
   if(!chat||!mover||!state.key)return "";
@@ -34758,7 +34763,7 @@ async function narrateCharMove(chat,mover,opts){
       `The first sentence names ${mover.name} as its subject.`   // v148.6 — a beat that says nobody tells the reader nothing
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt",chat.universeId),{user:turnUser(chat)});   // v146.1 — this chat's world and player
-    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",timeoutMs:MOVE_NARR_TIMEOUT_MS,rescueTimeoutMs:MOVE_NARR_RESCUE_MS,retries:1,temp:fnTemp("gm",0.7),max:fnTok("gm",120),dbg:"Character move · "+mover.name});
     let beat=unquoteWrap(out);
     // Strip an accidental "Name:" prefix and any code fences / reasoning.
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
@@ -34794,7 +34799,7 @@ async function narrateCharMoveGroup(chat,movers,opts){
       `Write ONE short beat (${Math.min(4,movers.length+1)} sentences at most) covering ALL of them. These are SEPARATE moves reported in one breath, not a group travelling as one: give EACH character a DISTINCT action, manner or detail true to who they are, never recycle the same phrasing between two people, and never write them walking off or arriving as a party. Name each of them, by name. No dialogue.`
     ].filter(Boolean).join("\n");
     const sys=fillTpl(up("charMovePrompt",chat.universeId),{user:turnUser(chat)});
-    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("charMovePrompt",sys+"\n\n"+langDirective(),{data:ctx})),state.gmModel,{fn:"gm",timeoutMs:MOVE_NARR_TIMEOUT_MS,rescueTimeoutMs:MOVE_NARR_RESCUE_MS,retries:1,temp:fnTemp("gm",0.7),max:fnTok("gm",60+70*movers.length),dbg:"Character moves · "+movers.map(m=>m.p.name).join(", ")});
     let beat=unquoteWrap(out);
     beat=beat.replace(/<think>[\s\S]*?<\/think>/gi,"").replace(/```[a-z]*|```/gi,"").trim();
     if(/^[\[{]/.test(beat)) return "";   // v146.1 — a JSON answer is not a beat
@@ -52614,6 +52619,7 @@ function _gmTurnCount(chat){
    The player alone in an area is part of the state, so someone may come to them. */
 const _moveDecBreak=_decBreaker("Movement","Characters only move when a line says so meanwhile.");
 const MOVE_COOLDOWN=3, MOVE_MAX=2;
+let MOVE_GM_WAIT_MS=15000;   // v150.47 — how long a Gamemaster waits on this turn's movement (let: a test shortens it)
 const _moveDecJobs=new Map();   // chat id → this turn's movement decision, in flight (never persisted)
 const MOVE_WHY=[{k:"done",desc:"they are done with what they were doing here",say:"done with what kept them here"},
   {k:"someone",desc:"someone they want, need or are responsible for is in that area",say:"to be with someone there"},
@@ -52711,6 +52717,7 @@ async function maybeMoveDecision(chat){
     dbgDone(e,"ok",{moves:go.map(m=>`${m.p.name} → ${m.sb.name} (${Math.round(m.pMove*100)}%${m.why?", "+m.why.k:""})`),threshold:at,usage:res.usage});
     if(!go.length)return false;
     chat.subPos=chat.subPos||{};
+    chat._movedAtTurn=turn;   // v150.47 — the Gamemaster can stand down on this before the narration is back
     const movers=go.map(m=>{ const prev=charSubId(chat,m.p.id); chat.subPos[m.p.id]=m.sb.id; chat._moveDecAt[m.p.id]=turn;
       const prevName=(subById(loc,prev)||{}).name||"";
       return {p:m.p,fromName:prevName?`${loc.name} — ${prevName}`:loc.name,toName:`${loc.name} — ${m.sb.name}`,sName:m.sb.name,
@@ -52899,7 +52906,11 @@ async function maybeGamemaster(chat,force){
         : "the player asked for something to happen — nudge the current scene meaningfully";
     }
     /* v150.42 — a move decided this turn is the turn's beat: wait for it, and stand down when someone moved. */
-    if(!force&&_moveDecJobs.has(chat.id)){ let _mv=false; try{ _mv=await _moveDecJobs.get(chat.id); }catch(_){}
+    /* v150.47 — at most MOVE_GM_WAIT_MS: the decision is quick, the narration may not be, and a move already applied
+       (chat._movedAtTurn) is enough to stand down on. */
+    if(!force&&_moveDecJobs.has(chat.id)){ let _mv=false;
+      try{ _mv=await Promise.race([_moveDecJobs.get(chat.id),new Promise(r=>setTimeout(()=>r(false),MOVE_GM_WAIT_MS))]); }catch(_){}
+      if(!_mv&&chat._movedAtTurn===_playerTurns(chat))_mv=true;
       if(_mv){ _gmGiveBack(); try{ _alog("gm.move","someone moved this turn — the Gamemaster waits"); }catch(_){} return; } }
     // STAGE 2 — author the hidden nudge. Pass through the judge's trigger_context and energy so
     // the author can ground the beat in the specific tension the judge spotted; fillTpl leaves

@@ -242,8 +242,8 @@ intense → "furious") and exposed as the `emotion` / `intensity` / `tone` flags
 `{{if}}` conditions. The same moment is never asked twice; a failure keeps the last pick. Shipped list
 (`EMOTIONS_DEFAULT`): Calm, Joy, Affection, Desire, Sadness, Anger, Fear, Disgust, Surprise, Shame, Guilt,
 Jealousy, Pride. Prompts `x_emotion_pick`, `x_emotion_intensity` (Payloads → Emotion pick); model
-`emoModel`. Pinned by `tests/emotion-pick.browser.js`. Nothing reads it yet beyond the flags — the speaking
-style per emotion comes with the fragment model.
+`emoModel`. Pinned by `tests/emotion-pick.browser.js`. Since v150.37 the speaking style has a part
+per emotion and the fragment model's choose-when conditions read it (docs/05, the fragment model).
 
 **v150.35 — id or superego, in the same request.** A third question (`x_ego_pick`, a choice) asks who is
 winning in this moment with the one they answer: `no_conflict`, `superego_firm`, `superego_ahead`, `torn`,

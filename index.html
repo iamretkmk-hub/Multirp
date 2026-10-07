@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.34</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.35</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4166,6 +4166,11 @@ NO: It is already on record (listed in the state), even worded differently, or: 
   x_emotion_intensity:{label:"Emotion — how strongly",json:false,
     hint:"Asked with the emotion pick. The options are mild, clear and intense. Supports {{char}} and {{user}}.",
     def:`How strongly is {{char}} feeling it right now, as they answer?`},
+  /* v150.35 — WHO WINS, THE WANT OR THE CONSCIENCE. Asked with the emotion pick, from the feelings right now,
+     the lasting ones and who the other person is; the answer is the `ego` condition. */
+  x_ego_pick:{label:"Id or superego — who is winning",json:false,
+    hint:"Asked with the emotion pick before each reply. The options are the levels from no conflict to the want winning. Supports {{char}}, {{user}} and {{target}} (who they are answering).",
+    def:`In this moment with {{target}}, which is winning in {{char}}: what {{char}} wants (the id), or what {{char}} owes and who they want to be (the superego)? Weigh it from the state: the feelings right now, the lasting feelings, and who {{target}} is to {{char}}, against what is actually at stake in this moment. Do not lean on conscience by default. When the wanting is strong and the bond allows it, the want wins. When nothing here sets wanting against conscience, there is no conflict at all.`},
   x_future_reconcile:{label:"Future record — check at each time of day",json:true,
     hint:"When a part of the day ends, reads that whole stretch against the meetings, tasks and promises filed or changed in it: corrects details that ended up different, closes what was called off or done, drops what was never actually agreed, and reports anything agreed that is on no record.",
     def:`You check a roleplay's record of the future against the stretch of the story it came from. A tracker filed these entries turn by turn while the scene was still going, so some may have been written before every detail was settled, and something agreed in the stretch may have been missed.
@@ -22855,11 +22860,37 @@ function emotionList(){ const l=(Array.isArray(state.emotions)&&state.emotions.l
   return l.filter(e=>e&&String(e.name||"").trim()); }
 function emotionModel(){ return String(state.emoModel||"").trim()||DECISIONS_DEFAULT_MODEL; }
 const _emoKey=n=>String(n||"").trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu,"_").replace(/^_+|_+$/g,"")||"x";
+/* v150.35 — the levels of the id / superego question, in order. */
+const EGO_LEVELS=[
+  {k:"no_conflict",desc:"Nothing here sets what they want against their conscience; they simply act as themselves."},
+  {k:"superego_firm",desc:"Conscience holds easily; the want is faint or easily set aside."},
+  {k:"superego_ahead",desc:"Conscience is ahead, but the want is clearly felt and pulls at them."},
+  {k:"torn",desc:"Evenly torn: either could win this turn."},
+  {k:"id_ahead",desc:"The want is ahead; conscience is slipping and they are finding reasons."},
+  {k:"id_winning",desc:"The want has won for now; conscience is a voice they are not listening to."}];
+/* What the speaker feels toward the one they answer: the feeling right now (fast axes), the lasting one (slow
+   axes), the settled view in words and the tie — so the emotion and the id/superego answers weigh the bond,
+   not the room. Null when there is nobody to answer. */
+function _emoFeelState(chat,p,targetId,targetName){
+  try{
+    if(!targetId)return null;
+    const o=relPeek(chat,p.id,targetId);
+    const tn=targetName||(targetId==="__user__"?(chatUserName(chat)||"the player"):(((state.personas||[]).find(x=>x&&x.id===targetId)||{}).name||"them"));
+    const fast=relReadings(o,{self:p.name,target:tn,which:"fast"}), slow=relReadings(o,{self:p.name,target:tn,which:"slow"});
+    const tie=relSheetEntry(p,targetId), settled=settledViewOf(o);
+    return {toward:tn,
+      who_they_are_to_them:tie?((tie.tie?tie.tie+" — ":"")+(tie.relationship||"")).trim():"(no tie on record)",
+      feelings_right_now:fast.length?fast.join(" "):"(nothing strong in the moment)",
+      lasting_feelings:slow.length?slow.join(" "):"(nothing settled yet)",
+      settled_view:settled?String(settled):"(none written yet)"};
+  }catch(e){ return null; }
+}
 // This character's last pick in this chat (null when none).
 function charEmotion(chat,pid){ const e=chat&&chat.emo&&chat.emo[pid]; return e&&e.emotion?e:null; }
 const _emoJobs=new Map();
-async function emotionEnsure(chat,p,line){
+async function emotionEnsure(chat,p,line,tgt){
   if(!chat||!p||!state.emoOn||!_decReady(_emoBreak))return null;
+  tgt=tgt||{};
   const ms=chat.messages||[], last=ms.length?ms[ms.length-1]:null;
   const sig=p.id+"|"+((last&&last.mid)||"")+"|"+String(line||"").slice(0,80);
   if(chat.emo&&chat.emo[p.id]&&chat.emo[p.id].sig===sig)return chat.emo[p.id];
@@ -22872,11 +22903,18 @@ async function emotionEnsure(chat,p,line){
       const prev=charEmotion(chat,p.id);
       const crit={}; list.forEach(e=>{ crit[_emoKey(e.name)]=`${e.name}: ${String(e.desc||"").trim()}`; });
       const lv={}; EMO_LEVELS.forEach(l=>{ lv[l.k]=l.desc; });
-      const body={model:emotionModel(),
-        state:{character:{name:p.name||"",personality:memPayloadText(p.personality||"",500)},
-          feeling_earlier_in_this_scene:prev&&prev.scene===_placeSig(chat)?`${prev.emotion} (${prev.intensity})`:"(not known)",scene},
+      /* (!) v150.35 — the feelings toward the one they answer go along (right now, lasting, the tie), and the
+         id / superego question is asked in the same request from them. */
+      const feel=_emoFeelState(chat,p,tgt.targetId||"__user__",tgt.targetName);
+      vars.target=(feel&&feel.toward)||vars.user;
+      const ev={}; EGO_LEVELS.forEach(l=>{ ev[l.k]=l.desc; });
+      const st={character:{name:p.name||"",personality:memPayloadText(p.personality||"",500)},
+          feeling_earlier_in_this_scene:prev&&prev.scene===_placeSig(chat)?`${prev.emotion} (${prev.intensity})${prev.ego?", "+prev.ego.replace(/_/g," "):""}`:"(not known)",scene};
+      if(feel)st.toward_the_one_they_answer=feel;
+      const body={model:emotionModel(),state:st,
         questions:{emotion:{type:"choice",instructions:fillTpl(up("x_emotion_pick",chat.universeId),vars),criteria:crit},
-          intensity:{type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv}}};
+          intensity:{type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv},
+          ego:{type:"choice",instructions:fillTpl(up("x_ego_pick",chat.universeId),vars),criteria:ev}}};
       const e=dbg("Emotion · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,body);
       const res=await decisionsCall(_emoBreak,body,e,10000);
       if(!res)return null;
@@ -22887,11 +22925,12 @@ async function emotionEnsure(chat,p,line){
       const em=ek?list.find(x=>_emoKey(x.name)===ek):null;
       if(!em){ dbgDone(e,"error",{note:"No emotion in the answer — the last pick stands.",response:res.answers}); return null; }
       const li=EMO_LEVELS.findIndex(x=>x.k===lk), tone=(Array.isArray(em.tones)&&em.tones[li])||em.name.toLowerCase();
-      const out={emotion:em.name,intensity:lk,tone:String(tone),sig,scene:_placeSig(chat),day:chat.gameDay||1,at:Date.now(),
-        p:(res.answers.emotion&&res.answers.emotion.probabilities)||null};
+      const gk=pick(res.answers.ego,EGO_LEVELS.map(x=>x.k));
+      const out={emotion:em.name,intensity:lk,tone:String(tone),ego:gk||"",sig,scene:_placeSig(chat),day:chat.gameDay||1,at:Date.now(),
+        p:(res.answers.emotion&&res.answers.emotion.probabilities)||null,egoP:(res.answers.ego&&res.answers.ego.probabilities)||null};
       chat.emo=(chat.emo&&typeof chat.emo==="object")?chat.emo:{}; chat.emo[p.id]=out;
       try{ markChatDirty(chat); }catch(_){}
-      dbgDone(e,"ok",{emotion:out.emotion,intensity:out.intensity,tone:out.tone,probabilities:out.p,usage:res.usage});
+      dbgDone(e,"ok",{emotion:out.emotion,intensity:out.intensity,tone:out.tone,ego:out.ego,probabilities:out.p,egoProbabilities:out.egoP,usage:res.usage});
       return out;
     }catch(err){ return null; }
     finally{ _emoJobs.delete(sig); }
@@ -29583,7 +29622,10 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
     let seenInstruction=false;
     ptParse(ptTemplate(kind)).forEach(pt=>{
       if(pt.type==="history"){ if(Array.isArray(history)) msgs.push.apply(msgs,history); return; }
-      let body=ptExpand(pt.text,srcs,vars,report);
+      /* (!) v150.35 — {{if}} conditions in the layout itself, with this reply's flags (render mode, emotion,
+         intensity, tone, ego…): a layout with no {{if}} is unchanged. */
+      const _txt=/\{\{\s*if\s/i.test(pt.text)?ptResolveConds(pt.text,ptCondFlags((blocks&&blocks._railFlags)||{})):pt.text;
+      let body=ptExpand(_txt,srcs,vars,report);
       if(!body.trim()) return;
       body=_dedupePayloadSections(body);
       /* Same cross-message de-duplication buildPayload does between head and tail: a section
@@ -30107,7 +30149,7 @@ const X_PROMPT_CARDS=[
   {key:"strict_gates",label:"Strict gates (Decisions API)",desc:"Before a new promise, task, meeting, character quest, motive or limit is filed, a yes/no question asks whether it is real \u2014 and it is filed only at the strictness in Settings \u2192 Features (0.8 by default). Each prompt is the question, a YES: line and a NO: line.",
    keys:["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent","x_gate_limit"]},
   {key:"emotion_pick",label:"Emotion pick (Decisions API)",desc:"Before each character reply, which emotion from the list in Settings \u2192 Emotions they are feeling, and how strongly (mild / clear / intense). The answer is a condition the reply can be shaped by.",
-   keys:["x_emotion_pick","x_emotion_intensity"]},
+   keys:["x_emotion_pick","x_emotion_intensity","x_ego_pick"]},
   {key:"text_arrival",label:"Texts: are they coming over?",desc:"After every text a character sends, one small call reads the thread and decides from their own words whether they are on their way to you — a meeting is filed for today at your place — or say they are already at the door, in which case they walk into your scene now. An invitation they turned down files nothing.",
    keys:["x_text_arrival"]},
   {key:"day_end_quests",label:"End of day — what moved",desc:"At day's end, reads the day's memories and decides what happened to each quest and to each favour asked of you.",
@@ -32632,7 +32674,7 @@ function buildTailBlocks(opts){
        already gated on this; the sound rules were not. */
     voicing:!!(state.autoSpeak||state.narrMode),
     /* v150.34 — the speaker's emotion, from the emotion pick (empty when there is none yet) */
-    ...(()=>{ const e=charEmotion(chat,selfP&&selfP.id); return {emotion:e?e.emotion:"",intensity:e?e.intensity:"",tone:e?e.tone:""}; })()
+    ...(()=>{ const e=charEmotion(chat,selfP&&selfP.id); return {emotion:e?e.emotion:"",intensity:e?e.intensity:"",tone:e?e.tone:"",ego:e?(e.ego||""):""}; })()
   };
   B._railFlags=_railFlags;
   {
@@ -35551,7 +35593,7 @@ async function sendMessage(opts){
       heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
       // (!) v148.6 — this reply's drives, written for this line, started beside the memory search and awaited below
       const _psy=psycheEnsure(chat,solo,"__user__",_who,{foreground:true});
-      const _emo=emotionEnsure(chat,solo,text);   // v150.34 — the speaker's emotion, beside the memory search
+      const _emo=emotionEnsure(chat,solo,text,{targetId:"__user__",targetName:_who});   // v150.34 — the speaker's emotion, beside the memory search
       // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
       let injected={recent:[],diary:[],longterm:[]};
       if(state.mem && state.memory.length){
@@ -35838,7 +35880,7 @@ async function buildTextPayload(chat,p,how){
   /* (!) v148.6 — a text REPLY waits for its drives like a spoken one (see psycheEnsure). The proactive
      texter's decision context (timing:false) is not a reply and does not pay for a call. */
   const _psy=(how&&how.timing===false)?null:psycheEnsure(chat,p,"__user__",chatUserName(chat),{textMode:true,foreground:true});
-  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,"");   // v150.34
+  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,"",{targetId:"__user__",targetName:chatUserName(chat)});   // v150.34
   let injected={recent:[],diary:[],longterm:[]};
   if(state.mem && state.memory.length){
     try{
@@ -39441,7 +39483,8 @@ async function playCharacterTurn(chat,p,addressed,opts){
     // (!) v148.6 — this reply's drives, for this line, beside the memory search; awaited before assembly
     const _psy=(()=>{ try{ const t=inChatWorld(chat,()=>_replyTargetOf(chat,p,present,others,addressed,_who,_pin0));
       return psycheEnsure(chat,p,t.targetId,t.targetName,{foreground:true,answerTo:_pin0}); }catch(e){ return null; } })();
-    const _emo=(()=>{ try{ return emotionEnsure(chat,p,heardQueryLine(chat,p)); }catch(e){ return null; } })();   // v150.34
+    const _emo=(()=>{ try{ const t=inChatWorld(chat,()=>_replyTargetOf(chat,p,present,others,addressed,_who,_pin0));
+      return emotionEnsure(chat,p,heardQueryLine(chat,p),{targetId:t.targetId||"__user__",targetName:t.targetName}); }catch(e){ return null; } })();   // v150.34
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
       try{
@@ -52490,7 +52533,7 @@ async function playSingleReaction(chat,p,eventText){
   const _who=turnUser(chat), _at=_placeSig(chat);   // v146.1 — see playCharacterTurn
   try{
     const _psy=psycheEnsure(chat,p,"__user__",_who,{foreground:true});   // v148.6 — see psycheEnsure
-    const _emo=emotionEnsure(chat,p,eventText);   // v150.34
+    const _emo=emotionEnsure(chat,p,eventText,{targetId:"__user__",targetName:_who});   // v150.34
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
       const r=await retrieveMemories(eventText,chat,p.id);

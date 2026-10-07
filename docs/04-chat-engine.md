@@ -245,6 +245,17 @@ Jealousy, Pride. Prompts `x_emotion_pick`, `x_emotion_intensity` (Payloads → E
 `emoModel`. Pinned by `tests/emotion-pick.browser.js`. Nothing reads it yet beyond the flags — the speaking
 style per emotion comes with the fragment model.
 
+**v150.35 — id or superego, in the same request.** A third question (`x_ego_pick`, a choice) asks who is
+winning in this moment with the one they answer: `no_conflict`, `superego_firm`, `superego_ahead`, `torn`,
+`id_ahead`, `id_winning`. So it does not default to conscience, the state carries the feelings toward that
+person (`_emoFeelState`): the fast axes read as words (feelings right now), the slow axes (lasting
+feelings), the tie from the relationship sheet and the settled view; and the prompt says not to lean on
+conscience by default and that most moments have no conflict at all. The answer is `chat.emo[id].ego` and
+the `ego` flag. **Layouts can use the flags now:** a payload template's own `{{if}} … {{else}} … {{endif}}`
+is resolved with this reply's flags (render mode, emotion, intensity, tone, ego), e.g.
+`{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{endif}}`. A layout
+with no `{{if}}` is unchanged (payload parity holds).
+
 ## Refusal & empty-reply handling (both reply paths)
 
 - `looksLikeRefusal()` catches canned refusals (CJK "无法…" patterns, English "I can't…", or a

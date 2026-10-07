@@ -61,6 +61,26 @@ const {chromium}=require('playwright');
       const f=ptCondFlags({emotion:"Anger",intensity:"intense",tone:"furious"});
       return (ptCondTest("emotion = anger and intensity = intense",f)&&!ptCondTest("emotion = sadness",f)) ? true : "flags do not test"; }).catch(e=>"err "+e.message));
 
+  console.log("\n[id or superego — v150.35]");
+  ok("the same request asks who is winning, from no conflict to the want winning", q.ego&&q.ego.type==="choice"&&JSON.stringify(Object.keys(q.ego.criteria))==='["no_conflict","superego_firm","superego_ahead","torn","id_ahead","id_winning"]'&&/Do not lean on conscience by default/.test(q.ego.instructions), JSON.stringify(q.ego&&Object.keys(q.ego.criteria)));
+  ok("the state carries the feelings toward the one answered: right now, lasting, the tie, the settled view", await pg.evaluate(async()=>{
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
+      p.relationships={__user__:{tie:"neighbour",relationship:"The neighbour she flirts with when her husband is away."}};
+      const o=relObj(c,"p_b","__user__"); o.st=o.st||{}; o.st.desire=60; o.trust=40; o.affection=55;
+      c.messages.push({mid:"u3",role:"user",content:"Gel bu gece.",speaker:"Emre"}); window.__reqs=[];
+      window.__ans.ego={type:"choice",choice:"id_ahead",probabilities:{id_ahead:0.6,torn:0.3}};
+      const out=await emotionEnsure(c,p,"Gel bu gece.",{targetId:"__user__",targetName:"Emre"});
+      const f=window.__reqs[0]&&window.__reqs[0].state.toward_the_one_they_answer;
+      return (f&&f.toward==="Emre"&&/neighbour/.test(f.who_they_are_to_them)&&f.feelings_right_now&&!/nothing strong/.test(f.feelings_right_now)&&f.lasting_feelings&&!/nothing settled/.test(f.lasting_feelings)&&out.ego==="id_ahead"&&/Emre/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify({f,ego:out&&out.ego}); }));
+  ok("a layout's own {{if ego = …}} and {{if emotion = …}} pick their text", await pg.evaluate(()=>{
+      const keepOn=state.payloadTplOn, keepT=state.payloadTemplates;
+      state.payloadTplOn=true; state.payloadTemplates={solo:"[system]\nBASE\n\n{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{else}}Your conscience holds.{{endif}}\n\n{{if emotion = anger}}You are angry.{{endif}}\n[system end]\n\n{{call//dialogue_history}}\n"};
+      const a=ptBuildMessages("solo",{_railFlags:{ego:"id_ahead",emotion:"Anger"}},[],{});
+      const b=ptBuildMessages("solo",{_railFlags:{ego:"superego_firm",emotion:"Joy"}},[],{});
+      state.payloadTplOn=keepOn; state.payloadTemplates=keepT;
+      const ta=JSON.stringify(a), tb=JSON.stringify(b);
+      return (/desire is winning/.test(ta)&&/You are angry/.test(ta)&&!/conscience holds/.test(ta)&&/conscience holds/.test(tb)&&!/angry/.test(tb)) ? true : ta.slice(0,300)+" || "+tb.slice(0,300); }));
+
   console.log("\n[a real turn]");
   ok("a solo turn asks it before the reply is written", await pg.evaluate(async()=>{
       const c=curChat(); c.messages=[]; c.emo={}; const order=[];
@@ -97,9 +117,9 @@ const {chromium}=require('playwright');
       const cr=window.__reqs[0].questions.emotion.criteria; return (cr.loneliness&&!cr.pride&&/glad and light/.test(cr.joy)) ? true : JSON.stringify(Object.keys(cr)); }));
   ok("reset puts the shipped list back (saved as no override)", await pg.evaluate(()=>{ emotionEditorReset(); saveSettings(false);
       return (state.emotions.length===13&&state.emotions[12].name==="Pride"&&store.raw(K.emotions,"x")==="") ? true : JSON.stringify([state.emotions.length,store.raw(K.emotions,"x").slice(0,40)]); }));
-  ok("the two prompts are on their Payloads card; a fresh install has it on", await pg.evaluate(()=>{
+  ok("the three prompts are on their Payloads card; a fresh install has it on", await pg.evaluate(()=>{
       const card=ENGINE_PAYLOAD_DEFS.find(d=>d.key==="emotion_pick");
-      const okCard=card&&["x_emotion_pick","x_emotion_intensity"].every(k=>card.blocks.some(x=>x.promptKey===k)&&PROMPT_BY_KEY[k]);
+      const okCard=card&&["x_emotion_pick","x_emotion_intensity","x_ego_pick"].every(k=>card.blocks.some(x=>x.promptKey===k)&&PROMPT_BY_KEY[k]);
       localStorage.removeItem(K.emoOn); loadState(); return (okCard&&state.emoOn===true) ? true : "card="+okCard+" on="+state.emoOn; }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

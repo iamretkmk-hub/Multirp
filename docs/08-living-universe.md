@@ -53,6 +53,23 @@ fire.
 - **Stage 1 — judge** (`gmJudge`, genre-pack pacing tail): returns
   `{stale, trigger, trigger_context, energy, reason}`. Intervenes if *either* stale or
   trigger fires.
+  - **v150.41:** this runs as one Decisions request first (`gmDecisionJudge`, switch
+    `gmDecOn`, on by default), with four questions:
+    - `x_gm_dec_stale` and `x_gm_dec_trigger`: yes/no.
+    - `x_gm_dec_energy`: a pick from 1 to 5.
+    - `x_gm_dec_kind`: the kind of beat that fits, picked from `GM_BEAT_KINDS`. The kinds are
+      signal, elsewhere, inside, pursuit (only when someone here is after something), staging
+      (only when an armed plan waits) and arrival (never in a private moment).
+  - The state carries:
+    - the judge's scene brief and the latest exchange;
+    - what the director already staged, the story so far and the offstage world;
+    - the pursuits and armed plans;
+    - what "stale" means in this genre;
+    - whether the moment is private.
+  - A yes counts at the Eagerness bar: cautious 0.8, balanced 0.65, active 0.5.
+  - The picked kind becomes the author's `trigger_context` ("The kind of beat that fits: …").
+  - A failed or empty answer falls back to the chat judge. A forced beat skips both.
+  - Pinned by `tests/gm-decisions.browser.js`.
 - **Stage 2 — author** (`gmAuthor`): writes the hidden nudge, grounded in
   `directorContext(chat,"gm")` (tie-only roster, scene/privacy lines, trackers, calendar,
   offstage positions), the shared recent-exchange window (`recentExchangeText` — texts

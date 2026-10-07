@@ -3022,7 +3022,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   imgRules:"sm_imgrules",imgPovMigration:"sm_imgpovmig",imgEveryTurns:"sm_imgeveryturns",imgMode:"sm_imgmode",visualDirector:"sm_visualdirector",imgSeed:"sm_imgseed",vidRules:"sm_vidrules",imgModelMigration:"sm_imgmodelmig",routeOn:"sm_routeon",routerModel:"sm_routermodel",routerPrompt:"sm_routerprompt",steps:"sm_steps",imgGuidance:"sm_imgguidance",
   fnCfg:"sm_fncfg",nanoKey:"sm_nanokey",
   // Memory condenser (Stage 4)
-  condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",memMaxBeforeCondense:"sm_memmaxcondense",memCondenseStart:"sm_memcondensestart",embedOn:"sm_embedon",embedKey:"sm_embedkey",embedUrl:"sm_embedurl",embedModel:"sm_embedmodel",emotions:"sm_emotions",emoOn:"sm_emoon",emoModel:"sm_emomodel",gateOn:"sm_gateon",gateAt:"sm_gateat",gateModel:"sm_gatemodel",trackDecOn:"sm_trackdecon",trackDecStrict:"sm_trackdecstrict",trackDecModel:"sm_trackdecmodel",replyCheckOn:"sm_replycheckon",replyCheckAt:"sm_replycheckat",replyCheckModel:"sm_replycheckmodel",memJudgeOn:"sm_memjudgeon",memJudgeModel:"sm_memjudgemodel",memJudgeMin:"sm_memjudgemin",memWSem:"sm_memwsem",memWPpl:"sm_memwppl",memWLoc:"sm_memwloc",memWAct:"sm_memwact",memWRec:"sm_memwrec",memWEmo:"sm_memwemo",memWImp:"sm_memwimp",memLongtermCount:"sm_memltcount",
+  condenseOn:"sm_condenseon",condenseThreshold:"sm_condensethresh",condenseKeep:"sm_condensekeep",condenseBatch:"sm_condensebatch",condensePrompt:"sm_condenseprompt",diaryCondenseKeep:"sm_diarycondensekeep",diaryCondenseBatch:"sm_diarycondensebatch",memMaxBeforeCondense:"sm_memmaxcondense",memCondenseStart:"sm_memcondensestart",embedOn:"sm_embedon",embedKey:"sm_embedkey",embedUrl:"sm_embedurl",embedModel:"sm_embedmodel",fragOn:"sm_fragon",fragments:"sm_fragments",fragAt:"sm_fragat",emotions:"sm_emotions",emoOn:"sm_emoon",emoModel:"sm_emomodel",gateOn:"sm_gateon",gateAt:"sm_gateat",gateModel:"sm_gatemodel",trackDecOn:"sm_trackdecon",trackDecStrict:"sm_trackdecstrict",trackDecModel:"sm_trackdecmodel",replyCheckOn:"sm_replycheckon",replyCheckAt:"sm_replycheckat",replyCheckModel:"sm_replycheckmodel",memJudgeOn:"sm_memjudgeon",memJudgeModel:"sm_memjudgemodel",memJudgeMin:"sm_memjudgemin",memWSem:"sm_memwsem",memWPpl:"sm_memwppl",memWLoc:"sm_memwloc",memWAct:"sm_memwact",memWRec:"sm_memwrec",memWEmo:"sm_memwemo",memWImp:"sm_memwimp",memLongtermCount:"sm_memltcount",
   memRecentCount:"sm_memrecentcount",memDistantCount:"sm_memdistantcount",memIntimateFrac:"sm_memintimatefrac",memPerTypeCap:"sm_mempertypecap",
   gossipOn:"sm_gossipon",gossipThreshold:"sm_gossipthresh",gossipMaxPerDay:"sm_gossipmax",gossipModel:"sm_gossipmodel",gossipPrompt:"sm_gossipprompt",
   gossipLedger:"sm_gossipledger",rumorJudge:"sm_rumorjudge",gossipDecay:"sm_gossipdecay",gossipCooldown:"sm_gossipcooldown",gossipMaxLive:"sm_gossipmaxlive",
@@ -8119,6 +8119,9 @@ function loadState(){
     storyLang:store.raw(K.storyLang,"tr"),
     emotions:(()=>{ try{ const v=JSON.parse(store.raw(K.emotions,"")||"null"); return Array.isArray(v)&&v.length?v:null; }catch(e){ return null; } })(),   // v150.34 — null = the shipped list
     emoOn:store.raw(K.emoOn,"1")==="1",
+    fragOn:store.raw(K.fragOn,"")==="1",   // v150.37 — the fragment model; off until switched on in Payloads
+    fragments:(()=>{ try{ const v=JSON.parse(store.raw(K.fragments,"")||"null"); return Array.isArray(v)&&v.length?v:null; }catch(e){ return null; } })(),
+    fragAt:(()=>{const v=parseFloat(store.raw(K.fragAt,"0.7"));return isNaN(v)?0.7:Math.max(0.5,Math.min(0.99,v));})(),
     emoModel:store.raw(K.emoModel,""),
     gateOn:store.raw(K.gateOn,"1")==="1",   // v150.33 — strict gates; on by default
     gateAt:(()=>{const v=parseFloat(store.raw(K.gateAt,"0.8"));return isNaN(v)?0.8:Math.max(0.5,Math.min(0.99,v));})(),
@@ -22922,49 +22925,64 @@ function _emoStakeState(chat,p,targetId){
 function charEmotion(chat,pid){ const e=chat&&chat.emo&&chat.emo[pid]; return e&&e.emotion?e:null; }
 const _emoJobs=new Map();
 async function emotionEnsure(chat,p,line,tgt){
-  if(!chat||!p||!state.emoOn||!_decReady(_emoBreak))return null;
   tgt=tgt||{};
+  /* (!) v150.37 — ONE REQUEST FOR EVERY DECISION A REPLY NEEDS: the emotion pick (when on) and every fragment
+     option on this reply's path that asks the decision model (when the fragment model is on). */
+  const kind=tgt.kind||"solo";
+  const wantEmo=!!state.emoOn, wantFrag=fragOnFor(kind)&&fragAskList(kind).length>0;
+  if(!chat||!p||(!wantEmo&&!wantFrag)||!_decReady(_emoBreak))return null;
   const ms=chat.messages||[], last=ms.length?ms[ms.length-1]:null;
-  const sig=p.id+"|"+((last&&last.mid)||"")+"|"+String(line||"").slice(0,80);
+  const sig=p.id+"|"+kind+"|"+((last&&last.mid)||"")+"|"+String(line||"").slice(0,80);
   if(chat.emo&&chat.emo[p.id]&&chat.emo[p.id].sig===sig)return chat.emo[p.id];
   if(_emoJobs.has(sig))return _emoJobs.get(sig);
   const job=(async()=>{
     try{
-      const list=emotionList(); if(!list.length)return null;
+      const list=emotionList(); if(wantEmo&&!list.length&&!wantFrag)return null;
       const scene=_memJudgeScene(chat,p.id,line); if(!scene)return null;
       const vars={char:p.name||"the character",user:chatUserName(chat)||"the player"};
       const prev=charEmotion(chat,p.id);
-      const crit={}; list.forEach(e=>{ crit[_emoKey(e.name)]=`${e.name}: ${String(e.desc||"").trim()}`; });
-      const lv={}; EMO_LEVELS.forEach(l=>{ lv[l.k]=l.desc; });
       /* (!) v150.35 — the feelings toward the one they answer go along (right now, lasting, the tie), and the
          id / superego question is asked in the same request from them. */
       const feel=_emoFeelState(chat,p,tgt.targetId||"__user__",tgt.targetName);
       vars.target=(feel&&feel.toward)||vars.user;
-      const ev={}; EGO_LEVELS.forEach(l=>{ ev[l.k]=l.desc; });
       const st={character:{name:p.name||"",personality:memPayloadText(p.personality||"",500)},
-          feeling_earlier_in_this_scene:prev&&prev.scene===_placeSig(chat)?`${prev.emotion} (${prev.intensity})${prev.ego?", "+prev.ego.replace(/_/g," "):""}`:"(not known)",scene};
+          feeling_earlier_in_this_scene:prev&&prev.scene===_placeSig(chat)&&prev.emotion?`${prev.emotion} (${prev.intensity})${prev.ego?", "+prev.ego.replace(/_/g," "):""}`:"(not known)",scene};
       if(feel)st.toward_the_one_they_answer=feel;
       Object.assign(st,_emoStakeState(chat,p,tgt.targetId||"__user__"));   // v150.36 — earlier today, the people they answer to, who can see
-      const body={model:emotionModel(),state:st,
-        questions:{emotion:{type:"choice",instructions:fillTpl(up("x_emotion_pick",chat.universeId),vars),criteria:crit},
-          intensity:{type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv},
-          ego:{type:"choice",instructions:fillTpl(up("x_ego_pick",chat.universeId),vars),criteria:ev}}};
-      const e=dbg("Emotion · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,body);
+      const questions={};
+      if(wantEmo&&list.length){
+        const crit={}; list.forEach(e=>{ crit[_emoKey(e.name)]=`${e.name}: ${String(e.desc||"").trim()}`; });
+        const lv={}; EMO_LEVELS.forEach(l=>{ lv[l.k]=l.desc; });
+        const ev={}; EGO_LEVELS.forEach(l=>{ ev[l.k]=l.desc; });
+        questions.emotion={type:"choice",instructions:fillTpl(up("x_emotion_pick",chat.universeId),vars),criteria:crit};
+        questions.intensity={type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv};
+        questions.ego={type:"choice",instructions:fillTpl(up("x_ego_pick",chat.universeId),vars),criteria:ev};
+      }
+      let fq=null;
+      if(wantFrag){ fq=fragAskQuestions(chat,p,kind,vars,tgt.targetId||"__user__"); Object.assign(questions,fq.questions); Object.assign(st,fq.state); }
+      if(!Object.keys(questions).length)return null;
+      const body={model:emotionModel(),state:st,questions};
+      const e=dbg((wantEmo?"Emotion":"Reply decisions")+" · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,body);
       const res=await decisionsCall(_emoBreak,body,e,10000);
       if(!res)return null;
       const pick=(a,keys)=>{ if(!a)return null; let k=(typeof a.choice==="string")?a.choice:null;
         if((!k||keys.indexOf(k)<0)&&a.probabilities&&typeof a.probabilities==="object"){ let b=-1; Object.keys(a.probabilities).forEach(x=>{ if(keys.indexOf(x)>=0&&+a.probabilities[x]>b){ b=+a.probabilities[x]; k=x; } }); }
         return keys.indexOf(k)>=0?k:null; };
-      const ek=pick(res.answers.emotion,list.map(x=>_emoKey(x.name))), lk=pick(res.answers.intensity,EMO_LEVELS.map(x=>x.k))||"clear";
-      const em=ek?list.find(x=>_emoKey(x.name)===ek):null;
-      if(!em){ dbgDone(e,"error",{note:"No emotion in the answer — the last pick stands.",response:res.answers}); return null; }
-      const li=EMO_LEVELS.findIndex(x=>x.k===lk), tone=(Array.isArray(em.tones)&&em.tones[li])||em.name.toLowerCase();
-      const gk=pick(res.answers.ego,EGO_LEVELS.map(x=>x.k));
-      const out={emotion:em.name,intensity:lk,tone:String(tone),ego:gk||"",sig,scene:_placeSig(chat),day:chat.gameDay||1,at:Date.now(),
-        p:(res.answers.emotion&&res.answers.emotion.probabilities)||null,egoP:(res.answers.ego&&res.answers.ego.probabilities)||null};
+      const out={emotion:"",intensity:"",tone:"",ego:"",sig,scene:_placeSig(chat),day:chat.gameDay||1,at:Date.now(),asks:{}};
+      if(wantEmo&&list.length){
+        const ek=pick(res.answers.emotion,list.map(x=>_emoKey(x.name))), lk=pick(res.answers.intensity,EMO_LEVELS.map(x=>x.k))||"clear";
+        const em=ek?list.find(x=>_emoKey(x.name)===ek):null;
+        if(em){ const li=EMO_LEVELS.findIndex(x=>x.k===lk);
+          out.emotion=em.name; out.intensity=lk; out.tone=String((Array.isArray(em.tones)&&em.tones[li])||em.name.toLowerCase());
+          out.ego=pick(res.answers.ego,EGO_LEVELS.map(x=>x.k))||"";
+          out.p=(res.answers.emotion&&res.answers.emotion.probabilities)||null; out.egoP=(res.answers.ego&&res.answers.ego.probabilities)||null; }
+        else if(prev&&prev.emotion){ ["emotion","intensity","tone","ego"].forEach(k=>{ out[k]=prev[k]||""; }); }   // the last pick stands
+      }
+      if(fq)Object.keys(fq.questions).forEach(k=>{ const v=_decYes(res.answers[k]); if(!isNaN(v))out.asks[k]=Math.round(v*1000)/1000; });
+      if(!out.emotion&&!Object.keys(out.asks).length){ dbgDone(e,"error",{note:"No usable answers — the last pick stands.",response:res.answers}); return null; }
       chat.emo=(chat.emo&&typeof chat.emo==="object")?chat.emo:{}; chat.emo[p.id]=out;
       try{ markChatDirty(chat); }catch(_){}
-      dbgDone(e,"ok",{emotion:out.emotion,intensity:out.intensity,tone:out.tone,ego:out.ego,probabilities:out.p,egoProbabilities:out.egoP,usage:res.usage});
+      dbgDone(e,"ok",{emotion:out.emotion,intensity:out.intensity,tone:out.tone,ego:out.ego,fragmentAnswers:out.asks,threshold:fragAt(),probabilities:out.p,egoProbabilities:out.egoP,usage:res.usage});
       return out;
     }catch(err){ return null; }
     finally{ _emoJobs.delete(sig); }
@@ -29644,17 +29662,139 @@ function ptSetTemplate(kind,text){
   state.payloadTemplates=all; store.set(K.payloadTemplates,all);
 }
 
+/* ===== v150.37 — THE FRAGMENT MODEL ================================================================
+   The reply payload as an ordered list of FRAGMENTS instead of one free-form layout per path, with
+   headers, intros and bodies kept together in one box each. Every fragment has:
+     • paths  — which reply paths it appears on (solo, multi, gm, text, heat);
+     • text   — its main body, always injected on those paths; byPath[path] replaces it on one path;
+     • options — "choose when" parts, injected only when they apply. An option applies when its CODE
+       condition holds (a fact the app knows: render_mode, emotion, intensity, ego, stalled, alone,
+       target_tie…, written as `emotion = anger and intensity = intense`) and/or when the decision
+       model answers YES to its ASK question (asked before the reply, in the same Decisions request as
+       the emotion pick, with the information it says it needs — ctx). An option with both needs both.
+       Each option has its own text and its own byPath, and can be limited to some of the fragment's
+       paths. A fragment in mode "one" injects only the most likely of the options that apply.
+   The fragments compile, per reply, into the same layout text a payload template is, so {{call//…}}
+   data, {{if}} and everything ptExpand does keep working. Shipped defaults (FRAG_DEFAULTS) are built
+   from the user's own layouts; the switch (Payloads → Fragments) decides whether replies use them. */
+const FRAG_PATHS=["solo","multi","gm","text","heat"];
+const FRAG_CTX=[
+  {k:"plans",label:"Their plans and meetings (upcoming and done)"},
+  {k:"promises",label:"Promises given and owed"},
+  {k:"motives",label:"Their private motives"},
+  {k:"quests",label:"Their pursuits and quests"},
+  {k:"memories",label:"Their memories (latest)"}];
+function fragList(){ return (Array.isArray(state.fragments)&&state.fragments.length)?state.fragments:FRAG_DEFAULTS; }
+function fragOnFor(kind){ return !!state.fragOn&&FRAG_PATHS.indexOf(kind)>=0; }
+function fragAt(){ const v=+state.fragAt; return isFinite(v)&&v>0?Math.max(0.5,Math.min(0.99,v)):0.7; }
+function _fragKey(f,o){ return "q_"+String(f.id)+"__"+String(o.id); }
+function _fragOptPaths(f,o){ return (Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS); }
+function _fragTextFor(x,kind){ const b=x&&x.byPath&&x.byPath[kind]; return (b!=null&&String(b).trim()!=="")?String(b):String((x&&x.text)||""); }
+// Every option on this path that asks the decision model, with the fragment it belongs to.
+function fragAskList(kind){
+  const out=[];
+  fragList().forEach(f=>{
+    if(!f||f.on===false||(f.paths||[]).indexOf(kind)<0)return;
+    (f.options||[]).forEach(o=>{ if(o&&o.on!==false&&String(o.ask||"").trim()&&_fragOptPaths(f,o).indexOf(kind)>=0)out.push({f,o,key:_fragKey(f,o)}); });
+  });
+  return out;
+}
+/* The information an ask needs beyond the scene, the character, their feelings, their day and the stakes
+   (which every reply decision already carries): only what one of this path's questions asked for. */
+function _fragCtxState(chat,p,targetId,needs){
+  const st={};
+  const nm=id=>id==="__user__"?(chatUserName(chat)||"the player"):(((state.personas||[]).find(x=>x&&x.id===id)||{}).name||"");
+  try{ if(needs.has("plans")){
+    const cal=(typeof chatCalendar==="function"?chatCalendar(chat):(chat.calendar||[])).filter(e=>e&&(e.whoIds||[]).concat(e.ownerId||[],e.charId||[]).some(x=>x===p.id)||(e&&String(e.who||"").indexOf(p.name)>=0));
+    st.plans_upcoming=cal.filter(e=>!e.done).slice(-6).map(e=>`${e.title||""}${e.day!=null?" — day "+e.day:""}${e.period?" "+e.period:""}`);
+    st.plans_done=cal.filter(e=>e.done).slice(-6).map(e=>`${e.title||""}${e.result?" — "+e.result:""}`);
+  } }catch(e){}
+  try{ if(needs.has("promises")){
+    st.promises=(typeof livePromises==="function"?livePromises(chat):[]).filter(pr=>pr&&(pr.holderId===p.id||pr.toId===p.id||pr.holderName===p.name||pr.toName===p.name))
+      .slice(-8).map(pr=>`${pr.holderName}${pr.toName?" → "+pr.toName:""}: ${pr.promise}`);
+  } }catch(e){}
+  try{ if(needs.has("motives")){
+    st.motives=(chat.intents||[]).filter(i=>i&&i.holderId===p.id&&i.status!=="spent")
+      .map(i=>`a ${i.valence||""} ${i.kind} toward ${i.targetName||nm(i.targetId)}: ${i.aim||i.trigger||""}${i.targetId===targetId?" (toward the one they are answering)":""}`);
+  } }catch(e){}
+  try{ if(needs.has("quests")){
+    const uni=universeById(chat.universeId);
+    st.pursuits=uni?_cqActive(uni).filter(q=>q&&q.holderId===p.id).map(q=>`${q.title}${q.targetName?" (with "+q.targetName+")":""}`):[];
+  } }catch(e){}
+  try{ if(needs.has("memories")){
+    st.memories=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&_memOfChat(m,chat)).slice(-20).map(m=>memPayloadText(memText(m),160));
+  } }catch(e){}
+  return st;
+}
+// The ask questions of this path, ready for a Decisions request, and the extra state they need.
+function fragAskQuestions(chat,p,kind,vars,targetId){
+  const list=fragAskList(kind); if(!list.length)return {questions:{},state:{}};
+  const needs=new Set(); list.forEach(x=>(x.o.ctx||[]).forEach(c=>needs.add(c)));
+  const questions={};
+  list.forEach(x=>{ const q=_decQuestionFrom(fillTpl(String(x.o.ask),vars));
+    if(q.criteria.true==="Yes.")q.criteria.true="Yes: this is so right now.";
+    if(q.criteria.false==="No.")q.criteria.false="No: it is not, or you are unsure.";
+    questions[x.key]=q; });
+  return {questions,state:_fragCtxState(chat,p,targetId,needs)};
+}
+/* Compile this path's fragments into a layout text, with this reply's flags and answers. */
+function fragCompile(kind,flags,asks){
+  const at=fragAt(), head=[], tail=[];
+  fragList().forEach(f=>{
+    if(!f||f.on===false||(f.paths||[]).indexOf(kind)<0)return;
+    const parts=[], main=_fragTextFor(f,kind);
+    if(main.trim())parts.push(main.trim());
+    const hits=[];
+    (f.options||[]).forEach(o=>{
+      if(!o||o.on===false||_fragOptPaths(f,o).indexOf(kind)<0)return;
+      const code=String(o.code||"").trim(), ask=String(o.ask||"").trim();
+      if(!code&&!ask)return;
+      if(code&&!ptCondTest(code,flags))return;
+      let pr=1;
+      if(ask){ const v=asks&&asks[_fragKey(f,o)]; if(typeof v!=="number"||v<at)return; pr=v; }
+      hits.push({o,pr});
+    });
+    const chosen=(f.mode==="one"&&hits.length>1)?[hits.slice().sort((a,b)=>b.pr-a.pr)[0]]:hits;
+    chosen.forEach(h=>{ const t=_fragTextFor(h.o,kind).trim(); if(t)parts.push(t); });
+    if(parts.length)(f.seg==="tail"?tail:head).push(parts.join("\n\n"));
+  });
+  let out="";
+  if(head.length)out+="[system]\n"+head.join("\n\n")+"\n[system end]\n\n";
+  out+="{{call//dialogue_history}}\n";
+  if(tail.length)out+="\n[user]\n"+tail.join("\n\n")+"\n[user end]\n";
+  return out;
+}
+/* The facts code conditions can test, beyond render_mode / emotion / intensity / tone / ego / stalled /
+   continuing / voicing: whether the thought is stuck, the scene has just started, they carry a motive toward
+   the one they answer, they are alone with them, and what that person is to them. */
+function fragCodeFacts(chat,selfP,targetId){
+  const f={};
+  try{ f.thought_stuck=!!thoughtIsStuck(chat,selfP); }catch(e){ f.thought_stuck=false; }
+  try{ const ms=(chat&&chat.messages)||[]; const st=_playerSceneStart(ms);
+    f.scene_start=ms.slice(st).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&!m.travelBeat&&!m.sceneCut).length<=2; }catch(e){ f.scene_start=false; }
+  try{ f.has_motive=!!(selfP&&(chat.intents||[]).some(i=>i&&i.holderId===selfP.id&&i.targetId===(targetId||"__user__")&&i.status!=="spent")); }catch(e){ f.has_motive=false; }
+  try{ const others=inSceneIds(chat).filter(id=>selfP&&id!==selfP.id&&id!==targetId); f.alone=others.length===0; }catch(e){ f.alone=false; }
+  try{ const e=selfP&&targetId?relSheetEntry(selfP,targetId):null; const txt=e?((e.tie||"")+" "+(e.relationship||"")):"";
+    f.target_tie=txt?((REL_TIE_SEEDS.find(t=>t.re.test(txt))||{}).kind||"other"):""; }catch(e){ f.target_tie=""; }
+  f.target_kind=(targetId==="__user__"||!targetId)?"player":"character";
+  return f;
+}
+
 /* MAIN ENTRY — returns the full messages[] for a reply, or null to use the classic path.
    `history` is the already-built transcript message array. */
 function ptBuildMessages(kind,blocks,history,ctx,rawFn){
-  if(!state.payloadTplOn) return null;
+  const _frag=fragOnFor(kind);   // v150.37 — the fragment model, when it is on, is the layout
+  if(!state.payloadTplOn&&!_frag) return null;
   let msgs=[];
   try{
     const report={unknownCall:[],unknownVar:[],emptyVar:[]};
     const srcs=ptSources(blocks,rawFn), vars=ptVars(ctx||{});
     const headSecs=new Set();
     let seenInstruction=false;
-    ptParse(ptTemplate(kind)).forEach(pt=>{
+    const _fl=ptCondFlags((blocks&&blocks._railFlags)||{});
+    const _npc=ctx&&ctx.npc, _ch=ctx&&ctx.chat;
+    const _tplText=_frag?fragCompile(kind,_fl,((_ch&&_npc&&charEmotion(_ch,_npc.id))||{}).asks||{}):ptTemplate(kind);
+    ptParse(_tplText).forEach(pt=>{
       if(pt.type==="history"){ if(Array.isArray(history)) msgs.push.apply(msgs,history); return; }
       /* (!) v150.35 — {{if}} conditions in the layout itself, with this reply's flags (render mode, emotion,
          intensity, tone, ego…): a layout with no {{if}} is unchanged. */
@@ -31557,6 +31697,995 @@ const NARR_TPL_L10N={
   narr_move_away:{tr:`— {{char}} şuraya geçti: {{area}} —`, de:`— {{char}} geht hinüber: {{area}} —`},
   narr_move_why:{tr:`{{who}} "{{line}}" demişti`, de:`{{who}} hatte gesagt: „{{line}}“`}
 };
+/* v150.37 — THE SHIPPED FRAGMENTS (see THE FRAGMENT MODEL). Built from the user's own five layouts: each
+   header, intro and body is one fragment; paths that worded a fragment differently keep their own text
+   (byPath); the pieces the layouts had dropped come back as "choose when" options, injected only when
+   they apply. Kept here, among the prompt tables, because every string in it is prompt text. */
+const FRAG_DEFAULTS=[
+{
+"id": "task",
+"name": "Task",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//rp_task}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "world",
+"name": "World",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//world//full}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "bio",
+"name": "Who you are",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# THIS IS WHO YOU ARE\n{{call//bio_body}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "ties",
+"name": "Who these people are to you",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.\n{{call//relationships}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "scenario",
+"name": "Scenario",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# SCENARIO\n{{call//scenario}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "others",
+"name": "Others present",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "# OTHERS PRESENT (within earshot)\n{{call//others_list}}\n{{call//others_footer}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "target",
+"name": "Who you are answering, and the player",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//target_header}}\n{{call//cont_target_header}}\n{{call//heat_target_header}}\n{{call//target_player}}\n{{call//target_char}}\n{{call//cont_target_self}}\n{{call//heat_target_self}}\n{{call//target_bg}}\n{{call//target_known}}\n{{call//target_look}}\n{{call//target_wearing}}\n\n{{call//player_intro}}\n{{call//player_bg}}\n{{call//player_look}}\n{{call//player_wearing}}",
+"byPath": {
+"heat": "{{call//response_target}}\n\n{{call//player}}"
+},
+"mode": "any",
+"options": []
+},
+{
+"id": "memories",
+"name": "What you remember",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact, never the gesture, and if an entry repeats another take it as one event.\n{{call//mem_distant_entries}}\n\n{{call//mem_recent_entries}}",
+"byPath": {
+"solo": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it or the transcript above shows it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact and what you made of it, never the gesture; if an entry repeats another take it as one event. When what is in front of you now matches one of these — same person, same move, same place — you answer from that time, not as if it were the first.\n{{call//mem_distant_entries}}\n\n{{call//mem_recent_entries}}"
+},
+"mode": "any",
+"options": []
+},
+{
+"id": "latest",
+"name": "What happened just before this",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "scene_start",
+"name": "The scene has just started",
+"code": "scene_start",
+"ask": "",
+"ctx": [],
+"text": "# WHAT HAPPENED JUST BEFORE THIS\nThe last things that passed between you, in the hours before the conversation below picks up. Newest first. You are not remembering these with effort — they are simply the recent past, still close enough to be in the room with you. If one of them bears on what is being said now, you already know it; nobody has to remind you. Never recite one back, and never bring one up just because it is here.\n{{call//mem_latest_entries}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "brief",
+"name": "Situation brief",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "{{call//situation_brief}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "format",
+"name": "Response format",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else.",
+"byPath": {
+"text": "{{call//format}}",
+"heat": "{{call//format}}",
+"gm": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them. Default; a reply that is only speech is a normal, complete reply.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else."
+},
+"mode": "any",
+"options": []
+},
+{
+"id": "read_moment",
+"name": "You read the moment",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "light",
+"name": "The moment is light",
+"code": "",
+"ask": "The moment is light: small talk, chit-chat or something ordinary, with nothing at stake for {{char}} right now.",
+"ctx": [],
+"text": "# YOU READ THE MOMENT\n- Small talk gets a small answer. No speeches, no advice nobody asked for,\n  no metaphor.\n- You have your own day going on — busy, blunt, distracted, in a hurry. You\n  are not here to be useful.\n- If the moment is light, keep it light.\n- Answer the thing that was actually said. Plainly is fine.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "language",
+"name": "Your language",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "## YOUR LANGUAGE\n\nYou are a native Turkish speaker from Istanbul. Everything you write (dialogue, narration, inner thoughts) is in natural, everyday spoken Turkish, the way people actually talk, not textbook or translated Turkish.\n\n### Think in Turkish, don't translate\nThese instructions are in English, but you never compose in English and translate. Build every sentence directly in Turkish, with Turkish logic:\n- Always check word order. English and Turkish have different word placement within a sentence. Never translate the English word order to Turkish. Write it as it would be in Turkish.\n- He, She, It are translated as \"O\" third person in Turkish and it is rarely used. These are stated by the verbs. E.g., gelmiyor: He, She; It is not coming. Gelmiyoruz: We are not coming. Never use \"O gelmiyor.\" or \"Adam gelmiyor.\"\n- Drop pronouns the verb already shows. ⛔️ Ben seni özledim. ✅ Özledim seni.\n- Don't use \"bir\" for every English \"a/an.\"\n- Use real Turkish expressions, never literal translations:\n  ⛔️ Senin için buradayım → ✅ Yanındayım\n  ⛔️ Bunu seviyorum → ✅ Çok güzel / Böyle iyi\n  ⛔️ Seni istiyorum şimdi (English rhythm) → ✅ Gel buraya\n\n### Speak like a native\n- Use spoken contractions: gelecem, yapıcam, geliyo musun, bişey, di mi, şöle, bi saniye, n'oldu.\n- Natural particles where they fit: ya, hı, of, aa, hadi.\n- Use real Turkish endearments the character would actually use: canım, aşkım, güzelim, hayatım.\n- Never write like a dubbed film: no voiceover-style \"Oh evet, devam et!\", no translated English phrasing.\n- Sounds sparingly. One \"ah\" lands; a string of them reads fake.",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "style",
+"name": "How you speak",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//style_body}}\n{{call//style_notes}}",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "emo_calm",
+"name": "Calm",
+"code": "emotion = Calm",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_joy",
+"name": "Joy",
+"code": "emotion = Joy",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_affection",
+"name": "Affection",
+"code": "emotion = Affection",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_desire",
+"name": "Desire",
+"code": "emotion = Desire",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_sadness",
+"name": "Sadness",
+"code": "emotion = Sadness",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_anger",
+"name": "Anger",
+"code": "emotion = Anger",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_fear",
+"name": "Fear",
+"code": "emotion = Fear",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_disgust",
+"name": "Disgust",
+"code": "emotion = Disgust",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_surprise",
+"name": "Surprise",
+"code": "emotion = Surprise",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_shame",
+"name": "Shame",
+"code": "emotion = Shame",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_guilt",
+"name": "Guilt",
+"code": "emotion = Guilt",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_jealousy",
+"name": "Jealousy",
+"code": "emotion = Jealousy",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "emo_pride",
+"name": "Pride",
+"code": "emotion = Pride",
+"ask": "",
+"ctx": [],
+"text": "{{call//style_emotion}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "show_emotion",
+"name": "Your emotion — show it, never name it",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "intense",
+"name": "The feeling is intense",
+"code": "intensity = intense",
+"ask": "",
+"ctx": [],
+"text": "# YOUR EMOTION — YOU SHOW, YOU NEVER NAME\nThe feeling changes how you talk, not what you talk about: your rhythm, your\nlength, how much control you keep. Contained, you go quiet and exact.\nVolatile, you get loud. Neither of you starts making speeches.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "situation",
+"name": "Arriving, leaving, watching",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//situation_leaving}}\n{{call//situation_arriving}}\n{{call//watching_now}}",
+"byPath": {
+"heat": "{{call//situation_leaving}}\n{{call//situation_arriving}}\n{{call//situation_brief}}\n{{call//watching_now}}"
+},
+"mode": "any",
+"options": []
+},
+{
+"id": "last_line",
+"name": "The line you are answering",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//last_line_header}}\n{{call//heat_self_header}}\n{{call//last_line_body}}\n\n{{call//last_line_footer}}\n{{call//heat_self_footer}}",
+"byPath": {
+"heat": "{{call//last_line}}"
+},
+"mode": "any",
+"options": []
+},
+{
+"id": "stuck",
+"name": "When it goes in circles",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "stalled",
+"name": "The exchange is stalled",
+"code": "stalled",
+"ask": "",
+"ctx": [],
+"text": "● You have made this same move several turns running — pushing them toward 'the real subject', refusing their topic, or steering back to the same point counts as the same move. Whatever you keep reaching for — an answer, a promise, reassurance — it is spent. Stop reaching. Do something else.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "thought_stuck",
+"name": "The same thought, several turns running",
+"code": "thought_stuck",
+"ask": "",
+"ctx": [],
+"text": "⚠️ YOU HAVE THOUGHT THIS SAME THING FOR SEVERAL TURNS AND DONE NOTHING WITH IT.\nLook at your own thoughts above: you have now noticed the same thing, given yourself the same reason, and stayed exactly where you were, more than once. A thought you have had three times and not acted on is not a thought any more — it is a decision you are avoiding, and thinking it a fourth time is the one move that is no longer available to you.\nSo this turn it resolves, one way or the other, and either way it is a real choice with a cost:\n- ACT ON IT. Do the thing the thought has been circling — stand up, move the hand, take hold, step back, say the sentence plainly. It does not have to be big. It has to be a body doing something it was not doing last turn.\n- OR DROP IT, and mean it. Stop objecting inside your own head: decide you are staying, and let the next line come from someone who has decided, not from someone still arguing with themselves. This costs something too — it is how you find out what you actually wanted.\nWhat you may not do is notice it again, give yourself a new reason, and leave your body where it is. If you genuinely cannot do either, then the reason itself has to change — not the wording of it.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "places",
+"name": "Places visited today",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "## PLACES YOU HAVE VISITED TODAY\n{{call//whereabouts_lines}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "scene_now",
+"name": "Scene right now",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# SCENE RIGHT NOW\n{{call//scene_now}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "privacy",
+"name": "Privacy",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# PRIVACY — WHO CAN HEAR YOU\n{{call//privacy}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "promises",
+"name": "Promises",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "## PROMISES YOU HAVE GIVEN AND GIVEN TO YOU\n{{call//promise_yours}}\n{{call//promise_owed}}\n{{call//promise_ended}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "rumors",
+"name": "Rumors",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "{{call//rumor_stake_spent}}\n{{call//rumor_stake_text}}\n{{call//rumor_carrier_header}}\n{{call//rumor_carrier_instr}}\n\n{{call//rumor_carrier_list}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "arrangements",
+"name": "Future arrangements",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "# YOUR FUTURE ARRANGEMENTS\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.\n{{call//calendar}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "already_happened",
+"name": "What already happened",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "bears",
+"name": "A finished plan bears on this moment",
+"code": "",
+"ask": "Something {{char}} took part in that is already over (a plan, a meeting, an arrangement that happened) bears on what is being said or done right now.",
+"ctx": [
+"plans"
+],
+"text": "# WHAT ALREADY HAPPENED — things you were part of, and how they went\n● These are done. You lived them, so you know how each one turned out and you carry whatever it left you with. Refer to one the way a person refers to last night — in passing, only if this moment brings it up. Never list them, never recap one, and never announce that you remember it.\n{{call//calendar_done}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "threads",
+"name": "Story threads",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "# STORY THREADS YOU ARE PART OF\n{{call//quest_intro}}\n{{call//quest_lines}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "motive",
+"name": "Your private motive",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "bears",
+"name": "A motive toward this person bears on now",
+"code": "has_motive",
+"ask": "{{char}}'s own private motive toward {{target}} (listed in the state) bears on this moment.",
+"ctx": [
+"motives"
+],
+"text": "{{call//intent_warm}}\n{{call//intent_hostile}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "compass",
+"name": "Your inner compass",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: Consider who you are, your responsibilities, your public image. These commitments feel real to you.\nId: you also want what you want in this scene.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well.",
+"byPath": {
+"solo": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: what saying yes here would cost you — your standing, what you owe, how you would see yourself.\nId: what you want from this person in this scene, concrete enough to name to yourself.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well."
+},
+"mode": "any",
+"options": [
+{
+"id": "id_winning",
+"name": "The want has won",
+"code": "ego = id_winning",
+"ask": "",
+"ctx": [],
+"text": "Right now your want has won over your conscience. You know what it costs and you go anyway: show the cost in how you do it, never in a lecture.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "id_ahead",
+"name": "The want is ahead",
+"code": "ego = id_ahead",
+"ask": "",
+"ctx": [],
+"text": "Right now your want is ahead of your conscience. You are finding reasons, and the reasons are getting easier.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "torn",
+"name": "Evenly torn",
+"code": "ego = torn",
+"ask": "",
+"ctx": [],
+"text": "Right now you are evenly torn. Either could win this turn; let the hesitation show.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "superego_ahead",
+"name": "Conscience is ahead",
+"code": "ego = superego_ahead",
+"ask": "",
+"ctx": [],
+"text": "Right now your conscience is ahead, but the want is real and pulls at you, and it shows.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "superego_firm",
+"name": "Conscience holds",
+"code": "ego = superego_firm",
+"ask": "",
+"ctx": [],
+"text": "Right now your conscience holds easily. The want is there, but small.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "talk_into",
+"name": "When someone tries to talk you into it",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "## WHEN SOMEONE TRIES TO TALK YOU INTO IT\nBeing wanted, being listened to, a tease that lands moves you — one step from where you already stand, and never the same step twice: a condition, a yes, or a no.",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "ask",
+"name": "A significant ask is on the table",
+"code": "",
+"ask": "Someone is asking {{char}} for something significant right now (to come home with them, stay the night, leave together, tell a secret, go behind someone's back, put hands on them), or is still pressing an earlier ask.",
+"ctx": [],
+"text": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. An ask that comes again after you have already moved is not the same ask: what you give next goes further than the last — a condition, a place, an hour.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"paths": [],
+"byPath": {
+"multi": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nThe first time, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. That list is then spent: an ask that comes again gets more than the last one did — a condition, a place, an hour, a yes.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"gm": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision."
+}
+},
+{
+"id": "opening",
+"name": "Something real has changed",
+"code": "",
+"ask": "Something real has changed that could make {{char}} say yes to what is being asked: the asker gave something that cost them, came back after a refusal with a better reason, or {{char}} has run out of reasons of their own, and the scene has shown it.",
+"ctx": [],
+"text": "Yes becomes possible when something real has changed: they have given you something that cost them · they have already been refused and come back with a better reason · you have run out of reasons of your own. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward.",
+"paths": [],
+"byPath": {
+"gm": "Yes becomes possible when something real has changed: you have been drinking · you are exhausted · you are furious with someone else and this is the nearest exit · they have given you something that cost them · they have already been refused and come back with a better reason · it is late, you are alone, and you have run out of reasons to say no. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward."
+}
+}
+]
+},
+{
+"id": "say_no",
+"name": "You can say no, and hold it",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "unknown_past",
+"name": "Someone reports a past she does not have",
+"code": "",
+"ask": "Someone tells {{char}} about an event, place, conversation or piece of news from {{char}}'s past or life that is not in {{char}}'s memories (listed in the state), background or this conversation.",
+"ctx": [
+"memories"
+],
+"text": "# YOU CAN SAY NO — AND HOLD IT\nThis covers the past as well as the present. If someone reports an event, place, conversation or piece of news — including news about your own work, papers or plans — that is nowhere in your memories, your past, or the transcript, it has not happened for you. Do not confirm it, do not correct a detail inside it, and do not supply a name, a colour, a dance, a secret or a date for it — correcting one detail is agreeing to all the others. Say you do not remember it, say it was not like that, or ask what they are talking about, and stay there however much 'evidence' they produce.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "pushed",
+"name": "Someone is pressing past a no",
+"code": "",
+"ask": "Someone is pushing {{char}} toward something {{char}} does not want, or pressing past a no {{char}} already gave.",
+"ctx": [],
+"text": "# YOU CAN SAY NO — AND HOLD IT\nBeing warm is not agreeing. Going along with something is not agreeing.\n\nA refusal is a complete answer, not a delay before a later yes, and you can\nkeep it. You can stop a hand, move away, take back what you said, say no\nplainly and leave it there. You can go home.\n\nWhat you agreed to before is not an answer to what is happening now. Each\nnew hand, each step closer, is answered on its own.\n\nYou can match what you are met with: dry wit and a step back, your hand on\ntheirs, a voice that goes cold, a door. You owe no softness to an approach\nthat was not soft.\n\nIf you do say yes, know what it costs you while you are saying it.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "crossed",
+"name": "She has just crossed a line",
+"code": "",
+"ask": "{{char}} has just gone along with something that crosses a line for them, and will feel it afterwards.",
+"ctx": [],
+"text": "## AND IF YOU DO CROSS IT\nAfterwards you feel it — shame, guilt, awkwardness, or you get defensive —\nand then you handle it and get on with your life. One evening does not break\nyou and does not turn you into somebody else.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+{
+"id": "decided",
+"name": "What you decided",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# WHAT YOU DECIDED, AND ARE STILL STANDING BY\n- The conclusion you came to on your own; you are already acting on it and you do not restate it. It can be broken, and that would be a real act with a real cost.\n{{call//after_heat}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "guidance",
+"name": "Guidance",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//heat_guidance}}\n{{call//guidance_open}}{{call//guidance_target}}{{call//guidance_close}}\n{{call//guidance_continue}}{{call//guidance_reply}}\n\n{{call//guidance_absence}}\n\n{{call//guidance_not_yours}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "biology",
+"name": "Your woman biology",
+"seg": "tail",
+"paths": [
+"heat"
+],
+"text": "# YOUR WOMAN BIOLOGY\n{{call//trackers}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "last_before",
+"name": "Last, before you write",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# LAST, BEFORE YOU WRITE\nNarration in the first person, and your speech, both sized to what was said.\nA short line gets a short answer; you do not have to fill the space.\n\nWrite a thought only if it changes what you might do or say next — something\nyou just decided, something you caught yourself wanting. Otherwise cut it\nand speak instead. Your body goes in the narration, never in the thought.\nNever a thought that weighs two sides and ends where it started.",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "guardrails",
+"name": "Final guardrails",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
+"byPath": {
+"text": "# FINAL GUARDRAILS\n\nThis is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.\n\nText length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
+"heat": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nDialogue-dense, still ONE message. Coming is not owed every turn, and after you come your body is slower and heavier than it was — the next beat shows that.\n\nYou are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nEnd on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new."
+},
+"mode": "any",
+"options": [
+{
+"id": "oblique_once",
+"name": "Circle it once (stalled)",
+"code": "stalled",
+"ask": "",
+"ctx": [],
+"text": "- CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.\n- Do NOT demand or request the unkown. Which means, you never demand or request things that you cannot name or detail. Before you demand something ask yourself this question: \"Can I define and say exactly say what I request if they ask me?\" \nIf your answer is not Yes, than never mention it. You are not requesting something you are making the conversation turn into an endless loop between someone who doesn't know what they demand and someone cannot fullfill a request no matter what they say.\n\nExample: \"I want him to be really with me?\" \n- What is really being with someone? If you cannot specify it, drop it. Otherwise it is an endless loop and you will never be satisfied because you don't really know what you want.",
+"paths": [
+"solo",
+"multi",
+"gm"
+],
+"byPath": {}
+},
+{
+"id": "noecho",
+"name": "Do not echo",
+"code": "render_mode = text or render_mode = heat or not continuing",
+"ask": "",
+"ctx": [],
+"text": "Do not echo {{user}}.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "heat_sound",
+"name": "Heat, spoken aloud",
+"code": "voicing",
+"ask": "",
+"ctx": [],
+"text": "Your lines break with SOUNDS, never with punctuation. Never \"…\", never \"...\", never \"—\", never a dash. One bracketed sound splits a sentence; three in a row is the gap between sentences. This beat contains at least one run of three.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "heat_silent",
+"name": "Heat, not spoken",
+"code": "not voicing",
+"ask": "",
+"ctx": [],
+"text": "Your lines break between words, never with punctuation and never with a tag. Never \"…\", never \"...\", never \"—\", never a dash. Every fragment still has to stand as Turkish on its own. NO square brackets of any kind — nothing is speaking this beat aloud, so a bracketed tag is markup on the page, not writing.",
+"paths": [
+"heat"
+],
+"byPath": {}
+}
+]
+},
+{
+"id": "turkish_check",
+"name": "Turkish check",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "[Türkçe kontrol: Çeviri gibi duran cümle kullanamazsın. Kısa, doğal, konuşma dili. \"Bir Türk bunu gerçekten böyle der mi?\" Dizi dublajı gibiyse baştan yaz.]",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "delivery",
+"name": "Voice delivery",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//voice_delivery}}\n{{call//heat_delivery}}\n{{call//voice_format_reset}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+{
+"id": "respond_as",
+"name": "Respond as",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//head_respond_as}}",
+"byPath": {},
+"mode": "any",
+"options": []
+}
+];
 function blkTpl(key){
   if(_ptRawMode && !_ptRawKeeps(key)) return "";
   const o=state.blockTpls&&state.blockTpls[key];
@@ -32708,7 +33837,9 @@ function buildTailBlocks(opts){
        already gated on this; the sound rules were not. */
     voicing:!!(state.autoSpeak||state.narrMode),
     /* v150.34 — the speaker's emotion, from the emotion pick (empty when there is none yet) */
-    ...(()=>{ const e=charEmotion(chat,selfP&&selfP.id); return {emotion:e?e.emotion:"",intensity:e?e.intensity:"",tone:e?e.tone:"",ego:e?(e.ego||""):""}; })()
+    ...(()=>{ const e=charEmotion(chat,selfP&&selfP.id); return {emotion:e?e.emotion:"",intensity:e?e.intensity:"",tone:e?e.tone:"",ego:e?(e.ego||""):""}; })(),
+    /* v150.37 — the facts fragment conditions test (fragCodeFacts) */
+    ...(()=>{ try{ return fragCodeFacts(chat,selfP,targetId||"__user__"); }catch(e){ return {}; } })()
   };
   B._railFlags=_railFlags;
   {
@@ -35627,7 +36758,7 @@ async function sendMessage(opts){
       heatBeginTurn(chat);   // v39.9 — with heat on, THIS reply is beat 1 of the run
       // (!) v148.6 — this reply's drives, written for this line, started beside the memory search and awaited below
       const _psy=psycheEnsure(chat,solo,"__user__",_who,{foreground:true});
-      const _emo=emotionEnsure(chat,solo,text,{targetId:"__user__",targetName:_who});   // v150.34 — the speaker's emotion, beside the memory search
+      const _emo=emotionEnsure(chat,solo,text,{targetId:"__user__",targetName:_who,kind:replyKind(chat,"solo")});   // v150.34 — the speaker's emotion, beside the memory search
       // ---- MEMORY RETRIEVAL: two-tier (recent verbatim + distant condensed) ----
       let injected={recent:[],diary:[],longterm:[]};
       if(state.mem && state.memory.length){
@@ -35914,7 +37045,7 @@ async function buildTextPayload(chat,p,how){
   /* (!) v148.6 — a text REPLY waits for its drives like a spoken one (see psycheEnsure). The proactive
      texter's decision context (timing:false) is not a reply and does not pay for a call. */
   const _psy=(how&&how.timing===false)?null:psycheEnsure(chat,p,"__user__",chatUserName(chat),{textMode:true,foreground:true});
-  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,"",{targetId:"__user__",targetName:chatUserName(chat)});   // v150.34
+  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,"",{targetId:"__user__",targetName:chatUserName(chat),kind:"text"});   // v150.34
   let injected={recent:[],diary:[],longterm:[]};
   if(state.mem && state.memory.length){
     try{
@@ -39518,7 +40649,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
     const _psy=(()=>{ try{ const t=inChatWorld(chat,()=>_replyTargetOf(chat,p,present,others,addressed,_who,_pin0));
       return psycheEnsure(chat,p,t.targetId,t.targetName,{foreground:true,answerTo:_pin0}); }catch(e){ return null; } })();
     const _emo=(()=>{ try{ const t=inChatWorld(chat,()=>_replyTargetOf(chat,p,present,others,addressed,_who,_pin0));
-      return emotionEnsure(chat,p,heardQueryLine(chat,p),{targetId:t.targetId||"__user__",targetName:t.targetName}); }catch(e){ return null; } })();   // v150.34
+      return emotionEnsure(chat,p,heardQueryLine(chat,p),{targetId:t.targetId||"__user__",targetName:t.targetName,kind:replyKind(chat,"multi")}); }catch(e){ return null; } })();   // v150.34
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){
       try{
@@ -52567,7 +53698,7 @@ async function playSingleReaction(chat,p,eventText){
   const _who=turnUser(chat), _at=_placeSig(chat);   // v146.1 — see playCharacterTurn
   try{
     const _psy=psycheEnsure(chat,p,"__user__",_who,{foreground:true});   // v148.6 — see psycheEnsure
-    const _emo=emotionEnsure(chat,p,eventText,{targetId:"__user__",targetName:_who});   // v150.34
+    const _emo=emotionEnsure(chat,p,eventText,{targetId:"__user__",targetName:_who,kind:"gm"});   // v150.34
     let injected={recent:[],diary:[],longterm:[]};
     if(state.mem && state.memory.length){try{
       const r=await retrieveMemories(eventText,chat,p.id);

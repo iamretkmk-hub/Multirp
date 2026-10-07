@@ -105,8 +105,9 @@ const {chromium}=require('playwright');
   ok("a failure keeps the last pick", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u9",role:"user",content:"?",speaker:"Emre"}); window.__mode="500"; _emoBreak.until=0; _emoBreak.fails=0;
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"?"); window.__mode="ok"; _emoBreak.fails=0;
       return c.emo.p_b&&c.emo.p_b.emotion==="Anger" ? true : JSON.stringify(c.emo.p_b); }));
-  ok("off: nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10",role:"user",content:"!",speaker:"Emre"}); state.emoOn=false; window.__reqs=[];
-      await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!"); state.emoOn=true; return window.__reqs.length===0 ? true : "sent"; }));
+  // v150.38 — spoken limits ride in the same request, so they are switched off here too
+  ok("off (and spoken limits off): nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10",role:"user",content:"!",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
+      await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!"); state.emoOn=true; state.limitsOn=true; return window.__reqs.length===0 ? true : "sent"; }));
   ok("no key: nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u11",role:"user",content:"!!",speaker:"Emre"}); state.key=""; window.__reqs=[];
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!!"); state.key="sk-test"; return window.__reqs.length===0 ? true : "sent"; }));
 

@@ -112,6 +112,7 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Rolling recap (calls) | `recapModel` | → `memModel` |
 | Gossip & offstage intent | `gossipModel` | → `memModel` |
 | Embeddings | `embedModel` | → `openai/text-embedding-3-small` |
+| Memory relevance judge (Decisions API, v150.29) | `memJudgeModel` | → `openai/gpt-6-luna-decisions` |
 | Gamemaster / Scene Writer / judges | `gmModel` | — |
 | Character generator & background tasks | `bioModel` | — |
 | Authoring model (universe gen, director notes, genre packs, prompt tuner) | `authorModel` | — |
@@ -119,6 +120,12 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Voice calls | `callModel` | — |
 | STT fixer | `sttFixModel` | → `callModel` |
 | Tracker with its own model | `tracker.model` | → `memModel` |
+
+**The Decisions API** (v150.29) is the one text-model call that does not go through `chatCompletion`:
+it is not a chat completion. `memRelevanceJudge` posts `{model, state, questions}` to
+`https://openrouter.ai/api/alpha/decisions` with the OpenRouter key and reads `answers.<name>.noul` (a
+probability) back. Output is free; input is billed. It has its own timeout, failure pauses and Debug row
+(doc 07, "The relevance judge"). The path is `alpha`, so its parsing lives in that one function.
 
 **Model rotation** (`rpRotation`, comma-separated): each roleplay reply uses the next model in
 the list, cycling; index persists (`sm_rprotidx`). Rotation picks only the *primary* model —

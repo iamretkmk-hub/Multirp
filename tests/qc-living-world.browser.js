@@ -370,10 +370,14 @@ const {chromium}=require('playwright');
       /* the schedule alone decides here: who is with the player, who was left behind and who travels along all
          override it, and earlier steps in this file (or their background engines on a slow runner) can leave them set */
       c.presentIds=[]; c.leftBehind=null; c.companionLock={};
+      /* and the dice are pinned: home always keeps a floor weight of 1 (placementWeights), so a Morning row of
+         {l_gym:50} still sends her home 1 roll in 51 — that is the CI failure this check kept producing */
+      const _rnd=Math.random; Math.random=()=>0.5;
       const m=resolveWorldPositions(c).p_a;
       c.period="Night"; const n=resolveWorldPositions(c).p_a;
       c.period="Night"; c.presentIds=["p_a"]; c.locationId="l_cafe"; c.period="Evening";
       const kept=resolveWorldPositions(c).p_a;                      // with the player: stays with the player
+      Math.random=_rnd;
       return (m==="l_gym"&&n==="l_home"&&kept==="l_cafe") ? true : [m,n,kept].join(" / ")+" | "+JSON.stringify({lb:c.leftBehind,lock:c.companionLock,loc:c.locationId}); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

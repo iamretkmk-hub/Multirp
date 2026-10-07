@@ -329,6 +329,12 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **A goal already done** (v150.50, `goalDoneQuestions` / `goalDoneApply`, switch `goalCheckOn`): the maintained
+  goals (`goalsLive`) are rewritten once a day, so a goal the scene had just settled was still pushed at the
+  character. When the reply's Decisions request goes anyway (it never sends one of its own), each live goal (at
+  most five) is a yes/no (`x_goal_done`) with the goals in the state as `their_goals`. A yes at `gateAt()` adds it
+  to `goalsLive.done`, which `liveGoalsLines` filters out until the curator writes a new list. Pinned by
+  `tests/goal-done.browser.js`.
 - **Repetition and continuity** (v150.49): two more questions in the same request. `repeat`
   (`x_reply_check_repeat`) asks whether the reply makes a point, deflection, excuse or gesture the character
   already made in this scene, or the same sound twice. `continuity` (`x_reply_check_continuity`) asks whether

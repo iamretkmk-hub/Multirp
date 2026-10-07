@@ -16,6 +16,7 @@ const {chromium}=require('playwright');
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
+  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(900);
 
   await pg.evaluate(()=>{

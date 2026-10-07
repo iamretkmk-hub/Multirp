@@ -7,6 +7,7 @@ const {chromium}=require('playwright');
   pg.on('pageerror',e=>errs.push('PAGEERROR: '+e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
   await pg.waitForTimeout(2500);
+  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
 
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+(x?"\n        "+String(x).slice(0,400):""));} };

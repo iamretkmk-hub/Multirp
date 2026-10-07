@@ -102,7 +102,8 @@ const {chromium}=require('playwright');
   ok("the image model is told that last picture is the current scene to edit",
      /Figure 3 is not a person: it is the current scene — edit it/.test(B.prompt) && B.prompt.indexOf("Figure 3 is not a person")<B.prompt.indexOf("the man in IMAGE 1 leans"), B.prompt.slice(0,700));
   ok("the writer gets the edit brief", /EDITING THE CURRENT SCENE/.test(B.usr)&&/Write only what has to CHANGE/.test(B.usr), B.usr.slice(0,600));
-  ok("no clothes are injected", !/cashmere/.test(B.usr)&&!/WHAT THEY ARE WEARING/.test(B.usr)&&!/WARDROBE/.test(B.usr), B.usr.slice(0,900));
+  // (!) v150.51 — the clothes ARE stated on an edit: told "the picture carries them", the writer wrote "her current clothing"
+  ok("the clothes are still named, as decided garments, never a menu", /cashmere crewneck/.test(B.usr)&&!/WARDROBE/.test(B.usr)&&/The CLOTHES are the exception/.test(B.usr), B.usr.slice(0,900));
   ok("no location is injected", !/WHERE THIS FRAME HAPPENS/.test(B.usr)&&!/chalkboard/.test(B.usr), B.usr.slice(0,900));
   ok("and no old prompt as a continuity reference — the picture is the continuity", !/CONTINUITY REFERENCE/.test(B.usr)&&!/No previous image/.test(B.usr), B.usr.slice(0,900));
   ok("the message records what it edited", B.chain&&B.chain.from===A.mid&&B.chain.mode==="edit", JSON.stringify(B.chain));
@@ -119,7 +120,7 @@ const {chromium}=require('playwright');
   ok("the image model is told to keep the people and their clothes and replace the background",
      /it is the previous scene\. Keep the people in it and exactly the clothes they wear, and replace the whole background/.test(D.prompt), D.prompt.slice(0,500));
   ok("the writer gets the move brief with the new area described, once", /THE PEOPLE HAVE MOVED TO ANOTHER AREA/.test(D.usr)&&/striped awning/.test(D.usr)&&/Outdoor Patio/.test(D.usr), D.usr.slice(0,900));
-  ok("and still no clothes", !/cashmere/.test(D.usr)&&!/WHAT THEY ARE WEARING/.test(D.usr), D.usr.slice(0,900));
+  ok("and the clothes are still named (v150.51)", /cashmere crewneck/.test(D.usr)&&/SAY what they are/.test(D.usr), D.usr.slice(0,900));
   ok("recorded as a move", D.chain&&D.chain.mode==="move", JSON.stringify(D.chain));
   const E=await draw("*Sami sits down under the awning.*");
   ok("the next picture on the patio is a plain edit again, with no area description", E.chain&&E.chain.mode==="edit"&&!/striped awning/.test(E.usr)&&!/MOVED TO ANOTHER AREA/.test(E.usr), E.usr.slice(0,600));
@@ -148,7 +149,7 @@ const {chromium}=require('playwright');
   ok("and it is a base frame: both are dressed, the place is described", /coral-pink cardigan/.test(N.usr)&&/cashmere/.test(N.usr)&&/WHERE THIS FRAME HAPPENS/.test(N.usr), N.usr.slice(0,1400));
   const N2=await draw("*Burcu sits down.*",{who:"Burcu",id:"p_burcu"});
   ok("the same two again: the chain picks up from that picture", N2.chain&&N2.chain.from===N.mid&&N2.images[N2.images.length-1]==="https://out/"+(await pg.evaluate(()=>window.__n-1))+".png", JSON.stringify(N2.images));
-  ok("and nobody's clothes are described", !/coral-pink/.test(N2.usr)&&!/cashmere/.test(N2.usr)&&/WHAT EACH PERSON IN THE FRAME IS DOING/.test(N2.usr), N2.usr.slice(0,1400));
+  ok("and everyone's garments are named again, each on their own person (v150.51)", /coral-pink/.test(N2.usr)&&/cashmere/.test(N2.usr)&&/WHAT EACH PERSON IN THE FRAME IS DOING/.test(N2.usr)&&/name each person's garments with their colours, every frame/.test(N2.usr), N2.usr.slice(0,1400));
   // Burcu leaves: a presence note naming the exit, and the scene's cast is Sami alone
   await pg.evaluate(()=>{ const c=curChat(); c.messages.push({mid:"pn"+c.messages.length,role:"assistant",speaker:"Narrator",presenceNote:true,exitedIds:["p_burcu"],content:"— Burcu has left —"}); });
   await at({loc:"L_cafe",sub:"c1",day:2,present:["p_sami"]});
@@ -178,6 +179,10 @@ const {chromium}=require('playwright');
   ok("the four prompts are registry prompts on the image writer's card", await pg.evaluate(()=>
      ["x_img_edit_scene","x_img_edit_move","x_img_edit_roster_scene","x_img_edit_roster_move"].every(k=>!!PROMPT_BY_KEY[k]&&!!K[k]
        &&ENGINE_PAYLOAD_DEFS.some(d=>(d.blocks||[]).some(x=>x.promptKey===k)))));
+  ok("(v150.51) the frame guide forbids 'current clothing', and an old stored copy picks it up", await pg.evaluate(()=>{
+      const d=DEFAULT_IMG_FRAME_GUIDE, stale=(window.__stalePipes||[]).join(" | ");
+      return (/NAME EVERY GARMENT, EVERY FRAME/.test(d)&&/"her current clothing"/.test(d)&&/the garments as they are NOW/.test(d)&&!/imgFrameGuide/.test(stale)
+        &&/write each person's garments out with their colours/.test(X_ENGINE_PROMPTS.x_img_edit_scene.def)&&/SAY what they are/.test(X_ENGINE_PROMPTS.x_img_edit_move.def))?true:stale||"wording"; }));
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n  "+pass+" passed, "+fail+" failed");
   await b.close();

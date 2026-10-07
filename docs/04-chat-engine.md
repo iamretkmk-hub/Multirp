@@ -329,6 +329,11 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **The clock follows the scene** (v150.53, `clockFollowOn`): time used to move only by travel, Story mode or by hand.
+  The reply check's request carries `time_moved` (`x_clock_moved`), with `story_clock` in the state. A yes at
+  `CLOCK_AT` (0.85) calls `advanceTime(chat, 1)`, which runs the period engines as usual, and adds a short note.
+  It moves at most once in `CLOCK_GAP` (6) turns and never past Night (End Day ends the day). Pinned by
+  `tests/clock-follows.browser.js`.
 - **A goal already done** (v150.50, `goalDoneQuestions` / `goalDoneApply`, switch `goalCheckOn`): the maintained
   goals (`goalsLive`) are rewritten once a day, so a goal the scene had just settled was still pushed at the
   character. When the reply's Decisions request goes anyway (it never sends one of its own), each live goal (at
@@ -369,6 +374,22 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   - The player memory files only threads that are new (`_playerNewOpen`). Re-listing old ones re-dated
     them, so they never aged out.
   - The familiarity reading says "little that X does surprises them".
+- **Fixes from a live export (v150.52):**
+  - `parseJSON` drops a stray closing brace that is followed by another `"key":`. Before, `{"event":…},"note":…`
+    kept only `event`.
+  - A quest or goal step with no memory of its own plants its English `note`. It never plants the narrated
+    `event`, which is in the story language and the third person.
+  - `_memJudgeScene` compares the player's line as the lines are written, so it no longer goes in twice.
+  - `_withPlayerIn(chat, id, period)`: the period engines run after the player has travelled on. Someone the
+    player left behind in that same stretch counts as having been with them. `runCharQuestPursuit` and
+    `runGoalPursuit` skip them, and the quest step runs once per holder per run.
+  - The period reconcile's token room grows with its fragments: `300 + 110 × n`, capped at 6000.
+  - The debug export holds the last 120 entries (from a log of 200), with answers up to 12000 characters.
+  - (v150.54) The world pulse drops a companion already booked on the calendar for that day and part of the day.
+  - (v150.54) A confrontation about someone else (c2c) opens at conviction 0.75 at most, not 0.9. Its memory
+    reads "I went to {player} about {them}…", not "I confronted", with importance 0.65 at most. Its aim is
+    clipped at a sentence (`clipAtSentence`), never mid-word.
+  - Pinned by `tests/export-fixes-1552.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

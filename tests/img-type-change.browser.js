@@ -79,8 +79,8 @@ const {chromium}=require('playwright');
   await draw({rule:"r_doggy",line:"*Dizlerimin üzerine çöküyorum.*",out:"the woman in IMAGE 1 on all fours, fully naked"});
   const E=await draw({rule:"r_miss",line:"*Sırt üstü dönüyorum.*",out:"restage"});
   ok("the previous picture is still sent last", E.images[E.images.length-1]&&/^https:\/\/out\//.test(E.images[E.images.length-1]), JSON.stringify(E.images));
-  ok("the writer is told the scene has changed, to restage, and that the picture carries the clothing",
-     /THE SCENE HAS CHANGED — from "Doggy" to "Missionary"/.test(E.usr)&&/current scene picture shows it/.test(E.usr)&&/Write them fresh/.test(E.usr), E.usr.slice(0,1200));
+  ok("the writer is told the scene has changed, to restage, and to write the clothing out (v150.51: never 'the same clothing')",
+     /THE SCENE HAS CHANGED — from "Doggy" to "Missionary"/.test(E.usr)&&/written out garment by garment with colours/.test(E.usr)&&/Write them fresh/.test(E.usr), E.usr.slice(0,1200));
 
   console.log("\n[the clothing filter]");
   const F=await pg.evaluate(()=>_imgClothingClauses("woman on top, riding him, fully naked, black lace bra pushed up, on all fours, white shirt unbuttoned, hands on his chest, close-up from below"));

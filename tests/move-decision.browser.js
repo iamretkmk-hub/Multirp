@@ -121,6 +121,25 @@ const {chromium}=require('playwright');
       window.chatCompletion=realCC; window.playGamemasterBeat=realB; state.gmOn=false; state.gmDecOn=true;
       return event===1?true:"events "+event; }));
 
+  // v150.53 — the player moves too
+  console.log("\n[the player]");
+  const PL=await pg.evaluate(async()=>{ const c=__setup(); const keep=window.__ans;
+    window.__ans=body=>{ const out=keep(body); const q=body.questions.player_area; if(q){ const k=Object.keys(q.criteria).find(x=>/^Garden/.test(q.criteria[x])); const pr={stay:0.1}; pr[k]=0.9; out.player_area={type:"choice",choice:k,probabilities:pr}; } return out; };
+    __plan={Ayla:{to:"Garden",p:0.9,why:"someone"}};
+    const r=await maybeMoveDecision(c); window.__ans=keep; const q=(__reqs[0]||{questions:{}}).questions.player_area;
+    const note=c.messages.filter(m=>m.presenceNote).map(m=>m.content+"|"+(m.subTo||"")).join(" // ");
+    return {r,q:q&&{ins:q.instructions,crit:q.criteria},sub:c.subId,self:c.subSelf,ayla:c.subPos.p_a,note}; });
+  ok("one more pick in the same request: does the player go to another area (stay, or each area with who is there)",
+     !!PL.q&&/Emre is in the Living Room of Duygu's House/.test(PL.q.ins)&&/let's go down to the sand/.test(PL.q.ins)&&/^Emre stays where they are/.test(PL.q.crit.stay)&&Object.keys(PL.q.crit).length===3, JSON.stringify(PL.q));
+  ok("a yes at the bar moves the player, and whoever was picked for the same area goes with them in the player's own note",
+     PL.r===true&&PL.sub==="s_gar"&&PL.self===true&&PL.ayla==="s_gar"&&/\|s_gar/.test(PL.note), JSON.stringify(PL));
+  ok("not asked when the player already changed area this turn", await pg.evaluate(async()=>{ const c=__setup();
+      c.messages.push({mid:"n1",role:"assistant",speaker:"Narrator",presenceNote:true,subTo:"s_kit",content:"Emre goes to the Kitchen."});
+      await maybeMoveDecision(c); const q=(__reqs[0]||{questions:{}}).questions; return !q.player_area?true:"asked"; }));
+  ok("below the bar the player stays", await pg.evaluate(async()=>{ const c=__setup(); const keep=window.__ans;
+      window.__ans=body=>{ const out=keep(body); const q=body.questions.player_area; if(q){ const k=Object.keys(q.criteria).find(x=>x!=="stay"); const pr={stay:0.4}; pr[k]=0.6; out.player_area={type:"choice",choice:k,probabilities:pr}; } return out; };
+      await maybeMoveDecision(c); window.__ans=keep; return c.subId==="s_liv"?true:c.subId; }));
+
   // v150.47 — the move note never holds the turn
   ok("the move narration has its own ceiling (45 s, one retry, 30 s rescue)", await pg.evaluate(async()=>{ const c=__setup(); __plan={Berk:{to:"Living Room",p:0.9}};
       const realCC=window.chatCompletion; let seen=null; window.chatCompletion=async(m,mo,o)=>{ if(/^Character move/.test((o&&o.dbg)||""))seen=o; return realCC(m,mo,o); };

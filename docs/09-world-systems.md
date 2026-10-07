@@ -35,11 +35,33 @@ Generators: single (`generateBioIntoEditor`, `bioPrompt` — world block + exist
 context so the model *updates* rather than reinvents), batch (`generateBatchCharacters`,
 `batchBioPrompt` — mutually-related set), appearance (`generateAppearance`), portrait
 (`generateProfilePic`), schedule (`generateSchedule`), relationships
-(`generateRelationshipsFor`). Auto-characters: the GM/events can mint `temp` cards
+(`generateRelationshipsFor`), speaking styles (`writeStyleSet`, v150.40). Auto-characters: the GM/events can mint `temp` cards
 (`ensureTempChar`); with `autoCharOn` they're added immediately and `fillPendingBios` writes
 the bio after `autoCharDelay` witnessed messages. `/remove` = soft-delete (`removed`;
 `isActiveChar` false everywhere); hard `deletePersona` exists in the editor but the soft path
 is the safe one mid-campaign.
+
+**v150.40 — the generator writes what the reply reads.**
+
+The speaking styles writer (`x_style_writer`, on the Character Generator card) writes a character's style
+from their card:
+- one per path: multi, gamemaster reaction, text, heat;
+- one per emotion in Settings → Emotions (scaled from mild to intense by the list's tones);
+- heat-specific ones for the emotions that change in the heat of the moment, at least Desire.
+
+They land as `p.styleBy` / `p.styleEmoBy` (`all` and `heat`), the shape `buildTailBlocks` reads since
+v150.37. The writer runs:
+- after "Create with AI" for one character, from the card just written, into the editor;
+- in the background for each character a batch makes (`writeStylesForNew`). It skips anyone who
+  already has styles;
+- from the speaking-styles section's **Write with AI** (`peStyleWriteAI`). What it writes replaces
+  those boxes, and the rest are kept.
+
+The batch prompt now returns `ties` (`name`, `tie`, `relationship`, `always`) instead of a
+social-graph paragraph. `batchTiesApply` turns them into structured relationships keyed by the new
+ids, resolving names in this order: the batch itself, then the rest of the world, then the player.
+`always` becomes the "Always include" pin. A card that got ties has no social-graph seed. A stored
+copy of the old shipped batch prompt is refreshed. Pinned by `tests/char-generator-styles.browser.js`.
 
 The **character page** (`openCharacterPage`) is a per-character hub: profile + everything
 bound to them (media, diaries, memories, relationships, quests).

@@ -218,6 +218,9 @@ const {chromium}=require('playwright');
       localStorage.removeItem(K.memJudgeOn); localStorage.removeItem(K.memJudgeMin); localStorage.removeItem(K.memJudgeModel);
       loadState(); const s=state; return (s.memJudgeOn===true&&s.memJudgeMin===0.15&&s.memJudgeModel==="") ? true : JSON.stringify([s.memJudgeOn,s.memJudgeMin,s.memJudgeModel]); }));
 
+  ok("(v150.48) the judge reads the memory as written, with who and where, not its search keys", await pg.evaluate(()=>{
+      const t=_memJudgeText({content:"Nil invited me to dinner.",people:["Nil Özlem"],details:["kitchen"],tags:["dinner","invitation","nil"],location:"Nil's flat"});
+      return t==="Nil invited me to dinner. (with Nil Özlem) · at Nil's flat"?true:t; }));
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close();

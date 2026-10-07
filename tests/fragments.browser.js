@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("thirty-eight fragments, every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===38&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("thirty-nine fragments (v150.48: + the spoken limits), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===39&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties");
       return /^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(f.text)&&/\{\{call\/\/relationships\}\}$/.test(f.text) ? true : f.text; }));
   ok("heat has the language and 'talk you into it'; others present is not on heat", await pg.evaluate(()=>{ const g=id=>FRAG_DEFAULTS.find(x=>x.id===id);
@@ -35,10 +35,23 @@ const {chromium}=require('playwright');
   ok("the guardrails are a fragment: shared body, text and heat variants, coded options; empty and 'never' rails gone", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="guardrails");
       const ids=f.options.map(o=>o.id).join();
       return (/^# FINAL GUARDRAILS/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!/\{\{if/.test(JSON.stringify(f))&&/typed message/.test(f.byPath.text)&&/Dialogue-dense/.test(f.byPath.heat)
-        &&ids==="oblique_once,noecho,heat_sound,heat_silent"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; }));
+        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);
       return (f.options.length===3&&o("unknown_past").ctx.join()==="memories"&&/not in \{\{char\}\}'s memories/.test(o("unknown_past").ask)&&/Being warm is not agreeing/.test(o("pushed").text)&&/AND IF YOU DO CROSS IT/.test(o("crossed").text)) ? true : JSON.stringify(f.options.map(x=>x.id)); }));
+
+  /* v150.48 — the spoken limits were judged on every reply and never reached it under the fragment model. */
+  ok("the spoken limits are a shipped fragment, before the guidance, on every path", await pg.evaluate(()=>{ const ids=FRAG_DEFAULTS.map(f=>f.id), f=FRAG_DEFAULTS.find(x=>x.id==="limits");
+      return (f&&f.text==="{{call//limits//full}}"&&f.seg==="tail"&&f.paths.length===5&&ids.indexOf("limits")===ids.indexOf("guidance")-1)?true:JSON.stringify(f); }));
+  ok("a list saved before them gets the limits and the consistency option once; deleting them afterwards sticks", await pg.evaluate(()=>{
+      const old=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="limits"); old.find(f=>f.id==="guardrails").options=old.find(f=>f.id==="guardrails").options.filter(o=>o.id!=="consistency");
+      store.setRaw(K.fragAdds,""); state.fragments=old;
+      const L=fragList(), ids=L.map(f=>f.id), got=ids.indexOf("limits")===ids.indexOf("guidance")-1&&L.find(f=>f.id==="guardrails").options.some(o=>o.id==="consistency");
+      const stored=JSON.parse(store.raw(K.fragments,"[]")).some(f=>f.id==="limits");
+      const mine=JSON.parse(JSON.stringify(L)).filter(f=>f.id!=="limits"); state.fragments=mine; const again=fragList().some(f=>f.id==="limits");
+      state.fragments=null; store.setRaw(K.fragments,"");
+      return (got&&stored&&!again&&/limits/.test(store.raw(K.fragAdds,"")))?true:JSON.stringify({got,stored,again}); }));
+  ok("the compiled layout calls the limits", await pg.evaluate(()=>/\{\{call\/\/limits\/\/full\}\}/.test(fragCompile("solo",ptCondFlags({}),{}))?true:"missing"));
 
   console.log("\n[compile]");
   const base=await C("solo",{render_mode:"solo"},{});

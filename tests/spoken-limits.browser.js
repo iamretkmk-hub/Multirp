@@ -156,9 +156,11 @@ const USER_TPL=`[system]
     const pm=ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[];
     ptSetTemplate("solo","[user]\n"+ptPieceTemplate("drives","solo")+"\n[user end]");
     const piece=((ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[])[0]||{}).content||"";
+    ptSetTemplate("solo",""); const _fo=state.fragOn; state.fragOn=true;   // v150.48 — and under the fragment model
+    const frag=(ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[]).map(m=>m.content).join("\n"); state.fragOn=_fo;
     return {req:req&&{qk:Object.keys(req.questions),crit:Object.keys(req.questions.limit_L1.criteria),state:req.state,emo:!!req.questions.emotion,ins:req.questions.limit_L1.instructions},
       rep:p.length?p[0].t:"",lim,saidMid:said&&said.mid,read:(c.spokenLimitsRead||{}).p_d||null,
-      limitsBlk:String(B.limits||""),drives:String(B.drives||""),resist:String(B.resistance||""),tplCall:pm.map(m=>m.content).join("\n"),piece};
+      limitsBlk:String(B.limits||""),drives:String(B.drives||""),resist:String(B.resistance||""),tplCall:pm.map(m=>m.content).join("\n"),piece,frag};
   });
   ok("her own new line is one choice question in the same request as her emotion",
      !!r5.req&&r5.req.emo&&r5.req.crit.join(",")==="none,limit_scene,limit_day,limit_until_changed,commitment_scene,commitment_day,commitment_until_changed"&&/banka kadar/.test(r5.req.ins)&&!/Çayımı/.test(r5.req.ins),
@@ -172,6 +174,9 @@ const USER_TPL=`[system]
      /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.rep), r5.rep.slice(-2500));
   ok("the resistance block quotes the line she drew", /YOU HAVE ALREADY SAID WHERE YOUR LINE IS[\s\S]*banka kadar/.test(r5.resist), r5.resist);
   ok("{{call//limits//full}} works in a template of its own", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.tplCall), r5.tplCall);
+  ok("(v150.49) the suggested-replies writer is told the line she drew", await pg.evaluate(()=>{ const c=curChat(), D=state.personas.find(x=>x.id==="p_d");
+      const t=_sugPeopleBlock(c,[D],"Emre"); return /has said out loud about how far this goes[\s\S]*banka kadar/.test(t)?true:t; }));
+  ok("the fragment model's layout carries it too (v150.48)", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.frag), r5.frag.slice(-1500));
   ok("the drives block is now exactly the limits block, and its piece renders it", r5.drives===r5.limitsBlk&&r5.limitsBlk.length>0&&r5.piece.trim()===r5.limitsBlk.trim(), JSON.stringify({d:r5.drives,p:r5.piece}));
 
   const r6=await pg.evaluate(async()=>{

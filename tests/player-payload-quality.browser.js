@@ -181,6 +181,9 @@ const {chromium}=require('playwright');
   ok("a thread whose promise is on the ledger as kept is settled", !/bring Sami the money/.test(OT.kept)&&/call Burak back/.test(OT.kept), OT.kept);
   ok("the memory writer sees the recent open threads, numbered, each once", /THREADS STILL OPEN FROM BEFORE:\n1\. bring Sami the money on Friday\n2\. call Burak back/.test(OT.sent)&&!/old mill/.test(OT.sent), OT.sent);
   ok("…and the numbers it returns as closed come off every memory carrying them", OT.after==='[["visit the old mill"],["call Burak back"],[],[]]', OT.after);
+  ok("(v150.48) a thread already open is not filed again; only the new one is, once", await pg.evaluate(()=>{
+      const r=_playerNewOpen(["call Burak back","Call Burak back!","ask Nil about the dinner","ask Nil about the dinner"],["call Burak back","bring Sami the money on Friday"]);
+      return JSON.stringify(r)==='["ask Nil about the dinner"]'?true:JSON.stringify(r); }));
 
   // ---------------------------------------------------------------------------------------------
   console.log("\n[3. a move can be private]");

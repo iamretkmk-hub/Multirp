@@ -230,6 +230,20 @@ memory retrieval scoped to them, target resolution from the *freshest real line 
 transcript* (not the router's stale `addressed`), witness-scoped history, refusal fallback,
 `Name:` prefix stripping, and awaits the on-screen reveal so chains pace correctly.
 
+**v150.44 — router 2 as one Decisions pick.**
+
+After each character line in a group turn, and after a narrator event (`gamemasterReactions`),
+`router2Decision` asks one choice: `nobody` (the default: the turn returns to the player) or one of the
+characters who may speak. Each candidate is listed with their hooks. Someone who already spoke is offered
+only "to answer a jab at them just now".
+
+The state carries the last line, who spoke, who is present and the latest exchange. The likeliest
+character is chosen only at `routerDecAt()` (0.6) and above `nobody`.
+
+The question is `x_router2` (Payloads → Turn router). If the request fails, or the switch is off
+(Settings → "Who answers next: ask the Decisions API", `routerDecOn`), the chat router (`routerChar`)
+decides as before. Pinned by `tests/router2-decisions.browser.js`.
+
 ## The emotion pick (v150.34)
 
 Before each character reply (solo, multi, Gamemaster reaction, text), `emotionEnsure(chat, p, line)` asks the
@@ -260,7 +274,8 @@ with no `{{if}}` is unchanged (payload parity holds).
 speaker's own latest memories of today, so a fight this morning colours the emotion now),
 `people_they_answer_to` (spouse, partner, lover, family, read off their own ties whether or not those people
 are here) and `who_else_can_see_or_hear` (or "nobody — they are alone with …"). The id/superego prompt weighs
-the feelings against those stakes.
+the feelings against those stakes. (v150.42: `who_else_can_see_or_hear` also names the public at a place that is not
+someone's home — "strangers and staff at <place> (<exposure>)" — instead of "alone with" on a beach club boardwalk.)
 
 ## v150.38 — the drives writer is gone; spoken limits are read in the reply's request
 
@@ -314,6 +329,46 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **A goal already done** (v150.50, `goalDoneQuestions` / `goalDoneApply`, switch `goalCheckOn`): the maintained
+  goals (`goalsLive`) are rewritten once a day, so a goal the scene had just settled was still pushed at the
+  character. When the reply's Decisions request goes anyway (it never sends one of its own), each live goal (at
+  most five) is a yes/no (`x_goal_done`) with the goals in the state as `their_goals`. A yes at `gateAt()` adds it
+  to `goalsLive.done`, which `liveGoalsLines` filters out until the curator writes a new list. Pinned by
+  `tests/goal-done.browser.js`.
+- **Repetition and continuity** (v150.49): two more questions in the same request. `repeat`
+  (`x_reply_check_repeat`) asks whether the reply makes a point, deflection, excuse or gesture the character
+  already made in this scene, or the same sound twice. `continuity` (`x_reply_check_continuity`) asks whether
+  it contradicts what already happened (asking someone to sit who already sat, the wrong place or people).
+  The state gains `their_own_earlier_lines_this_scene` (their last four) and `where_and_who` (the place, the
+  area and who is present). The pills read "repeats itself" and "continuity?". The flags are `repeated` and
+  `lost_track`, with notes `consistency_repeat` and `consistency_continuity`, and the fragment option's code
+  covers all four. The suggested-replies writer is also told each present character's spoken limits
+  (`_sugPeopleBlock`), so an option that walks past one is offered only as pressure.
+- **The consistency note** (v150.45): a flag is also a correction on that character's *next* reply.
+  When the speaker's latest reply carries `replyFlags.character` or `.player`, `buildTailBlocks` sets
+  `_railFlags.broke_character` / `spoke_for_player` and appends the matching note to the end of the
+  final guardrails — `consistency_character` ("LAST TIME YOU SLIPPED OUT OF CHARACTER…") and/or
+  `consistency_player` ("LAST TIME YOU WROTE {{user}}'S PART…"), both editable block templates. It is
+  reachable as `{{call//final_guardrails//consistency_note}}` (the generated layout calls it), inside
+  `final_guardrails//full`, and as the fragment model's guardrails option `consistency`
+  (`broke_character or spoke_for_player`). It lasts one reply: it reads only the speaker's own latest
+  reply, so once they answer again unflagged it is gone, and another character never carries it.
+  Pinned by `tests/consistency-note.browser.js`.
+- **Fixes from a live export (v150.48):**
+  - **The spoken limits reach the reply under the fragment model.** No shipped fragment called
+    `{{call//limits//full}}`, so the limits were judged every turn and then dropped. There is a `limits`
+    fragment before the guidance now. `fragMigrateStored` adds it, and the guardrails `consistency` option,
+    once to a list saved before them (`FRAG_SHIPPED_ADDS`, remembered in `sm_fragadds`), so deleting either
+    afterwards sticks.
+  - `relTieKind`: an "X of Y" tie is X only for a friend ("friend of the family"). "Son of my best friend"
+    is `via`, not one's own son, as `relTieSeed` already read it.
+  - `_limitSpoken` clips at a sentence or a word (`clipAtSentence`, 240), never mid-word.
+  - `_trackDecMoves(t, cur)` offers only the moves the range allows: steps capped at the span and
+    deduplicated, no fall at the floor and no rise at the ceiling.
+  - The memory judge reads the memory as written, with who and where (`_memJudgeText`), not its search keys.
+  - The player memory files only threads that are new (`_playerNewOpen`). Re-listing old ones re-dated
+    them, so they never aged out.
+  - The familiarity reading says "little that X does surprises them".
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

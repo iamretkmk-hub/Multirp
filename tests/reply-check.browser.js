@@ -58,12 +58,23 @@ const {chromium}=require('playwright');
   const q=(r.req[0]||{body:{questions:{}}}).body;
   ok("one request to the Decisions endpoint with the OpenRouter key", r.req.length===1&&r.req[0].url==="https://openrouter.ai/api/alpha/decisions"&&r.req[0].headers.Authorization==="Bearer sk-test", JSON.stringify(r.req.map(x=>x.url)));
   ok("default model is openai/gpt-6-luna-decisions", q.model==="openai/gpt-6-luna-decisions", q.model);
-  ok("three noul questions: refusal, player, character", JSON.stringify(Object.keys(q.questions||{}))==='["refusal","player","character"]'&&Object.values(q.questions).every(x=>x.type==="noul"), JSON.stringify(Object.keys(q.questions||{})));
+  ok("five noul questions: refusal, player, character, and (v150.49) repeat and continuity", JSON.stringify(Object.keys(q.questions||{}))==='["refusal","player","character","repeat","continuity"]'&&Object.values(q.questions).every(x=>x.type==="noul"), JSON.stringify(Object.keys(q.questions||{})));
   ok("YES:/NO: lines become the criteria, the rest the instructions, placeholders filled", (()=>{ const x=q.questions.player||{};
       return /^Does the reply write Emre's part/.test(x.instructions||"")&&!/YES:|NO:/.test(x.instructions)&&/^It puts words in Emre's mouth/.test(x.criteria.true)&&/^It plays only Burcu/.test(x.criteria.false)
         &&!/\{\{/.test(JSON.stringify(q.questions)); })(), JSON.stringify(q.questions&&q.questions.player));
   ok("the state: sheet, player, the scene before the reply, the reply", q.state&&q.state.character&&q.state.character.name==="Burcu"&&/guarded/.test(q.state.character.personality)&&/Short sentences/.test(q.state.character.speaking_style)
       &&q.state.player==="Emre"&&/Kahve ister misin/.test(q.state.scene_before_the_reply)&&!/fincanı/.test(q.state.scene_before_the_reply)&&/sarılır/.test(q.state.reply), JSON.stringify(q.state));
+
+  ok("(v150.49) the state has their own earlier lines in this scene (not this reply), and where and who", await pg.evaluate(async()=>{
+      const c=curChat(), keep=c.messages.slice();
+      c.messages=[{mid:"e1",role:"user",content:"Kahve?",speaker:"Emre"},{mid:"e2",role:"assistant",speaker:"Burcu",speakerId:"p_b",content:'"Düşmem, çocuk değiliz."'},
+        {mid:"e3",role:"user",content:"*sits on the rock*",speaker:"Emre"}];
+      window.__reqs=[]; const m=__mkReply('"Kendim düşerim, merak etme."'); await runReplyCheck(c,m,state.personas.find(p=>p.id==="p_b"));
+      const st=window.__reqs[0].body.state; c.messages=keep;
+      return (JSON.stringify(st.their_own_earlier_lines_this_scene)==='["\\"Düşmem, çocuk değiliz.\\""]'&&/present: Emre, Burcu/.test(st.where_and_who)&&/merak etme/.test(st.reply))?true:JSON.stringify(st); }));
+  ok("(v150.49) the repeat question names the deflection and the doubled sound; continuity names asking for what was already done", await pg.evaluate(()=>{
+      const r=X_ENGINE_PROMPTS.x_reply_check_repeat.def, c=X_ENGINE_PROMPTS.x_reply_check_continuity.def;
+      return (/same deflection, excuse or refusal/.test(r)&&/\[sigh\] tag and a \*sighs\*/.test(r)&&/telling someone to sit who already sat/.test(c))?true:"wording"; }));
 
   ok("the scene before the reply stops at the last scene cut", await pg.evaluate(async()=>{
       const c=curChat(), keep=c.messages.slice();

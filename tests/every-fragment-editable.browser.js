@@ -61,9 +61,10 @@ const {chromium}=require('playwright');
       const names=tas.length?Array.from(tas).map(t=>t.getAttribute('data-btpl')):[];
       ptEditPiece("final_guardrails");
       // the box itself, plus the fragments the block claims that are NOT sections of it
-      // (heat_narr_*_short feed {{narr_short}} inside [[rail_heat_narr]])
+      // (heat_narr_*_short feed {{narr_short}} inside [[rail_heat_narr]];
+      //  v150.45 consistency_* are the one-turn notes after a flagged reply, not rails)
       if(names.indexOf("rails_header")<0) return "the box did not open: "+names.join(", ");
-      const stray=names.filter(n=>n!=="rails_header"&&!/^heat_narr_.*_short$/.test(n));
+      const stray=names.filter(n=>n!=="rails_header"&&!/^heat_narr_.*_short$/.test(n)&&!/^consistency_(character|player|repeat|continuity)$/.test(n));
       if(stray.length) return "still opening separate rule boxes: "+stray.join(", ");
       const secs=ptBoxSections("final_guardrails");
       const missing=RAIL_KEYS.filter(k=>secs.indexOf(k)<0);

@@ -70,6 +70,28 @@ fire.
   - The picked kind becomes the author's `trigger_context` ("The kind of beat that fits: …").
   - A failed or empty answer falls back to the chat judge. A forced beat skips both.
   - Pinned by `tests/gm-decisions.browser.js`.
+- **v150.42 — movement inside a place** (`maybeMoveDecision`, switch `moveDecOn`, bar `moveAt`, default
+  0.75). It runs from `postTurn` beside the Gamemaster, at a place with two or more areas.
+  - **Who is asked:** every character there gets a pick (`x_move_pick`: stay, or another area, each listed
+    with what it is and who is there) and a reason (`x_move_why`). At most six are asked; left out are the
+    one an active event brings in, anyone who promised to come back (`chat.expected` has its own path) and
+    anyone who moved within `MOVE_COOLDOWN` (3) turns.
+  - **What the request sees:** the place, every area with its exposure and who is in it, where the player
+    is (and whether they are alone there), each person's area, tie to the player and last line, the latest
+    exchange, and whether the moment is private. In a private moment the player's area is not offered.
+  - **When someone moves:** a move counts at 1 − P(stay) ≥ the bar, to the likeliest area. At most
+    `MOVE_MAX` (2) move per turn. A move is applied like a presence-tracker move: `subPos`, one narrated
+    beat told the reason, the terse note when that fails, then `syncPlayerSubArea`.
+  - **One beat per turn:** a Gamemaster about to write a beat first awaits that turn's move decision
+    (`_moveDecJobs`) and stands down if someone moved. (v150.47) It waits at most `MOVE_GM_WAIT_MS`
+    (15 s), and a move already applied (`chat._movedAtTurn`, set before the narration is asked for) is
+    enough to stand down on.
+  - **The move note never holds the turn** (v150.47): `narrateCharMove` / `narrateCharMoveGroup` call
+    with `MOVE_NARR_TIMEOUT_MS` (45 s), one retry and `MOVE_NARR_RESCUE_MS` (30 s) for the empty-response
+    rescue, instead of the 180 s default twice over (one narration was seen taking 246 s). The terse
+    note stands in when it fails. This covers the presence tracker's moves too.
+  - **Unchanged:** moves a line asks for are still read by the presence tracker.
+  - Pinned by `tests/move-decision.browser.js`.
 - **Stage 2 — author** (`gmAuthor`): writes the hidden nudge, grounded in
   `directorContext(chat,"gm")` (tie-only roster, scene/privacy lines, trackers, calendar,
   offstage positions), the shared recent-exchange window (`recentExchangeText` — texts
@@ -742,3 +764,24 @@ and Autopilot both wait for a spoken line after one. So a scene that ended on th
 suggestions and never moved until the player typed. The meeting resolver has always followed an
 arrival with `playCharacterTurn(…,"arriving")`, and the text arrival now does the same. The one
 exception is a player turn already in flight, which answers with them in the room.
+
+
+## v150.43 — the proactive text gate
+
+`maybeProactiveText` scores every absent character's pull in code (hot axes, affection, today's slow
+change, today's most important memory, having just parted). It used to send the strongest one above
+0.85 straight to the roleplay model, which often answered "no text".
+
+Now the strongest candidates (at most three) are asked first, in one Decisions request: `x_text_gate`,
+"would they text now?", via `proactiveTextGate`. For each candidate the state carries:
+- their tie to the player;
+- how they feel;
+- when they last met;
+- the text thread, with when each message was sent;
+- what happened to them today;
+- the news, if it involved them.
+
+The likeliest yes at `textGateAt()` (0.6) is the one the writer is asked for, even over a stronger
+pull. With nobody at the bar, nothing is written and the writer is not called. A failed request, or the
+switch off (Settings → Texts → "Ask before a text is written", `textGateOn`), leaves the writer to
+decide alone as before. Pinned by `tests/text-gate.browser.js`.

@@ -177,6 +177,22 @@ it back. Three do: `closeSceneDock`, `deleteScene` (only when the deleted scene 
 in the *current* chat), and `syncSceneDock` when the scene has vanished from under the dock. The
 last two used not to, and left heat raised with no video playing.
 
+**As Decisions (v150.46).** With "Picture decisions: ask the Decisions API" on (`imgDecOn`,
+`sm_imgdecon`, on by default), both questions are typed requests to the Decisions API first, and the
+chat calls above are the fallback (a failed request, a paused breaker `_imgDecBreak`, or the switch
+off):
+
+- `visualNewDecision(state)` — one yes/no (`x_visual_new`, YES:/NO: lines) with
+  `picture_on_screen`, `where_and_when_that_picture_is`, `where_and_when_it_is_now` and
+  `latest_exchange` (thoughts removed; a line that was only thoughts is left out). A new picture is
+  drawn at `VISUAL_NEW_AT` (0.5) or more. The code checks before it (no picture yet, a new
+  place/area or cast) still draw without asking.
+- `ruleDecision(active, routeText)` — one choice (`x_rule_pick`) over the enabled rules
+  (`r0…`, each "label: when"), with the same route text as `state.scene`. The likeliest rule is used;
+  routing off or a single rule asks nothing.
+
+Both prompts are on the **What you see** card. Pinned by `tests/image-decisions.browser.js`.
+
 Every failure path draws rather than skips — a missing picture is worse than a spare one — and a
 malformed answer is logged with what the model actually said. `routeSceneForBeat` now also runs when
 `imgMode()==="smart"` even if the Smart-routing switch is off: that switch governs the model-RULE

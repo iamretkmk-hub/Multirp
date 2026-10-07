@@ -79,7 +79,7 @@ const {chromium}=require('playwright');
   ok("default model openai/gpt-6-luna-decisions", body.model==="openai/gpt-6-luna-decisions", body.model);
   ok("the state is the exchange as numbered lines, once", typeof body.state==="string"&&/^1\. Emre: Merhaba\./.test(body.state)&&/\n6\. Burcu: /.test(body.state), JSON.stringify(body.state));
   const love=qs.find(q=>/"Love"/.test(q.instructions)), trust=qs.find(q=>/"Trust"/.test(q.instructions)), kiss=qs.find(q=>/"Kissed"/.test(q.instructions));
-  ok("a free 0..100 tracker chooses between seven moves sized 3/8/20", love&&love.type==="choice"&&JSON.stringify(Object.keys(love.criteria))==='["fall_sharp","fall","fall_little","none","rise_little","rise","rise_sharp"]'&&/^\+8:/.test(love.criteria.rise)&&/^\+20:/.test(love.criteria.rise_sharp), JSON.stringify(love&&love.criteria));
+  ok("a free 0..100 tracker at 0 chooses between staying and rises sized 3/8/20 (v150.48: no fall at the floor)", love&&love.type==="choice"&&JSON.stringify(Object.keys(love.criteria))==='["none","rise_little","rise","rise_sharp"]'&&/^\+8:/.test(love.criteria.rise)&&/^\+20:/.test(love.criteria.rise_sharp), JSON.stringify(love&&love.criteria));
   ok("an up-only tracker cannot fall", trust&&JSON.stringify(Object.keys(trust.criteria))==='["none","rise_little","rise","rise_sharp"]', JSON.stringify(trust&&Object.keys(trust.criteria)));
   ok("an event tracker is a yes/no with its YES/NO meanings", kiss&&kiss.type==="noul"&&/^It clearly happened/.test(kiss.criteria.true)&&/^It did not/.test(kiss.criteria.false)&&/they kiss/.test(kiss.instructions), JSON.stringify(kiss));
   ok("each question names line 1 as the first one to judge, and the tracker's current value", qs.every(q=>/judging only line 1 onward|in line 1 or later/i.test(q.instructions))&&/Current value: 0\./.test(love.instructions), love&&love.instructions);
@@ -122,6 +122,11 @@ const {chromium}=require('playwright');
       const k=t=>_trackDecMoves(t).map(m=>m.k+":"+m.d).join(",");
       const a=k({behavior:"counter",min:0,max:100}), d=k({behavior:"down",min:0,max:100}), f=k({behavior:"free",min:0,max:10});
       return (a==="none:0,once:1,twice:2,three:3"&&d==="none:0,fall_little:-3,fall:-8,fall_sharp:-20"&&f==="fall_sharp:-3,fall:-2,fall_little:-1,none:0,rise_little:1,rise:2,rise_sharp:3") ? true : [a,d,f].join(" | "); }));
+
+  ok("(v150.48) only what the range allows: a 0..1 tracker moves by 1, never falls at 0 or rises at 1", await pg.evaluate(()=>{
+      const k=(t,v)=>_trackDecMoves(t,v).map(m=>m.k+":"+m.d).join(",");
+      const any=k({behavior:"free",min:0,max:1}), at0=k({behavior:"free",min:0,max:1},0), at1=k({behavior:"free",min:0,max:1},1), mid=k({behavior:"free",min:0,max:10},5);
+      return (any==="fall_little:-1,none:0,rise_little:1"&&at0==="none:0,rise_little:1"&&at1==="fall_little:-1,none:0"&&mid==="fall_sharp:-3,fall:-2,fall_little:-1,none:0,rise_little:1,rise:2,rise_sharp:3") ? true : [any,at0,at1,mid].join(" | "); }));
 
   console.log("\n[fallbacks]");
   ok("a failed request sends every tracker through its own call", await pg.evaluate(async()=>{

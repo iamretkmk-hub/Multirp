@@ -81,6 +81,13 @@ const {chromium}=require('playwright');
       await emotionEnsure(c,p,"Kal bu gece.",{targetId:"__user__",targetName:"Emre"});
       const st=window.__reqs[0]&&window.__reqs[0].state;
       return (st&&/fought about money/.test(JSON.stringify(st.earlier_today))&&/Burak — husband/.test(JSON.stringify(st.people_they_answer_to))&&/alone with Emre/.test(JSON.stringify(st.who_else_can_see_or_hear))&&/who else can see or hear/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify(st); }));
+  ok("in a public place the state says strangers can see and hear, not 'alone' (v150.42)", await pg.evaluate(()=>{
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); const uni=universeById(c.universeId)||state.universes[0];
+      uni.locations=(uni.locations||[]).filter(l=>l.id!=="l_pub").concat([{id:"l_pub",name:"Palmera Beach Club",type:"poi",gossipChance:0.6,description:"x",residents:[],sublocations:[{id:"s_bw",name:"Boardwalk",entrance:true}]}]);
+      const keep={l:c.locationId,n:c.location,pr:c.presentIds}; c.locationId="l_pub"; c.location="Palmera Beach Club"; c.presentIds=["p_b"];
+      const pubW=JSON.stringify(_emoStakeState(c,p,"__user__").who_else_can_see_or_hear);
+      c.locationId=keep.l; c.location=keep.n; c.presentIds=keep.pr;
+      return (/strangers and staff at Palmera Beach Club/.test(pubW)&&!/alone with/.test(pubW))?true:pubW; }));
   ok("a layout's own {{if ego = …}} and {{if emotion = …}} pick their text", await pg.evaluate(()=>{
       const keepOn=state.payloadTplOn, keepT=state.payloadTemplates;
       state.payloadTplOn=true; state.payloadTemplates={solo:"[system]\nBASE\n\n{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{else}}Your conscience holds.{{endif}}\n\n{{if emotion = anger}}You are angry.{{endif}}\n[system end]\n\n{{call//dialogue_history}}\n"};

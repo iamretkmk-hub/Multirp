@@ -318,7 +318,7 @@ const {chromium}=require('playwright');
         {mid:newMid(),role:"assistant",speaker:"Narrator",dayMarker:true,content:"Day 1 ends."},
         {mid:newMid(),role:"assistant",speaker:"Narrator",narratorEvent:true,travelBeat:true,content:"Emre drives to the market."},
         L("Emre","MARKET Merhaba Buket."),L("Buket Özüçak","MARKET Hoş geldin.")];
-      state.gmOn=true; state.gmEvery=3; c.gmLastCheck=0; c.presentIds=["p_buket"];
+      state.gmOn=true; state.gmEvery=3; c.gmLastCheck=0; c.presentIds=["p_buket"]; state.gmDecOn=false;   // v150.41 — the chat judge is the one under test
       window.__reply["Gamemaster: judge"]={stale:false,trigger:false};
       await maybeGamemaster(c,false);
       return {text:recentExchangeText(c,12,{scene:true}),judge:window.__sent["Gamemaster: judge"]||""};

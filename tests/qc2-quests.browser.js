@@ -314,7 +314,7 @@ ordinary:[
 
   await setup();
   const G=await pg.evaluate(async()=>{
-    const c=curChat(); state.gmEvery=4; c.gmLastCheck=0; c.presentIds=["p_a"];
+    const c=curChat(); state.gmEvery=4; c.gmLastCheck=0; c.presentIds=["p_a"]; state.gmDecOn=false;   // v150.41 — the chat judge is the one under test
     const s=(r,t)=>Object.assign({mid:"m"+Math.random(),role:r,content:t,present:["p_a"]},r==="user"?{}:{speaker:"Ayla",speakerId:"p_a"});
     let judges=0, overtake=true;
     window.__reply=d=>{ if(d==="Gamemaster: judge"){ judges++; if(overtake)markPlayerTurn(c); return JSON.stringify({stale:true}); } return "Someone knocks at the door."; };

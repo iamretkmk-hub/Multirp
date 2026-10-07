@@ -31,9 +31,9 @@ const {chromium}=require('playwright');
     window.chatCompletion=window.__spy;
     window.__cfg=()=>{
       state.key="or-key"; state.nanoKey="nano-key";
-      state.model="google/gemini-3.7-flash"; state.rpRotation=""; state.bookModel=""; state.playerNarrateModel="";
+      state.model="google/gemini-3.7-flash"; state.rpRotation=""; state.bookModel=""; state.playerNarrateModel=""; state.gmModel="deepseek/gm-model";
       state.authorModel=""; state.bioModel="deepseek/deepseek-v4-pro"; state.mcModel="deepseek/deepseek-v4-flash";
-      state.fnCfg={rp:{prov:"or"},narrate:{prov:"nano"},unigen:{prov:"nano"},bio:{prov:"or"},mc:{prov:"nano"},mem:{prov:"nano"}};
+      state.fnCfg={rp:{prov:"or"},narrate:{prov:"nano"},unigen:{prov:"nano"},bio:{prov:"or"},mc:{prov:"nano"},mem:{prov:"nano"},gm:{prov:"or"}};
     };
   });
 
@@ -72,11 +72,17 @@ const {chromium}=require('playwright');
     state.bookModel="nano/book-model"; __calls=[]; chat.book=null;
     try{ await bookCatchUp(chat,"story",{day:1}); }catch(e){}
     const w2=__calls.filter(x=>/Story Book writer/.test(x.dbg));
-    return {w,w2};
+    state.bookModel=""; state.gmModel=""; __calls=[]; chat.book=null;
+    try{ await bookCatchUp(chat,"story",{day:1}); }catch(e){}
+    const w3=__calls.filter(x=>/Story Book writer/.test(x.dbg));
+    return {w,w2,w3};
   });
   ok("the day's chapter was written", !B.err && B.w.length>=1, JSON.stringify(B));
-  ok("blank Book model: the roleplay model goes to the roleplay API (OpenRouter), not Narration's NanoGPT",
-     B.w.length>=1 && B.w.every(x=>x.model==="google/gemini-3.7-flash"&&x.prov==="or"), JSON.stringify(B.w));
+  // v150.39 — the books are written by the Gamemaster & Scene Writer model when the Book model is blank
+  ok("blank Book model: the Gamemaster & Scene Writer model, on the gamemaster card's API (not Narration's NanoGPT)",
+     B.w.length>=1 && B.w.every(x=>x.model==="deepseek/gm-model"&&x.prov==="or"), JSON.stringify(B.w));
+  ok("blank Book model and blank gamemaster model: the roleplay model, on the roleplay API",
+     B.w3.length>=1 && B.w3.every(x=>x.model==="google/gemini-3.7-flash"&&x.prov==="or"), JSON.stringify(B.w3));
   ok("a Book model of its own goes to the Narration card's API", B.w2.length>=1 && B.w2.every(x=>x.model==="nano/book-model"&&x.prov==="nano"), JSON.stringify(B.w2));
 
   console.log("\n[the other borrowers]");
@@ -85,11 +91,12 @@ const {chromium}=require('playwright');
     const uni=state.universes[0];
     const p={id:"p_sg",name:"Selin",universeId:uni.id,personality:"x",relationships:{}};
     state.personas=[p];
-    try{ await generateSocialGraphFor(p,uni); }catch(e){}
-    const sg=__calls.find(x=>/^Social graph/.test(x.dbg));
+    // v150.39 — the social-graph generator is gone; the relationship generator is the authoring call that replaced it
+    try{ await generateRelationshipsFor(p,uni,""); }catch(e){}
+    const sg=__calls.find(x=>/^Relationship generator/.test(x.dbg));
     state.authorModel="nano/author"; __calls=[];
-    try{ await generateSocialGraphFor(p,uni); }catch(e){}
-    const sg2=__calls.find(x=>/^Social graph/.test(x.dbg));
+    try{ await generateRelationshipsFor(p,uni,""); }catch(e){}
+    const sg2=__calls.find(x=>/^Relationship generator/.test(x.dbg));
     return {sg,sg2};
   });
   ok("authoring with no author model: bio model on the bio card's API", C.sg&&C.sg.model==="deepseek/deepseek-v4-pro"&&C.sg.prov==="or", JSON.stringify(C.sg));

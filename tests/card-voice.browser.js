@@ -70,10 +70,11 @@ const {chromium}=require('playwright');
   ok("and so do the universe builder's",
      /"backstory":[^\n]*SECOND PERSON/.test(texts.univPrompt)
      && /"traits":[^\n]*SECOND PERSON/.test(texts.univPrompt));
-  ok("the batch writer's socialGraph is no longer first person",
-     /"socialGraph":[^\n]*SECOND PERSON/.test(texts.batchBioPrompt)
-     && !/Selim is my younger brother/.test(texts.batchBioPrompt),
-     "socialGraph still says \"my younger brother\"");
+  // v150.40 — the batch writes structured ties (the social graph is gone); their paragraphs are second person too
+  ok("the batch writer's ties are written to the character, not about them",
+     /"relationship": "1-2 sentences IN THE SECOND PERSON/.test(texts.batchBioPrompt)
+     && !/"socialGraph":/.test(texts.batchBioPrompt) && !/Selim is my younger brother/.test(texts.batchBioPrompt),
+     "the batch prompt's ties");
 
   console.log("\n[the director fields stay director-facing]");
   /* Only SCHEMA lines ("field": …) count — the rule's own prose names both fields too. */
@@ -100,7 +101,7 @@ const {chromium}=require('playwright');
   console.log("\n[every writer that feeds the card states its voice]");
   {
     const FEEDS=["goalsCurator","relPrompt","relShortPrompt","promisePurge",
-                 "promisePrompt","socialGraphPrompt","relGenPrompt","afterHeatPrompt",
+                 "promisePrompt","relGenPrompt","afterHeatPrompt","x_style_writer",   // v150.39: socialGraphPrompt is gone; v150.40: the styles writer
                  "calReconcile","goalPursuit","intentForm","x_outfits_generator",
                  // v79.1 — the quest designer prints desc and ask under YOUR OWN PURSUIT.
                  "charQuestGen"];

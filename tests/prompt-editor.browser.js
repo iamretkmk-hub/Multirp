@@ -545,7 +545,10 @@ const ROOT=path.resolve(__dirname,'..');
       /* the author applies an edit, and the scenes are played again: a later run with the new wording in its payload */
       const it=P.findItem("frag:style_header"), old=P.itemVal(it), line=old.split("\n").find(l=>l.trim().length>20).trim();
       P.setVal(it,old.replace(line,"PE-NEW-OPENING "+line)); APPLIED["pe-eff"]={t:Date.now(),item:"frag:style_header",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
-      P.DRIFT_SCENES.forEach(sc=>{ const r=P.DR.results[sc.id]; if(r&&r.turns&&r.turns.length){ r.at=Date.now(); if(r.payload) r.payload={messages:r.payload.messages.map((m,i)=>i===0?Object.assign({},m,{content:String(m.content)+"\nPE-NEW-OPENING "+line}):m)};
+      /* the later run is LATER than run 1's snapshot: on a fast machine Date.now() here can be the very millisecond the
+         snapshot took as its id, and an equal id is not "earlier", so nothing would be compared (a CI-only failure) */
+      const _later=Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).id||0)+1);
+      P.DRIFT_SCENES.forEach(sc=>{ const r=P.DR.results[sc.id]; if(r&&r.turns&&r.turns.length){ r.at=_later; if(r.payload) r.payload={messages:r.payload.messages.map((m,i)=>i===0?Object.assign({},m,{content:String(m.content)+"\nPE-NEW-OPENING "+line}):m)};
         if(r.judge){ r.judge=Object.assign({},r.judge,{score:7,criteria:Object.assign({},r.judge.criteria,{memory:{score:7,note:"better"}})}); } } });
       await new Promise(r=>setTimeout(r,20));
       await P.writeFixesAlone();                                             // run 2: compared with run 1 before the fixer

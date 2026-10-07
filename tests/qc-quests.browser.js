@@ -237,7 +237,7 @@ const {chromium}=require('playwright');
   console.log("\n[the Gamemaster]");
   await setup();
   const M=await pg.evaluate(async()=>{
-    const c=curChat(); state.gmEvery=3; c.gmLastCheck=0; c.presentIds=["p_a"];
+    const c=curChat(); state.gmEvery=3; c.gmLastCheck=0; c.presentIds=["p_a"]; state.gmDecOn=false;   // v150.41 — the chat judge is the one under test
     const say=(r,t,x)=>Object.assign({mid:"m"+Math.random(),role:r,content:t,speaker:r==="user"?undefined:"Ayla",speakerId:r==="user"?undefined:"p_a",present:["p_a"]},x||{});
     c.messages=[say("user","hi"),say("assistant","hey"),
       {mid:"n1",role:"assistant",speaker:"Narrator",narratorEvent:true,gmBeat:true,content:"A door slams.",present:["p_a"]},

@@ -8,7 +8,7 @@
         now goes in whole, labelled word for word, and stored copies of the old label are refreshed in place.
      3. the player's relationship paragraph vanished from YOUR PEOPLE when the template did not call
         `feelings` (the v62.1 "stated once, in feelings" drop); the player's entry is always printed whole, and
-        the "everyone" scope keeps the author's summary note.
+        the "everyone" scope carries every tie (v150.39: and the social graph never goes at all).
    Each is checked through the player's own template (template mode) AND the default block layout.
    Run: NODE_PATH=/path/to/node_modules node tests/reply-retry-gists.browser.js */
 const {chromium}=require('playwright');
@@ -165,7 +165,8 @@ const USER_TEMPLATE=`[system]
     const people=sent.slice(sent.indexOf("PLAYER_PARA")-200,sent.indexOf("PLAYER_PARA")+50);
     ok("the player's entry carries its paragraph from the card's relationships.__user__", /\[Emre — friend\]/.test(sent)&&sent.indexOf("PLAYER_PARA")>=0, people);
     ok("everyone else keeps theirs", sent.indexOf("HAKAN_PARA")>=0);
-    ok("the \"everyone\" scope keeps the author's summary note whole", sent.indexOf("Hakan is my husband. Emre is Hakan's old school friend.")>=0, sent.slice(sent.indexOf("ties"),sent.indexOf("ties")+600));
+    // v150.39 — the social graph (the author's summary note) is gone: even the "everyone" scope never sends it
+    ok("the social graph never reaches the payload, even on the \"everyone\" scope", sent.indexOf("Hakan is my husband. Emre is Hakan's old school friend.")<0, sent.slice(sent.indexOf("ties"),sent.indexOf("ties")+600));
   }
 
   console.log("\n[3 — only a payload that sends feelings may drop a character target's paragraph]");

@@ -758,3 +758,24 @@ and Autopilot both wait for a spoken line after one. So a scene that ended on th
 suggestions and never moved until the player typed. The meeting resolver has always followed an
 arrival with `playCharacterTurn(…,"arriving")`, and the text arrival now does the same. The one
 exception is a player turn already in flight, which answers with them in the room.
+
+
+## v150.43 — the proactive text gate
+
+`maybeProactiveText` scores every absent character's pull in code (hot axes, affection, today's slow
+change, today's most important memory, having just parted). It used to send the strongest one above
+0.85 straight to the roleplay model, which often answered "no text".
+
+Now the strongest candidates (at most three) are asked first, in one Decisions request: `x_text_gate`,
+"would they text now?", via `proactiveTextGate`. For each candidate the state carries:
+- their tie to the player;
+- how they feel;
+- when they last met;
+- the text thread, with when each message was sent;
+- what happened to them today;
+- the news, if it involved them.
+
+The likeliest yes at `textGateAt()` (0.6) is the one the writer is asked for, even over a stronger
+pull. With nobody at the bar, nothing is written and the writer is not called. A failed request, or the
+switch off (Settings → Texts → "Ask before a text is written", `textGateOn`), leaves the writer to
+decide alone as before. Pinned by `tests/text-gate.browser.js`.

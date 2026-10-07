@@ -199,6 +199,17 @@ malformed answer is logged with what the model actually said. `routeSceneForBeat
 router (`pickRule`/`routerPrompt`), and turning it off must not freeze a docked scene.
 
 
+**Clothes are always written out (v150.51).** An image model reads only the prompt's words, so
+"her current clothing", "the same outfit" or "unchanged" mean nothing to it. The frame guide
+(`imgFrameGuide`, "NAME EVERY GARMENT, EVERY FRAME") tells the writer to name each person's garments
+with their colours in every frame: the same garments again when nothing changed, and the garments as
+they are now when the lines changed something. On an edit of the previous picture (the scene chain),
+the clothes are no longer left out of the request. A decided outfit is stated as decided, and a
+wardrobe menu becomes "keep what the picture shows, written out", with the previous frame's garments,
+so the writer cannot pick a different outfit. `x_img_edit_scene` / `x_img_edit_move` and the
+scene-type-change clause say the same. Stored copies of the old guide are refreshed (`_refreshPipe`).
+Pinned by `tests/img-scene-chain.browser.js` and `tests/img-type-change.browser.js`.
+
 ## Auto-illustration flow (`illustrate(mid, replyText, force)`)
 
 Fires per assistant reply when auto-images are active (`autoImgActive` — toggle + the

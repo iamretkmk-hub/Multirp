@@ -37,8 +37,8 @@ sendMessage()
  └─ exactly 1 present    → solo flow:
       retrieveMemories() → buildPayload("solo", head, tail) → castHistory() (witness-scoped)
       → tagLastForTarget() → [head system] + history + [tail system] (+ GM director note)
-      → chatCompletion(rp:true) → refusal fallback → push assistant msg
-      → autoVisualize (image) + autoSpeakMsg (TTS) + runVoiceCheck   (all background)
+      → chatCompletion(rp:true) → refusal check (not posted) → push assistant msg
+      → autoVisualize (image) + autoSpeakMsg (TTS) + runVoiceCheck + runReplyCheck   (all background)
       → enqueuePresent (typewriter) → runPresenceTracker → maybeBuildMemory → postTurn → maybeHeatBursts
 ```
 
@@ -234,9 +234,24 @@ transcript* (not the router's stale `addressed`), witness-scoped history, refusa
 
 - `looksLikeRefusal()` catches canned refusals (CJK "无法…" patterns, English "I can't…", or a
   reply that is overwhelmingly CJK when the story language isn't).
-- On refusal: retry **once** on `fallbackModel` → else `mcModel` → else give up with an honest
-  toast ("model declined — try a different model"), never rendering the refusal text and never
-  blaming max-tokens.
+- On refusal: **no automatic retry** (v148.7, at the player's request — a second call behind their
+  back was sometimes worse than the first). The refusal text is never rendered; the turn leaves a
+  notice with the Retry button, and asking again is the player's choice.
+- **The reply check** (v150.30, `runReplyCheck`, on by default): after a character reply is posted
+  (solo, multi-character and Gamemaster reactions), one Decisions-API request (doc 06/07) asks three
+  yes/no questions about it — `refusal` (the AI declining in a way the regex missed), `player` (it
+  writes the player's words, actions, thoughts or decisions) and `character` (out of character for
+  the sheet). The state is the character's name, personality and speaking style, the player, the six
+  lines before the reply as the character heard them, and the reply. Each question is one editable
+  prompt (`x_reply_check_*`, Payloads → Reply check): the question, a `YES:` line and a `NO:` line,
+  split into the noul question's instructions and criteria (`_decQuestionFrom`; no YES/NO lines →
+  "Yes."/"No."). A probability at or above `replyCheckAt` (default 0.7) is stored on the message
+  (`replyCheck`, `replyFlags`) and drawn as a pill on the bubble ("refusal?", "speaks for you", "out
+  of character", with the percentage in its title). It only marks: the reply is never held back,
+  changed or regenerated — Retry is the remedy. Failures leave the reply unmarked; a rejected key,
+  refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
+  judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
+  call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

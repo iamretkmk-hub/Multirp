@@ -170,7 +170,9 @@ const {chromium}=require('playwright');
       const m=src.match(/playerNarratePrompt[\s\S]{0,400}?\{fn:"([a-z]+)"/);
       return m&&m[1]==="narrate"?true:"narrator bucket is "+(m?m[1]:"?"); })());
   ok("the drives writer's bucket follows the gamemaster model", (()=>{
-      const m=src.match(/state\.gmModel\|\|state\.rewriter,\{fn:"([a-z]+)"/);
+      /* v150.28 — INTENTIONALLY CHANGED: the fallback chain is written through agentModel now, so the rewriter
+         fallback goes out on the rewriter card's API; the bucket is still the gamemaster's. */
+      const m=src.match(/agentModel\(\["gm",state\.gmModel\],\["rewriter",state\.rewriter\]\)\.model,\{fn:"([a-z]+)"/);
       return m&&m[1]==="gm"?true:"drives bucket is "+(m?m[1]:"?"); })());
   ok("both new buckets have a card", await pg.evaluate(()=>{
       const b=new Set([...document.querySelectorAll('[data-kind="reason"]')].map(h=>h.dataset.ovr));

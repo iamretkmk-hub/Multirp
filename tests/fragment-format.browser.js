@@ -103,7 +103,7 @@ const {chromium}=require('playwright');
     return {bad,n:FRAG_DEFAULTS.length,order:FRAG_DEFAULTS.map(f=>f.id).join(",")};
   },OLD_PIECES);
   ok("no converted fragment calls an old header / intro / body / footer piece", scan.bad.length===0, scan.bad.join("; "));
-  ok("40 shipped fragments, with \"What you know of them\" right after \"Who you are answering\"", scan.n===40&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
+  ok("41 shipped fragments (v150.58: + what you already said), with \"What you know of them\" right after \"Who you are answering\"", scan.n===41&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
   ok("every *_raw name a converted fragment calls is a known data name, and none is in an ORDER list the classic template prints",
     await pg.evaluate(()=>{ const used=new Set(); FRAG_DEFAULTS.forEach(f=>{ JSON.stringify(f).replace(/\{\{call\/\/([a-z_]+_raw)\}\}/g,(m,k)=>used.add(k)); });
       const miss=[...used].filter(k=>RAW_DATA_KEYS.indexOf(k)<0), printed=RAW_DATA_KEYS.filter(k=>RT_ORDER.concat(PL_ORDER,SI_ORDER,LL_ORDER,RG_ORDER,RU_ORDER,SS_ORDER,WN_ORDER,PR_ORDER,PRE_ORDER).indexOf(k)>=0);
@@ -209,6 +209,29 @@ const {chromium}=require('playwright');
   ok("an edited fragment is the user's and stays as it is", M.othersKept&&M.editedTarget, JSON.stringify(M));
   ok("the rewrite runs once: a sheet deleted afterwards is not put back", M.once, JSON.stringify(M));
   ok("saving from the editor marks the rewrite as done", await pg.evaluate(()=>FRAG_SHIPPED_ADDS.some(a=>a.key==="v150.57.format")));
+
+  // v150.58 — "YOU ALREADY SAID THESE" as a fragment of its own
+  console.log("\n[what you already said]");
+  const AS=await pg.evaluate(()=>{
+    const f=FRAG_DEFAULTS.find(x=>x.id==="already_said"), ids=FRAG_DEFAULTS.map(x=>x.id);
+    const plain=__build("solo",{}), cont=__build("solo",{s:["cont"]}), heat=__build("heat",{s:["cont"]});
+    const c=__base(null); c.messages=[{mid:"u1",role:"user",content:'"Hi there."'}];
+    const p=state.personas[0]; const B=Object.assign({},buildCharPromptBlocks(p,[],{recent:[],diary:[],longterm:[]},null,{chat:c,targetName:"Emre",targetId:"__user__"}),
+      buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}}));
+    const none=(ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B)||[]).map(x=>x.content).join("\n");
+    return {f,at:ids.indexOf("already_said")===ids.indexOf("last_line")+1&&ids.indexOf("stuck")===ids.indexOf("already_said")+1,plain,cont,heat,none}; });
+  ok("a fragment of its own on every path, between the last line and 'when it goes in circles', with its data as a call",
+     AS.f&&AS.f.paths.length===5&&AS.at&&/\{\{call\/\/already_said_lines\}\}/.test(AS.f.text)&&/YOU ALREADY SAID THIS/.test(AS.f.text), JSON.stringify(AS.f).slice(0,300));
+  ok("a reply after their own earlier line quotes it under the heading", /YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN[\s\S]*your last line, word for word[\s\S]*Hello\./.test(AS.plain), AS.plain.slice(-1500));
+  ok("carrying on: the 'continues' sentence, and the window slides past the newest line", /Your newest line is the one quoted above[\s\S]*the line before the one quoted above[\s\S]*Hello\./.test(AS.cont)&&!/\{\{(if|endif|gap)/.test(AS.cont), AS.cont.slice(-1500));
+  ok("on heat too", /YOU ALREADY SAID THIS/.test(AS.heat), "");
+  ok("nothing said yet: no heading standing alone", !/YOU ALREADY SAID THIS/.test(AS.none), "");
+  ok("(v150.58) an {{endif}} written right before another token is resolved, not left as text", await pg.evaluate(()=>{
+      const t="A {{if continuing}}C {{endif}}{{call//x}}"; return (ptResolveConds(t,ptCondFlags({continuing:true}))==="A C {{call//x}}"&&ptResolveConds(t,ptCondFlags({continuing:false}))==="A {{call//x}}")?true:"resolver"; }));
+  ok("a saved list gets it once, before 'stuck'", await pg.evaluate(()=>{
+      const old=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="already_said"); store.setRaw(K.fragAdds,"limits,guardrails.consistency,v150.57.format"); state.fragments=old; _fragMigratedFor=null;
+      const L=fragList(), ids=L.map(f=>f.id), ok1=ids.indexOf("already_said")===ids.indexOf("stuck")-1;
+      state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); return ok1?true:ids.join(","); }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

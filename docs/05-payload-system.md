@@ -1177,3 +1177,16 @@ seed. On that character's first reply, `relSeedMigrate` generates their structur
 it in the background, once (`p._relSeeded`; a universe reset clears it).
 
 Pinned by `tests/rel-scope.browser.js`, which replaces `social-graph`.
+
+### "What you already said" as a fragment (v150.58)
+
+The fragment model had no "YOU ALREADY SAID THIS" block (the character's own recent lines in the scene, quoted
+so the turn does not repeat them); the classic layout always had it. It is the `already_said` fragment now,
+between `last_line` and `stuck`, on every path. It is one paragraph: the heading, the instruction, the
+"continues" sentence when the character spoke last (`{{if continuing}}`), and `{{call//already_said_lines}}`.
+The paragraph drops as a whole when there is nothing to quote. A saved fragment list gets it once
+(`FRAG_SHIPPED_ADDS`, key `already_said`).
+
+`ptResolveConds` also had an off-by-one: an `{{endif}}` written directly before another token
+(`…{{endif}}{{call//x}}`) was left in the text. It searches back from `end-1` now.
+

@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("forty fragments (v150.48: + the spoken limits; v150.57: + what you know of them), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===40&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("forty-one fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===41&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties");
       return /^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(f.text)&&/\{\{call\/\/relationships\}\}$/.test(f.text) ? true : f.text; }));
   ok("heat has the language and 'talk you into it'; others present is not on heat", await pg.evaluate(()=>{ const g=id=>FRAG_DEFAULTS.find(x=>x.id===id);

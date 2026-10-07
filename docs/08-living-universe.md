@@ -334,6 +334,40 @@ request per batch; the prompts are registry prompts (Payloads → Strict gates),
   whether it was filed. Model: `gateModel` → `openai/gpt-6-luna-decisions`. Pinned by
   `tests/strict-gates.browser.js`.
 
+## Status checks (v150.55)
+
+Whether a promise was **kept, broken or released**, a meeting **happened, was missed or was called off**, and a
+task, quest or pursuit was **done, failed or called off** is one typed Decisions question per open item
+(`runStatusCheck`, switch `statusDecOn`, on by default). Before this, each was decided by a chat engine returning
+JSON: the future update, the period reconcile, the promise engine, and the day-end calendar, quest and pursuit
+reconcilers.
+
+- **Questions:** every item uses the same four answers: `open`, `done`, `failed` and `cancelled`. Their meaning
+  per kind is in `STATUS_CRIT`. The instructions are `x_status_promise`, `x_status_meeting` and `x_status_task`,
+  each with the item's own facts (`_ftEntry(...).show`). They are on the Strict gates card.
+- **After a turn** (from `postTurn`): only the items in play (`_statusItems(…, "turn")`) are asked about: someone
+  present is involved, the lines mention them, or they are due. That is at most 12 items. The state is `now` and
+  `latest_exchange`.
+- **When a part of the day ends** (first in `_runPeriodEnginesNow`): every open item is asked about, 12 per request,
+  up to 24. The state is `judging`, `the_stretch` (up to 60 lines) and `what_people_remember_of_it` (that
+  stretch's memories, by owner).
+- **Verdicts:** the likeliest of done, failed or cancelled counts at `statusAt()` (the gate strictness, 0.8), and
+  only when it is above `open`. The vetoes of `_ftRefuse` hold: a meeting still ahead cannot have happened, and a
+  word that holds for good is not kept by one afternoon. The item closes through `E.end`, so promises get their
+  status, meetings `calClose`, player quests `questMarkDone`, and pursuits `charQuestComplete`. A promise broken
+  to a character plants their memory of it.
+- **The older engines step aside** only once the check has answered for that day (`statusDecActive`):
+  - the future update and the period reconcile still apply their changes, but not endings;
+  - the promise engine still reaffirms or rewords a promise, but does not set kept, broken or released;
+  - the day-end calendar reconcile skips;
+  - the quest and pursuit reconcilers keep their progress notes, but not done or failed.
+
+  A failed request, or the switch off, leaves all of them deciding as before.
+- **Unchanged:** code statuses: lapsing, dice, attendance persuasion, the player's buttons and a pursuit step's own
+  outcome.
+
+Pinned by `tests/status-check.browser.js`.
+
 ## The future-event tracker (v130.1)
 
 `runFutureTracker(chat)` replaces the per-turn Meetings detector and the every-other-turn Promises

@@ -104,6 +104,30 @@ const {chromium}=require('playwright');
       const c=curChat(); c.messages.push({mid:"u3",role:"user",content:"x",speaker:state.user}); await emotionEnsure(c,state.personas.find(x=>x.id==="p_b"),"x",{kind:"solo"});
       window.fetch=realF; state.emoOn=true; return window.__n===0 ? true : window.__n+" requests"; }));
 
+  console.log("\n[speaking style by path and by emotion]");
+  ok("the path's own main style replaces the main one; the picked emotion's style is offered, the path's before 'all paths'", await pg.evaluate(()=>{
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
+      p.style="Short, dry."; p.styleBy={heat:"Breathless, broken."}; p.styleEmoBy={all:{Anger:"Clipped, cold."},heat:{Desire:"Slow, low."}};
+      c.emo={p_b:{emotion:"Anger",intensity:"clear"}};
+      const base={chat:c,selfP:p,selfName:"Burcu",selfId:"p_b",targetName:state.user,targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}};
+      const solo=buildTailBlocks(base)._ss;
+      c._heatBeat={n:1,total:3}; c.emo.p_b.emotion="Desire"; const heat=buildTailBlocks(base)._ss; delete c._heatBeat;
+      c.emo.p_b.emotion="Joy"; const none=buildTailBlocks(base)._ss;
+      return (solo.style_body==="Short, dry."&&solo.style_emotion==="Clipped, cold."&&heat.style_body==="Breathless, broken."&&heat.style_emotion==="Slow, low."&&!none.style_emotion) ? true : JSON.stringify({solo,heat,none}); }));
+  ok("the style fragment injects the emotion's style only for the emotion picked", await pg.evaluate(()=>{
+      const a=fragCompile("solo",ptCondFlags({emotion:"Anger"}),{}), b=fragCompile("solo",ptCondFlags({emotion:""}),{});
+      return ((a.match(/\{\{call\/\/style_emotion\}\}/g)||[]).length===1&&!/style_emotion/.test(b)) ? true : "a/b wrong"; }));
+  ok("the character editor shows one path at a time, keeps what was typed across paths, and saves it", await pg.evaluate(()=>{
+      const p=state.personas.find(x=>x.id==="p_b"); editPersona("p_b");
+      const box=()=>document.getElementById('peStyleBoxes');
+      const anger=()=>box().querySelector('.psEmo[data-emo="Anger"]');
+      if(!anger()||anger().value!=="Clipped, cold.") return "all-paths Anger not loaded: "+(anger()&&anger().value);
+      peStyleSwitch("multi"); box().querySelector('.psMain').value="Guarded in company."; anger().value="Icy, polite.";
+      peStyleSwitch("all"); if(anger().value!=="Clipped, cold.") return "switching lost the all-paths text";
+      peStyleSwitch("multi"); if(box().querySelector('.psMain').value!=="Guarded in company.") return "multi main lost";
+      const r=peStyleRead();
+      return (r.styleBy.multi==="Guarded in company."&&r.styleBy.heat==="Breathless, broken."&&r.styleEmoBy.multi.Anger==="Icy, polite."&&r.styleEmoBy.all.Anger==="Clipped, cold.") ? true : JSON.stringify(r); }));
+
   console.log("\n[settings]");
   ok("a fresh install has the switch off and the threshold at 0.7", await pg.evaluate(()=>{ localStorage.removeItem(K.fragOn); localStorage.removeItem(K.fragAt); loadState(); return state.fragOn===false&&state.fragAt===0.7; }));
 

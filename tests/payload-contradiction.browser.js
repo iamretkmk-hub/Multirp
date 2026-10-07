@@ -71,16 +71,12 @@ const {chromium}=require('playwright');
   ok("the curator is handed what already happened, with a rule attached to it",
      await pg.evaluate(()=>/WHAT THEY ALREADY DID/.test(String(_curateGoalsFor))
        && /WHAT THEY ALREADY DID names it as finished/.test(DEFAULT_GOALS_CURATOR)));
-  ok("and so is the drives writer, which reads the current want-list rather than the frozen field",
-     await pg.evaluate(()=>/bits\.done=settledEventLines/.test(String(_writePsyche))
-       && /engineGoals\(p,400\)/.test(String(_writePsyche))
-       && /ALREADY HAPPENED means already happened/.test(DEFAULT_PSYCHE)));
+  // v150.38 — the drives writer is gone; the goal filter and the curator still read the one source below.
   /* v62.1 — and all three read ONE source, so a resolved quest cannot be settled for the drives
      writer and still pending for the goal list. */
-  ok("the goal filter, the curator and the drives writer share one settled-event source",
+  ok("the goal filter and the curator share one settled-event source",
      await pg.evaluate(()=>/settledEventLines/.test(String(_goalsSettledTexts))
-       && /settledEventLines/.test(String(_curateGoalsFor))
-       && /settledEventLines/.test(String(_writePsyche))));
+       && /settledEventLines/.test(String(_curateGoalsFor))));
   ok("and it reads the pursuits and the world quests, not only the calendar",
      await pg.evaluate(()=>{
       const src=String(settledEventLines);
@@ -327,12 +323,13 @@ const {chromium}=require('playwright');
      were all this: `drive_ego` is inlined into the template as fixed prose, it contains a blank
      line, and that blank line split the one paragraph the auto-drop needs in order to remove the
      whole piece. So the closing note shipped on every turn the psyche engine had not written for. */
+  // v150.38 — the drives piece is the spoken limits alone now, so the gap rule is checked on the helper itself
   ok("inlined prose keeps its blank lines as {{gap}}, which stays inside the paragraph",
      await pg.evaluate(()=>{
-      const t=ptPieceTemplate("drives","solo");
-      return !/\n[ \t]*\n/.test(t) && /\{\{gap\}\}/.test(t) ? true : JSON.stringify(t).slice(0,300); }));
-  ok("so a turn with no drives at all ships none of the block", await pg.evaluate(()=>{
-      const chat=curChat(); delete chat._psyche;
+      const t=_ptGapify("A heading line.\n\nA closing note.\n \nAnd more.");
+      return !/\n[ \t]*\n/.test(t) && (t.match(/\{\{gap\}\}/g)||[]).length===2 ? true : JSON.stringify(t).slice(0,300); }));
+  ok("so a turn with no limits ships none of the drives block", await pg.evaluate(()=>{
+      const chat=curChat(); chat.spokenLimits={};
       const P=state.personas.find(p=>p.id==="p_b");
       const B=buildTailBlocks({chat,selfP:P,selfId:P.id,selfName:P.name,targetName:state.user,
         targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});

@@ -31,7 +31,7 @@ The editor does not reimplement payload assembly. It fetches `index.html`, boots
 localStorage or IndexedDB), and gives it:
 
 - an in-memory `localStorage`/`sessionStorage` and a small in-memory IndexedDB (the shim in `#shimSrc`);
-- no network (`fetch`, XHR and WebSocket throw), `chatCompletion` answering `"{}"`, `psycheEnsure` a no-op;
+- no network (`fetch`, XHR and WebSocket throw), `chatCompletion` answering `"{}"`;
 - a bridge (`#bridgeSrc`) that applies the editor's working pack to `state` live and builds payloads
   through the same calls the reply paths make: `buildSystemPromptBlocks` / `buildCharPromptBlocks`,
   `buildTailBlocks`, `castHistory` + `tagLastForTarget`, `ptBuildMessages`; `buildTextPayload` for the
@@ -42,8 +42,8 @@ The defaults it compares against are read from the running engine (`PROMPT_REGIS
 `BLOCK_TPL_DEFAULTS`, `ptDefaultTemplate`, `epDefaultTemplate`).
 
 Memory retrieval is replaced by the speaker's own memories (newest six fresh, newest four condensed),
-because the real retrieval costs a model call. Drives (`psycheEnsure`) are not written for the same
-reason, so the drives block is empty unless the story data carries `_psyche`.
+because the real retrieval costs a model call. (v150.38: the drives writer is gone; the drives block is
+the character's spoken limits, so it is empty unless the story data carries `spokenLimits`.)
 
 **Story data: your story.** **Use my own story…** reads a full backup (best), a roleplay export or a
 universe export (`slimWorld`). It prefers the universe that has Buket in it, and slims it: no pictures,

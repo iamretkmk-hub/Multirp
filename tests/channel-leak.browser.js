@@ -134,23 +134,7 @@ const {chromium}=require('playwright');
       await rememberTextExchange(curChat(),(state.personas||[]).find(p=>p.id==="p_duygu"));
       return (state.memory||[]).length===before ? true : "it wrote a memory from two lines"; }));
 
-  console.log("\n[drives are written about a named person, in the third person]");
-  ok("the prompt names its subject before anything else", await pg.evaluate(()=>
-      /^# WHO THIS IS ABOUT/.test(DEFAULT_PSYCHE)));
-  ok("it uses {{self}} and {{target}}", await pg.evaluate(()=>
-      /\{\{self\}\}/.test(DEFAULT_PSYCHE) && /\{\{target\}\}/.test(DEFAULT_PSYCHE)));
-  ok("both are offered in the placeholder picker", await pg.evaluate(()=>{
-      const t=promptPlaceholders('psychePrompt');
-      return (t.indexOf('self')>-1 && t.indexOf('target')>-1) ? true : JSON.stringify(t); }));
-  /* The voice moved to SECOND person on purpose (the note lands in a card written to them as
-     "you"); what must still hold is that it never speaks AS them, and never about them from outside. */
-  ok("it never speaks as them, or about them from the outside", await pg.evaluate(()=>
-      /never "I"/.test(DEFAULT_PSYCHE) && /never "she"\/"he"\/"they" about them/.test(DEFAULT_PSYCHE)
-      && /Second person, but NOT their voice/.test(DEFAULT_PSYCHE)));
-  ok("it forbids writing the other person's inner life", await pg.evaluate(()=>
-      /wrong subject/.test(DEFAULT_PSYCHE)));
-  ok("the payload header says the note is not in the character's voice", await pg.evaluate(()=>
-      /not in your voice/.test(BLOCK_TPL_DEFAULTS.drive_header)));
+  // v150.38 — the drives writer (DEFAULT_PSYCHE, drive_header) is gone; its voice checks went with it.
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

@@ -99,7 +99,7 @@ const {chromium}=require('playwright');
      the list; a new writer that feeds the card belongs on it. */
   console.log("\n[every writer that feeds the card states its voice]");
   {
-    const FEEDS=["psychePrompt","goalsCurator","relPrompt","relShortPrompt","promisePurge",
+    const FEEDS=["goalsCurator","relPrompt","relShortPrompt","promisePurge",
                  "promisePrompt","socialGraphPrompt","relGenPrompt","afterHeatPrompt",
                  "calReconcile","goalPursuit","intentForm","x_outfits_generator",
                  // v79.1 — the quest designer prints desc and ask under YOUR OWN PURSUIT.
@@ -110,10 +110,7 @@ const {chromium}=require('playwright');
     }),FEEDS);
     said.forEach(([k,okk])=>ok(k+" names its voice", okk===true?true:"no second-person rule in "+k));
   }
-  ok("the drives writer is no longer clinical third person", await pg.evaluate(()=>{
-      const t=up("psychePrompt");
-      return /VOICE — SECOND PERSON/.test(t) && !/Write ABOUT \{\{self\}\} in the third person/.test(t)
-        ? true : "psychePrompt still asks for third person"; }));
+  // v150.38 — the drives writer (psychePrompt) is gone.
   ok("the goals rule no longer demonstrates what it forbids", await pg.evaluate(()=>{
       const t=up("goalsCurator");
       return !/look at me the way he used to/.test(t) && /pronoun INSIDE the line is SECOND PERSON/i.test(t)

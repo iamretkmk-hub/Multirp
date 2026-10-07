@@ -272,12 +272,14 @@ request per batch; the prompts are registry prompts (Payloads → Strict gates),
 | `x_gate_meeting` | future tracker, before `runCalendarEngine` | only suggested, unanswered, a "maybe", or already together |
 | `x_gate_quest` | `runCharQuestSpawn`, on the designer's proposal | a mood, a standing goal with nothing new, an errand |
 | `x_gate_intent` | `runIntentEngine` FORM, on each proposed new motive | a passing feeling, small friction or warmth |
-| `x_gate_limit` | `_writePsyche`, on each new limit the drives writer found | an errand ("go make a salad"), logistics, a joke, a passing hesitation |
+| `x_limit_read` / `x_limit_release` | (v150.38) the reply's Decisions request, on each of the character's new lines / each limit on record | an errand ("go make a salad"), logistics, a joke, a passing hesitation; one already on record |
 
 - **What is already on record goes with every gate** and each prompt says it is a NO, so the same promise,
   quest, motive or limit is not re-filed every turn while the line that made it is still in view: the future
   tracker's gate gets `_ftRecord` (meetings, promises, tasks with ids), the quest gate `openQuestLines`, the
-  motive gate `holderIntentRecord`, the limit gate the character's live limits (`limitLines`).
+  motive gate `holderIntentRecord`, the limit read the character's live limits (`limitLines`). Since v150.38 limits
+  are not gated after a writer: the drives writer is gone, and the limit read itself is the strict question
+  (docs/04, spoken limits).
 
 - The future-tracker gate asks only about **new agreed** items; planning items, updates and endings of
   entries on record, and lines already read are not gated. A promise/task/meeting that fails is kept on

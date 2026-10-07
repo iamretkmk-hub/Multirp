@@ -135,24 +135,12 @@ const {chromium}=require('playwright');
   ok("the motive gate sees the motives already carried", /^MOTIVES Burcu ALREADY CARRIES/.test(i1.st||"")&&/already carries/i.test(i1.q.criteria.false), JSON.stringify([String(i1.st).slice(0,120)]));
   ok("the motive question carries kind, target and aim", i1.q&&/a grievance toward Emre/.test(i1.q.instructions)&&/apologise/.test(i1.q.instructions), JSON.stringify(i1.q));
 
-  console.log("\n[limits]");
-  const lim=async(probs)=>pg.evaluate(async(probs)=>{
-      const c=curChat(); c.spokenLimits={p_b:[{id:"lim_old",text:"not in front of Nil",kind:"limit",about:"",saidMid:"m_old",day:3,period:chatPeriod(c),expires:"until_changed",at:1}]}; c.spokenLimitsRead={};
-      const _o=__L("Burcu","Nil'in önünde olmaz."); _o.mid="m_old";
-      c.messages=[_o,__L("Emre","Bana bir salata yapar mısın?"),__L("Burcu","Git kendin yap salatayı. Ve bu gece olmaz, bunu bilmeni istiyorum.")];
-      window.__out={"Drives & brakes":JSON.stringify({toward:"x",against:"y",released:[],
-        limits:[{line:"L1",text:"go make your own salad",about:"",expires:"scene"},{line:"L1",text:"not tonight",about:"being together tonight",expires:"day"}]})};
-      window.__p=q=>/salad/.test(q)?probs[0]:probs[1]; window.__reqs=[];
-      await _writePsyche(c,state.personas.find(p=>p.id==="p_b"),"__user__","Emre","sig"+Math.random(),{line:"Ve bu gece olmaz"});
-      return {kept:(c.spokenLimits.p_b||[]).map(l=>l.text),reqs:window.__reqs.length,st:window.__reqs[0]&&window.__reqs[0].state,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)};
-    },probs);
-  const l1=await lim([0.05,0.9]);
-  ok("the salad 'limit' (5%) is not kept; the real one (90%) is", l1.reqs===1&&l1.kept.indexOf("go make your own salad")<0&&l1.kept.indexOf("not tonight")>=0, JSON.stringify(l1.kept)+" reqs="+l1.reqs);
-  ok("the limit gate sees the limits already drawn, and that is a NO", /^LIMITS Burcu HAS ALREADY DRAWN[\s\S]*not in front of Nil/.test(l1.st||"")&&l1.q&&l1.q.every(x=>/already on record/i.test(x.criteria.false)), JSON.stringify([String(l1.st).slice(0,160)]));
+  // v150.38 — limits are no longer gated after the drives writer: they are read, strictly, in the reply's
+  // Decisions request (tests/spoken-limits.browser.js).
 
   console.log("\n[prompts and settings]");
-  ok("the six prompts are registry prompts on the Strict gates card", await pg.evaluate(()=>{
-      const keys=["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent","x_gate_limit"];
+  ok("the gate prompts (and the two spoken-limit questions) are registry prompts on the Strict gates card", await pg.evaluate(()=>{
+      const keys=["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent","x_limit_read","x_limit_release"];
       const card=ENGINE_PAYLOAD_DEFS.find(d=>d.key==="strict_gates");
       return (keys.every(k=>PROMPT_BY_KEY[k])&&card&&keys.every(k=>card.blocks.some(x=>x.promptKey===k))) ? true : "missing"; }));
   ok("settings round-trip; a fresh install has it on at 0.8", await pg.evaluate(()=>{

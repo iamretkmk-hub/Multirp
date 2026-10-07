@@ -109,8 +109,9 @@ const {chromium}=require('playwright');
       // v62.1 — the absence note is gated to DIRECT ADDRESS: this line calls Deniz by name.
       // Merely asking AFTER an absent person no longer raises it (asserted below).
       {mid:"q2",role:"user",content:"Deniz, neredesin?",present:["p_q","p_r"]}];
-    chat._psyche={p_q:{toward:"She wants to be told she was missed.",
-                       against:"Saying it first would cost her the only ground she has."}};
+    // v150.38 — the drives block is the spoken limits now (the drives writer is gone)
+    chat.spokenLimits={p_q:[{id:"lim1",text:"Not in front of your mother.",kind:"limit",about:"",saidMid:"q1",
+      day:chat.gameDay||1,period:"Evening",place:"The port",placeId:"",expires:"until_changed",at:1}]};
     // memories, promises and play notes — so RECENT/DISTANT MEMORIES, PROMISES, HOW YOU SPEAK and
     // YOU ALREADY SAID THIS all render for real instead of resolving empty and proving nothing.
     state.mem=true;
@@ -127,9 +128,9 @@ const {chromium}=require('playwright');
        promise:"to call on Sunday",statusDay:3,day:1,note:"she did not"}];
     markChatDirty(chat);
     const t=ptDefaultTemplate("solo");
-    return {tplHasDrives:/CAUGHT BETWEEN/.test(t)&&/\{\{call\/\/drive_toward\}\}/.test(t)};
+    return {tplHasDrives:/\{\{call\/\/drive_limits\}\}/.test(t)&&!/CAUGHT BETWEEN/.test(t)};
   });
-  ok("the drives heading and closing note are prose in the template",
+  ok("the drives piece in the template is the spoken limits (no drives heading or note any more)",
      loaded.tplHasDrives===true?true:"drives not unpacked");
 
   console.log("\n[with drives, an absent name, and a scene that moved]");
@@ -147,10 +148,10 @@ const {chromium}=require('playwright');
         buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,
           targetId:"__user__",injected}));
       const miss=[];
-      if(!(B._drives&&B._drives.drive_toward&&B._drives.drive_against)) miss.push("drives");
+      if(!(B._drives&&B._drives.drive_limits)) miss.push("drives");
       if(!(B._rg&&B._rg.guidance_absence)) miss.push("absence note");
       if(!(B._rt&&B._rt.target_header&&B._rt.target_bg)) miss.push("target fragments");
-      if(!(B.drives&&B.drives.indexOf("CAUGHT BETWEEN")>-1)) miss.push("drives block");
+      if(!(B.drives&&B.drives.indexOf("HOW FAR THIS GOES")>-1)) miss.push("drives block");
       if(!(B._mem&&B._mem.mem_recent_entries&&B._mem.mem_distant_entries)) miss.push("memories");
       // promise_ended is its own block (_pre) since the split that moved it to the tail
       if(!(B._pr&&B._pr.promise_yours&&B._pr.promise_owed&&B._pre&&B._pre.promise_ended)) miss.push("promises");

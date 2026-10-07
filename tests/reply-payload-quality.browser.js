@@ -6,7 +6,7 @@
      3  a quest ask / a confrontation was recorded as made before it was played (+ the rumour answer judge)
      4  /whisper: the quoted speech after the starred span was heard by the room
      5  OTHERS PRESENT and [here now] named people PRIVACY put in another area
-     6  drives & brakes from the previous scene
+     6  drives & brakes from the previous scene (v150.38: the drives writer is gone)
      7  an arrival could not hear the greeting said to them at the door
      8  other characters' visible actions were stripped by default
      9  the memory query was built from lines the character never heard
@@ -72,6 +72,9 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       return c;
     };
     window.__P=id=>state.personas.find(p=>p.id===id);
+    // the reply's Decisions request (emotion pick, spoken limits) is answered here, never sent to the network
+    { const realF=window.fetch; window.fetch=async(u,o)=>String(u).indexOf("/api/alpha/decisions")>-1
+        ? new Response(JSON.stringify({answers:{}}),{status:200,headers:{'content-type':'application/json'}}) : realF(u,o); }
     window.__settle=async(ms)=>{ const t=Date.now(); while(Date.now()-t<(ms||8000)){ await new Promise(r=>setTimeout(r,60));
       if(!_presentPlaying&&!_presentQueue.length) { await new Promise(r=>setTimeout(r,120)); if(!_presentPlaying&&!_presentQueue.length) return true; } } return false; };
     window.__rp=()=>window.__calls.filter(c=>/^Roleplay reply/.test(c.dbg));
@@ -235,21 +238,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("earshotSplit is the one reading", JSON.stringify(r5.split.here)==='["p_berk"]' && JSON.stringify(r5.split.apart)==='["p_oz"]', JSON.stringify(r5.split));
 
   /* ------------------------------------------------------------------------------------------ */
-  console.log("\n[6 — drives & brakes belong to the scene they were written for]");
-  const r6=await pg.evaluate(()=>{
-    const c=__setup(); const sami=__P("p_sami");
-    const mk=()=>buildTailBlocks({chat:c,selfP:sami,selfId:"p_sami",selfName:"Sami Ozucak",targetName:"Emre",targetId:"__user__",multi:true,injected:{}});
-    c._psyche={p_sami:{sig:psycheSig(c,sami,"__user__"),toward:"You want the money.",against:"Berker is sitting right there."}};
-    const same=!!mk().drives;
-    c.presentIds=["p_sami"]; c.subPos={p_sami:"s_tab"};                // Berker left: the brake is about someone gone
-    const moved=!!mk().drives;
-    c._psyche={p_sami:{toward:"a",against:"b"}};                        // a record from before signatures
-    const legacy=!!mk().drives;
-    return {same,moved,legacy};
-  });
-  ok("same scene: the block ships", r6.same===true, JSON.stringify(r6));
-  ok("the cast changed: last scene's pull and brake wait for fresh text", r6.moved===false, JSON.stringify(r6));
-  ok("a record without a signature is left as it was", r6.legacy===true, JSON.stringify(r6));
+  // 6 — v150.38: the drives writer is gone, so there is no drives record from an earlier scene to hold back.
 
   /* ------------------------------------------------------------------------------------------ */
   console.log("\n[7 — an arrival hears the greeting said to them at the door]");

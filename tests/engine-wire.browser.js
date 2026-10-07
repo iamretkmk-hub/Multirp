@@ -100,25 +100,8 @@ const {chromium}=require('playwright');
     ["x_day_transition_narration",{scene:"LAST"},{day:"4",next_day:"5"},
       "The scene so far (Day 4):\nLAST\n\nWrite the day-ending transition into Day 5."],
     ["memBuild",{convo:"CONVO"},{who:"Ayse"},"Text conversation Ayse had with "+U+":\n\nCONVO"],
-    ["memBuild",{data:"PLAIN"},{},"PLAIN"],
-    /* the drives-and-brakes engine: eleven sections, each under its own heading. Both the
-       everything-present and the sparse shape, because most turns are the sparse one. */
-    /* v149.1 — the readings are behaviour lines, and they sit right before the risk (here: after the scene) */
-    ["psychePrompt",{character:"Ayse",personality:"Wry",goals:"Find the shop",backstory:"Left at 19",
-      with:"Kemal",ties:"TIES",promises:"PROM",trackers:"TRK",scene:"SCENE",exchange:"EX",axes:"- Your eyes keep going back to Kemal."},
-      {target:"Kemal",self:"Ayse"},
-      "THE CHARACTER: Ayse\n\nWHO THEY ARE: Wry\n\nWHAT THEY WANT OUT OF THEIR LIFE: Find the shop"
-      +"\n\nWHERE THEY CAME FROM: Left at 19\n\nTHEY ARE WITH: Kemal"
-      +"\n\nEVERY TIE THEY HAVE (the people a conscience is made of):\nTIES"
-      +"\n\nTHE WORDS THAT BIND — what they have given, and what was given to them. Nobody else's:\nPROM"
-      +"\n\nTRUE OF THEM RIGHT NOW:\nTRK"
-      +"\n\nWHERE THEY ARE AND WHO CAN SEE:\nSCENE"
-      +"\n\nHOW Ayse STANDS WITH Kemal — private, never stated in the story. Each line is what a reading changes in how Ayse acts;"
-      +" anything not listed is too faint to matter:\n- Your eyes keep going back to Kemal."
-      +"\n\nWHAT HAS JUST BEEN HAPPENING:\nEX"],
-    ["psychePrompt",{character:"Ayse",personality:"",goals:"",backstory:"",with:"Kemal",
-      ties:"",promises:"",trackers:"",scene:"",exchange:"",axes:""},{target:"Kemal"},
-      "THE CHARACTER: Ayse\n\nTHEY ARE WITH: Kemal"]
+    ["memBuild",{data:"PLAIN"},{},"PLAIN"]
+    // v150.38 — the drives-and-brakes engine (psychePrompt) is gone.
   ];
 
   console.log("\n[the user message each converted engine puts on the wire]");

@@ -1096,6 +1096,14 @@
   .plqBtns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;}
   .plqBtns .plqArrows{margin-left:auto;}
   .plqBadge{font-size:10px;letter-spacing:.4px;opacity:.75;border:1px solid var(--border);border-radius:8px;padding:2px 6px;white-space:nowrap;}
+  /* v150.62 — the Readable payload view (Debug and the Payloads previews): white fixed wording, green data, red decisions */
+  .pvView{display:flex;flex-direction:column;gap:8px;min-width:0;max-width:100%}
+  .pvMsg{min-width:0}
+  .pvBadge{display:inline-block;margin-bottom:4px;opacity:1;font-size:11px;white-space:normal;word-break:break-word}
+  .pvPre{margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;overflow-x:hidden;color:var(--text);max-width:100%;box-sizing:border-box}
+  .pvw{color:var(--text)} .pvd{color:var(--good)} .pvr{color:var(--danger)}
+  .pvH{font-weight:700}
+  .pvLegend b,.pvLegend span{font-weight:600}
   .plqLabel{flex:1;min-width:120px;font-size:13px;font-weight:600;}
   .plqArrows{display:flex;gap:4px;}
   .plqArrows button{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;width:30px;height:30px;font-size:14px;line-height:1;cursor:pointer;}
@@ -7490,6 +7498,141 @@ function mixedLangDirective(fields){
 - Proper nouns are never translated. JSON keys and fixed enum values stay EXACTLY as the prompt specifies.`;
 }
 
+/* ===== v150.62 — WHERE EACH PART OF A PAYLOAD CAME FROM (the Readable view) ================================
+   Debug's Readable view and the payload previews colour a payload by source: white is fixed wording (a fragment's
+   main body, an option chosen by a code fact), green is live data (every {{call//…}} value and {{value}} filled in,
+   and the conversation), red is what the decision model chose (an option whose ask passed, or whose condition reads
+   a flag a decision set). The builders mark those spans with private-use characters ONLY in a second, annotated pass:
+   the messages that are sent come from the first pass exactly as before, and the annotated copy is kept here, keyed
+   by the clean text, for dbg() to pick up. It never reaches a request — ptBuildMessages and epMessages strip their
+   output, and chatCompletion strips once more before anything is sent. The debug export stays the clean payload. */
+const PV_D0="\uE000", PV_D1="\uE001", PV_R0="\uE002", PV_R1="\uE003";
+const PV_ANY=/[\uE000-\uE003]/g, PV_HAS=/[\uE000-\uE003]/;
+// The flags a decision sets: the emotion pick (emotion, intensity, tone, ego) and the reply check of the last reply.
+const PV_DECISION_FLAGS=["emotion","intensity","tone","ego","broke_character","spoke_for_player","repeated","lost_track"];
+function pvStrip(s){ return (typeof s==="string"&&PV_HAS.test(s))?s.replace(PV_ANY,""):s; }
+function pvCleanMessages(msgs){
+  if(!Array.isArray(msgs)||!msgs.some(m=>m&&typeof m.content==="string"&&PV_HAS.test(m.content)))return msgs;
+  return msgs.map(m=>(m&&typeof m.content==="string"&&PV_HAS.test(m.content))?Object.assign({},m,{content:pvStrip(m.content)}):m);
+}
+/* Mark every line of a text so that what the builders read is unchanged: a line's indent, a heading's "# " and its
+   trailing blanks stay outside the marks, and a blank line gets none. */
+function pvWrap(t,o,c){
+  return String(t==null?"":t).split("\n").map(l=>{ const m=l.match(/^([ \t]*(?:#{1,6}[ \t]+)?)(.*?)([ \t]*)$/);
+    return (m&&m[2])?m[1]+o+m[2]+c+m[3]:l; }).join("\n");
+}
+// Does a choose-when code condition read a flag that a decision set?
+function pvCondByDecision(code){
+  return String(code||"").split(/\s+(?:and|or)\s+/i).some(t=>{
+    const m=String(t).trim().replace(/^not\s+/i,"").match(/^([a-zA-Z0-9_]+)/);
+    return !!(m&&PV_DECISION_FLAGS.indexOf(m[1].toLowerCase())>=0); });
+}
+const _pvAnnot=new Map(), PV_KEEP=48;
+function pvRemember(clean,annot){
+  if(typeof clean!=="string"||typeof annot!=="string"||clean===annot||pvStrip(annot)!==clean)return;
+  _pvAnnot.delete(clean); _pvAnnot.set(clean,annot);
+  while(_pvAnnot.size>PV_KEEP)_pvAnnot.delete(_pvAnnot.keys().next().value);
+}
+// The annotated copy of one sent message: the built message itself, or one a caller wrapped in more text.
+function pvAnnotFor(content){
+  if(typeof content!=="string"||!content)return null;
+  if(_pvAnnot.has(content))return _pvAnnot.get(content);
+  let best=null;
+  _pvAnnot.forEach((a,k)=>{ if(k.length>200&&k.length<=content.length&&(!best||k.length>best.k.length)){
+    const i=content.indexOf(k); if(i>=0)best={k,a,i}; } });
+  return best?content.slice(0,best.i)+best.a+content.slice(best.i+best.k.length):null;
+}
+function pvAnnotList(msgs){
+  if(!Array.isArray(msgs))return null;
+  const out=msgs.map(m=>(m&&typeof m.content==="string"&&m.role!=="assistant")?pvAnnotFor(m.content):null);
+  return out.some(Boolean)?out:null;
+}
+/* ---- the renderer, shared by Debug's Readable view and the payload previews ---- */
+// An annotated text as HTML: headings (lines starting with #) bold, data green, decisions red; `base` colours the
+// unmarked text ("d" for a conversation turn that has no annotation).
+function pvTextHtml(s,base){
+  const lines=[[]]; let d=0,r=0;
+  String(s==null?"":s).split(/([\uE000-\uE003])/).forEach(p=>{
+    if(p===PV_D0){d++;return;} if(p===PV_D1){d=Math.max(0,d-1);return;}
+    if(p===PV_R0){r++;return;} if(p===PV_R1){r=Math.max(0,r-1);return;}
+    if(!p)return;
+    const c=d>0?"d":r>0?"r":(base||"");
+    p.split("\n").forEach((q,i)=>{ if(i>0)lines.push([]); if(q)lines[lines.length-1].push({t:q,c}); });
+  });
+  return lines.map(L=>{
+    if(L.length>1&&/^[ \t]*#+[ \t]*$/.test(L[0].t))L[0]={t:L[0].t,c:L[1].c};   // a marked heading takes its "# " with it
+    const html=L.map(x=>`<span class="pv${x.c||"w"}">${esc(x.t)}</span>`).join("");
+    return /^\s*#/.test(L.map(x=>x.t).join(""))?`<b class="pvH">${html}</b>`:html;
+  }).join("\n");
+}
+function _pvScalar(v){
+  const s=(v==null)?"":(typeof v==="string"?v:(typeof v==="object"?JSON.stringify(v):String(v)));
+  return s.replace(/data:image\/[a-z+]*;base64,[A-Za-z0-9+/=]{100,}/g,"[image data omitted]");
+}
+// A plain object as indented "key: value" lines; `mark` paints the values as data.
+function _pvLines(v,ind,mark,out){
+  const pad="  ".repeat(ind), val=s=>mark?pvWrap(s,PV_D0,PV_D1):s;
+  const multi=(head,s)=>{ out.push(head); s.split("\n").forEach(l=>out.push(pad+"  "+val(l))); };
+  if(Array.isArray(v)){
+    if(!v.length){ out.push(pad+"(none)"); return; }
+    v.forEach(x=>{ if(x&&typeof x==="object"){ out.push(pad+"-"); _pvLines(x,ind+1,mark,out); }
+      else { const s=_pvScalar(x); if(s.indexOf("\n")>=0)multi(pad+"-",s); else out.push(pad+"- "+val(s)); } });
+    return;
+  }
+  if(v&&typeof v==="object"){
+    Object.keys(v).forEach(k=>{ const x=v[k];
+      if(x&&typeof x==="object"){ out.push(pad+k+":"); _pvLines(x,ind+1,mark,out); }
+      else { const s=_pvScalar(x); if(s.indexOf("\n")>=0)multi(pad+k+":",s); else out.push(pad+k+": "+val(s)); } });
+    return;
+  }
+  out.push(pad+val(_pvScalar(v)));
+}
+// The request's settings beside its body, on one line.
+function _pvParams(p,skip){
+  return Object.keys(p||{}).filter(k=>skip.indexOf(k)<0).map(k=>k+": "+_pvScalar(p[k])).join(" · ");
+}
+/* The whole payload, readable: {html, text}. A chat payload is one block per message — a bold badge and its text,
+   coloured from `annots` (the annotated copy of each message, when the builder left one; a conversation turn
+   without one is green). Anything else reads as headings and indented "key: value" lines, a Decisions request as
+   its state (values green) and then each question with its instructions and criteria. `text` is the plain copy. */
+function pvReadable(p,annots,opts){
+  opts=opts||{};
+  const pre=`class="pvPre"${opts.maxH?` style="max-height:${+opts.maxH}px;overflow:auto"`:""}`;
+  if(p&&Array.isArray(p.messages)){
+    const html=[`<div class="desc pvLegend"><span class="pvw">white</span>: fixed wording · <span class="pvd">green</span>: live data · <span class="pvr">red</span>: chosen by the decision model</div>`];
+    const text=[];
+    const params=_pvParams(p,["messages"]);
+    if(params){ html.push(`<div class="desc" style="word-break:break-word">${esc(params)}</div>`); text.push(params); }
+    p.messages.forEach((m,i)=>{
+      const badge="message "+(i+1)+" — "+((m&&m.role)||"?")+(m&&m.name?" ("+m.name+")":"");
+      const content=(m&&typeof m.content==="string")?m.content:JSON.stringify(m&&m.content,null,2);
+      const a=annots&&annots[i];
+      const turn=!!m&&(m.role==="user"||m.role==="assistant");
+      html.push(`<div class="pvMsg"><div class="plqBadge pvBadge"><b>${esc(badge)}</b></div><pre ${pre}>${a?pvTextHtml(a,""):pvTextHtml(pvStrip(String(content)),turn?"d":"")}</pre></div>`);
+      text.push("=== "+badge+" ===\n"+pvStrip(String(content)));
+    });
+    return {html:`<div class="pvView" data-pvview>${html.join("")}</div>`,text:text.join("\n\n")};
+  }
+  const lines=[];
+  if(p&&typeof p==="object"&&!Array.isArray(p)&&p.questions&&typeof p.questions==="object"&&p.state!==undefined){
+    const params=_pvParams(p,["state","questions"]); if(params)lines.push(params,"");
+    lines.push("# STATE"); _pvLines(p.state,1,true,lines); lines.push("","# QUESTIONS");
+    Object.keys(p.questions).forEach(k=>{ const q=p.questions[k]||{};
+      lines.push("","## "+k+(q.type?" — "+q.type:""));
+      if(q.instructions!=null)_pvScalar(q.instructions).split("\n").forEach(l=>lines.push(l));
+      Object.keys(q).filter(rk=>rk!=="type"&&rk!=="instructions").forEach(rk=>{ const v=q[rk];
+        if(v&&typeof v==="object"){ lines.push(rk+":"); _pvLines(v,1,false,lines); }
+        else lines.push(rk+": "+_pvScalar(v)); });
+    });
+  }else if(p&&typeof p==="object"&&!Array.isArray(p)){
+    Object.keys(p).forEach(k=>{ const v=p[k];
+      if(v&&typeof v==="object"){ lines.push("# "+k); _pvLines(v,1,false,lines); }
+      else { const s=_pvScalar(v); if(s.indexOf("\n")>=0){ lines.push("# "+k); s.split("\n").forEach(l=>lines.push("  "+l)); } else lines.push(k+": "+s); } });
+  }else lines.push(_pvScalar(p));
+  const s=lines.join("\n");
+  return {html:`<div class="pvView" data-pvview><pre ${pre}>${pvTextHtml(s,"")}</pre></div>`,text:pvStrip(s)};
+}
+
 /* ===== DEBUG LOG ===== captures every payload sent to an AI service ===== */
 let dbgLog=[];           // newest last
 const DBG_MAX=200;       // keep memory bounded (v150.52: 80 → 200, so an export holds a whole turn and what followed it)
@@ -7498,6 +7641,8 @@ function dbg(label,service,endpoint,payload){
   const entry={id:"dbg_"+(Date.now().toString(36))+"_"+(_dbgc++),
     label,service,endpoint,t:Date.now(),
     payload,status:"sent",result:null,tokens:estTokens(payload)};
+  // v150.62 — the annotated copy of a built payload, for the Readable view only (never exported, never sent)
+  try{ if(payload&&Array.isArray(payload.messages)){ const a=pvAnnotList(payload.messages); if(a)entry.annot=a; } }catch(e){}
   /* v73.1 — the clock the duration is measured from, stamped AFTER the payload has been sized.
      `t` is the log timestamp and is taken before estTokens walks the payload, so using it for the
      duration folded that walk into every call's reported time; and a caller that logs the entry
@@ -7824,12 +7969,10 @@ function payloadCapsules(p){
 function fmtSentJSON(p){
   try{ return JSON.stringify(p,null,2); }catch(e){ return String(p); }
 }
-function dbgViewMode(){ try{ return store.raw(K.dbgView,"sent")==="capsules"?"capsules":"sent"; }catch(e){ return "sent"; } }
-function setDbgView(m){ try{ store.setRaw(K.dbgView, m==="capsules"?"capsules":"sent"); }catch(e){} renderDebug(); }
-function fmtCapsules(p){
-  const c=payloadCapsules(p);
-  return c?JSON.stringify(c,null,2):null;
-}
+/* v150.62 — "Readable" replaces the capsule view: the payload as the Payloads preview shows it, one block per
+   message, coloured by where each part came from (see pvReadable). A stored "capsules" choice reads as Readable. */
+function dbgViewMode(){ try{ const v=store.raw(K.dbgView,"sent"); return (v==="readable"||v==="capsules")?"readable":"sent"; }catch(e){ return "sent"; } }
+function setDbgView(m){ try{ store.setRaw(K.dbgView, (m==="readable"||m==="capsules")?"readable":"sent"); }catch(e){} renderDebug(); }
 /* v28.7 — the untruncated result for the expanded card and the clipboard. shortResult stays for
    any one-line summary; this is what you actually read. Only real image DATA is elided — a 2MB
    base64 blob is not something anyone wants pasted. */
@@ -7862,14 +8005,16 @@ function renderDebug(){
     const dur=e.ms!=null?fmtDur(e.ms):(e.status==="sent"?"running…":"");
     const durColor=e.ms==null?"var(--muted)":(e.ms>15000?"var(--danger)":e.ms>5000?"#E8A33D":"var(--good)");
     const card=document.createElement('div');card.className="card";card.style.gap="8px";card.style.cursor="pointer";
-    // Prefer the structured JSON-capsule view for chat payloads; fall back to the
-    // readable payload dump for image/video calls that have no messages array.
-    const capStr=fmtCapsules(e.payload);
-    const wantCaps=(dbgViewMode()==="capsules");
-    const usingCaps=!!(capStr&&wantCaps);
-    const payloadView=usingCaps?capStr:(capStr?fmtSentJSON(e.payload):fmtPayload(e.payload));
-    const payloadLabel=usingCaps?"JSON capsules"
-      :(capStr?"The request body, exactly as sent":"Payload sent");
+    /* v150.62 — two views of the same payload. "As sent" is the request body verbatim (JSON for a chat payload);
+       "Readable" is what the Payloads preview shows — one block per message, headings bold, coloured by where each
+       part came from (pvReadable). The payload is rendered only when its card is open: the list is rebuilt on every
+       call, and rendering two hundred closed payloads each time is wasted work. */
+    const isChat=!!(e.payload&&Array.isArray(e.payload.messages));
+    const hasBody=!!(e.payload&&typeof e.payload==="object");
+    const readable=hasBody&&dbgViewMode()==="readable";
+    const sentText=()=>isChat?fmtSentJSON(e.payload):fmtPayload(e.payload);
+    const payloadLabel=readable?"Readable — where each part came from"
+      :(isChat?"The request body, exactly as sent":"Payload sent");
     card.innerHTML=`
       <div class="kvline" style="padding:0;align-items:flex-start">
         <div style="min-width:0">
@@ -7885,7 +8030,7 @@ function renderDebug(){
           <span class="pill" data-arrow>▸</span>
         </div>
       </div>
-      <div data-body class="hide" style="display:flex;flex-direction:column;gap:8px">
+      <div data-body class="hide" style="display:flex;flex-direction:column;gap:8px;min-width:0">
         <div class="desc" style="word-break:break-all">${esc(e.endpoint)}</div>
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
         ${e.usage?`<div class="desc">🧮 Billed: <b>${+e.usage.prompt_tokens||0}</b> prompt + <b>${+e.usage.completion_tokens||0}</b> completion tokens</div>`:""}
@@ -7893,27 +8038,33 @@ function renderDebug(){
         ${Array.isArray(e.notes)&&e.notes.length?`<div class="desc">🔎 ${e.notes.map(esc).join("<br>🔎 ")}</div>`:""}
         <div class="kvline" style="padding:0">
           <label style="margin:0">${payloadLabel}</label>
-          ${capStr?`<span class="seg" style="flex-shrink:0">
-            <button type="button" data-dbgview="sent" class="${usingCaps?"":"on"}">As sent</button>
-            <button type="button" data-dbgview="capsules" class="${usingCaps?"on":""}">Capsules</button>
+          ${hasBody?`<span class="seg" style="flex-shrink:0">
+            <button type="button" data-dbgview="sent" class="${readable?"":"on"}">As sent</button>
+            <button type="button" data-dbgview="readable" class="${readable?"on":""}">Readable</button>
           </span>`:""}
         </div>
-        <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-x:auto">${esc(payloadView)}</pre>
+        <div data-payload style="min-width:0"></div>
         ${e.result!=null?`<label style="margin:0">Result (${esc(e.status)})</label>
           <pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word">${esc(fullResult(e.result))}</pre>`:""}
-        <button class="btn sec small" data-copy>Copy JSON + response</button>
+        <button class="btn sec small" data-copy>${readable?"Copy text + response":"Copy JSON + response"}</button>
       </div>`;
     const body=card.querySelector('[data-body]');
     const arrow=card.querySelector('[data-arrow]');
+    const fillPayload=()=>{
+      const host=card.querySelector('[data-payload]'); if(!host||host.dataset.filled)return;
+      host.dataset.filled="1";
+      host.innerHTML=readable?pvReadable(e.payload,e.annot).html
+        :`<pre style="margin:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-x:auto">${esc(sentText())}</pre>`;
+    };
     // Restore this entry's expanded state across the rebuild.
-    if(_dbgOpen.has(e.id)){ body.classList.remove('hide'); arrow.textContent="▾"; }
+    if(_dbgOpen.has(e.id)){ fillPayload(); body.classList.remove('hide'); arrow.textContent="▾"; }
     card.addEventListener('click',ev=>{
       if(ev.target.closest('[data-copy]'))return;
       if(ev.target.closest('[data-dbgview]'))return;
-      if(ev.target.closest('pre'))return;          // selecting text inside a payload must not collapse it
+      if(ev.target.closest('pre')||ev.target.closest('[data-pvview]'))return;   // selecting text inside a payload must not collapse it
       const open=body.classList.toggle('hide')===false;
       arrow.textContent=open?"▾":"▸";
-      if(open)_dbgOpen.add(e.id); else _dbgOpen.delete(e.id);
+      if(open){ fillPayload(); _dbgOpen.add(e.id); } else _dbgOpen.delete(e.id);
     });
     card.querySelectorAll('[data-dbgview]').forEach(btn=>{
       btn.addEventListener('click',ev=>{ ev.stopPropagation(); setDbgView(btn.dataset.dbgview); });
@@ -7921,18 +8072,26 @@ function renderDebug(){
     card.querySelector('[data-copy]').addEventListener('click',ev=>{
       ev.stopPropagation();
       // v28.7 — the reply is half the reason to copy a payload; it goes on the clipboard with it.
-      // For the capsule view it lands INSIDE the JSON as a `response` field, so what you paste is
-      // still one valid document.
-      let out=payloadView;
-      if(e.result!=null){
-        if(capStr){
-          try{ const o=JSON.parse(payloadView); o.response=fullResult(e.result); o.status=e.status;
-               if(e.ms!=null)o.ms=e.ms; out=JSON.stringify(o,null,2); }
-          catch(_){ out=payloadView+"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result); }
-        }else out=payloadView+"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result);
+      // For a chat payload "as sent" it lands INSIDE the JSON as a `response` field, so what you paste
+      // is still one valid document. v150.62 — Readable copies its plain text (no colour, no markup).
+      const resp=()=>"\n\n=== RESPONSE ("+e.status+") ===\n"+fullResult(e.result);
+      let out;
+      if(readable){
+        out=pvReadable(e.payload,e.annot).text;
+        if(e.result!=null)out+=resp();
+      }else{
+        const payloadView=sentText();
+        out=payloadView;
+        if(e.result!=null){
+          if(isChat){
+            try{ const o=JSON.parse(payloadView); o.response=fullResult(e.result); o.status=e.status;
+                 if(e.ms!=null)o.ms=e.ms; out=JSON.stringify(o,null,2); }
+            catch(_){ out=payloadView+resp(); }
+          }else out=payloadView+resp();
+        }
       }
       navigator.clipboard?.writeText(out);
-      toast((capStr?"JSON":"Payload")+" + response copied");
+      toast((readable?"Readable text":isChat?"JSON":"Payload")+" + response copied");
     });
     el.appendChild(card);
   });
@@ -11784,6 +11943,7 @@ async function chatCompletion(messages,model,opts={}){
     : provFor((typeof opts.fn==="string"&&opts.fn)?opts.fn:(opts.rp===true?"rp":""));
   const _isOR=_api.id==="or";
   if(!_api.key)throw{friendly:"No "+_api.label+" API key set. Add it in Settings → API Keys."};
+  messages=pvCleanMessages(messages);   // v150.62 — the Readable view's marks never leave the app (last line of defence)
   const body={model,messages,temperature:opts.temp??state.temp,max_tokens:opts.max??state.tokens};
   // REASONING CONTROL. Hybrid models on OpenRouter (e.g. deepseek/deepseek-v4-pro) default to
   // thinking-ON, which both wastes the token budget on hidden reasoning AND can leak that reasoning
@@ -28768,7 +28928,7 @@ function _dedupePayloadSections(text){
   if(parts.length<2)return t;
   const seen=new Set(), out=[];
   parts.forEach(sec=>{
-    const key=sec.replace(/\s+/g," ").trim();
+    const key=pvStrip(sec).replace(/\s+/g," ").trim();   // v150.62 — an annotated copy (Readable view) dedupes as the text does
     if(key.length>40){ if(seen.has(key))return; seen.add(key); }
     out.push(sec);
   });
@@ -29127,9 +29287,15 @@ const PT_NAME_VARS=["char","self","npc.name","user","target","response.target"];
 /* Expand one segment's text. Returns "" when everything in it dropped out. */
 /* v45.1 — is this call one of the layout group headings? (see LY_ORDER / the layout block) */
 function _ptIsHead(key){ try{ return LY_ORDER.indexOf(String(key).split("//")[0])>-1; }catch(e){ return false; } }
-function ptExpand(text,srcs,vars,report){
+/* v150.62 — `ann` (the Readable view's second pass only; null when the payload that is sent is built): every filled
+   call and value is marked as data, except the calls ann.fixed(key) names as fixed wording; and a paragraph inside a
+   red span (fragCompile's decision-chosen options) is marked red. The marks are taken off a paragraph before any of
+   the logic below reads it and put back on its output line by line, so the annotated build, stripped, is the build. */
+function ptExpand(text,srcs,vars,report,ann){
   const paras=String(text==null?"":text).split(/\n[ \t]*\n/);
   const keep=[];
+  let _red=false;
+  const _dat=(k,v)=>(ann&&v&&!(ann.fixed&&ann.fixed(k)))?pvWrap(v,PV_D0,PV_D1):v;
   /* (!) v150.24 — A HEADING TYPED INTO THE LAYOUT IS ONLY AS ALIVE AS WHAT FOLLOWS IT. A group heading
      written as plain text ("# WHAT YOU DECIDED") in a paragraph of its own has no call to die with, so it
      printed even when every block under it came back empty, straight above the next heading: a promised
@@ -29139,6 +29305,10 @@ function ptExpand(text,srcs,vars,report){
   let _heldHead=null;
   const _isLiteralHead=p=>!/\{\{call\/\//.test(p)&&p.trim()!==""&&p.split("\n").every(l=>!l.trim()||/^\s*#/.test(l));
   paras.forEach(p=>{
+    let _pRed=false;
+    if(ann){ _pRed=_red;
+      if(/[\uE002\uE003]/.test(p)){ p.replace(/[\uE002\uE003]/g,c=>{ if(c===PV_R0){ _red=true; _pRed=true; } else _red=false; return c; });
+        p=p.replace(/[\uE002\uE003]/g,""); } }
     const _litHead=_isLiteralHead(p);
     /* pass 1 — resolve every call in this paragraph up front, so pass 2 can tell an empty call
        from a filled one without re-running the lookup. */
@@ -29207,7 +29377,7 @@ function ptExpand(text,srcs,vars,report){
     const typed=new Set();
     { let vm; PT_VAR.lastIndex=0;
       while((vm=PT_VAR.exec(tmpl))){ const k=vm[1]; if(k!=="call"&&k!=="gap") typed.add(k); } }
-    let out=tmpl.replace(PT_CALL,(mm,n,s)=>vals[s?(n+"//"+s):n]||"");
+    let out=tmpl.replace(PT_CALL,(mm,n,s)=>{ const k=s?(n+"//"+s):n; return ann?_dat(k,vals[k]||""):(vals[k]||""); });
     out=out.replace(PT_VAR,(mm,k)=>{
       if(k==="call") return mm;
       /* v38.1 — {{gap}} IS A BLANK LINE, NOT A MISSING VALUE. Several pieces are a fixed heading,
@@ -29229,13 +29399,14 @@ function ptExpand(text,srcs,vars,report){
            character it is for. Reported so it shows up in Debug instead of in the story. */
         if(!v && report && typed.has(k) && PT_NAME_VARS.indexOf(k)>=0 && report.emptyVar.indexOf(k)===-1)
           report.emptyVar.push(k);
-        return v;
+        return ann?_dat(k,v):v;
       }
       if(report&&typed.has(k)&&report.unknownVar.indexOf(k)===-1) report.unknownVar.push(k);
       return mm;                                       // left visible on purpose
     });
     out=out.replace(/[ \t]+$/gm,"").replace(/\n{3,}/g,"\n\n");
     if(!out.trim()) return;
+    if(_pRed) out=pvWrap(out,PV_R0,PV_R1);
     if(_litHead){ _heldHead=out.trim(); return; }
     if(_heldHead){ keep.push(_heldHead); _heldHead=null; }
     keep.push(out.trim());
@@ -30236,8 +30407,11 @@ function fragAskQuestions(chat,p,kind,vars,targetId){
     questions[x.key]=q; });
   return {questions,state:_fragCtxState(chat,p,targetId,needs)};
 }
-/* Compile this path's fragments into a layout text, with this reply's flags and answers. */
-function fragCompile(kind,flags,asks){
+/* Compile this path's fragments into a layout text, with this reply's flags and answers.
+   v150.62 — `annotate` (the Readable view's pass only): an option the decision model chose — its ask passed, or its
+   condition reads a flag a decision set (PV_DECISION_FLAGS) — is wrapped in red marks. Options are whole paragraphs
+   of the layout, so ptExpand can carry the marks paragraph by paragraph. */
+function fragCompile(kind,flags,asks,annotate){
   const at=fragAt(), head=[], tail=[];
   fragList().forEach(f=>{
     if(!f||f.on===false||(f.paths||[]).indexOf(kind)<0)return;
@@ -30251,10 +30425,10 @@ function fragCompile(kind,flags,asks){
       if(code&&!ptCondTest(code,flags))return;
       let pr=1;
       if(ask){ const v=asks&&asks[_fragKey(f,o)]; if(typeof v!=="number"||v<at)return; pr=v; }
-      hits.push({o,pr});
+      hits.push({o,pr,red:!!annotate&&(!!ask||pvCondByDecision(code))});
     });
     const chosen=(f.mode==="one"&&hits.length>1)?[hits.slice().sort((a,b)=>b.pr-a.pr)[0]]:hits;
-    chosen.forEach(h=>{ const t=_fragTextFor(h.o,kind).trim(); if(t)parts.push(t); });
+    chosen.forEach(h=>{ const t=_fragTextFor(h.o,kind).trim(); if(t)parts.push(h.red?PV_R0+t+PV_R1:t); });
     if(parts.length)(f.seg==="tail"?tail:head).push(parts.join("\n\n"));
   });
   let out="";
@@ -30295,33 +30469,46 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
   try{
     const report={unknownCall:[],unknownVar:[],emptyVar:[]};
     const srcs=ptSources(blocks,rawFn), vars=ptVars(ctx||{});
-    const headSecs=new Set();
-    let seenInstruction=false;
     /* v150.57 — the tail's flags with the head builder's laid over them (target_kind is decided there; the tail's
        guess from the id alone mislabels a named target with no id), for the fragment options and every {{if}} */
     /* (!) v150.59 — and every data name (RAW_DATA_KEYS) as a flag of its own, true when it has data this turn: a fragment
        can say "when there is a second line to quote" ({{if said_line2_raw}}) without a flag made for it. */
     const _fl=ptCondFlags(Object.assign(_ptDataFlags(blocks),(blocks&&blocks._railFlags)||{},(blocks&&blocks._headFlags)||{}));
     const _npc=ctx&&ctx.npc, _ch=ctx&&ctx.chat;
-    const _tplText=_frag?fragCompile(kind,_fl,((_ch&&_npc&&charEmotion(_ch,_npc.id))||{}).asks||{}):ptTemplate(kind);
-    ptParse(_tplText).forEach(pt=>{
-      if(pt.type==="history"){ if(Array.isArray(history)) msgs.push.apply(msgs,history); return; }
-      /* (!) v150.35 — {{if}} conditions in the layout itself, with this reply's flags (render mode, emotion,
-         intensity, tone, ego…): a layout with no {{if}} is unchanged. */
-      const _txt=/\{\{\s*if\s/i.test(pt.text)?ptResolveConds(pt.text,_fl):pt.text;
-      let body=ptExpand(_txt,srcs,vars,report);
-      if(!body.trim()) return;
-      body=_dedupePayloadSections(body);
-      /* Same cross-message de-duplication buildPayload does between head and tail: a section
-         repeated after the transcript is still a repeat. */
-      if(!seenInstruction){
-        body.split(/\n(?=#{1,2} )/).forEach(s=>{ const k=s.replace(/\s+/g," ").trim(); if(k.length>40) headSecs.add(k); });
-        seenInstruction=true;
-      }else{
-        body=body.split(/\n(?=#{1,2} )/).filter(s=>!headSecs.has(s.replace(/\s+/g," ").trim())).join("\n");
-      }
-      if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
-    });
+    const _asks=((_ch&&_npc&&charEmotion(_ch,_npc.id))||{}).asks||{};
+    /* v150.62 — the same build twice: once as it is sent (ann null — exactly as before), then once annotated for the
+       Readable view (data marked green, the decision model's choices red; see PV_D0). The second pass reads the pieces
+       the first one already resolved (ptResolve caches them on srcs) and reports nothing; an annotated message is kept
+       only against the sent one it matches with its marks taken off (pvRemember). */
+    const _build=(ann,out,rep)=>{
+      const headSecs=new Set();
+      let seenInstruction=false;
+      const _tplText=_frag?fragCompile(kind,_fl,_asks,!!ann):ptTemplate(kind);
+      ptParse(_tplText).forEach(pt=>{
+        if(pt.type==="history"){ if(Array.isArray(history)) out.push.apply(out,history); return; }
+        /* (!) v150.35 — {{if}} conditions in the layout itself, with this reply's flags (render mode, emotion,
+           intensity, tone, ego…): a layout with no {{if}} is unchanged. */
+        const _txt=/\{\{\s*if\s/i.test(pt.text)?ptResolveConds(pt.text,_fl):pt.text;
+        let body=ptExpand(_txt,srcs,vars,rep,ann);
+        if(!body.trim()) return;
+        body=_dedupePayloadSections(body);
+        /* Same cross-message de-duplication buildPayload does between head and tail: a section
+           repeated after the transcript is still a repeat. */
+        if(!seenInstruction){
+          body.split(/\n(?=#{1,2} )/).forEach(s=>{ const k=pvStrip(s).replace(/\s+/g," ").trim(); if(k.length>40) headSecs.add(k); });
+          seenInstruction=true;
+        }else{
+          body=body.split(/\n(?=#{1,2} )/).filter(s=>!headSecs.has(pvStrip(s).replace(/\s+/g," ").trim())).join("\n");
+        }
+        if(body.trim()) out.push({role:pt.role,content:body.trim()});
+      });
+      return out;
+    };
+    _build(null,msgs,report);
+    try{
+      const an=_build({fixed:_ptIsHead},[],{unknownCall:[],unknownVar:[],emptyVar:[]});
+      if(an.length===msgs.length) an.forEach((a,i)=>{ if(a&&msgs[i]&&a.role===msgs[i].role) pvRemember(msgs[i].content,a.content); });
+    }catch(e){}
     if(report.unknownCall.length||report.unknownVar.length||report.emptyVar.length){
       const e=dbg("Payload template — names that did not resolve ("+kind+")","In-app",
         "(template check — no network request)",
@@ -30340,6 +30527,7 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
     try{ toast("Payload template error — sent the standard payload instead"); }catch(e2){}
     return null;
   }
+  msgs=pvCleanMessages(msgs);   // v150.62 — never a mark on the wire (the sent build has none; this is the guard)
   return msgs.length?msgs:null;
 }
 
@@ -30704,11 +30892,22 @@ function epMessages(key,systemText,parts,vars){
        where a world's name should be is a bug you cannot. It is also what the classic path does
        with an unfilled name, and the two paths have to agree or parity is a lie. */
     if(vars) Object.keys(vars).forEach(k=>{ tvars[k]=vars[k]; });
-    ptParse(ptTemplate(epTplKey(key))).forEach(pt=>{
+    const _parsed=ptParse(ptTemplate(epTplKey(key)));
+    _parsed.forEach(pt=>{
       if(pt.type==="history") return;           // engines have no transcript slot
       const body=ptExpand(pt.text,srcs,tvars,report);
       if(body.trim()) msgs.push({role:pt.role,content:body.trim()});
     });
+    /* v150.62 — and once more annotated, for Debug's Readable view (see ptBuildMessages): the engine's pieces and
+       values green; its own prompt ({{call//prompt}}) is the engine's wording, so it stays unmarked. */
+    try{
+      const an=[], _fixed=k=>k==="prompt"||k==="prompt//full";
+      _parsed.forEach(pt=>{ if(pt.type==="history")return;
+        const body=ptExpand(pt.text,srcs,tvars,{unknownCall:[],unknownVar:[],emptyVar:[]},{fixed:_fixed});
+        if(body.trim()) an.push({role:pt.role,content:body.trim()}); });
+      if(an.length===msgs.length) an.forEach((a,i)=>{ if(a.role===msgs[i].role) pvRemember(msgs[i].content,a.content); });
+    }catch(e){}
+    msgs=pvCleanMessages(msgs);
     if(report.unknownCall.length||report.unknownVar.length||report.emptyVar.length){
       const e=dbg("Engine template — names that did not resolve ("+key+")","In-app",
         "(template check — no network request)",
@@ -60511,10 +60710,7 @@ function epPreview(k){
   finally{ state.payloadTplOn=was; }
   if(!msgs||!msgs.length){ host.innerHTML=`<div class="desc">This template produced nothing to send — the engine would fall back to its standard payload.</div>`; return; }
   host.innerHTML=`<div class="desc" data-help style="margin-bottom:6px">Structure preview. The engine's own pieces are shown as labels; the shared pieces are filled from your current story.</div>`
-    +msgs.map((m,i)=>`<div style="margin-bottom:8px">
-        <div class="plqBadge" style="display:inline-block;margin-bottom:4px">message ${i+1} — ${esc(m.role)}</div>
-        <pre style="white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;font-size:11.5px;max-height:300px;overflow:auto">${esc(m.content)}</pre>
-      </div>`).join("");
+    +pvReadable({messages:msgs},pvAnnotList(msgs),{maxH:300}).html;   // v150.62 — as Debug's Readable view
 }
 
 
@@ -61093,10 +61289,8 @@ function ptPreview(kind){
   const empties=Object.keys(pb.blocks).filter(k=>!String(pb.blocks[k]||"").trim());
   host.innerHTML=
     `<div class="desc" data-help style="margin-bottom:6px">This is exactly what would be sent, using <b>${esc(pb.npc.name)}</b> in your current scene. Memories are left out of the preview because fetching them costs a model call.</div>`
-    +msgs.map((m,i)=>`<div style="margin-bottom:8px">
-        <div class="plqBadge" style="display:inline-block;margin-bottom:4px">message ${i+1} — ${esc(m.role)}</div>
-        <pre style="white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;font-size:11.5px;max-height:340px;overflow:auto">${esc(m.content)}</pre>
-      </div>`).join("")
+    // v150.62 — the same readable, coloured rendering as Debug's Readable view
+    +pvReadable({messages:msgs},pvAnnotList(msgs),{maxH:340}).html
     +(empties.length?`<div class="desc">Empty in this scene, so dropped from the payload: ${empties.map(e=>"<code>"+esc(e)+"</code>").join(", ")}</div>`:"");
 }
 

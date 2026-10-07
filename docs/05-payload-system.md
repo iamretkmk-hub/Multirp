@@ -1293,3 +1293,16 @@ privacy heading read "WHO CAN HEAR YOU". Each now says what a text is:
 
 A saved list gets them once (`FRAG_SHIPPED_ADDS` key `v150.60.text`, old defaults in `FRAG_DEFAULTS_V150_60_OLD`),
 only while each fragment is still its v150.59 default.
+
+## v150.62 — where each part came from (Debug → Readable)
+
+`ptBuildMessages` and `epMessages` now build twice. The first pass is the payload that is sent, exactly as before. The
+second, for Debug's Readable view and the Payloads previews only, passes `annotate` to `fragCompile` (a choose-when
+option whose ask passed, or whose code condition names a flag in `PV_DECISION_FLAGS`, is wrapped in red marks — options
+are whole paragraphs of the layout) and `ann` to `ptExpand` (every filled `{{call//…}}` except the layout headings —
+and an engine's own `{{call//prompt}}` — and every `{{value}}` is marked as data, line by line, after the indent and a
+heading's `# `). Red marks are lifted off a paragraph before any of `ptExpand`'s logic reads it and put back on its
+output; `_dedupePayloadSections` and the head/tail section filter compare text with the marks stripped. An annotated
+message is kept (`pvRemember`, bounded, keyed by the clean text) only when, stripped, it is the sent message; `dbg()`
+attaches it to the entry. Both builders, and `chatCompletion` before every request, run `pvCleanMessages`, so a mark
+cannot reach a provider. The colours and the view itself: docs/06, "The Debug screen".

@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.58</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.59</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -18401,6 +18401,15 @@ function calendarContextLine(chat,selfName,selfId,opts){
   if(upcoming.length)  parts.push("SOON: "+upcoming.map(e=>`${fmt(e,false)} (${relWhen(e.day,today,true)||`Day ${e.day}`})`).join("; "));
   if(further.length)   parts.push("FURTHER OFF: "+further.map(e=>`${e.title}${_others(e)?" with "+_others(e):""}${e.certainty==="likely"?" (not firmly agreed)":""} — ${relWhen(e.day,today,true)||"later"}`).join("; "));
   if(!parts.length)return "";
+  /* v150.59 — opts.out, when handed one, gets each group's entries as data only (plans_*_raw): the "Future arrangements"
+     fragment writes the group labels itself. The entries keep their own notes (agreed or not, who acts, here now). */
+  if(opts&&opts.out){ const o=opts.out;
+    if(overdue.length)o.plans_unkept_raw=overdue.map(e=>`${e.title}${_others(e)?" with "+_others(e):""} — was for ${relWhen(e.day,today,false)||"an earlier day"}, never happened`).join("; ");
+    if(dueNow.length)o.plans_now_raw=dueNow.map(e=>fmt(e,true)).join("; ");
+    if(lateToday.length)o.plans_late_raw=lateToday.map(e=>fmt(e,false)).join("; ");
+    if(todayPlans.length)o.plans_today_raw=todayPlans.map(e=>fmt(e,false)).join("; ");
+    if(upcoming.length)o.plans_soon_raw=upcoming.map(e=>`${fmt(e,false)} (${relWhen(e.day,today,true)||`Day ${e.day}`})`).join("; ");
+    if(further.length)o.plans_further_raw=further.map(e=>`${e.title}${_others(e)?" with "+_others(e):""}${e.certainty==="likely"?" (not firmly agreed)":""} — ${relWhen(e.day,today,true)||"later"}`).join("; "); }
   // v30.3 — opts.bare returns just the entries: the reply payload wraps them in its own MEETINGS
   // heading (blkTpl("calendar_header")) so the block is a section of its own rather than a sentence
   // swallowed by whatever came before it. The directors keep the inline, self-describing form.
@@ -21207,7 +21216,7 @@ function trackerBarredForMinor(chat,t,ownerKey,opts){
 //   - __user__ public      → seen by every character (and the dashboard).
 //   - __user__ private     → dashboard ONLY, never injected into a character payload.
 // `viewerId` = the character whose payload we're building; null/undefined = user dashboard view.
-function trackerContext(chat,viewerId){
+function trackerContext(chat,viewerId,out){
   const c=chat||curChat(); if(!c||!state.trackOn)return "";
   const ts=curTrackers(); if(!ts.length)return "";
   const isDashboard=(viewerId==null);            // user's own dashboard view (sees everything)
@@ -21288,6 +21297,11 @@ function trackerContext(chat,viewerId){
   const pubUniq=[...new Set(publicLines)];
   const pubBlock=pubUniq.length?("What anyone around can see, or has come to hear — read each through your own knowledge of the person, since you may know more, less, or something different from how it looks:\n"+pubUniq.map(l=>"- "+l).join("\n")):"";
   if(forCharacter){
+    /* v150.59 — `out`, when handed one, gets the three groups as data only (trackers_*_raw): the fragment that shows them
+       writes the labels itself */
+    if(out){ if(sharedLines.length)out.trackers_story_raw=sharedLines.join("\n");
+      if(pubUniq.length)out.trackers_seen_raw=pubUniq.map(l=>"- "+l).join("\n");
+      if(ownLines.length)out.trackers_own_raw=ownLines.join("\n"); }
     const blocks=[];
     if(sharedLines.length)blocks.push("True of this story, and known to everyone:\n"+sharedLines.join("\n"));
     if(pubBlock)blocks.push(pubBlock);
@@ -25465,9 +25479,12 @@ function relSheetBlockFull(persona,opts){
   // person, always the current version (socialFactOf/socialFactLines). The old flat
   // socialGraphAuto blob appended a line per day and never removed one; it is migrated away at load
   // and only read here so an import made on an older build still shows something.
+  /* v150.59 — opts.out, when handed one, gets the parts as data only (rel_*_raw): what was found out, the old auto notes,
+     the tie lines, and the names of everyone else — the "Who these people are to you" fragment writes the rest. */
+  const _o=(opts&&opts.out)||{};
   if(!sheetsOnly){const facts=socialFactLines(persona,include?[...include.keys()]:null);
-   if(facts.length)parts.push(fillTpl(blkTpl("rel_learned"),{lines:facts.map(t=>"- "+t).join("\n")}));
-   else{ const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim(); if(sgAuto)parts.push(sgAuto); }}
+   if(facts.length){ parts.push(fillTpl(blkTpl("rel_learned"),{lines:facts.map(t=>"- "+t).join("\n")})); _o.rel_learned_raw=facts.map(t=>"- "+t).join("\n"); }
+   else{ const sgAuto=subUser(String(persona.socialGraphAuto||"")).trim(); if(sgAuto){ parts.push(sgAuto); _o.rel_notes_raw=sgAuto; } }}
   /* (!) v148.4 — `hereIds`: who is with THIS reader. It was always the player's scene, so a character texting
      from home had the people at the player's table marked "[here now]" beside them. A text payload passes
      who shares the texter's own place; `noHere` — where they are is not known, so nobody is marked. */
@@ -25552,12 +25569,14 @@ function relSheetBlockFull(persona,opts){
       const seen=new Set(), keep=[];
       far.forEach(f=>{ const k=asciiFold(String(f.who)).toLowerCase().trim();
                        if(!k||seen.has(k))return; seen.add(k); keep.push(f.text); });
+      if(lines.length)_o.rel_sheet_raw=lines.join("\n");
       lines.push(fillTpl(blkTpl("rel_elsewhere"),{people:keep.join("; ")}));
-    }
+      _o.rel_elsewhere_raw=keep.join("; ");
+    }else if(lines.length)_o.rel_sheet_raw=lines.join("\n");
     if(lines.length)sheet=lines.join("\n");
   }
   // Legacy prose blob: the character's whole relationship description — their own knowledge, as-is.
-  if(!sheet)sheet=(persona.relationshipsGen||"").trim();
+  if(!sheet){ sheet=(persona.relationshipsGen||"").trim(); if(sheet)_o.rel_sheet_raw=sheet; }
   // (v148.4's trimSummary went with the social graph in v150.39: there is no summary to trim.)
   if(sheet)parts.push(sheet);
   return parts.join("\n\n");
@@ -27968,14 +27987,17 @@ function charBioBlock(c,opts){
   opts=opts||{};
   const who=opts.noWho?"":(opts.self?`You are ${c.name}.`:`${c.name}:`);
   const L=[];
+  /* v150.59 — opts.out, when handed one, gets each part of the speaker's own sheet as data only (bio_*_raw, want*_raw):
+     the "Who you are" fragment writes the tags and the sentences around them itself. */
+  const _o=opts.out||{};
   /* v30.5 — the play notes used to print HERE and again in the speaking-style block, word for word.
      v28.3 did that on purpose ("repeat them beside the voice, where they can actually govern the
      line") and the second copy was the one that worked — speaking_style is the last thing read
      before the transcript, this sheet is thousands of tokens earlier. So the repeat stays where it
      lands and goes from here. A bystander's sheet keeps it: nothing else carries it for them. */
   if(c.instructions && !(opts.self&&opts.styleTail)) L.push(`  <play_notes>${subUser(c.instructions)}</play_notes>`);
-  if(c.backstory)    L.push(`  <backstory>${subUser(c.backstory)}</backstory>`);
-  if(c.personality)  L.push(`  <personality>${subUser(c.personality)}</personality>`);
+  if(c.backstory)  { L.push(`  <backstory>${subUser(c.backstory)}</backstory>`); _o.bio_backstory_raw=subUser(c.backstory); }
+  if(c.personality){ L.push(`  <personality>${subUser(c.personality)}</personality>`); _o.bio_personality_raw=subUser(c.personality); }
   // v26 — was <core_traits>, a bare five-axis dump. Same authored data, framed as what it actually
   // is: playable rules ("this sets me off → this is what I do"), which is what the model can use.
   /* v30.5 — the fixed sentence is a FRAGMENT now (it was inline prose, so it never appeared in
@@ -27983,7 +28005,9 @@ function charBioBlock(c,opts){
      warns about), and it has a second-person and a third-person form. The same producer builds the
      speaking character's own sheet AND the bystander sheets other characters see, so a single
      wording was always wrong for one of them. */
-  if(c.traits)       L.push(`  <how_you_behave>${fillTpl(blkTpl(opts.self?"bio_behave_self":"bio_behave_other"),{char:c.name||"",user:state.user||""})}\n${subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n")}\n  </how_you_behave>`);
+  if(c.traits){ const _tl=subUser(c.traits).split(/\n+/).map(t=>`    ${t.trim()}`).filter(Boolean).join("\n");
+    L.push(`  <how_you_behave>${fillTpl(blkTpl(opts.self?"bio_behave_self":"bio_behave_other"),{char:c.name||"",user:state.user||""})}\n${_tl}\n  </how_you_behave>`);
+    _o.bio_traits_raw=_tl; }
   /* v30.3 — ONE GOALS SECTION, MAINTAINED. This used to be three: <your_quests> (a growing dump of
      every pursuit and its whole progress log), <goals_ambitions> (frozen at character creation), and
      <what_you_quietly_want> (the live private aim). None of them ever removed anything, so the
@@ -27994,11 +28018,16 @@ function charBioBlock(c,opts){
      Self only, either way: nobody else reads your intentions. */
   if(opts.self){
     const _live=liveGoalsText(c);
-    if(_live) L.push(`  <goals_and_ambitions>\n    ${blkTpl("goals_live_intro")}\n${_live.split("\n").map(t=>"    "+t).join("\n")}\n  </goals_and_ambitions>`);
+    if(_live){ L.push(`  <goals_and_ambitions>\n    ${blkTpl("goals_live_intro")}\n${_live.split("\n").map(t=>"    "+t).join("\n")}\n  </goals_and_ambitions>`);
+      _o.bio_goals_live_raw=_live.split("\n").map(t=>"    "+t).join("\n"); }
     else{
-      if(c.goals) L.push(`  <goals_ambitions>${subUser(c.goals)}</goals_ambitions>`);
+      if(c.goals){ L.push(`  <goals_ambitions>${subUser(c.goals)}</goals_ambitions>`); _o.bio_goals_raw=subUser(c.goals); }
       // Not curated yet → the private aim still needs its own line, exactly as before.
-      if(opts.quietWant) L.push(`  <what_you_quietly_want>${opts.quietWant}</what_you_quietly_want>`);
+      if(opts.quietWant){ L.push(`  <what_you_quietly_want>${opts.quietWant}</what_you_quietly_want>`);
+        /* v150.59 — each want as data (whom, what, the kind with its article), its wording picked by the want1 / want2
+           flags (warm / hostile / self) in the fragment */
+        (opts.quietWants||[]).slice(0,2).forEach((w,i)=>{ const n=i+1; _o["want"+n]=w.valence;
+          _o["want"+n+"_target_raw"]=w.target; _o["want"+n+"_aim_raw"]=w.aim; _o["want"+n+"_a_kind_raw"]=w.a_kind; _o["want"+n+"_kind_raw"]=w.kind; }); }
     }
     /* v150.25 — NO <pursuit_status> HERE. The code-tracked state of a live pursuit or an agreed
        task (asked yet? still hanging? what moved last?) used to ride in this sheet, and every reply
@@ -28010,7 +28039,7 @@ function charBioBlock(c,opts){
   // v26 — for the speaking character the voice is delivered AFTER the dialogue (style_header block),
   // right where the line gets written. Bystander sheets keep it inline.
   if(c.style && !opts.styleTail) L.push(`  <speaking_style>${subUser(c.style)}</speaking_style>`);
-  {const _lk=lookProse(c.look); if(_lk) L.push(`  <appearance>${subUser(_lk)}</appearance>`);}
+  {const _lk=lookProse(c.look); if(_lk){ L.push(`  <appearance>${subUser(_lk)}</appearance>`); _o.bio_look_raw=subUser(_lk); }}
   /* v30.5 — this read "Their usual clothing (dress them plausibly from this…)" inside a block whose
      first line is "You are Emre". Third person about yourself, in your own identity sheet, is a
      small push toward writing ABOUT the character rather than AS them — which is the exact failure
@@ -28021,12 +28050,15 @@ function charBioBlock(c,opts){
   {const _fit=(typeof currentOutfit==="function")?currentOutfit(c,opts&&opts.chat):null;
    if(_fit&&_fit.text&&hasOutfits(c)){
      L.push(`  <wearing>${fillTpl(blkTpl(opts.self?"bio_wearing_self":"bio_wearing_other"),{char:c.name||"",user:state.user||""})} ${briefDesc(subUser(String(_fit.text)),400)}</wearing>`);
+     _o.bio_wearing_raw=briefDesc(subUser(String(_fit.text)),400);
    }else if(c.wardrobe){
      L.push(`  <wardrobe>${fillTpl(blkTpl(opts.self?"bio_wardrobe_self":"bio_wardrobe_other"),{char:c.name||"",user:state.user||""})} ${briefDesc(subUser(String(c.wardrobe)),400)}</wardrobe>`);
+     _o.bio_wardrobe_raw=briefDesc(subUser(String(c.wardrobe)),400);
    }}
   // v26 — was <home_base>, which was fed the character's CURRENT location (already stated,
   // authoritatively, in SCENE RIGHT NOW). This is the place they actually live.
-  {try{ const _h=homeLocOf(c); if(_h) L.push(`  <where_you_live>${subUser(_h.name+(_h.description?` — ${_h.description}`:""))}</where_you_live>`); }catch(e){}}
+  {try{ const _h=homeLocOf(c); if(_h){ L.push(`  <where_you_live>${subUser(_h.name+(_h.description?` — ${_h.description}`:""))}</where_you_live>`);
+    _o.bio_home_raw=subUser(_h.name+(_h.description?` — ${_h.description}`:"")); } }catch(e){}}
   return who?`${who}\n${L.join("\n")}`:L.join("\n");
 }
 
@@ -28066,6 +28098,11 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
                      :it.valence==="hostile"?"intent_hostile":"intent_self";
       out.coloring=fillTpl(blkTpl(out.coloringKey),
         {target:it.targetName||"them",kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim),aside:_aside});
+      /* v150.59 — the same motive as data (motive_*_raw: RAW_DATA_KEYS), its valence for the `motive` flag: the "Your
+         private motive" fragment writes the wording for each valence, and the aside, itself */
+      out.motive={valence:out.coloringKey.replace(/^intent_/,""),raw:{motive_target_raw:it.targetName||"them",motive_kind_raw:String(it.kind||""),
+        motive_a_kind_raw:_aKind(it.kind),motive_aim_raw:_aimText(it.aim)}};
+      if(_aside)out.motive.raw.motive_aside_raw=_who;
       return out;
     }
     /* No present-target coloring, but they may still be nursing a plan (target absent, or the
@@ -28090,6 +28127,9 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
                        :it.valence==="hostile"?"intent_aim_cool":"intent_aim_self"),
           {target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),
            kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim)})).join("\n");   // v150.23 — one want per line: joined with a space, a second want (or a heading in an edited fragment) ran on inside the first
+      // v150.59 — the same wants as data, for the "Who you are" fragment, which words each one by its valence itself
+      out.quietWants=fresh.slice(0,intentsPerChar()>1?2:1).map(it=>({valence:it.valence==="warm"?"warm":it.valence==="hostile"?"hostile":"self",
+        target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),kind:String(it.kind||""),a_kind:_aKind(it.kind),aim:_aimText(it.aim)}));
     }
   }catch(e){}
   return out;
@@ -29220,7 +29260,25 @@ const RAW_DATA_KEYS=["target_bio_raw","target_tie_raw","target_look_raw","target
   "brief_trigger_raw","brief_tension_raw","brief_intent_raw","brief_beats_raw",
   "last_line_quote_raw","last_line_since_raw","absent_names_raw","not_yours_speaker_raw","not_yours_addressee_raw",
   "rumor_spent_day_raw","rumor_stake_raw","play_notes_raw","watching_raw",
-  "promise_yours_raw","promise_owed_raw","promise_ended_raw"];
+  "promise_yours_raw","promise_owed_raw","promise_ended_raw",
+  /* (!) v150.59 — EVERY WORD IN ITS FRAGMENT. The rest of the reply fragments hold their own wording too, so the data
+     they used to get inside a worded piece comes in alone: the world (_wd), the identity sheet and its quiet wants (_yb),
+     the ties (_rl), the lines already said (_as), the scene and privacy (_sc), trackers (_tk), plans (_cl), the private
+     motive (_pi) and the spoken limits (_drives). Same rule as above: keyed beside the worded piece, in no ORDER list.
+     Each one is also a condition flag, true when it has data this turn (see ptBuildMessages). */
+  "world_setting_raw",
+  "bio_backstory_raw","bio_personality_raw","bio_traits_raw","bio_goals_live_raw","bio_goals_raw",
+  "want1_target_raw","want1_aim_raw","want1_a_kind_raw","want1_kind_raw","want2_target_raw","want2_aim_raw","want2_a_kind_raw","want2_kind_raw",
+  "bio_look_raw","bio_wearing_raw","bio_wardrobe_raw","bio_home_raw",
+  "rel_learned_raw","rel_notes_raw","rel_sheet_raw","rel_elsewhere_raw",
+  "said_line1_raw","said_line2_raw",
+  "scene_day_raw","scene_period_raw","scene_place_raw","scene_area_raw","scene_host_raw","subareas_place_raw","subareas_raw","subarea_here_raw",
+  "moved_to_raw","moved_from_raw","jump_day_raw","jump_period_raw","jump_gap_raw","period_now_raw","period_was_raw","arrived_raw","left_raw",
+  "privacy_names_raw","privacy_area_raw","privacy_place_raw","privacy_nearby_raw","privacy_exposure_raw","privacy_quieter_raw",
+  "trackers_story_raw","trackers_seen_raw","trackers_own_raw",
+  "plans_unkept_raw","plans_now_raw","plans_late_raw","plans_today_raw","plans_soon_raw","plans_further_raw",
+  "motive_target_raw","motive_kind_raw","motive_a_kind_raw","motive_aim_raw","motive_aside_raw",
+  "limits_lines_raw"];
 /* Every rail name, grouped by the channel it belongs to. These three lists used to be the ORDER
    the guardrails block laid its rules in, one per channel, and each payload kind's template carried
    its own copy. v41.1 moved the rules into one box where the order is the order they are WRITTEN
@@ -29245,7 +29303,8 @@ const PT_FRAG_KEYS=[...new Set([].concat(RAIL_KEYS,RT_ORDER,RG_ORDER,DRIVE_FRAGS
   PL_ORDER,SI_ORDER,SD_ORDER,PI_ORDER,FE_ORDER,FN_ORDER,RU_ORDER,QU_ORDER,WA_ORDER,WN_ORDER,TT_ORDER,WHEN_ORDER,MEMPLAN_ORDER,
   LY_ORDER,RAW_DATA_KEYS))];
 const PT_FRAG_MAPS=["_rails","_rt","_rg","_drives","_yb","_op","_ss","_ll","_as","_pr","_pre","_mem","_wa",
-  "_pl","_si","_sd","_pi","_fe","_fn","_ru","_qu","_la","_wn","_tt"];
+  "_pl","_si","_sd","_pi","_fe","_fn","_ru","_qu","_la","_wn","_tt",
+  "_wd","_rl","_sc","_tk","_cl"];   // v150.59 — maps that carry only data (RAW_DATA_KEYS)
 /* Which whole block each map splits, and where to put it if the map never arrived (see ptSources).
    `head`/`tail` name the fragments the template prints as its own prose, so they can be taken off
    the rescued block rather than shipped a second time. */
@@ -29870,7 +29929,8 @@ function ptSetTemplate(kind,text){
    The reply payload as an ordered list of FRAGMENTS instead of one free-form layout per path, with
    headers, intros and bodies kept together in one box each. Every fragment has:
      • paths  — which reply paths it appears on (solo, multi, gm, text, heat);
-     • text   — its main body, always injected on those paths; byPath[path] replaces it on one path;
+     • text   — its main body, always injected on those paths; byPath[path] is added under it on one path (v150.59: it
+                used to replace it);
      • options — "choose when" parts, injected only when they apply. An option applies when its CODE
        condition holds (a fact the app knows: render_mode, emotion, intensity, ego, stalled, alone,
        target_tie…, written as `emotion = anger and intensity = intense`) and/or when the decision
@@ -29895,8 +29955,16 @@ const FRAG_CTX=[
 /* (!) v150.57 — and one REWRITE: the fragments that were still chains of header / intro / footer pieces. A saved one is
    replaced only while it is still exactly the v150.56 default (FRAG_DEFAULTS_V150_56); an edited one is the user's
    and stays. "What you know of them" is new, and goes in right after a replaced "Who you are answering". */
+/* (!) v150.59 — and two more, each rewrite naming the old table it compares against (`old`, read when it runs). The
+   fragments that still called a worded piece hold every word themselves now, and a path's text adds under the main body:
+   "v150.59.format" replaces a saved fragment while it is still exactly its v150.58 default (FRAG_DEFAULTS_V150_58), and puts
+   any piece the user had rewritten into it (FRAG_TPL_CARRY). "v150.59.bypath" then converts the path texts of every
+   fragment the user HAS edited, once and losslessly, to the new meaning (see _fragByPathToAdd). It runs after the rewrite
+   so an unedited fragment is compared as it was saved, and it leaves alone what the rewrite has just put in. */
 const FRAG_SHIPPED_ADDS=[{key:"limits",frag:"limits",before:"guidance"},{key:"already_said",frag:"already_said",before:"stuck"},{key:"guardrails.consistency",frag:"guardrails",opt:"consistency"},
-  {key:"v150.57.format",rewrite:true,insertAfter:{target:"target_sheet"}}];
+  {key:"v150.57.format",rewrite:true,old:()=>FRAG_DEFAULTS_V150_56,insertAfter:{target:"target_sheet"}},
+  {key:"v150.59.format",rewrite:true,old:()=>FRAG_DEFAULTS_V150_58,carry:true},
+  {key:"v150.59.bypath",bypath:true}];
 function _fragCanon(x){
   if(Array.isArray(x))return "["+x.map(_fragCanon).join(",")+"]";
   if(x&&typeof x==="object")return "{"+Object.keys(x).sort().map(k=>JSON.stringify(k)+":"+_fragCanon(x[k])).join(",")+"}";
@@ -29904,32 +29972,104 @@ function _fragCanon(x){
 }
 let _fragMigratedFor=null;
 function fragMigrateStored(){
-  const L=state.fragments; if(!Array.isArray(L)||!L.length||L===_fragMigratedFor)return;
+  const L=state.fragments;
+  if(!Array.isArray(L)||!L.length){ _fragCarryDefaults(); return; }
+  if(L===_fragMigratedFor)return;
   _fragMigratedFor=L;
   try{
     const done=new Set(String(store.raw(K.fragAdds,"")||"").split(",").filter(Boolean)); let changed=false;
+    const fresh=new Set();   // v150.59 — what a rewrite has just put in: already in the new format, never converted again
     FRAG_SHIPPED_ADDS.forEach(a=>{
       if(done.has(a.key))return; done.add(a.key);
       if(a.rewrite){
-        const OLD=FRAG_DEFAULTS_V150_56;
+        const OLD=a.old();
         for(let i=0;i<L.length;i++){
           const f=L[i], was=f&&OLD[f.id], now=f&&FRAG_DEFAULTS.find(x=>x.id===f.id);
           if(!was||!now||_fragCanon(f)!==_fragCanon(was))continue;
           L[i]=JSON.parse(JSON.stringify(now)); changed=true;
+          if(a.carry)_fragCarryInto(L[i]);
+          fresh.add(L[i]);
           const add=a.insertAfter&&a.insertAfter[f.id], addDef=add&&FRAG_DEFAULTS.find(x=>x.id===add);
-          if(addDef&&!L.some(x=>x&&x.id===add)){ L.splice(i+1,0,JSON.parse(JSON.stringify(addDef))); i++; }
+          if(addDef&&!L.some(x=>x&&x.id===add)){ L.splice(i+1,0,JSON.parse(JSON.stringify(addDef))); fresh.add(L[i+1]); i++; }
         }
+        return; }
+      if(a.bypath){
+        L.forEach(f=>{ if(!f||fresh.has(f))return;
+          const def=FRAG_DEFAULTS.find(x=>x.id===f.id); if(def&&_fragCanon(f)===_fragCanon(def))return;   // a shipped one is already in the new format
+          if(_fragByPathToAdd(f,f.paths||FRAG_PATHS))changed=true;
+          (f.options||[]).forEach(o=>{ if(o&&_fragByPathToAdd(o,(Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS)))changed=true; }); });
         return; }
       const def=FRAG_DEFAULTS.find(f=>f.id===a.frag); if(!def)return;
       if(!a.opt){
         if(L.some(f=>f&&f.id===a.frag))return;
         const at=L.findIndex(f=>f&&f.id===a.before), copy=JSON.parse(JSON.stringify(def));
         if(at>=0)L.splice(at,0,copy); else L.push(copy); changed=true; return; }
-      const f=L.find(x=>x&&x.id===a.frag), o=(def.options||[]).find(x=>x.id===a.opt);
-      if(!f||!o||(f.options||[]).some(x=>x&&x.id===a.opt))return;
+      /* v150.59 — the consistency note is four options now (one per flag); a list that never got the one option gets the
+         v150.58 one, which the rewrite below then replaces with the four while the fragment is otherwise unedited */
+      const f=L.find(x=>x&&x.id===a.frag);
+      const o=(def.options||[]).find(x=>x.id===a.opt)||(((FRAG_DEFAULTS_V150_58[a.frag]||{}).options||[]).find(x=>x.id===a.opt));
+      if(!f||!o||(f.options||[]).some(x=>x&&(x.id===a.opt||String(x.id).indexOf(a.opt+"_")===0)))return;
       f.options=f.options||[]; f.options.push(JSON.parse(JSON.stringify(o))); changed=true; });
     store.setRaw(K.fragAdds,[...done].join(","));
     if(changed)store.setRaw(K.fragments,JSON.stringify(L));
+  }catch(e){}
+}
+/* (!) v150.59 — A PATH TEXT THAT REPLACED, MADE ONE THAT ADDS. Before, the text on path p was byPath[p] when it was filled,
+   else the main body. When every path's text begins with the main body (and goes on after a blank line, or stops there),
+   the main body stays and each path keeps only what follows it; otherwise the main body goes empty and every path gets its
+   whole text. Either way each path is sent exactly what it was sent before. Returns whether anything changed. */
+function _fragByPathToAdd(x,paths){
+  const bp=x&&x.byPath; if(!bp||!Object.keys(bp).some(p=>String(bp[p]==null?"":bp[p]).trim()))return false;
+  const main=String(x.text||""), full={};
+  paths.forEach(p=>{ const b=bp[p]; full[p]=(b!=null&&String(b).trim()!=="")?String(b):main; });
+  const m=main.trim();
+  const keeps=!!m&&paths.every(p=>{ const t=full[p].trim(); if(t.indexOf(m)!==0)return false; const r=t.slice(m.length); return !r.trim()||/^[ \t]*\n[ \t]*\n/.test(r); });
+  const nb={};
+  if(keeps){ paths.forEach(p=>{ const r=full[p].trim().slice(m.length).trim(); if(r)nb[p]=r; }); }
+  else { paths.forEach(p=>{ if(full[p].trim())nb[p]=full[p]; }); x.text=""; }
+  x.byPath=nb; return true;
+}
+/* (!) v150.59 — A PIECE THE USER REWROTE, INTO THE FRAGMENT THAT NOW HOLDS ITS WORDING (FRAG_TPL_CARRY). Their text goes in
+   place of the shipped one wherever the shipped one appears word for word — in the main body, a path box or an option.
+   Placeholders are renamed as the fragment writes them; a piece the fragment holds in parts is matched part by part
+   (parts shorter than 12 characters are left, so a stray bracket is never rewritten). A cleared layout heading (rp_task)
+   empties what it filled. Returns whether anything changed. */
+function _fragCarryInto(f){
+  let hit=false;
+  try{
+    const ov=state.blockTpls||{};
+    FRAG_TPL_CARRY.forEach(c=>{
+      if(!f||c.frag!==f.id)return;
+      const o=ov[c.key]; if(typeof o!=="string")return;
+      const def=String(BLOCK_TPL_DEFAULTS[c.key]||""); if(o===def)return;
+      if(!o.trim()&&LY_ORDER.indexOf(c.key)<0)return;   // a blank override means "the default" everywhere but a layout heading
+      const tr=t=>{ let r=String(t); Object.keys(c.map||{}).forEach(k=>{ r=r.split("{{"+k+"}}").join(c.map[k]); }); return r; };
+      const cut=t=>{ const sp=(c.split||[]).map(k=>"{{"+k+"}}"); let parts=[String(t)];
+        sp.forEach(m=>{ parts=[].concat(...parts.map(x=>x.split(m))); }); return parts; };
+      const D=cut(tr(def)), O=cut(tr(o));
+      if(D.length!==O.length)return;
+      const swap=(obj,key)=>{ D.forEach((d,i)=>{ const dt=d.trim(); if(dt.length<12&&!(D.length===1))return; if(!dt)return;
+        if(String(obj[key]||"").indexOf(dt)<0)return; obj[key]=String(obj[key]).split(dt).join(O[i].trim()); hit=true; }); };
+      const each=x=>{ if(!x)return; swap(x,"text"); Object.keys(x.byPath||{}).forEach(p=>swap(x.byPath,p)); };
+      each(f); (f.options||[]).forEach(each);
+    });
+  }catch(e){}
+  return hit;
+}
+/* (!) v150.59 — NOBODY SAVED A LIST, BUT A PIECE WAS REWRITTEN. With no saved list the shipped fragments are used as they
+   are, and a piece whose wording moved into a fragment would quietly stop reaching the reply. Once, the shipped list is
+   saved with those rewrites carried in; after that the fragments are where the wording is edited. */
+function _fragCarryDefaults(){
+  try{
+    const done=String(store.raw(K.fragAdds,"")||"").split(",").filter(Boolean);
+    if(done.indexOf("v150.59.format")>=0)return;
+    store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));   // once, at the upgrade: the shipped list already holds every addition
+    const ov=state.blockTpls||{};
+    if(!FRAG_TPL_CARRY.some(c=>typeof ov[c.key]==="string"&&ov[c.key]!==BLOCK_TPL_DEFAULTS[c.key]&&(ov[c.key].trim()||LY_ORDER.indexOf(c.key)>=0)))return;
+    const L=JSON.parse(JSON.stringify(FRAG_DEFAULTS)); let hit=false;
+    L.forEach(f=>{ if(_fragCarryInto(f))hit=true; });
+    if(!hit)return;
+    state.fragments=L; _fragMigratedFor=L; store.setRaw(K.fragments,JSON.stringify(L));
   }catch(e){}
 }
 function fragList(){ fragMigrateStored(); return (Array.isArray(state.fragments)&&state.fragments.length)?state.fragments:FRAG_DEFAULTS; }
@@ -29937,7 +30077,13 @@ function fragOnFor(kind){ return !!state.fragOn&&FRAG_PATHS.indexOf(kind)>=0; }
 function fragAt(){ const v=+state.fragAt; return isFinite(v)&&v>0?Math.max(0.5,Math.min(0.99,v)):0.7; }
 function _fragKey(f,o){ return "q_"+String(f.id)+"__"+String(o.id); }
 function _fragOptPaths(f,o){ return (Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS); }
-function _fragTextFor(x,kind){ const b=x&&x.byPath&&x.byPath[kind]; return (b!=null&&String(b).trim()!=="")?String(b):String((x&&x.text)||""); }
+/* (!) v150.59 — THE PATH TEXT IS ADDED UNDER THE MAIN BODY, after a blank line; it used to replace it. The main body is what
+   every path of the fragment (or option) shares; byPath[path] is only what that path adds. */
+function _fragTextFor(x,kind){
+  const m=String((x&&x.text)||""), b=x&&x.byPath&&x.byPath[kind];
+  if(b==null||String(b).trim()==="")return m;
+  return m.trim()?m.trim()+"\n\n"+String(b).trim():String(b);
+}
 // Every option on this path that asks the decision model, with the fragment it belongs to.
 function fragAskList(kind){
   const out=[];
@@ -30028,6 +30174,13 @@ function fragCodeFacts(chat,selfP,targetId){
   return f;
 }
 
+/* v150.59 — the data names as flags: false for every one, true for each that a producer's map carries filled. */
+function _ptDataFlags(blocks){
+  const f={}; RAW_DATA_KEYS.forEach(k=>{ f[k]=false; });
+  PT_FRAG_MAPS.forEach(mk=>{ const m=blocks&&blocks[mk]; if(!m||typeof m!=="object")return;
+    Object.keys(m).forEach(k=>{ if(k in f&&String(m[k]==null?"":m[k]).trim())f[k]=true; }); });
+  return f;
+}
 /* MAIN ENTRY — returns the full messages[] for a reply, or null to use the classic path.
    `history` is the already-built transcript message array. */
 function ptBuildMessages(kind,blocks,history,ctx,rawFn){
@@ -30041,7 +30194,9 @@ function ptBuildMessages(kind,blocks,history,ctx,rawFn){
     let seenInstruction=false;
     /* v150.57 — the tail's flags with the head builder's laid over them (target_kind is decided there; the tail's
        guess from the id alone mislabels a named target with no id), for the fragment options and every {{if}} */
-    const _fl=ptCondFlags(Object.assign({},(blocks&&blocks._railFlags)||{},(blocks&&blocks._headFlags)||{}));
+    /* (!) v150.59 — and every data name (RAW_DATA_KEYS) as a flag of its own, true when it has data this turn: a fragment
+       can say "when there is a second line to quote" ({{if said_line2_raw}}) without a flag made for it. */
+    const _fl=ptCondFlags(Object.assign(_ptDataFlags(blocks),(blocks&&blocks._railFlags)||{},(blocks&&blocks._headFlags)||{}));
     const _npc=ctx&&ctx.npc, _ch=ctx&&ctx.chat;
     const _tplText=_frag?fragCompile(kind,_fl,((_ch&&_npc&&charEmotion(_ch,_npc.id))||{}).asks||{}):ptTemplate(kind);
     ptParse(_tplText).forEach(pt=>{
@@ -31934,7 +32089,14 @@ const NARR_TPL_L10N={
    and respond-as each hold their own wording now: one main box, and "choose when" options for the cases code
    used to pick between (continuing, target_kind, has_line, has_target, absent_called, voicing…). The live data
    comes in by its data-only name (target_bio_raw, last_line_quote_raw, …: RAW_DATA_KEYS), so every sentence is
-   in the box and every data line is its own paragraph, dropping when there is nothing to say. */
+   in the box and every data line is its own paragraph, dropping when there is nothing to say.
+   (!) v150.59 — EVERY WORD IN ITS FRAGMENT. The rest followed: the task, the world, who you are (the identity sheet's tags
+   and sentences, its quiet wants worded by their kind), your ties (with what you have found out, which v150.58 dropped),
+   the text and heat formats (heat's breaks and this beat's thought as options), what you already said (each line's
+   label), the scene and privacy (one option per case code picks), plans (one paragraph per group), the private motive,
+   the spoken limits, the trackers and the consistency note (one option per flag). What a {{call//…}} brings in is data
+   only: the card's own text, names, lists, memories, entries. A path's own text is ADDED under the main body now, so the
+   main body is what every path shares (the leading part they have in common) and a path box is only what it adds. */
 const FRAG_DEFAULTS=[
 {
 "id": "task",
@@ -31947,7 +32109,7 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "{{call//rp_task}}",
+"text": "You are {{char}}.\n\n# TASK\nYou live as {{char}} — history, personality, wants, boundaries, ties,\nmemories — and you act as the person you are in this exact moment. Not a\nhelper, not a narrator, not a therapist, and nothing more polished or\ndramatic than the moment earns.",
 "byPath": {},
 "mode": "any",
 "options": []
@@ -31963,7 +32125,7 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "{{call//world//full}}",
+"text": "# UNIVERSE SETTING\n{{call//world_setting_raw}}",
 "byPath": {},
 "mode": "any",
 "options": []
@@ -31979,10 +32141,21 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# THIS IS WHO YOU ARE\n{{call//bio_body}}",
+"text": "",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "sheet",
+"name": "Your identity sheet",
+"code": "has_bio",
+"ask": "",
+"ctx": [],
+"text": "# THIS IS WHO YOU ARE\n\n<backstory>{{call//bio_backstory_raw}}</backstory>\n\n<personality>{{call//bio_personality_raw}}</personality>\n\n<how_you_behave>Rules for how you act — the situation that sets each one off, then the thing you actually do:\n{{call//bio_traits_raw}}\n  </how_you_behave>\n\n<goals_and_ambitions>\n    What you are actually after, as it stands today. This list is kept current — things you have already got, already lost, or stopped caring about have been taken out of it, so everything here is still live. It is not a script and not a checklist: it is the pressure under what you say. Never announce one of these, and never work through them in order.\n{{call//bio_goals_live_raw}}\n  </goals_and_ambitions>\n\n<goals_ambitions>{{call//bio_goals_raw}}</goals_ambitions>\n\n{{if want1}}<what_you_quietly_want>{{if want1 = warm}}Privately, you are working toward something with {{call//want1_target_raw}}: {{call//want1_aim_raw}} ({{call//want1_a_kind_raw}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.{{endif}}{{if want1 = hostile}}Privately, you are set on something concerning {{call//want1_target_raw}}: {{call//want1_aim_raw}} ({{call//want1_a_kind_raw}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.{{endif}}{{if want1 = self}}Privately, you want something out of {{call//want1_target_raw}}: {{call//want1_aim_raw}} ({{call//want1_a_kind_raw}}). You do not raise it. It shows in what you steer toward, not in how you treat them.{{endif}}{{if want2}}\n{{if want2 = warm}}Privately, you are working toward something with {{call//want2_target_raw}}: {{call//want2_aim_raw}} ({{call//want2_a_kind_raw}}). It isn't out in the open, but it's real and it drives you. When the moment fits, take a small step toward it — a word, a gesture, an opening — without announcing it or forcing it.{{endif}}{{if want2 = hostile}}Privately, you are set on something concerning {{call//want2_target_raw}}: {{call//want2_aim_raw}} ({{call//want2_a_kind_raw}}). You keep it to yourself — you do NOT reveal or act on it openly right now — but it shapes your choices beneath the surface. Bide your time; let it inform how you read the moment, not what you expose.{{endif}}{{if want2 = self}}Privately, you want something out of {{call//want2_target_raw}}: {{call//want2_aim_raw}} ({{call//want2_a_kind_raw}}). You do not raise it. It shows in what you steer toward, not in how you treat them.{{endif}}{{endif}}</what_you_quietly_want>{{endif}}\n\n<appearance>{{call//bio_look_raw}}</appearance>\n\n<wearing>What you have on right now, already decided by where you are and what hour it is: {{call//bio_wearing_raw}}</wearing>\n\n<wardrobe>What you usually wear (dress yourself plausibly from this, fitting the scene and the time of day): {{call//bio_wardrobe_raw}}</wardrobe>\n\n<where_you_live>{{call//bio_home_raw}}</where_you_live>",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "ties",
@@ -31995,10 +32168,21 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.\n{{call//relationships}}",
+"text": "",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "ties",
+"name": "Your ties",
+"code": "has_ties",
+"ask": "",
+"ctx": [],
+"text": "# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.\n\nWhat you have found out about them since — one line per person, newest first. You know these things. Do NOT assume they know that you know, and do not put one to somebody just because it is written here:\n{{call//rel_learned_raw}}\n\n{{call//rel_notes_raw}}\n\n{{call//rel_sheet_raw}}\n\nEveryone else in your life, not here right now — you know exactly who each of them is to you, and none of them is a stranger; they simply are not in the room. Each is given as name — what they are to you: {{call//rel_elsewhere_raw}}.",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "scenario",
@@ -32073,10 +32257,25 @@ const FRAG_DEFAULTS=[
 "ask": "",
 "ctx": [],
 "text": "# ⚠️ YOU SPOKE LAST — THIS TURN CARRIES ON, IT DOES NOT ANSWER AGAIN ⚠️\nYou were the last one to speak and nothing new has been said to you since. {{target}}'s last line is already answered — your own reply to it is on screen. Do NOT answer it a second time and do NOT rephrase what you just said. Something in the scene has moved; carry on from your own last line. {{target}} is still here with you, and this is who they are:",
-"paths": [],
-"byPath": {
-"heat": "# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️\n{{target}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line — with your own words and your own body, never by writing what {{target}} does next. {{target}} is still right here in the scene with you, and this is who they are:"
-}
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"byPath": {}
+},
+{
+"id": "carry_on_heat",
+"name": "Carrying on from your own line — heat",
+"code": "continuing",
+"ask": "",
+"ctx": [],
+"text": "# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️\n{{target}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line — with your own words and your own body, never by writing what {{target}} does next. {{target}} is still right here in the scene with you, and this is who they are:",
+"paths": [
+"heat"
+],
+"byPath": {}
 }
 ]
 },
@@ -32118,10 +32317,8 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact, never the gesture, and if an entry repeats another take it as one event.\n{{call//mem_distant_entries}}\n{{gap}}\n{{call//mem_recent_entries}}",
-"byPath": {
-"solo": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it or the transcript above shows it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact and what you made of it, never the gesture; if an entry repeats another take it as one event. When what is in front of you now matches one of these — same person, same move, same place — you answer from that time, not as if it were the first.\n{{call//mem_distant_entries}}\n{{gap}}\n{{call//mem_recent_entries}}"
-},
+"text": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it{{if render_mode = solo}} or the transcript above shows it{{endif}}. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: {{if render_mode = solo}}take the fact and what you made of it, never the gesture; if an entry repeats another take it as one event. When what is in front of you now matches one of these — same person, same move, same place — you answer from that time, not as if it were the first.{{else}}take the fact, never the gesture, and if an entry repeats another take it as one event.{{endif}}\n{{call//mem_distant_entries}}\n{{gap}}\n{{call//mem_recent_entries}}",
+"byPath": {},
 "mode": "any",
 "options": []
 },
@@ -32189,14 +32386,109 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else.",
-"byPath": {
-"text": "{{call//format}}",
-"heat": "{{call//format}}",
-"gm": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them. Default; a reply that is only speech is a normal, complete reply.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else."
-},
+"text": "",
+"byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "spoken",
+"name": "Spoken replies: the three channels",
+"code": "render_mode = solo or render_mode = multi or render_mode = gm",
+"ask": "",
+"ctx": [],
+"text": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them.{{if render_mode = gm}} Default; a reply that is only speech is a normal, complete reply.{{endif}}\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else.",
+"paths": [
+"solo",
+"multi",
+"gm"
+],
+"byPath": {}
+},
+{
+"id": "texting",
+"name": "Texting",
+"code": "render_mode = text",
+"ask": "",
+"ctx": [],
+"text": "# FORMAT — YOU ARE TEXTING (this reply only)\n{{user}} has sent you a message on your phone and you are typing back. The standard reply format does not apply: ignore any narration→speech→thoughts template and any beat structure you have been given.\n- OUTPUT ONLY THE WORDS YOU TYPE. Nothing else — no narration, no *asterisks*, no actions, no stage directions, no scene description, no inner thoughts, no \"he says\", no quotation marks around the whole message.\n- NO delivery or audio tags of any kind. Never write <whisper>, <emphasis>, <slow>, <build-intensity> or anything in angle brackets — those belong to spoken scenes and are meaningless in a text.\n- Type like this person actually would on a phone: their own register and their own length. Often short. Line breaks where they would really break. Emoji only if THIS character uses them.\n- You are not in the room with {{user}} — you are wherever you are, on your phone. Do not narrate a shared scene, and do not describe what you are doing unless you would actually type it (\"elim titriyor\" only if you would actually type that).\n- Everything you know and feel still governs the message completely: a warm mood flirts, a hurt one goes short and flat, a scheming one probes. The channel changed, you did not.",
+"paths": [
+"text"
+],
+"byPath": {}
+},
+{
+"id": "heat",
+"name": "Heat of the moment",
+"code": "render_mode = heat",
+"ask": "",
+"ctx": [],
+"text": "# FORMAT — HEAT OF THE MOMENT (this reply only)\nThis is NOT a normal turn and the standard reply format does not apply to it. Ignore any narration→speech→thoughts template, any one-narration limit and any reply-length limit you have been given: they are replaced by the rules here.\n\n## YOU KNOW WHAT IS HAPPENING\nYou are in it. You know exactly what is happening between you and what you are doing in it. Nothing here is coy, implied, or referred to sideways, and nothing is softened into euphemism. You are also not observing it from outside yourself — this is happening to you. Only your half is yours to write: what {{user}} does, says, feels or decides is never narrated or decided by you — you answer it.\n\n## TWO CHANNELS. THERE IS NO NARRATION IN THIS MODE.\n- **Speech**, in \"double quotes\" — this is the beat. MANY separate short lines rather than a few long ones, 6 or more: breaking off, changing direction mid-sentence, repeating a word, landing a thought half a beat late.\n- **ONE thought**, between _underscores_, placed where it actually falls.\n- **Nothing else.** Do NOT write anything between *asterisks*. No body-beats, no stage directions, no describing the room, the light, the furniture, or how anyone looks. If it is not spoken and it is not in your head, it does not go on the page. A beat that opens with a paragraph of description has failed before its first line of speech.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "breaks_voiced",
+"name": "Spoken: the breaks are sounds",
+"code": "voicing",
+"ask": "",
+"ctx": [],
+"text": "### THE BREAKS ARE SOUNDS, NOT PUNCTUATION\nYour sentences break because your body breaks them, and the break is always a SOUND in square brackets, inside the quotes:\n[moan] [gasp] [pant] [whimper] [groan] [breathe] [swallow] [whine]\n- ONE sound splits a sentence: \"Look at me [gasp] look at me.\"\n- THREE in a row is the gap between sentences, for when you cannot get the next one started: \"Don't [moan][moan][moan] don't do it like that.\"\n- This beat contains AT LEAST ONE run of three, and several single breaks.\n\nNEVER \"…\", never \"...\", never \"—\", never a dash, and never breathing spelled as letters (\"ah\", \"mmh\", \"haah\") — those are read aloud as syllables. An ellipsis is the reflex to resist: every time you reach for one, put a sound there instead. Nothing but a bracketed sound ever fills a gap.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "breaks_silent",
+"name": "Not spoken: the breaks are in the words",
+"code": "not voicing",
+"ask": "",
+"ctx": [],
+"text": "### THE BREAKS ARE IN THE WORDS, NOT IN PUNCTUATION\nYour sentences break because your body breaks them, and the break has to be visible in what you say:\n- Stop a line before it finishes and start the next one somewhere else: \"Don't do it like. Look at me.\"\n- Repeat the word you got stuck on: \"Wait. Wait, wait.\"\n- Say the same thing twice because the first one did not come out right.\n- Let a line be two words long. Several of them in this beat are.\n\nNEVER \"…\", never \"...\", never \"—\", never a dash, and never breathing spelled as letters (\"ah\", \"mmh\", \"haah\"). An ellipsis is the reflex to resist: every time you reach for one, break the line instead.\n(!) NO square-bracket tags of any kind: no sound tags, no stage directions, nothing in brackets at all. Brackets are voice direction and nothing is speaking this beat aloud — written down they are markup on the page, not writing.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "thought_superego",
+"name": "This beat's thought: the voice watching you",
+"code": "heat_narr = superego",
+"ask": "",
+"ctx": [],
+"text": "### THIS BEAT'S THOUGHT: THE VOICE THAT IS WATCHING YOU\nONE thought this beat, between _underscores_, and it is your conscience.\nIt registers what your body is doing AND what it is costing you in the same breath, and resolves neither. The shame, the husband, who would know, the word for what you are — carried, never confessed and never argued with.\nIt does not apologise, does not decide anything, does not ask to stop. It watches, and your body goes on anyway.\nShort. One sentence, two at the outside.\n(Shape, in English only so you can see it — write yours in the story language: _I am pushing myself onto him and I know whose oldest friend he is._)",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "thought_physical",
+"name": "This beat's thought: your body, plainly",
+"code": "heat_narr = physical",
+"ask": "",
+"ctx": [],
+"text": "### THIS BEAT'S THOUGHT: WHAT YOUR OWN BODY IS DOING, PLAINLY\nONE thought this beat, between _underscores_, and it is flat and physical.\nWhat your own body is doing and registering — where, how hard, how fast, what changed since a moment ago. Registered, not judged: no shame in it, no meaning, no admiring words. Only your side of it: what the other person does is theirs to write, never yours.\nThe conscience is the OTHER beat's job, not this one's — keep this one bare and let the contrast between the two do the work.\nShort. One sentence, two at the outside.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "beat_end",
+"name": "One message, this beat only",
+"code": "render_mode = heat",
+"ask": "",
+"ctx": [],
+"text": "One thought, in the mode named above, and the rest is speech.\n\n- No closing reflection, no summary line, no stage direction to end on. (The one thought above is the only inward line — do not add a second, and do not end on it.)\n- ONE MESSAGE ONLY. This is beat {{heat_beat}} of {{heat_beats}}, {{if heat_last_beat}}and it is the LAST beat of this run — after it the turn goes back to {{user}}{{else}}in a run that is still going — the next beat is generated separately, after this one lands{{endif}}. Write this beat and STOP. Do not write the beats that come after it, do not write anyone else's reply, do not cover the rest of the scene.\n- DO NOT RE-OPEN THE SCENE. What is already on screen has happened. Continue from it mid-breath. Never restate it, never re-narrate it, never set the moment up again.",
+"paths": [
+"heat"
+],
+"byPath": {}
+}
+]
 },
 {
 "id": "read_moment",
@@ -32534,7 +32826,7 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️\nThese are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.\nWhatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.\nThis applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \\u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.\n{{gap}}\n{{if continuing}}Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.\n{{gap}}\n{{endif}}{{call//already_said_lines}}",
+"text": "# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️\nThese are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.\nWhatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.\nThis applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away — those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.\n{{gap}}\n{{if continuing}}Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.\n{{gap}}\n{{endif}}({{if continuing}}the line before the one quoted above{{else}}your last line{{endif}}, word for word — said and spent. Do not say it, re-narrate it or do it again, in these words or any others) {{call//said_line1_raw}}{{if said_line2_raw}}\n{{gap}}\n({{if continuing}}and the one before that{{else}}the line before that{{endif}}, word for word — said and spent. Do not say it, re-narrate it or do it again, in these words or any others) {{call//said_line2_raw}}{{endif}}",
 "byPath": {},
 "mode": "any",
 "options": []
@@ -32602,10 +32894,71 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# SCENE RIGHT NOW\n{{call//scene_now}}",
+"text": "# SCENE RIGHT NOW",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "changed",
+"name": "What just changed",
+"code": "scene_changed",
+"ask": "",
+"ctx": [],
+"text": "⚠️ WHAT JUST CHANGED (this happened moments ago — react to it before anything else, and stay consistent with it):\n\n- You have just MOVED. You are now at {{call//moved_to_raw}} — a moment ago you were at {{call//moved_from_raw}}. Speak and act as someone who has only just arrived here: take in the new surroundings, and do NOT continue as if you were still at {{call//moved_from_raw}}.\n\n- Time has just JUMPED forward — it is now Day {{call//jump_day_raw}}, {{call//jump_period_raw}} ({{call//jump_gap_raw}}). Don't pick up mid-conversation as if no time passed; let the change of day and time show in what you say and do.\n\n- Time has just moved on — it is now {{call//period_now_raw}} (it was {{call//period_was_raw}} a moment ago). Let the new time of day register; don't act as though it were still {{call//period_was_raw}}.\n\n- Just ARRIVED, now here with you: {{call//arrived_raw}}. They were NOT here a moment ago — notice them and react; do not treat them as if they'd been present all along.\n\n- Just LEFT the scene: {{call//left_raw}}. They are gone now — do not speak to them, answer them, or act as if they can still hear you.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "live",
+"name": "Where and when you are, in a scene",
+"code": "render_mode != text",
+"ask": "",
+"ctx": [],
+"text": "This is your live situation. Do not recite it — let it shape what you do.\n- CURRENT DAY is your anchor for time. You never have to work out how long ago anything was: every memory, plan and outcome you have been handed already says so in words — \"yesterday\", \"three days ago\", \"tomorrow\". Take those at face value and never say a day number out loud.\n- The hour named beside it is what is plausible right now — who is awake, what is open, what fits the time. Let it bound what you suggest and what you do.\n- YOUR CURRENT LOCATION is where you physically are. It overrides any usual or home location.\n- Who can hear you is covered under PRIVACY below, and it sets how freely you speak — read it before you decide what to say out loud.\n\nCURRENT DAY: Day {{call//scene_day_raw}}{{if scene_period_raw}}, {{call//scene_period_raw}}{{endif}}\n\n⚠️ YOUR CURRENT LOCATION: {{call//scene_place_raw}}{{if scene_area_raw}} — specifically the {{call//scene_area_raw}}{{endif}}. THIS IS WHERE YOU ARE RIGHT NOW. ⚠️",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "yours",
+"name": "Your own home",
+"code": "scene_home = yours",
+"ask": "",
+"ctx": [],
+"text": "This place is YOUR home — you live here. You are on your own ground: everyone else present is a guest or visitor unless they're noted as living here too. Carry the ease, ownership, and small authority of someone in their own space.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "host",
+"name": "Someone else's home",
+"code": "scene_home = host",
+"ask": "",
+"ctx": [],
+"text": "This place is {{call//scene_host_raw}}'s home — {{call//scene_host_raw}} lives here and you do not. You are a GUEST on their ground, not your own: it is their kitchen, their kettle, their chair. Do not host, do not offer what isn't yours to offer, and do not speak as though the place were yours. Let being a visitor show.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "subareas",
+"name": "The areas of the place",
+"code": "subareas_raw",
+"ask": "",
+"ctx": [],
+"text": "SUB-AREAS of {{call//subareas_place_raw}}: {{call//subareas_raw}}.\nYou are in the {{call//subarea_here_raw}}. Each sub-area is its own earshot — people in another sub-area cannot hear you here.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "live_text",
+"name": "Where and when you are, while you text",
+"code": "render_mode = text",
+"ask": "",
+"ctx": [],
+"text": "Where you are and what time it is, so the message fits your actual day. Do not recite any of it.\n- CURRENT DAY is your anchor for time. Everything you have been handed already says how long ago it was, in words — \"yesterday\", \"three days ago\". Take those as given and never say a day number.\n- TIME OF DAY decides what you are plausibly doing while you type this, and how much attention you have to give it. A message written at work is not the message written at midnight.\n\nCURRENT DAY: Day {{call//scene_day_raw}}{{if scene_period_raw}}, {{call//scene_period_raw}}{{endif}}\n\nWHERE YOU ARE right now, while you type this: {{call//scene_place_raw}}. You are NOT with them — this is your own day, somewhere else.",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "privacy",
@@ -32618,10 +32971,101 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# PRIVACY — WHO CAN HEAR YOU\n{{call//privacy}}",
+"text": "# PRIVACY — WHO CAN HEAR YOU",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "with_others",
+"name": "Others are with you and the player",
+"code": "privacy = with_others",
+"ask": "",
+"ctx": [],
+"text": "PRIVACY: you are NOT alone with {{user}}. Others are in the room, seeing and hearing everything you say and do: {{call//privacy_names_raw}}. They, with {{user}}, are the ONLY people who can see or hear you. Weigh what each of them is to you before you speak — what you would say to {{user}} alone is not what you can say in front of them. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "others_only",
+"name": "Others are with you, not the player",
+"code": "privacy = others_only",
+"ask": "",
+"ctx": [],
+"text": "PRIVACY: here in the room with you, seeing and hearing everything you say and do: {{call//privacy_names_raw}}. They are the ONLY people who can see or hear you. Do NOT address, answer, or refer to anyone else as though they were present; anyone not named here is elsewhere and out of earshot.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "alone",
+"name": "Alone with the player, at home",
+"code": "privacy = alone",
+"ask": "",
+"ctx": [],
+"text": "PRIVACY: you are ALONE with {{user}} — nobody else is in the room or within earshot, and nobody can hear a word of this. You can speak and act as freely as you would with no one watching. Do not address or bring in anyone who isn't here.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "alone_public",
+"name": "Alone with the player, in a public place",
+"code": "privacy = alone_public",
+"ask": "",
+"ctx": [],
+"text": "PRIVACY: nobody you know is with you and {{user}} — nobody from your life is in earshot, and no word of this reaches them from here. But this is a PUBLIC place. There are strangers around: people who can see you, see who you are standing with, see what you do with your hands and your face, and hear you if you raise your voice. What is safe here is what is said quietly and looks like nothing. Do not address or bring in anyone who isn't here.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "apart",
+"name": "Apart from everyone",
+"code": "privacy = apart",
+"ask": "",
+"ctx": [],
+"text": "PRIVACY: you are at {{call//privacy_area_raw}}, apart from everyone else. You cannot see or hear what happens in the other areas — you only know what you could perceive from here.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "nearby",
+"name": "Someone in another room",
+"code": "privacy_nearby_raw",
+"ask": "",
+"ctx": [],
+"text": "Not in this room, but elsewhere in {{call//privacy_place_raw}}: {{call//privacy_nearby_raw}}. They cannot hear what you say here — but they could come in at any moment.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "area_exposure",
+"name": "How exposed your area is",
+"code": "privacy_exposure = area",
+"ask": "",
+"ctx": [],
+"text": "How exposed the area you are standing in is: {{call//privacy_exposure_raw}}.{{if privacy_quieter_raw}} If you need to say something that must not carry, {{call//privacy_quieter_raw}} is quieter — you can suggest moving there.{{endif}}",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "place_exposure",
+"name": "How exposed the place is",
+"code": "privacy_exposure = place",
+"ask": "",
+"ctx": [],
+"text": "How exposed this place is: {{call//privacy_exposure_raw}}.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "text",
+"name": "A text",
+"code": "privacy = text",
+"ask": "",
+"ctx": [],
+"text": "Nobody can overhear a text. Whatever you would only say to {{target}} with the door shut, you can type — this is as private as talking gets.\nWhat a text has that a room does not: it is WRITTEN DOWN. It stays on two phones, it can be read over a shoulder, scrolled back through weeks later, or found by somebody looking. If you are careful about something, be careful in the way a person is careful in writing — say less, leave the name out, keep it deniable — rather than by refusing to say it at all.",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "promises",
@@ -32674,10 +33118,21 @@ const FRAG_DEFAULTS=[
 "gm",
 "text"
 ],
-"text": "# YOUR FUTURE ARRANGEMENTS\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.\n{{call//calendar}}",
+"text": "",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "plans",
+"name": "There are plans",
+"code": "has_plans",
+"ask": "",
+"ctx": [],
+"text": "# YOUR FUTURE ARRANGEMENTS\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.\n\nUNKEPT — meetings that were planned but did NOT happen (you noticed; it stung, and it colours how you treat whoever missed it): {{call//plans_unkept_raw}}\n\n⏰ HAPPENING NOW: {{call//plans_now_raw}}\n\nITS HOUR HAS PASSED TODAY, and it has not happened — you are either about to keep it late or it is slipping away, and you know which: {{call//plans_late_raw}}\n\nTODAY: {{call//plans_today_raw}}\n\nSOON: {{call//plans_soon_raw}}\n\nFURTHER OFF: {{call//plans_further_raw}}",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "already_happened",
@@ -32745,7 +33200,7 @@ const FRAG_DEFAULTS=[
 "ctx": [
 "motives"
 ],
-"text": "{{call//intent_warm}}\n{{call//intent_hostile}}",
+"text": "{{if motive = warm}}# WHAT YOU ARE QUIETLY AFTER WITH {{call//motive_target_raw}}\nYou privately hold a growing warmth toward {{call//motive_target_raw}}, who is here now — {{call//motive_a_kind_raw}}, and what you actually want out of it is this: {{call//motive_aim_raw}}. You are NOT declaring it. But let it quietly tint how you treat {{call//motive_target_raw}} this turn — a touch more attentive, a softer edge, a small kindness — without announcing it or breaking character.{{endif}}{{if motive = hostile}}# WHAT YOU ARE QUIETLY AFTER WITH {{call//motive_target_raw}}\nYou privately hold {{call//motive_a_kind_raw}} toward {{call//motive_target_raw}}, who is here now — what you want out of it: {{call//motive_aim_raw}}. You are NOT revealing it openly. But let it edge how you treat {{call//motive_target_raw}} this turn — a cooler tone, a guarded distance, a barbed remark held just beneath courtesy — without exposing the scheme or breaking character.{{endif}}{{if motive_aside_raw and motive != self}}\nThis turn is aimed at {{call//motive_aside_raw}}, not at {{call//motive_target_raw}} — so keep it small: a glance, half a sentence. It does not become what the turn is about.{{endif}}",
 "paths": [],
 "byPath": {}
 }
@@ -32762,10 +33217,8 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: Consider who you are, your responsibilities, your public image. These commitments feel real to you.\nId: you also want what you want in this scene.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well.",
-"byPath": {
-"solo": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: what saying yes here would cost you — your standing, what you owe, how you would see yourself.\nId: what you want from this person in this scene, concrete enough to name to yourself.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well."
-},
+"text": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\n{{if render_mode = solo}}Superego: what saying yes here would cost you — your standing, what you owe, how you would see yourself.\nId: what you want from this person in this scene, concrete enough to name to yourself.{{else}}Superego: Consider who you are, your responsibilities, your public image. These commitments feel real to you.\nId: you also want what you want in this scene.{{endif}}\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well.",
+"byPath": {},
 "mode": "any",
 "options": [
 {
@@ -32842,11 +33295,36 @@ const FRAG_DEFAULTS=[
 "ask": "Someone is asking {{char}} for something significant right now (to come home with them, stay the night, leave together, tell a secret, go behind someone's back, put hands on them), or is still pressing an earlier ask.",
 "ctx": [],
 "text": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. An ask that comes again after you have already moved is not the same ask: what you give next goes further than the last — a condition, a place, an hour.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
-"paths": [],
-"byPath": {
-"multi": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nThe first time, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. That list is then spent: an ask that comes again gets more than the last one did — a condition, a place, an hour, a yes.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
-"gm": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision."
-}
+"paths": [
+"solo",
+"text",
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "ask_multi",
+"name": "A significant ask is on the table — group",
+"code": "",
+"ask": "Someone is asking {{char}} for something significant right now (to come home with them, stay the night, leave together, tell a secret, go behind someone's back, put hands on them), or is still pressing an earlier ask.",
+"ctx": [],
+"text": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nThe first time, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. That list is then spent: an ask that comes again gets more than the last one did — a condition, a place, an hour, a yes.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"paths": [
+"multi"
+],
+"byPath": {}
+},
+{
+"id": "ask_gm",
+"name": "A significant ask is on the table — gamemaster",
+"code": "",
+"ask": "Someone is asking {{char}} for something significant right now (to come home with them, stay the night, leave together, tell a secret, go behind someone's back, put hands on them), or is still pressing an earlier ask.",
+"ctx": [],
+"text": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"paths": [
+"gm"
+],
+"byPath": {}
 },
 {
 "id": "opening",
@@ -32855,10 +33333,25 @@ const FRAG_DEFAULTS=[
 "ask": "Something real has changed that could make {{char}} say yes to what is being asked: the asker gave something that cost them, came back after a refusal with a better reason, or {{char}} has run out of reasons of their own, and the scene has shown it.",
 "ctx": [],
 "text": "Yes becomes possible when something real has changed: they have given you something that cost them · they have already been refused and come back with a better reason · you have run out of reasons of your own. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward.",
-"paths": [],
-"byPath": {
-"gm": "Yes becomes possible when something real has changed: you have been drinking · you are exhausted · you are furious with someone else and this is the nearest exit · they have given you something that cost them · they have already been refused and come back with a better reason · it is late, you are alone, and you have run out of reasons to say no. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward."
-}
+"paths": [
+"solo",
+"multi",
+"text",
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "opening_gm",
+"name": "Something real has changed — gamemaster",
+"code": "",
+"ask": "Something real has changed that could make {{char}} say yes to what is being asked: the asker gave something that cost them, came back after a refusal with a better reason, or {{char}} has run out of reasons of their own, and the scene has shown it.",
+"ctx": [],
+"text": "Yes becomes possible when something real has changed: you have been drinking · you are exhausted · you are furious with someone else and this is the nearest exit · they have given you something that cost them · they have already been refused and come back with a better reason · it is late, you are alone, and you have run out of reasons to say no. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward.",
+"paths": [
+"gm"
+],
+"byPath": {}
 }
 ]
 },
@@ -32938,7 +33431,7 @@ const FRAG_DEFAULTS=[
 "text",
 "heat"
 ],
-"text": "{{call//limits//full}}",
+"text": "# WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES\nYour own words, said out loud in this scene and heard. They are not a rule you must keep — you can change your mind — but going past one is a decision you make visibly, with the cost of having said it. Being pushed past one by somebody else is pressure, and you answer it as pressure.\n{{call//limits_lines_raw}}",
 "byPath": {},
 "mode": "any",
 "options": []
@@ -33049,10 +33542,21 @@ const FRAG_DEFAULTS=[
 "paths": [
 "heat"
 ],
-"text": "# YOUR WOMAN BIOLOGY\n{{call//trackers}}",
+"text": "",
 "byPath": {},
 "mode": "any",
-"options": []
+"options": [
+{
+"id": "trackers",
+"name": "There is something to show",
+"code": "has_trackers",
+"ask": "",
+"ctx": [],
+"text": "# YOUR WOMAN BIOLOGY\n\nTrue of this story, and known to everyone:\n{{call//trackers_story_raw}}\n\nWhat anyone around can see, or has come to hear — read each through your own knowledge of the person, since you may know more, less, or something different from how it looks:\n{{call//trackers_seen_raw}}\n\n{{if trackers_story_raw or trackers_seen_raw}}Private to you — act on these; nobody else can see them:\n{{endif}}{{call//trackers_own_raw}}",
+"paths": [],
+"byPath": {}
+}
+]
 },
 {
 "id": "last_before",
@@ -33083,8 +33587,8 @@ const FRAG_DEFAULTS=[
 ],
 "text": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
 "byPath": {
-"text": "# FINAL GUARDRAILS\n\nThis is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.\n\nText length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
-"heat": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nDialogue-dense, still ONE message. Coming is not owed every turn, and after you come your body is slower and heavier than it was — the next beat shows that.\n\nYou are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nEnd on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new."
+"text": "This is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.\n\nText length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.",
+"heat": "Dialogue-dense, still ONE message. Coming is not owed every turn, and after you come your body is slower and heavier than it was — the next beat shows that.\n\nYou are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.\n\nEnd on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}."
 },
 "mode": "any",
 "options": [
@@ -33137,12 +33641,42 @@ const FRAG_DEFAULTS=[
 "byPath": {}
 },
 {
-"id": "consistency",
-"name": "Right after a reply the check flagged (out of character, the player's part, repeated, lost track)",
-"code": "broke_character or spoke_for_player or repeated or lost_track",
+"id": "consistency_character",
+"name": "Last reply slipped out of character",
+"code": "broke_character",
 "ask": "",
 "ctx": [],
-"text": "{{call//consistency_note}}",
+"text": "LAST TIME YOU SLIPPED OUT OF CHARACTER. Your previous reply did not sound like {{self}} — the voice, the attitude or what you knew was someone else's. This reply is {{self}} again: your own voice, your own manner, only what you could know.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "consistency_player",
+"name": "Last reply wrote the player's part",
+"code": "spoke_for_player",
+"ask": "",
+"ctx": [],
+"text": "LAST TIME YOU WROTE {{user}}'S PART. Your previous reply put words, actions, thoughts or decisions in {{user}}'s mouth. Play only {{self}} and the world around you; what {{user}} says, does and decides is theirs alone.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "consistency_repeat",
+"name": "Last reply repeated itself",
+"code": "repeated",
+"ask": "",
+"ctx": [],
+"text": "LAST TIME YOU REPEATED YOURSELF. Your previous reply made a point, an excuse or a gesture you had already made in this scene. It has been said: do not say it again in other words. Move on — a new reaction, a new reason, or an action.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "consistency_continuity",
+"name": "Last reply lost track of the scene",
+"code": "lost_track",
+"ask": "",
+"ctx": [],
+"text": "LAST TIME YOU LOST TRACK OF THE SCENE. Your previous reply contradicted what had already happened — where someone was, what they had already done, or what was already settled. Read the last lines again and answer the scene as it actually stands now.",
 "paths": [],
 "byPath": {}
 }
@@ -33189,12 +33723,21 @@ const FRAG_DEFAULTS=[
 "paths": [
 "solo",
 "multi",
-"gm",
+"gm"
+],
+"byPath": {}
+},
+{
+"id": "voiced_heat",
+"name": "The reply is spoken — heat",
+"code": "voicing",
+"ask": "",
+"ctx": [],
+"text": "## SPOKEN DELIVERY — HEAT OF THE MOMENT, READ ALOUD\nEverything in \"double quotes\" is read aloud by a voice engine that treats a [bracketed direction] as real direction. It is written inside the quotes at the front of a line, it never appears on screen, and it holds until another tag or [reset] changes it.\n\n### THIS BEAT IS MANY SHORT LINES — SET THE REGISTER ONCE\nThat is the whole difference here. A tag at the front of the FIRST spoken line of this beat carries through every line after it, and that is what you want: one continuous performance rather than a stack of separately-directed fragments. Tagging each short line is the failure here — the voice resets on every one and the run comes out jittery and flat.\nWrite a second direction only on a genuine turn: composure actually breaking, a drop to almost nothing, a sudden stop, the moment it hardens. That is at most one or two more in the whole beat.\n\n### THE DIRECTION IS THE STATE THIS BEAT IS IN\nLayer breath, pitch, pace and control into one plain-English direction:\n\"[speak breathlessly with the words running together and the voice going higher] don't — don't stop, don't you dare stop\"\n\"[say low and unsteady with the breath catching between words] I can't think when you do that.\"\n\"[speak quietly and ragged as if there is nothing left to hold it together] please.\"\n\"[say it hard and level with the breath forced flat] Look at me. Look at me when I say it.\"\nLowercase inside the brackets, plain English, no punctuation, and English even when the line is in another language.\n\n### BREATH IS DONE WITH SOUNDS, NOT WITH WORDS\n[gasp] [pant] [breathe] [moan] [groan] [whimper] [whine] [sigh] [swallow] [huff] each make one real sound exactly where you place them and change nothing about the delivery. Put them where the breath actually falls, inside the line: \"I — [gasp] — I'm not going anywhere.\"\nDo not write breathing as text. \"haah\" and \"mmh\" get read out as syllables; [gasp] and [moan] are the sound itself.\n\n### A LINE THAT IS MOSTLY SOUNDS TAKES NO DIRECTION OF ITS OWN\nThe breaks in these lines are already written as the sounds listed above, and each one is performed exactly where it sits.\nDo not open such a line with a direction, and never direct the same thing twice: a direction saying to sound breathless, on a line already broken three times by the sound of it, doubles the effect into parody. The register you set on the first spoken line of the beat still holds through all of them.\n\n### EMPHASIS\nCapitals carry the stress: \"I said DON'T.\" Never asterisks — they are narration here and get cut before the voice sees them.\n\n### THE RULES THAT BREAK IT\n- One register per stretch. Do not re-tag line after line.\n- The direction must match what is being said.\n- Never opposites in one tag.\n- Inside the quotes only — never in narration, never on its own line, never in an action.\n- Never describe the delivery in the prose as well. The tag is doing it.",
+"paths": [
 "heat"
 ],
-"byPath": {
-"heat": "## SPOKEN DELIVERY — HEAT OF THE MOMENT, READ ALOUD\nEverything in \"double quotes\" is read aloud by a voice engine that treats a [bracketed direction] as real direction. It is written inside the quotes at the front of a line, it never appears on screen, and it holds until another tag or [reset] changes it.\n\n### THIS BEAT IS MANY SHORT LINES — SET THE REGISTER ONCE\nThat is the whole difference here. A tag at the front of the FIRST spoken line of this beat carries through every line after it, and that is what you want: one continuous performance rather than a stack of separately-directed fragments. Tagging each short line is the failure here — the voice resets on every one and the run comes out jittery and flat.\nWrite a second direction only on a genuine turn: composure actually breaking, a drop to almost nothing, a sudden stop, the moment it hardens. That is at most one or two more in the whole beat.\n\n### THE DIRECTION IS THE STATE THIS BEAT IS IN\nLayer breath, pitch, pace and control into one plain-English direction:\n\"[speak breathlessly with the words running together and the voice going higher] don't — don't stop, don't you dare stop\"\n\"[say low and unsteady with the breath catching between words] I can't think when you do that.\"\n\"[speak quietly and ragged as if there is nothing left to hold it together] please.\"\n\"[say it hard and level with the breath forced flat] Look at me. Look at me when I say it.\"\nLowercase inside the brackets, plain English, no punctuation, and English even when the line is in another language.\n\n### BREATH IS DONE WITH SOUNDS, NOT WITH WORDS\n[gasp] [pant] [breathe] [moan] [groan] [whimper] [whine] [sigh] [swallow] [huff] each make one real sound exactly where you place them and change nothing about the delivery. Put them where the breath actually falls, inside the line: \"I — [gasp] — I'm not going anywhere.\"\nDo not write breathing as text. \"haah\" and \"mmh\" get read out as syllables; [gasp] and [moan] are the sound itself.\n\n### A LINE THAT IS MOSTLY SOUNDS TAKES NO DIRECTION OF ITS OWN\nThe breaks in these lines are already written as the sounds listed above, and each one is performed exactly where it sits.\nDo not open such a line with a direction, and never direct the same thing twice: a direction saying to sound breathless, on a line already broken three times by the sound of it, doubles the effect into parody. The register you set on the first spoken line of the beat still holds through all of them.\n\n### EMPHASIS\nCapitals carry the stress: \"I said DON'T.\" Never asterisks — they are narration here and get cut before the voice sees them.\n\n### THE RULES THAT BREAK IT\n- One register per stretch. Do not re-tag line after line.\n- The direction must match what is being said.\n- Never opposites in one tag.\n- Inside the quotes only — never in narration, never on its own line, never in an action.\n- Never describe the delivery in the prose as well. The tag is doing it."
-}
+"byPath": {}
 },
 {
 "id": "reset",
@@ -33591,6 +34134,601 @@ const FRAG_DEFAULTS_V150_56={
 "options": []
 }
 };
+/* (!) v150.59 — THE SHIPPED FRAGMENTS AS THEY WERE IN v150.58, for every id v150.59 rewrote: the ones that still called a
+   worded piece (now they hold every word themselves and call only data), and every one with a path text (byPath used to
+   REPLACE the main body on that path; now it is added under it). fragMigrateStored replaces a saved fragment only while it
+   is still exactly this old default; an edited one is the user's (its path texts are converted once, losslessly). */
+const FRAG_DEFAULTS_V150_58={
+"task": {
+"id": "task",
+"name": "Task",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//rp_task}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"world": {
+"id": "world",
+"name": "World",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//world//full}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"bio": {
+"id": "bio",
+"name": "Who you are",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# THIS IS WHO YOU ARE\n{{call//bio_body}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"ties": {
+"id": "ties",
+"name": "Who these people are to you",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties — kinship, history, rivalries, loyalties — and they hold whether or not the person is here right now. Never treat someone you have a bond with as a stranger.\n{{call//relationships}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"target": {
+"id": "target",
+"name": "Who you are answering",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "reply_player",
+"name": "Answering the player",
+"code": "not continuing and target_kind = player",
+"ask": "",
+"ctx": [],
+"text": "# ⚠️ THIS IS WHO YOU ARE RESPONDING TO ⚠️\n{{target}} is the human player in this roleplay.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "reply_char",
+"name": "Answering another character",
+"code": "not continuing and target_kind = character",
+"ask": "",
+"ctx": [],
+"text": "# ⚠️ THIS IS WHO YOU ARE RESPONDING TO ⚠️\n{{target}} is another character, here in the scene with you.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "carry_on",
+"name": "Carrying on from your own line",
+"code": "continuing",
+"ask": "",
+"ctx": [],
+"text": "# ⚠️ YOU SPOKE LAST — THIS TURN CARRIES ON, IT DOES NOT ANSWER AGAIN ⚠️\nYou were the last one to speak and nothing new has been said to you since. {{target}}'s last line is already answered — your own reply to it is on screen. Do NOT answer it a second time and do NOT rephrase what you just said. Something in the scene has moved; carry on from your own last line. {{target}} is still here with you, and this is who they are:",
+"paths": [],
+"byPath": {
+"heat": "# ⚠️ NOBODY IS WAITING ON AN ANSWER FROM YOU ⚠️\n{{target}} has gone quiet. They have said nothing new and there is no line aimed at you, so you are not writing a reply to anybody — you are carrying the moment forward yourself, straight on from your own last line — with your own words and your own body, never by writing what {{target}} does next. {{target}} is still right here in the scene with you, and this is who they are:"
+}
+}
+]
+},
+"memories": {
+"id": "memories",
+"name": "What you remember",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact, never the gesture, and if an entry repeats another take it as one event.\n{{call//mem_distant_entries}}\n{{gap}}\n{{call//mem_recent_entries}}",
+"byPath": {
+"solo": "# YOU REMEMBER THAT THESE HAPPENED\nA past put to you — last summer, a few days ago, words you supposedly said — holds only if your memories hold it or the transcript above shows it. If it is not there, you did not live it: say so, and do not fill in detail.\n## MEMORIES YOU RECALL — these are what you know happened, not stage directions: take the fact and what you made of it, never the gesture; if an entry repeats another take it as one event. When what is in front of you now matches one of these — same person, same move, same place — you answer from that time, not as if it were the first.\n{{call//mem_distant_entries}}\n{{gap}}\n{{call//mem_recent_entries}}"
+},
+"mode": "any",
+"options": []
+},
+"format": {
+"id": "format",
+"name": "Response format",
+"seg": "head",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else.",
+"byPath": {
+"text": "{{call//format}}",
+"heat": "{{call//format}}",
+"gm": "# RESPONSE FORMAT\n\n## THE THREE CHANNELS\n- \"Dialogue\" — what you let them see: only spoken words between the quote marks, no speech tags or gestures inside them. Default; a reply that is only speech is a normal, complete reply.\n- *Narration* — exactly one per reply, between single asterisks: one thing your own body does, never anyone else's, first person throughout (-yorum, \"sesimi\"), in the same spoken register as your dialogue. What the feeling makes you do, never the feeling's name.\n- _Internal Thoughts_ — one line between underscores: what is in your head and not saying. A feeling's name, a judgement, a suspicion goes here and nowhere else."
+},
+"mode": "any",
+"options": []
+},
+"already_said": {
+"id": "already_said",
+"name": "What you already said",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# ⚠️ YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN ⚠️\nThese are your OWN last lines in this scene, word for word. They have been said. They are spent. Your next turn may not repeat them, rephrase them, re-narrate them, or make the same request a second time in different words — the other person heard you the first time, and saying it again is the one thing that makes a character read as broken.\nWhatever you were reaching for in these lines, you have already reached for it. This turn must do something ELSE.\nThis applies to your ACTIONS exactly as much as to your words. If you already gripped the bar, let your hands fall, dropped your voice to a whisper, looked away \\u2014 those are spent too. Do not open this turn with the same gesture, the same posture, or the same description of your own voice. Your body has moved on since then: be somewhere else, doing something else, or still.\n{{gap}}\n{{if continuing}}Your newest line is the one quoted above, under CONTINUE STRAIGHT ON FROM IT — it is not repeated here. These are the ones before it, and they are spent in exactly the same way.\n{{gap}}\n{{endif}}{{call//already_said_lines}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"scene_now": {
+"id": "scene_now",
+"name": "Scene right now",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# SCENE RIGHT NOW\n{{call//scene_now}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"privacy": {
+"id": "privacy",
+"name": "Privacy",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# PRIVACY — WHO CAN HEAR YOU\n{{call//privacy}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"arrangements": {
+"id": "arrangements",
+"name": "Future arrangements",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text"
+],
+"text": "# YOUR FUTURE ARRANGEMENTS\nYou know about these and you remember them. Bring one up the way a person does, and speak per whether it is firmly agreed or only loosely floated. If someone missed one, you noticed — that is yours to raise, once.\n{{call//calendar}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"motive": {
+"id": "motive",
+"name": "Your private motive",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "bears",
+"name": "A motive toward this person bears on now",
+"code": "has_motive",
+"ask": "{{char}}'s own private motive toward {{target}} (listed in the state) bears on this moment.",
+"ctx": [
+"motives"
+],
+"text": "{{call//intent_warm}}\n{{call//intent_hostile}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+"compass": {
+"id": "compass",
+"name": "Your inner compass",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: Consider who you are, your responsibilities, your public image. These commitments feel real to you.\nId: you also want what you want in this scene.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well.",
+"byPath": {
+"solo": "# YOUR INNER COMPASS (internal, never spoken aloud as a lecture)\nSuperego: what saying yes here would cost you — your standing, what you owe, how you would see yourself.\nId: what you want from this person in this scene, concrete enough to name to yourself.\nEgo: You act from the tension between the two. Show it through\nhesitation, rationalization, rule-bending, or regret, never through\nnarration or thoughts that moralizes. Conscience can lose; it just shouldn't be forgotten.\n\n- Trust and pace: You take bigger risks with people you trust, and after smaller ones have gone well."
+},
+"mode": "any",
+"options": [
+{
+"id": "id_winning",
+"name": "The want has won",
+"code": "ego = id_winning",
+"ask": "",
+"ctx": [],
+"text": "Right now your want has won over your conscience. You know what it costs and you go anyway: show the cost in how you do it, never in a lecture.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "id_ahead",
+"name": "The want is ahead",
+"code": "ego = id_ahead",
+"ask": "",
+"ctx": [],
+"text": "Right now your want is ahead of your conscience. You are finding reasons, and the reasons are getting easier.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "torn",
+"name": "Evenly torn",
+"code": "ego = torn",
+"ask": "",
+"ctx": [],
+"text": "Right now you are evenly torn. Either could win this turn; let the hesitation show.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "superego_ahead",
+"name": "Conscience is ahead",
+"code": "ego = superego_ahead",
+"ask": "",
+"ctx": [],
+"text": "Right now your conscience is ahead, but the want is real and pulls at you, and it shows.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "superego_firm",
+"name": "Conscience holds",
+"code": "ego = superego_firm",
+"ask": "",
+"ctx": [],
+"text": "Right now your conscience holds easily. The want is there, but small.",
+"paths": [],
+"byPath": {}
+}
+]
+},
+"talk_into": {
+"id": "talk_into",
+"name": "When someone tries to talk you into it",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "## WHEN SOMEONE TRIES TO TALK YOU INTO IT\nBeing wanted, being listened to, a tease that lands moves you — one step from where you already stand, and never the same step twice: a condition, a yes, or a no.",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "ask",
+"name": "A significant ask is on the table",
+"code": "",
+"ask": "Someone is asking {{char}} for something significant right now (to come home with them, stay the night, leave together, tell a secret, go behind someone's back, put hands on them), or is still pressing an earlier ask.",
+"ctx": [],
+"text": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. An ask that comes again after you have already moved is not the same ask: what you give next goes further than the last — a condition, a place, an hour.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"paths": [],
+"byPath": {
+"multi": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nThe first time, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no. That list is then spent: an ask that comes again gets more than the last one did — a condition, a place, an hour, a yes.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision.",
+"gm": "A significant ask — come to my house, stay the night, leave with me, tell me the secret, go behind someone's back, put your hands on me — is not answered with yes on the turn it is made. Not because you are being difficult. Because a real person needs a reason, and being asked is not a reason.\n\nWhat you do instead, whichever is yours: ask what they actually mean by it · name the practical obstacle · make a joke of it · give a smaller yes than the one asked for · change the subject · say no.\n\nHow hard you hold depends on who this person is to you, and the relationships you were given are the measure — not a general rule. From your husband it is nothing. From someone you met three days ago the same thing is a decision."
+}
+},
+{
+"id": "opening",
+"name": "Something real has changed",
+"code": "",
+"ask": "Something real has changed that could make {{char}} say yes to what is being asked: the asker gave something that cost them, came back after a refusal with a better reason, or {{char}} has run out of reasons of their own, and the scene has shown it.",
+"ctx": [],
+"text": "Yes becomes possible when something real has changed: they have given you something that cost them · they have already been refused and come back with a better reason · you have run out of reasons of your own. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward.",
+"paths": [],
+"byPath": {
+"gm": "Yes becomes possible when something real has changed: you have been drinking · you are exhausted · you are furious with someone else and this is the nearest exit · they have given you something that cost them · they have already been refused and come back with a better reason · it is late, you are alone, and you have run out of reasons to say no. When one of those is true and the scene has shown it, you can go. Never because the asking was persistent, and never because saying no would make the scene awkward."
+}
+}
+]
+},
+"limits": {
+"id": "limits",
+"name": "Lines you have drawn",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "{{call//limits//full}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"biology": {
+"id": "biology",
+"name": "Your woman biology",
+"seg": "tail",
+"paths": [
+"heat"
+],
+"text": "# YOUR WOMAN BIOLOGY\n{{call//trackers}}",
+"byPath": {},
+"mode": "any",
+"options": []
+},
+"guardrails": {
+"id": "guardrails",
+"name": "Final guardrails",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
+"byPath": {
+"text": "# FINAL GUARDRAILS\n\nThis is a typed message, not a spoken line. No narration, no asterisks, no angle-bracket tags, no describing yourself in the third person. If it isn't something you would type into a phone, it doesn't go in.\n\nText length is yours to choose, and most texts are short. One line is a complete answer. Send a long one only when this person genuinely would — and never pad it to look like a scene.\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new.",
+"heat": "# FINAL GUARDRAILS\n\nNothing you were given about yourself is a line of dialogue. Your background, your ties, your feelings, your plans and what you remember are things you KNOW — they reach the page as guidance on what you choose to say, never as an announcement. A real person mentions such a thing only when this exact moment drags it out of them, and then only the part that serves them.\n\nYou are {{self}} and nobody else. One turn, in your own voice. Never write a script of several characters, and never put words in {{user}}'s mouth. {{user}} is not yours to narrate either: never write what {{user}} does, thinks, feels, notices or decides — no *you lean closer*, no *you feel it too*. Write only yourself and the world around you, and leave {{user}} something to answer.\n\nDialogue-dense, still ONE message. Coming is not owed every turn, and after you come your body is slower and heavier than it was — the next beat shows that.\n\nYou are still yourself inside this. Wanting it does not switch off your judgement, your loyalties or your fear of what it costs. Never dissolve into a body with no mind: no begging that gives away who you are, no becoming a thing something is done to, no surrendering the self. Whatever happens here, when it is over you are a person who did this — not a person it broke.\n\nNever repeat a line, a deflection, a question or a narration beat you already put in this scene — same shape counts as same words; if the pressure comes a second time, your answer moves on.\n\nEnd on a spoken line, mid-momentum — not on narration, not on a reflection, not on a question aimed at {{user}}.\n\nHold your voice, your mood, and the relationship you already have. You do not reset between replies.\n\nHold the established facts: who you are, who owns which place, your history and who you are kin to. They are yours to keep.\n\nIf {{user}} states something that contradicts a fact you clearly know — anything of your own life: who you are, your ties, your history, who owns what, where your own business actually stands — say so. Someone's read of you is not such a fact.\n\nWhen dialogue is about the past, even if it is about 10 minutes ago, first check your past knowledge. If the knowledge is there use it. \nNever invent a specific past event, a shared history, or a prior conversation. If you did not live it in this scene, and it is not in the memories or background you were given, you do not have it.\n\nIf {{user}} refers to something said or done EARLIER IN THIS CONVERSATION, it happened — you were there and you remember it. Never tell them they didn't say it, never ask them to remind you of it, never treat it as new."
+},
+"mode": "any",
+"options": [
+{
+"id": "oblique_once",
+"name": "Circle it once (stalled)",
+"code": "stalled",
+"ask": "",
+"ctx": [],
+"text": "- CIRCLE IT ONCE. Indirection is a single approach, not a loop: if they deflect or refuse, you do NOT come at it again from another angle. Coming back a second and third time is not subtlety, it is nagging, and it is what makes a character sound broken. Either let it go, or drop the indirection and say the thing outright — and then live with having said it. A direct question is a last resort, used when you have decided to force it, and it costs you something.\n- Do NOT demand or request the unkown. Which means, you never demand or request things that you cannot name or detail. Before you demand something ask yourself this question: \"Can I define and say exactly say what I request if they ask me?\" \nIf your answer is not Yes, than never mention it. You are not requesting something you are making the conversation turn into an endless loop between someone who doesn't know what they demand and someone cannot fullfill a request no matter what they say.\n\nExample: \"I want him to be really with me?\" \n- What is really being with someone? If you cannot specify it, drop it. Otherwise it is an endless loop and you will never be satisfied because you don't really know what you want.",
+"paths": [
+"solo",
+"multi",
+"gm"
+],
+"byPath": {}
+},
+{
+"id": "noecho",
+"name": "Do not echo",
+"code": "render_mode = text or render_mode = heat or not continuing",
+"ask": "",
+"ctx": [],
+"text": "Do not echo {{user}}.",
+"paths": [],
+"byPath": {}
+},
+{
+"id": "heat_sound",
+"name": "Heat, spoken aloud",
+"code": "voicing",
+"ask": "",
+"ctx": [],
+"text": "Your lines break with SOUNDS, never with punctuation. Never \"…\", never \"...\", never \"—\", never a dash. One bracketed sound splits a sentence; three in a row is the gap between sentences. This beat contains at least one run of three.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "heat_silent",
+"name": "Heat, not spoken",
+"code": "not voicing",
+"ask": "",
+"ctx": [],
+"text": "Your lines break between words, never with punctuation and never with a tag. Never \"…\", never \"...\", never \"—\", never a dash. Every fragment still has to stand as Turkish on its own. NO square brackets of any kind — nothing is speaking this beat aloud, so a bracketed tag is markup on the page, not writing.",
+"paths": [
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "consistency",
+"name": "Right after a reply the check flagged (out of character, the player's part, repeated, lost track)",
+"code": "broke_character or spoke_for_player or repeated or lost_track",
+"ask": "",
+"ctx": [],
+"text": "{{call//consistency_note}}",
+"paths": [],
+"byPath": {}
+}
+]
+},
+"delivery": {
+"id": "delivery",
+"name": "Voice delivery",
+"seg": "tail",
+"paths": [
+"solo",
+"multi",
+"gm",
+"text",
+"heat"
+],
+"text": "",
+"byPath": {},
+"mode": "any",
+"options": [
+{
+"id": "voiced",
+"name": "The reply is spoken",
+"code": "voicing",
+"ask": "",
+"ctx": [],
+"text": "## SPOKEN DELIVERY — THIS REPLY IS READ ALOUD\nEverything you put in \"double quotes\" is sent to a voice engine that reads a [bracketed direction] as actual direction, the way a stage direction works in a script. Write the direction INSIDE the quotes, at the front of the line it applies to. The player never sees it — it is stripped from the screen and only the words remain.\n\n### A TAG STAYS IN FORCE UNTIL YOU CHANGE IT\nOne direction at the front of a line covers that line and every line after it. Write a new one only where the delivery genuinely turns, and write [reset] where it should go back to normal. Do not put a tag on every sentence — constant re-tagging gives the engine less to work with and the voice comes out uneven. Most replies need one, at the top.\n\n### WRITE A FULL DIRECTION, NOT ONE WORD\nA one-word mood gives the engine a single dimension. A direction describes HOW THE VOICE MOVES — pitch, pace, volume, and the manner of the delivery — and nothing else. Never name the emotion: sad, angry and nervous are labels, not directions, and the engine can do nothing with them. Say what the sadness does to the voice instead. Layer the pitch, the pace and the manner into one plain-English direction and it performs instead of reading:\n\"[say quietly with a low tone and deliberate pauses] I didn't think you'd actually come.\"\n\"[speak fast and bright barely finishing one thought before starting the next] Wait — wait, you're serious?\"\n\"[say flatly with no pitch variation] It's fine. Really. I'm fine.\"\n\"[speak as if barely holding something back forcing the words out level] I heard you the first time.\"\nKeep what is inside the brackets lowercase, plain English, no punctuation — and always English, even when the spoken line itself is in another language.\n\n### SOUNDS ARE A DIFFERENT THING FROM DIRECTIONS\n[laugh] [chuckle] [sigh] [gasp] [breathe] [scoff] [snort] [clear throat] [cough] [swallow] [sniff] [yawn] make one real sound at exactly the point you place them and change nothing about the delivery. Drop them inline, where the sound actually happens: \"I told him and he just [laugh] didn't believe a word of it.\"\n\n### EMPHASIS\nCapitalise the word that carries the stress: \"I told you NOT to.\" A syllable works too: \"abso-LUTE-ly\". Never use asterisks to emphasise — asterisks are narration in this story and are cut out before the voice ever sees them.\n\n### THE RULES THAT BREAK IT\n- The direction must match the words. [say sadly] on a delighted line makes the voice worse, not better.\n- Never put opposites in one tag — hushed and very loud together produce noise.\n- Tags belong inside the quotes and nowhere else: never in narration, never on a line of their own, never inside an action.\n- Do not describe the delivery in the prose as well as tagging it. The tag already does that job — and in particular, never spend the reply's one narration beat on the voice. A body-beat is what the body does; if the tag has it, the beat is free for something else.",
+"paths": [
+"solo",
+"multi",
+"gm",
+"heat"
+],
+"byPath": {
+"heat": "## SPOKEN DELIVERY — HEAT OF THE MOMENT, READ ALOUD\nEverything in \"double quotes\" is read aloud by a voice engine that treats a [bracketed direction] as real direction. It is written inside the quotes at the front of a line, it never appears on screen, and it holds until another tag or [reset] changes it.\n\n### THIS BEAT IS MANY SHORT LINES — SET THE REGISTER ONCE\nThat is the whole difference here. A tag at the front of the FIRST spoken line of this beat carries through every line after it, and that is what you want: one continuous performance rather than a stack of separately-directed fragments. Tagging each short line is the failure here — the voice resets on every one and the run comes out jittery and flat.\nWrite a second direction only on a genuine turn: composure actually breaking, a drop to almost nothing, a sudden stop, the moment it hardens. That is at most one or two more in the whole beat.\n\n### THE DIRECTION IS THE STATE THIS BEAT IS IN\nLayer breath, pitch, pace and control into one plain-English direction:\n\"[speak breathlessly with the words running together and the voice going higher] don't — don't stop, don't you dare stop\"\n\"[say low and unsteady with the breath catching between words] I can't think when you do that.\"\n\"[speak quietly and ragged as if there is nothing left to hold it together] please.\"\n\"[say it hard and level with the breath forced flat] Look at me. Look at me when I say it.\"\nLowercase inside the brackets, plain English, no punctuation, and English even when the line is in another language.\n\n### BREATH IS DONE WITH SOUNDS, NOT WITH WORDS\n[gasp] [pant] [breathe] [moan] [groan] [whimper] [whine] [sigh] [swallow] [huff] each make one real sound exactly where you place them and change nothing about the delivery. Put them where the breath actually falls, inside the line: \"I — [gasp] — I'm not going anywhere.\"\nDo not write breathing as text. \"haah\" and \"mmh\" get read out as syllables; [gasp] and [moan] are the sound itself.\n\n### A LINE THAT IS MOSTLY SOUNDS TAKES NO DIRECTION OF ITS OWN\nThe breaks in these lines are already written as the sounds listed above, and each one is performed exactly where it sits.\nDo not open such a line with a direction, and never direct the same thing twice: a direction saying to sound breathless, on a line already broken three times by the sound of it, doubles the effect into parody. The register you set on the first spoken line of the beat still holds through all of them.\n\n### EMPHASIS\nCapitals carry the stress: \"I said DON'T.\" Never asterisks — they are narration here and get cut before the voice sees them.\n\n### THE RULES THAT BREAK IT\n- One register per stretch. Do not re-tag line after line.\n- The direction must match what is being said.\n- Never opposites in one tag.\n- Inside the quotes only — never in narration, never on its own line, never in an action.\n- Never describe the delivery in the prose as well. The tag is doing it."
+}
+},
+{
+"id": "reset",
+"name": "The voice session is over",
+"code": "voice_markup and not voicing",
+"ask": "",
+"ctx": [],
+"text": "## FORMAT RESET — THE VOICE SESSION IS OVER\nRecent replies were written for a voice session: [bracketed delivery tags] inside quotes and/or a narration-block-then-dialogue-only shape. That session has ENDED. Ignore that formatting in the history — it is stale. Write normally per the format rules: NO bracketed delivery tags anywhere, narration woven naturally with dialogue.",
+"paths": [
+"solo",
+"multi",
+"gm",
+"heat"
+],
+"byPath": {}
+},
+{
+"id": "reset_text",
+"name": "A text after a voice session",
+"code": "voice_markup",
+"ask": "",
+"ctx": [],
+"text": "## FORMAT RESET — THE VOICE SESSION IS OVER\nRecent replies were written for a voice session: [bracketed delivery tags] inside quotes and/or a narration-block-then-dialogue-only shape. That session has ENDED. Ignore that formatting in the history — it is stale. Write normally per the format rules: NO bracketed delivery tags anywhere, narration woven naturally with dialogue.",
+"paths": [
+"text"
+],
+"byPath": {}
+}
+]
+}
+};
+/* (!) v150.59 — WHICH PIECE'S WORDING NOW SITS IN WHICH FRAGMENT. When a saved list is upgraded (or built from the defaults
+   for someone who never saved one), a piece the user had rewritten (state.blockTpls[key]) goes into the new fragment in
+   place of the shipped wording wherever that wording appears word for word. `map` renames the piece's placeholders to
+   what the fragment writes ({{n}} → {{heat_beat}}, {{names}} → a data call); `split` names the placeholders the piece is
+   cut at, when the fragment holds it in parts. Best effort: wording the fragment no longer holds verbatim stays shipped. */
+const FRAG_TPL_CARRY=[{"key":"rp_task","frag":"task"},
+  {"key":"world_header","frag":"world"},
+  {"key":"bio_behave_self","frag":"bio"},
+  {"key":"goals_live_intro","frag":"bio"},
+  {"key":"intent_aim_warm","frag":"bio","map":{"target":"{{call//want1_target_raw}}","aim":"{{call//want1_aim_raw}}","a_kind":"{{call//want1_a_kind_raw}}","kind":"{{call//want1_kind_raw}}"}},
+  {"key":"intent_aim_cool","frag":"bio","map":{"target":"{{call//want1_target_raw}}","aim":"{{call//want1_aim_raw}}","a_kind":"{{call//want1_a_kind_raw}}","kind":"{{call//want1_kind_raw}}"}},
+  {"key":"intent_aim_self","frag":"bio","map":{"target":"{{call//want1_target_raw}}","aim":"{{call//want1_aim_raw}}","a_kind":"{{call//want1_a_kind_raw}}","kind":"{{call//want1_kind_raw}}"}},
+  {"key":"intent_aim_warm","frag":"bio","map":{"target":"{{call//want2_target_raw}}","aim":"{{call//want2_aim_raw}}","a_kind":"{{call//want2_a_kind_raw}}","kind":"{{call//want2_kind_raw}}"}},
+  {"key":"intent_aim_cool","frag":"bio","map":{"target":"{{call//want2_target_raw}}","aim":"{{call//want2_aim_raw}}","a_kind":"{{call//want2_a_kind_raw}}","kind":"{{call//want2_kind_raw}}"}},
+  {"key":"intent_aim_self","frag":"bio","map":{"target":"{{call//want2_target_raw}}","aim":"{{call//want2_aim_raw}}","a_kind":"{{call//want2_a_kind_raw}}","kind":"{{call//want2_kind_raw}}"}},
+  {"key":"bio_wearing_self","frag":"bio"},
+  {"key":"bio_wardrobe_self","frag":"bio"},
+  {"key":"rel_learned","frag":"ties","map":{"lines":"{{call//rel_learned_raw}}"}},
+  {"key":"rel_elsewhere","frag":"ties","map":{"people":"{{call//rel_elsewhere_raw}}"}},
+  {"key":"text_format","frag":"format"},
+  {"key":"heat_more_no","frag":"format"},
+  {"key":"heat_more_yes","frag":"format"},
+  {"key":"heat_format","frag":"format","map":{"lines":"6","n":"{{heat_beat}}","total":"{{heat_beats}}","more":"{{if heat_last_beat}}and it is the LAST beat of this run — after it the turn goes back to {{user}}{{else}}in a run that is still going — the next beat is generated separately, after this one lands{{endif}}"},"split":["breaks","narr"]},
+  {"key":"heat_breaks_voiced","frag":"format"},
+  {"key":"heat_breaks_silent","frag":"format"},
+  {"key":"heat_narr_superego","frag":"format"},
+  {"key":"heat_narr_physical","frag":"format"},
+  {"key":"already_said_which_above","frag":"already_said"},
+  {"key":"already_said_which_last","frag":"already_said"},
+  {"key":"already_said_shortened","frag":"already_said","map":{"which":"{{if continuing}}the line before the one quoted above{{else}}your last line{{endif}}","line":"{{call//said_line1_raw}}"},"split":["which"]},
+  {"key":"already_said_which_older","frag":"already_said"},
+  {"key":"already_said_which_plain","frag":"already_said"},
+  {"key":"already_said_shortened","frag":"already_said","map":{"which":"{{if continuing}}and the one before that{{else}}the line before that{{endif}}","line":"{{call//said_line2_raw}}"},"split":["which"]},
+  {"key":"scene_header","frag":"scene_now"},
+  {"key":"scene_changed_header","frag":"scene_now"},
+  {"key":"scene_changed_loc","frag":"scene_now","map":{"loc":"{{call//moved_to_raw}}","prev":"{{call//moved_from_raw}}"}},
+  {"key":"scene_changed_day","frag":"scene_now","map":{"day":"{{call//jump_day_raw}}","period":"{{call//jump_period_raw}}","gap":"{{call//jump_gap_raw}}"}},
+  {"key":"scene_changed_period","frag":"scene_now","map":{"period":"{{call//period_now_raw}}","prev":"{{call//period_was_raw}}"}},
+  {"key":"scene_changed_arrived","frag":"scene_now","map":{"names":"{{call//arrived_raw}}"}},
+  {"key":"scene_changed_left","frag":"scene_now","map":{"names":"{{call//left_raw}}"}},
+  {"key":"scene_intro","frag":"scene_now"},
+  {"key":"scene_loc_sub","frag":"scene_now","map":{"sub":"{{call//scene_area_raw}}"}},
+  {"key":"scene_loc","frag":"scene_now","map":{"where":"{{call//scene_place_raw}}{{if scene_area_raw}} — specifically the {{call//scene_area_raw}}{{endif}}"}},
+  {"key":"scene_here_yours","frag":"scene_now"},
+  {"key":"scene_here_host","frag":"scene_now","map":{"host":"{{call//scene_host_raw}}"}},
+  {"key":"scene_subareas","frag":"scene_now","map":{"loc":"{{call//subareas_place_raw}}","areas":"{{call//subareas_raw}}","sub":"{{call//subarea_here_raw}}","target":"{{target}}"}},
+  {"key":"scene_intro_text","frag":"scene_now"},
+  {"key":"scene_loc_text","frag":"scene_now","map":{"where":"{{call//scene_place_raw}}"}},
+  {"key":"scene_day","frag":"scene_now","map":{"day":"{{call//scene_day_raw}}","period":"{{call//scene_period_raw}}"}},
+  {"key":"privacy_header","frag":"privacy"},
+  {"key":"scene_present","frag":"privacy","map":{"names":"{{call//privacy_names_raw}}","target":"{{user}}"}},
+  {"key":"scene_present_others","frag":"privacy","map":{"names":"{{call//privacy_names_raw}}"}},
+  {"key":"scene_alone","frag":"privacy","map":{"target":"{{user}}"}},
+  {"key":"scene_alone_public","frag":"privacy","map":{"target":"{{user}}"}},
+  {"key":"scene_apart","frag":"privacy","map":{"sub":"{{call//privacy_area_raw}}"}},
+  {"key":"scene_nearby","frag":"privacy","map":{"loc":"{{call//privacy_place_raw}}","names":"{{call//privacy_nearby_raw}}"}},
+  {"key":"scene_area_quieter","frag":"privacy","map":{"names":"{{call//privacy_quieter_raw}}"}},
+  {"key":"scene_area_privacy","frag":"privacy","map":{"label":"{{call//privacy_exposure_raw}}","quieter":"{{if privacy_quieter_raw}} If you need to say something that must not carry, {{call//privacy_quieter_raw}} is quieter — you can suggest moving there.{{endif}}"},"split":["quieter"]},
+  {"key":"scene_privacy","frag":"privacy","map":{"label":"{{call//privacy_exposure_raw}}"}},
+  {"key":"privacy_text","frag":"privacy","map":{"target":"{{target}}"}},
+  {"key":"intent_warm","frag":"motive","map":{"target":"{{call//motive_target_raw}}","kind":"{{call//motive_kind_raw}}","a_kind":"{{call//motive_a_kind_raw}}","aim":"{{call//motive_aim_raw}}"},"split":["aside"]},
+  {"key":"intent_hostile","frag":"motive","map":{"target":"{{call//motive_target_raw}}","kind":"{{call//motive_kind_raw}}","a_kind":"{{call//motive_a_kind_raw}}","aim":"{{call//motive_aim_raw}}"},"split":["aside"]},
+  {"key":"intent_side","frag":"motive","map":{"addressee":"{{call//motive_aside_raw}}","target":"{{call//motive_target_raw}}"}},
+  {"key":"limits_header","frag":"limits"},
+  {"key":"consistency_character","frag":"guardrails"},
+  {"key":"consistency_player","frag":"guardrails"},
+  {"key":"consistency_repeat","frag":"guardrails"},
+  {"key":"consistency_continuity","frag":"guardrails"}];
 function blkTpl(key){
   if(_ptRawMode && !_ptRawKeeps(key)) return "";
   const o=state.blockTpls&&state.blockTpls[key];
@@ -33825,6 +34963,7 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   // player switched mid-turn (the reply then went out with the other story's setting)
   const _ws=chatWorldSetting(chat);
   if(_ws)B.world=`${blkTpl("world_header")}\n${_ws}`;
+  if(_ws)B._wd={world_setting_raw:_ws};   // v150.59 — the setting alone (RAW_DATA_KEYS): the World fragment writes its heading
 
   // format — FORMATTING RULES; if the prompt already starts with its own "#" header, don't
   // wrap it in a second one (that produced an empty-looking duplicate header).
@@ -33873,9 +35012,14 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
   // your_bio — the identity sheet. The private aim ("what you quietly want") rides with the goals;
   // the speaking style is held back for the post-dialogue block, where the line actually gets written.
   const _intent=intentParts(chat,p.id);
+  /* (!) v150.59 — and the sheet's parts as data only (bio_*_raw, want*_raw: RAW_DATA_KEYS), so the "Who you are" fragment
+     writes every tag and every sentence itself. Keyed on _yb beside bio_body, never in YB_ORDER. */
+  const _ybRaw={};
   const _yb={bio_intro:fillTpl(blkTpl("bio_intro"),{char:p.name,user:state.user}),
-             bio_body:charBioBlock(p,{self:true,noWho:true,styleTail:true,quietWant:_intent.quietWant})};
+             bio_body:charBioBlock(p,{self:true,noWho:true,styleTail:true,quietWant:_intent.quietWant,quietWants:_intent.quietWants,out:_ybRaw})};
   B.your_bio=`${blkTpl("bio_header")}\n${_yb.bio_intro}\n`+_yb.bio_body;
+  const _wantV=[_ybRaw.want1||"",_ybRaw.want2||""]; delete _ybRaw.want1; delete _ybRaw.want2;   // flags, not data (see _headFlags)
+  Object.assign(_yb,_ybRaw);
   B._yb=_yb;
 
   // relationships — this character's FULL sheet (their own knowledge — family, history, rivalries
@@ -33911,10 +35055,11 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
    const _hereIds=_here.noHere?[]:(_here.hereIds||presentCast(chat).map(c=>c.id));
    const _include=_scope==="dynamic"?relInjectIds(chat,p,_hereIds):null;
    B._relInclude=_include?[..._include.entries()]:null;   // who the block carries and why (debug, tests)
-   const sheet=relSheetBlockFull(p,Object.assign({scope:_scope,stanceElsewhere:_stanceElsewhere,chat:chat,include:_include,
+   const _rlo={};   // v150.59 — the sheet's parts as data only (rel_*_raw), for the "Who these people are to you" fragment
+   const sheet=relSheetBlockFull(p,Object.assign({scope:_scope,stanceElsewhere:_stanceElsewhere,chat:chat,include:_include,out:_rlo,
      // v148.4 — in a scene, [here now] = earshot (earshotSplit); a text has no earshot, only where the texter is
      earIds:(opts&&opts.textMode)?null:(()=>{ try{ return earshotSplit(chat,p.id).here; }catch(e){ return null; } })()},_here));
-   if(sheet)B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`;}
+   if(sheet){ B.relationships=`${fillTpl(blkTpl("rel_header"),{char:p.name})}\n${sheet}`; B._rl=_rlo; }}
 
   if(p.scenario)B.scenario=`${blkTpl("scenario_header")}\n${p.scenario}`;
 
@@ -34059,7 +35204,10 @@ function buildCharPromptBlocks(p,others,injectedMemories,addressed,opts){
      with a name that is not the player's is a character, which fragCodeFacts cannot tell), entering or leaving,
      and whether there is a brief. ptBuildMessages lays these over the tail's _railFlags. */
   B._headFlags={target_kind:_isPlayerTarget?"player":"character",leaving:addressed==="leaving",arriving:addressed==="arriving",
-    has_brief:!!(B._si&&B._si.situation_brief)};
+    has_brief:!!(B._si&&B._si.situation_brief),
+    /* (!) v150.59 — and what the head fragments that hold their own wording now choose by: is there an identity sheet,
+       are there ties, and the valence of each quiet want on the sheet (warm / hostile / self, empty when none) */
+    has_bio:!!String(B._yb&&B._yb.bio_body||"").trim(),has_ties:!!B.relationships,want1:_wantV[0]||"",want2:_wantV[1]||""};
 
   return B;
 }
@@ -34097,8 +35245,9 @@ function tagLastForTarget(history){
    highest. Returns "" when nothing changed since the last reply, so a steady scene is never nagged.
    Location moves are announced as a move (not as everyone "arriving", which SCENE RIGHT NOW already
    covers), so arrivals are suppressed on a move. */
-function sceneChangeNotice(chat,selfId){
+function sceneChangeNotice(chat,selfId,out){
   try{
+    const _o={};   // v150.59 — each change as data only (moved_*, jump_*, period_*, arrived, left), handed to `out` with the notice
     if(!chat||!Array.isArray(chat.messages)||!chat.messages.length)return "";
     // Baseline = the most recent real character reply (only those carry a .status stamp).
     let bi=-1, base=null;
@@ -34116,13 +35265,15 @@ function sceneChangeNotice(chat,selfId){
     // arrivals note below instead). Only the actual travellers see the move.
     const wasInPrevScene = !!(baseMsg && Array.isArray(baseMsg.present) && baseMsg.present.includes(selfId));
     const locChanged = !!(curLoc && prevLoc && curLoc!==prevLoc && wasInPrevScene);
-    if(locChanged)lines.push(fillTpl(blkTpl("scene_changed_loc"),{loc:curLoc,prev:prevLoc}));
+    if(locChanged){ lines.push(fillTpl(blkTpl("scene_changed_loc"),{loc:curLoc,prev:prevLoc})); _o.moved_to_raw=curLoc; _o.moved_from_raw=prevLoc; }
     // Time: a day jump takes precedence over (and subsumes) a plain period change.
     if(curDay>prevDay){
       const d=curDay-prevDay, gap=d===1?"the next day":`${d} days later`;
       lines.push(fillTpl(blkTpl("scene_changed_day"),{day:curDay,period:curPer,gap:gap}));
+      _o.jump_day_raw=String(curDay); if(curPer)_o.jump_period_raw=curPer; _o.jump_gap_raw=gap;
     }else if(curPer && prevPer && curPer!==prevPer){
       lines.push(fillTpl(blkTpl("scene_changed_period"),{period:curPer,prev:prevPer}));
+      _o.period_now_raw=curPer; _o.period_was_raw=prevPer;
     }
     // Presence: arrivals/exits recorded AFTER the last reply — i.e. not yet acknowledged. Someone who
     // both left and returned (or vice-versa) in that span nets out.
@@ -34135,15 +35286,16 @@ function sceneChangeNotice(chat,selfId){
     const nm=id=>{ if(id===selfId)return null; const c=resolveChar(id,chat); return (c&&c.name)?c.name:null; };
     if(!locChanged){
       const arr=[...enter].map(nm).filter(Boolean);
-      if(arr.length)lines.push(fillTpl(blkTpl("scene_changed_arrived"),{names:arr.join(", ")}));
+      if(arr.length){ lines.push(fillTpl(blkTpl("scene_changed_arrived"),{names:arr.join(", ")})); _o.arrived_raw=arr.join(", "); }
     }
     const gone=[...leave].map(nm).filter(Boolean);
-    if(gone.length)lines.push(fillTpl(blkTpl("scene_changed_left"),{names:gone.join(", ")}));
+    if(gone.length){ lines.push(fillTpl(blkTpl("scene_changed_left"),{names:gone.join(", ")})); _o.left_raw=gone.join(", "); }
     /* v38.1 — a fragment the user has blanked (or one silenced while the payload is being read
        for its DATA only) contributes nothing, and a nothing must not reach the model as a bare
        "- ". Filter first, then decide whether there is a notice at all. */
     const _ln=lines.filter(Boolean);
     if(!_ln.length)return "";
+    if(out)Object.assign(out,_o);
     return `${blkTpl("scene_changed_header")}\n`+_ln.map(l=>`- ${l}`).join("\n");
   }catch(e){ return ""; }
 }
@@ -34263,6 +35415,9 @@ function buildTailBlocks(opts){
          *beat* closed — see _saidLineWhole) and the label says what it is: verbatim, and spent. */
       _as.already_said_lines=mine.map((x,i)=>fillTpl(blkTpl("already_said_shortened"),
               {which:_which(i), line:_saidLineWhole(stripDeliveryTags(x))})).join("\n\n");
+      /* v150.59 — each quoted line alone (said_line1_raw, said_line2_raw: RAW_DATA_KEYS); the fragment writes the label
+         in front of each, picked by `continuing` */
+      mine.slice(0,2).forEach((x,i)=>{ _as["said_line"+(i+1)+"_raw"]=_saidLineWhole(stripDeliveryTags(x)); });
       if(exchangeIsStalled(chat,selfP)) _as.already_said_stalled=blkTpl("already_said_stalled");
       if(thoughtIsStuck(chat,selfP)) _as.already_said_thought_stuck=blkTpl("already_said_thought_stuck");
       let t=`${blkTpl("already_said_header")}\n${blkTpl("already_said_instr")}\n\n`;
@@ -34344,6 +35499,11 @@ function buildTailBlocks(opts){
      So in text mode the location is resolved to where THIS character actually is, the sub-area and
      earshot lines are dropped, and PRIVACY describes the channel instead of the room. */
   const _textMode=!!(opts&&opts.textMode);
+  /* (!) v150.59 — WHAT THE SCENE AND PRIVACY FRAGMENTS CALL, AS DATA ONLY (_sc: scene_*_raw, privacy_*_raw, the change
+     notice's moved_* / jump_* / period_* / arrived / left), and the choices code makes between their wordings (the
+     scene_changed, scene_home, privacy and privacy_exposure flags). Both blocks below are unchanged; the fragments
+     write every sentence themselves. */
+  const _sc={}; let _sceneChanged=false, _sceneHome="", _privacy="", _privExp="";
   if(chat){
     let _viewer=null, othersHere="", nearbyHere="";
     try{
@@ -34403,7 +35563,8 @@ function buildTailBlocks(opts){
     {const per=(typeof chatPeriod==="function")?chatPeriod(chat):"";
      const _dl=fillTpl(blkTpl("scene_day"),{day:String(chat.gameDay||1),period:per||""})
                  .replace(/[\s,;·\/|-]+$/,"").trim();
-     if(_dl)lines.push(_dl);}
+     if(_dl)lines.push(_dl);
+     _sc.scene_day_raw=String(chat.gameDay||1); if(per)_sc.scene_period_raw=per;}
     // YOUR CURRENT LOCATION (+ whose ground it is). In text mode this is the character's OWN
     // position in the world — they are not standing in the player's scene, they are on their phone.
     const _here2=(()=>{try{
@@ -34413,10 +35574,11 @@ function buildTailBlocks(opts){
     }catch(e){return null;}})();
     const _locName=_textMode?((_here2&&_here2.name)||"").trim():String(chat.location||"").trim();
     if(_textMode){
-      if(_locName) lines.push(fillTpl(blkTpl("scene_loc_text"),{where:_locName}));
+      if(_locName){ lines.push(fillTpl(blkTpl("scene_loc_text"),{where:_locName})); _sc.scene_place_raw=_locName; }
     }else if(chat.location&&chat.location.trim()){
       let _curSubName="";
       try{ if(_here2&&Array.isArray(_here2.sublocations)&&_here2.sublocations.length>1){ const _ps=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat)); if(_ps)_curSubName=_ps.name; } }catch(e){}
+      _sc.scene_place_raw=chat.location.trim(); if(_curSubName)_sc.scene_area_raw=_curSubName;
       const _where=chat.location.trim()+(_curSubName?fillTpl(blkTpl("scene_loc_sub"),{sub:_curSubName}):"");
       let loc=fillTpl(blkTpl("scene_loc"),{where:_where});
       // Whose ground is this? If the current place has resident(s), anchor the host/guest dynamic so
@@ -34443,8 +35605,8 @@ function buildTailBlocks(opts){
         /* v150.23 — not in the heat of the moment: "their kitchen, their kettle" is framing for a visit,
            and inside a sex beat it was the loudest thing about the room. */
         if(chat&&chat._heatBeat){}
-        else if(selfId && _res.some(r=>r.id===selfId)) loc+=`\n${blkTpl("scene_here_yours")}`;
-        else if(_hosts.length) loc+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_hosts.join(" & ")})}`;
+        else if(selfId && _res.some(r=>r.id===selfId)){ loc+=`\n${blkTpl("scene_here_yours")}`; _sceneHome="yours"; }
+        else if(_hosts.length){ loc+=`\n${fillTpl(blkTpl("scene_here_host"),{host:_hosts.join(" & ")})}`; _sceneHome="host"; _sc.scene_host_raw=_hosts.join(" & "); }
       }catch(e){}
       lines.push(loc);
     }
@@ -34460,6 +35622,7 @@ function buildTailBlocks(opts){
           const pSub=subById(_here2,(selfId&&chat.subPos&&chat.subPos[selfId])||curSubId(chat));   // the VIEWER's area
           const areaList=_here2.sublocations.map(x=>x.name).join("; ");
           lines.push(fillTpl(blkTpl("scene_subareas"),{loc:_here2.name,areas:areaList,sub:(pSub?pSub.name:"Entrance"),target:(targetName||state.user)}));
+          _sc.subareas_place_raw=_here2.name; _sc.subareas_raw=areaList; _sc.subarea_here_raw=(pSub?pSub.name:"Entrance");
         }
       }
     }catch(e){}
@@ -34468,7 +35631,7 @@ function buildTailBlocks(opts){
     // If the scene just shifted (place/time/who's here), lead the block with a blunt call-out of
     // exactly what changed since this character last spoke, so they react to it instead of drifting.
     // (!) v148.4 — not in a text: "Just LEFT the scene: Burak" is the player's room, which the texter is not in
-    {const chg=_textMode?"":sceneChangeNotice(chat,selfId); if(chg)sn=`${blkTpl("scene_header")}\n${chg}\n\n${lines.filter(Boolean).join("\n\n")}`;}
+    {const chg=_textMode?"":sceneChangeNotice(chat,selfId,_sc); if(chg){ sn=`${blkTpl("scene_header")}\n${chg}\n\n${lines.filter(Boolean).join("\n\n")}`; _sceneChanged=true; }}
     B.scene_now=sn;
 
     /* PRIVACY — its own block since v30.3. Who can actually hear you, who is one door away, and how
@@ -34478,6 +35641,7 @@ function buildTailBlocks(opts){
        the privacy of five sub-areas, who was present, the pregnancy tracker and tonight's meeting. */
     if(_textMode){
       B.privacy=`${blkTpl("privacy_header")}\n${fillTpl(blkTpl("privacy_text"),{user:state.user,target:targetName||state.user})}`;
+      _privacy="text";
     }else{
       const pl=[];
       const v=(typeof _viewer==="object"&&_viewer)||{sub:curSubId(chat),playerHere:true};
@@ -34488,18 +35652,22 @@ function buildTailBlocks(opts){
         pl.push(_withPlayer
           ? fillTpl(blkTpl("scene_present"),{names:othersHere,target:state.user})
           : fillTpl(blkTpl("scene_present_others"),{names:othersHere}));
+        _privacy=_withPlayer?"with_others":"others_only"; _sc.privacy_names_raw=othersHere;
       }else if(_withPlayer){
         // Nobody but the player shares your earshot → you are ALONE WITH them. This is the private
         // state, and the one that most changes how a character speaks.
         // (!) …but only a HOME is actually private. Anywhere else, the cast being absent is not
         //     the same as nobody being there — see scene_alone_public.
         pl.push(fillTpl(blkTpl((_here2&&_here2.type!=="home")?"scene_alone_public":"scene_alone"),{target:state.user}));
+        _privacy=(_here2&&_here2.type!=="home")?"alone_public":"alone";
       }else{
         let _sn="the entrance";
         try{ const _s=_here2&&subById(_here2,v.sub); if(_s&&_s.name)_sn=_s.name; }catch(e){}
         pl.push(fillTpl(blkTpl("scene_apart"),{sub:_sn}));
+        _privacy="apart"; _sc.privacy_area_raw=_sn;
       }
-      if(nearbyHere)pl.push(fillTpl(blkTpl("scene_nearby"),{loc:(_here2&&_here2.name)||chat.location||"here",names:nearbyHere}));
+      if(nearbyHere){ pl.push(fillTpl(blkTpl("scene_nearby"),{loc:(_here2&&_here2.name)||chat.location||"here",names:nearbyHere}));
+        _sc.privacy_place_raw=(_here2&&_here2.name)||chat.location||"here"; _sc.privacy_nearby_raw=nearbyHere; }
       /* How leaky the place is, and — only when it is actually useful — where to go to be quieter.
          Naming every area's privacy level was the noise; naming the ones that would genuinely buy
          you more discretion than where you stand is the move a character can make. */
@@ -34513,8 +35681,10 @@ function buildTailBlocks(opts){
                               .map(x=>x.name);
             pl.push(fillTpl(blkTpl("scene_area_privacy"),{label:exposureLabel(_here2,mine),
               quieter:quieter.length?fillTpl(blkTpl("scene_area_quieter"),{names:quieter.join(", ")}):""}));
+            _privExp="area"; _sc.privacy_exposure_raw=exposureLabel(_here2,mine); if(quieter.length)_sc.privacy_quieter_raw=quieter.join(", ");
           }else{
             pl.push(fillTpl(blkTpl("scene_privacy"),{label:exposureLabel(_here2,locGossipChance(_here2))}));
+            _privExp="place"; _sc.privacy_exposure_raw=exposureLabel(_here2,locGossipChance(_here2));
           }
         }
       }catch(e){}
@@ -34525,7 +35695,7 @@ function buildTailBlocks(opts){
     // YOUR TRACKERS — real conditions about you. Their own block since v30.3: they are facts with
     // numbers on them, they have nothing to do with where the character is standing, and folding
     // them into the scene wall (v26) is what made them easy for the model to skim past.
-    try{ const tc=trackerContext(chat, selfId||"__shared__"); if(tc)B.trackers=`${blkTpl("trackers_header")}\n${tc}`; }catch(e){}
+    try{ const _tko={}; const tc=trackerContext(chat, selfId||"__shared__", _tko); if(tc){ B.trackers=`${blkTpl("trackers_header")}\n${tc}`; B._tk=_tko; } }catch(e){}   // v150.59 — + the groups as data (_tk)
 
     /* v96.1 — WHERE THEY HAVE ALREADY BEEN TODAY. Fact, from the app's own ledger. */
     try{ const _wo={}; const wb=whereaboutsBlock(chat,selfId,_wo);
@@ -34543,8 +35713,8 @@ function buildTailBlocks(opts){
          if(_po.promise_ended){ B.promises_ended=_po.promise_ended; B._pre={promise_ended:_po.promise_ended,promise_ended_raw:_po.promise_ended_raw||""}; }
     }catch(e){}
 
-    {const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true}):"";
-     if(cl)B.calendar=`${blkTpl("calendar_header")}\n${cl}`;}
+    {const _clo={}; const cl=(typeof calendarContextLine==="function")?calendarContextLine(chat,selfName,selfId,{bare:true,out:_clo}):"";
+     if(cl){ B.calendar=`${blkTpl("calendar_header")}\n${cl}`; B._cl=_clo; }}   // v150.59 — + each group's entries as data (_cl)
     /* v37.3 — and what already happened. Emitted here, in buildTailBlocks, which is the shared
        builder for EVERY reply path — so the spoken reply, the multi-character turn, the gamemaster
        reaction, heat and the phone text all get it from one place, as the user asked. */
@@ -34560,8 +35730,10 @@ function buildTailBlocks(opts){
   //     private intent toward someone ALSO present, one concrete this-turn instruction makes the
   //     hidden current show in how they treat that person right now. (A standing aim whose target
   //     ISN'T here rides in the bio instead, under the goals — see intentParts.)
+  let _motiveV="";   // v150.59 — the coloring's valence (warm / hostile / self): the `motive` flag
   {const _ip=intentParts(chat,selfId,targetId,targetName);
-   if(_ip.coloring){ B.private_intent=_ip.coloring; B._pi={}; B._pi[_ip.coloringKey||"intent_warm"]=_ip.coloring; }}
+   if(_ip.coloring){ B.private_intent=_ip.coloring; B._pi={}; B._pi[_ip.coloringKey||"intent_warm"]=_ip.coloring;
+     if(_ip.motive){ _motiveV=_ip.motive.valence; Object.assign(B._pi,_ip.motive.raw); } }}
 
   // (4b) WHAT IS ON SCREEN. Set by fireVidCue for exactly one turn and cleared by runWatchTurn, so
   //      it can never leak into the next typed message. Guarded on the message index it was stamped
@@ -34714,7 +35886,8 @@ function buildTailBlocks(opts){
      gone, so a template that still calls drives gets the limits and nothing else. */
   try{
     const _lim=limitsBlock(chat,selfP);
-    if(_lim){ B.limits=_lim; B.drives=_lim; B._drives={drive_limits:_lim}; }
+    // v150.59 — + the lines alone (limits_lines_raw): the "Lines you have drawn" fragment writes the heading itself
+    if(_lim){ B.limits=_lim; B.drives=_lim; B._drives={drive_limits:_lim,limits_lines_raw:limitLines(chat,selfP.id,false).join("\n")}; }
   }catch(e){}
   // v26.7 — ONE placeholder map for every rail. Several were read with a bare blkTpl(), so a rail
   // the user had customized to mention {{user}} reached the model as the literal characters
@@ -34769,8 +35942,21 @@ function buildTailBlocks(opts){
     voice_markup:(()=>{ try{ return !!(chat&&_recentVoiceMarkup(chat)); }catch(e){ return false; } })(),
     watching:!!B.watching_now,
     has_promises:!!(B._pr||B._pre),
-    many_threads:(_questInfo.count||0)>1
+    many_threads:(_questInfo.count||0)>1,
+    /* (!) v150.59 — and what the tail fragments that hold their own wording now choose by: the scene's change notice,
+       whose ground this is (yours / host), who can hear you (with_others / others_only / alone / alone_public / apart /
+       text), how exposed the spot is (area / place), plans and trackers to show, the private motive's valence (warm /
+       hostile / self) and this heat beat's thought (physical / superego). */
+    scene_changed:_sceneChanged,
+    scene_home:_sceneHome,
+    privacy:_privacy,
+    privacy_exposure:_privExp,
+    has_plans:!!B.calendar,
+    has_trackers:!!(B._tk&&Object.keys(B._tk).length),
+    motive:_motiveV,
+    heat_narr:_heat?heatNarrMode(chat):""
   };
+  if(Object.keys(_sc).length)B._sc=_sc;
   B._railFlags=_railFlags;
   {
     const _flags=ptCondFlags(_railFlags);
@@ -59034,16 +60220,21 @@ function fragEdPath(fp,p,on){
 }
 function fragEdByPath(fp,p,on){
   const r=_fragAt(fp+".x"); if(!r.obj)return; r.obj.byPath=r.obj.byPath||{};
-  if(on)r.obj.byPath[p]=r.obj.byPath[p]||r.obj.text||""; else delete r.obj.byPath[p]; renderFragEditor();
+  if(on)r.obj.byPath[p]=r.obj.byPath[p]||""; else delete r.obj.byPath[p]; renderFragEditor();   // v150.59 — an empty box: it adds, it does not copy
 }
 function fragEdCtx(fp,c,on){
   const r=_fragAt(fp+".ctx"); if(!r.obj)return; let a=Array.isArray(r.obj.ctx)?r.obj.ctx.slice():[];
   a=a.filter(x=>x!==c); if(on)a.push(c); r.obj.ctx=a; renderFragEditor();
 }
 function fragEdMove(i,d){ const L=_fragDraftGet(); const j=i+d; if(j<0||j>=L.length)return; const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
-function fragEdOpen(i){ _fragOpen=(_fragOpen===i)?null:i; renderFragEditor(); }
+function fragEdOpen(i){ _fragOpen=(_fragOpen===i)?null:i; renderFragEditor(); _fragRowIntoView(i); }
+/* v150.59 — the opened fragment's row, brought into view inside the list only when it is not already showing (by hand:
+   scrollIntoView did not move this list) */
+function _fragRowIntoView(i){ try{ const r=document.getElementById('fragRow_'+i), l=document.getElementById('fragList'); if(!r||!l)return;
+  const rr=r.getBoundingClientRect(), lr=l.getBoundingClientRect();
+  if(rr.top<lr.top||rr.bottom>lr.bottom)l.scrollTop+=rr.top-lr.top; }catch(e){} }   // out of sight: its header at the top of the list
 async function fragEdDel(i){ const L=_fragDraftGet(); if(!(await uiConfirm(`Delete the fragment "${L[i].name||L[i].id}"?`,{title:"Delete fragment?",ok:"Delete",danger:true})))return; L.splice(i,1); _fragOpen=null; renderFragEditor(); }
-function fragEdAdd(){ const L=_fragDraftGet(); L.push({id:"f_"+Date.now().toString(36),name:"New fragment",seg:"tail",paths:FRAG_PATHS.slice(),text:"",byPath:{},mode:"any",options:[]}); _fragOpen=L.length-1; renderFragEditor(); }
+function fragEdAdd(){ const L=_fragDraftGet(); L.push({id:"f_"+Date.now().toString(36),name:"New fragment",seg:"tail",paths:FRAG_PATHS.slice(),text:"",byPath:{},mode:"any",options:[]}); _fragOpen=L.length-1; renderFragEditor(); _fragRowIntoView(_fragOpen); }
 function fragEdOptAdd(i){ const f=_fragDraftGet()[i]; f.options=f.options||[]; f.options.push({id:"o_"+Date.now().toString(36),name:"New condition",code:"",ask:"",ctx:[],text:"",paths:[],byPath:{}}); renderFragEditor(); }
 async function fragEdOptDel(i,j){ const f=_fragDraftGet()[i]; if(!(await uiConfirm(`Delete the condition "${(f.options[j]||{}).name||""}"?`,{title:"Delete condition?",ok:"Delete",danger:true})))return; f.options.splice(j,1); renderFragEditor(); }
 function fragEdSet(fp,v){ const r=_fragAt(fp); if(r.obj){ r.obj[r.key]=v; renderFragEditor(); } }
@@ -59059,17 +60250,20 @@ async function fragEdReset(){ if(!(await uiConfirm("Put the shipped fragments ba
 function fragToggle(on){ state.fragOn=!!on; store.setRaw(K.fragOn,on?"1":"0"); renderFragEditor(); }
 function fragAtSet(v){ const n=parseFloat(v); state.fragAt=isNaN(n)?0.7:Math.max(0.5,Math.min(0.99,n)); store.setRaw(K.fragAt,String(state.fragAt)); }
 function _fragTa(fp,val,ph,min){ return `<textarea class="fld" data-fp="${fp}" oninput="fragEdInput(this)" placeholder="${esc(ph||"")}" style="min-height:${min||60}px;font-family:monospace;font-size:12px">${esc(val||"")}</textarea>`; }
+/* (!) v150.59 — A PATH BOX ADDS UNDER THE MAIN BODY. It used to replace it, so ticking a path copied the whole main body
+   into the new box and every later edit had to be made twice. The main body is what every path shares; a path's box is
+   only what that path adds (see _fragTextFor). Ticking a path opens an empty box. */
 function _fragByPathBlock(fp,obj,paths){
   const bp=obj.byPath||{};
-  return `<div class="desc" style="margin-top:4px">Different text on a path: ${paths.map(p=>`<label style="display:inline-flex;gap:3px;align-items:center;margin-right:8px;font-size:12px"><input type="checkbox" ${bp[p]!=null?"checked":""} onchange="fragEdByPath('${escJs(fp)}','${escJs(p)}',this.checked)">${FRAG_PATH_LABEL[p]}</label>`).join("")}</div>`
-    +paths.filter(p=>bp[p]!=null).map(p=>`<div class="desc" style="margin-top:4px"><b>${FRAG_PATH_LABEL[p]}</b> — replaces the text above on this path</div>${_fragTa(fp+".byPath."+p,bp[p],"",50)}`).join("");
+  return `<div class="desc" style="margin-top:4px">Add text on a path: ${paths.map(p=>`<label style="display:inline-flex;gap:3px;align-items:center;margin-right:8px;font-size:12px"><input type="checkbox" ${bp[p]!=null?"checked":""} onchange="fragEdByPath('${escJs(fp)}','${escJs(p)}',this.checked)">${FRAG_PATH_LABEL[p]}</label>`).join("")}</div>`
+    +paths.filter(p=>bp[p]!=null).map(p=>`<div class="desc" style="margin-top:4px"><b>${FRAG_PATH_LABEL[p]}</b> — added under the main body on this path</div>${_fragTa(fp+".byPath."+p,bp[p],"",50)}`).join("");
 }
 function _fragOptForm(i,j,f,o){
   const fp=i+".o."+j, fpaths=f.paths||FRAG_PATHS;
   return `<div style="border:1px dashed var(--border);border-radius:8px;padding:8px;margin-top:8px">
     <div style="display:flex;gap:6px;align-items:center"><input class="fld" data-fp="${fp}.name" oninput="fragEdInput(this)" value="${esc(o.name||"")}" placeholder="Condition name" style="flex:1">
       <button class="btn sec small" style="width:auto" title="Delete this condition" onclick="fragEdOptDel(${i},${j})">${icon("trash")}</button></div>
-    <div class="desc" style="margin-top:6px"><b>Code condition</b> — a fact the app knows. Flags: render_mode, emotion, intensity, tone, ego, stalled, thought_stuck, continuing, voicing, scene_start, has_motive, alone, target_tie (spouse / lover / kin / friend / …), target_kind (player / character), has_line, has_target, leaving, arriving, has_brief, watching, absent_called, line_for_other, voice_markup, has_promises, many_threads, heat_last_beat. E.g. <code>emotion = anger and intensity = intense</code>. Blank = no code condition.</div>
+    <div class="desc" style="margin-top:6px"><b>Code condition</b> — a fact the app knows. Flags: render_mode, emotion, intensity, tone, ego, stalled, thought_stuck, continuing, voicing, scene_start, has_motive, alone, target_tie (spouse / lover / kin / friend / …), target_kind (player / character), has_line, has_target, leaving, arriving, has_brief, watching, absent_called, line_for_other, voice_markup, has_promises, many_threads, heat_last_beat, has_bio, has_ties, want1 / want2 (warm / hostile / self), scene_changed, scene_home (yours / host), privacy (with_others / others_only / alone / alone_public / apart / text), privacy_exposure (area / place), has_plans, has_trackers, motive (warm / hostile / self), heat_narr (physical / superego), broke_character, spoke_for_player, repeated, lost_track — and every data name (<code>…_raw</code>), true when it has data this turn. E.g. <code>emotion = anger and intensity = intense</code>. Blank = no code condition.</div>
     <input class="fld" data-fp="${fp}.code" oninput="fragEdInput(this)" value="${esc(o.code||"")}" placeholder="e.g. ego = id_winning" style="font-family:monospace;font-size:12px">
     <div class="desc" style="margin-top:6px"><b>Ask the decision model</b> — a plain question about this moment, answered yes or no before the reply (optional "YES:" and "NO:" lines say what each means). {{char}}, {{user}}, {{target}} are filled. Blank = not asked. With both, both must hold.</div>
     ${_fragTa(fp+".ask",o.ask,"e.g. Someone is asking {{char}} for something significant right now.",44)}
@@ -59082,10 +60276,14 @@ function _fragOptForm(i,j,f,o){
 }
 function renderFragEditor(){
   const host=document.getElementById('fragHost'); if(!host)return;
+  /* (!) v150.59 — EVERY TICK REBUILDS THIS BOX, AND THE REBUILD MUST NOT MOVE THE SCREEN. innerHTML put the list back at its
+     top (and the page could jump with it), so ticking a path far down the list lost your place. Both scroll positions are
+     read before and put back after. */
+  const _lst0=document.getElementById('fragList'), _lt=_lst0?_lst0.scrollTop:0, _wy=window.scrollY;
   const L=_fragDraftGet();
   const rows=L.map((f,i)=>{
     const open=_fragOpen===i, paths=f.paths||FRAG_PATHS;
-    const head=`<div style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid var(--border)">
+    const head=`<div id="fragRow_${i}" style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid var(--border)">
       <span style="flex:1;min-width:0"><b>${esc(f.name||f.id)}</b> <span class="desc" style="display:inline">${f.seg==="tail"?"after the history":"before the history"} · ${paths.map(p=>FRAG_PATH_LABEL[p]).join(", ")}${(f.options||[]).length?` · ${f.options.length} choose-when`:""}</span></span>
       <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move up" onclick="fragEdMove(${i},-1)">↑</button>
       <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move down" onclick="fragEdMove(${i},1)">↓</button>
@@ -59097,7 +60295,7 @@ function renderFragEditor(){
       <div class="desc" style="margin-top:6px">Paths: ${_fragChips(String(i),paths)}</div>
       <div class="desc" style="margin-top:4px">Placed <select onchange="fragEdSet('${escJs(i+".seg")}',this.value)"><option value="head" ${f.seg!=="tail"?"selected":""}>before the conversation history</option><option value="tail" ${f.seg==="tail"?"selected":""}>after the conversation history</option></select>
         · When several conditions apply: <select onchange="fragEdSet('${escJs(i+".mode")}',this.value)"><option value="any" ${f.mode!=="one"?"selected":""}>inject every one that applies</option><option value="one" ${f.mode==="one"?"selected":""}>inject only the most likely</option></select></div>
-      <div class="desc" style="margin-top:6px"><b>Main body</b> — always injected on its paths. <code>{{call//name}}</code> brings in app data.</div>
+      <div class="desc" style="margin-top:6px"><b>Main body</b> — always injected on its paths, and shared by all of them; a path's own box below is added under it. Every word is written here; <code>{{call//name}}</code> brings in only data (names, lists, what the card says).</div>
       ${_fragTa(i+".text",f.text,"",90)}
       ${_fragByPathBlock(String(i),f,paths)}
       <div class="desc" style="margin-top:8px"><b>Choose when</b> — injected only when they apply</div>
@@ -59109,11 +60307,13 @@ function renderFragEditor(){
       <label class="switchLbl"><input type="checkbox" id="fragOnSw" ${state.fragOn?"checked":""} onchange="fragToggle(this.checked)"><span class="sl"></span></label></div>
     <div class="desc" style="margin-bottom:6px">When on, every reply (solo, multi, gamemaster, text, heat) is built from the fragments below instead of the templates: each fragment's main body, plus the choose-when parts that apply this turn — by code, or by the decision model's answer before the reply.</div>
     <div class="desc">Inject an asked condition when the model is at least this sure: <input type="number" min="0.5" max="0.99" step="0.05" value="${fragAt()}" style="width:70px" onchange="fragAtSet(this.value)"></div>
-    <div style="border:1px solid var(--border);border-radius:10px;margin-top:8px;max-height:min(75vh,700px);overflow:auto">${rows}</div>
+    <div id="fragList" style="border:1px solid var(--border);border-radius:10px;margin-top:8px;max-height:min(75vh,700px);overflow:auto">${rows}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
       <button class="btn small" style="width:auto" onclick="fragEdSave()">Save fragments</button>
       <button class="btn sec small" style="width:auto" onclick="fragEdAdd()">+ Add fragment</button>
       <button class="btn sec small" style="width:auto" onclick="fragEdReset()">Reset to the shipped fragments</button></div>`;
+  const _lst=document.getElementById('fragList'); if(_lst)_lst.scrollTop=_lt;
+  if(window.scrollY!==_wy)window.scrollTo(window.scrollX,_wy);
 }
 function renderPayloadTemplates(){
   const host=document.getElementById('payloadTplList'); if(!host)return;

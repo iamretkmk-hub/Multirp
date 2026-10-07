@@ -344,3 +344,47 @@ memories it belongs with. The period is captured before the roll and passed down
 `reconcilePeriodFor` also gained a guard: a stretch whose every fragment is already `source:
 "reconciled"` is skipped, so the new day-end sweep cannot re-collapse what the period-change hook
 already collapsed.
+
+## v150.59 — a text exchange, as the one on the other end read it
+
+From a texting export (Duygu Akbaba):
+
+- **The player's texts are heard by the person they were sent to.** They are stored with `present:[]`, so the
+  witness filter of the emotion pick, the relevance judge (`_memJudgeScene`), the goal check and the query writer
+  (`genQuery`) dropped them; on the first text of a thread the scene was empty and the emotion pick never ran.
+  `_heardByOwner(m,p)` (witnessed, their own line, or a text in the thread with them) and `_heardLineOwner` (a
+  text labelled "(text message to …)", delivery tags stripped) replace the filter in those readers.
+- **A texter reads none of the player's room.** A line with no witness list (narration, move notes) reached every
+  per-character reader on position alone, so Burcu, at home and texting, had the player's house — Özlem carried to
+  the bedroom — as her emotion pick's scene. `_untaggedReaches(chat,p)`: an untagged line reaches only someone in
+  the player's scene (recentExchangeFor, the reply check, the judge, the query writer), and `castHistory` drops an
+  unwitnessed narrator beat for a reader who is not there.
+- **A text reply reads the thread.** `_textSceneLines` — a few in-person lines they heard, then the thread,
+  newest last. `_memJudgeScene(...,{text:true})`, `genQuery(...,{text:true})` and `retrieveMemories(q,chat,id,
+  {line,text})` use it; the line answered is the newest player text (`_newestPlayerText`), not "". `_textMemQuery`
+  puts the thread last and cuts from the front (the judge used to read only the old spoken scene).
+- **The goal check reads memories too.** `goalDoneQuestions` adds `memories_bearing_on_goals` (her memories sharing
+  words with a goal, whole up to 500 characters, dated, oldest first) and `player_lines`; `x_goal_done` judges from
+  the scene OR those memories, the newest winning (old default upgraded by `_refreshPipe`). The reply-decision
+  `memories` context (`_fragCtxState`) is cut at 400 characters, not 160.
+- **A text is not a room.** `_emoStakeState(...,"text")`: they are texting, not together; who is around the texter.
+- **Left behind, but on their way** (`_saidLeavingTo`): someone the player walks away from who said in their own last
+  lines that they are going is placed where they said, or home — not at the place they said they were leaving.
+- **The text memory writer** (`_commitTextArc`) gets the tracker's topic, what it already remembers of the thread and
+  the lines before the stretch, and two rules: the name in front of a line is who typed it; a condition is not a
+  statement; `people` includes whoever the messages are about. The text arc tracker gets the who-typed-it rule.
+- **World memories are English and first person** (`_memRecordProblem` in `_plantWorldMemory`): a quest step that
+  copied its narrated event (Turkish, third person) into the holder's memory is not planted; the English note
+  stands in, its owner's name turned to "I" (`_noteAsOwnMemory`).
+- **The query is one clean line** (`_cleanMemQuery`): the first line with keywords, non-Latin runs dropped, each term
+  once. The default temperature was already 0.3 (`fnTemp("mc",0.3)`); the export's 0.7 is an explicit "mc" override,
+  which is respected.
+
+Pinned by `tests/text-witness.browser.js`.
+
+Two payload fixes from the same export, outside memory proper:
+- **A motive toward the player** (`intentParts`): with the fragment model on and the player the one answered, the
+  holder's live motive toward the player is offered as this beat's colouring (`intent_warm` / `intent_hostile` /
+  `intent_self`), so a yes to `q_motive__bears` injects it; the standing aim stays in the bio as before.
+- **A quotation mark opens on its first word** (`stripDeliveryTags`, `_dispText`, `_cleanTextReply`): the space a
+  stripped `[say …]` tag left inside a quote is trimmed.

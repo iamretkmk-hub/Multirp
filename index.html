@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.60</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.61</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4176,9 +4176,11 @@ NO: It sounds like {{char}}, including {{char}} being surprised, changing their 
      children") and told the player to sit down after he already had. Both feed the consistency note. */
   x_goal_done:{label:"Goals — already done or moot?",json:false,
     hint:"Asked about each of the character's maintained goals (at most five) in the reply's Decisions request (Settings → Features → Goal check). The question, then a YES: line and a NO: line. Supports {{char}}, {{user}} and {{text}} (the goal).",
-    def:`One of {{char}}'s goals is: "{{text}}". Judging from the scene in the state, is this goal already done, settled or moot?
-YES: The scene shows it happened or was resolved (the thing was done, the call was made, the question was answered, the plan was dropped), or after what happened it no longer makes sense for {{char}} to want it.
-NO: It is still open: only talked about, promised, half done or not touched in this scene; or you are unsure.`},
+    /* (!) v150.59 — from the scene OR their memories. Duygu asked "did you call Ayça?" three times while her own memories
+       said he had: only the scene was judged. The memories that bear on the goals go along in full, oldest first. */
+    def:`One of {{char}}'s goals is: "{{text}}". Judge from the scene in the state AND from {{char}}'s own memories in the state (memories_bearing_on_goals, oldest first; when two of them disagree, the newest one is what is true now): is this goal already done, settled or moot?
+YES: The scene or one of those memories shows it happened or was resolved (the thing was done, the call was made, the question was answered, the plan was dropped) — {{user}} saying earlier that it was done counts when {{char}} remembers it — or after what happened it no longer makes sense for {{char}} to want it.
+NO: It is still open: only talked about, promised, half done or not touched; a newer memory says it is open again; or you are unsure.`},
   /* v150.55 — THE STATUS CHECK. One typed question per open item: open, done, failed or called off. The item's own facts
      are in its question; the lines (or the stretch and its memories) are the state. */
   x_status_promise:{label:"Status check — a promise",json:false,
@@ -7888,6 +7890,7 @@ function renderDebug(){
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
         ${e.usage?`<div class="desc">🧮 Billed: <b>${+e.usage.prompt_tokens||0}</b> prompt + <b>${+e.usage.completion_tokens||0}</b> completion tokens</div>`:""}
         ${_dbgMixLine(e.payload)}
+        ${Array.isArray(e.notes)&&e.notes.length?`<div class="desc">🔎 ${e.notes.map(esc).join("<br>🔎 ")}</div>`:""}
         <div class="kvline" style="padding:0">
           <label style="margin:0">${payloadLabel}</label>
           ${capStr?`<span class="seg" style="flex-shrink:0">
@@ -7969,7 +7972,7 @@ function exportDebug(limit=120){
   const entries=dbgLog.slice(-limit).map(e=>scrubSecrets({
     label:e.label, service:e.service, endpoint:e.endpoint,
     time:new Date(e.t).toISOString(), status:e.status, ms:e.ms??null,
-    payload:e.payload,
+    payload:e.payload, notes:e.notes||undefined,   // v150.59 — what a post-check changed (dbgNote)
     // keep results readable & bounded so the file stays shareable
     result:(e.result==null?null:String(typeof e.result==="string"?e.result:JSON.stringify(e.result)).slice(0,12000))
   }));
@@ -9793,6 +9796,8 @@ function loadState(){
   _refreshPipe("x_reply_suggest_neutral","3. SINCERE: a warm, honest move that brings them closer to {{user}}.","never a reassurance or confession",X_ENGINE_PROMPTS.x_reply_suggest_neutral.def);
   _refreshPipe("playerNarratePrompt",["You are the voice of {{user}}, the PLAYER character in a roleplay.","DIRECTION, NOT THE WORDS"],"even in other words",DEFAULT_PLAYER_NARRATE);
   // (end v149.4)
+  // ---- v150.59 refresh: a goal can be done in memory, not only in the scene (the newest memory wins) ----
+  _refreshPipe("x_goal_done","Judging from the scene in the state, is this goal already done","the newest one is what is true now",X_ENGINE_PROMPTS.x_goal_done.def);
   // ---- v150.4 refresh: THE NARRATOR KEEPS IT SHORT ----
   /* v150.4 — the Auto-RP narrator turned a tapped direction into a speech wrapped in a paragraph of narration.
      It now has a hard length rule (KEEP IT SHORT: one beat, one or two sentences, under 40 words). */
@@ -11380,21 +11385,30 @@ function revealCps(){ const v=+state.revealCps; return (v>=8&&v<=80)?v:REVEAL_CP
    Unlike _dispText this does not check whether voicing is on: a tag written while it was on is
    still a tag after it is switched off, and the stale-markup reset block exists precisely because
    those linger in a transcript. */
+/* (!) v150.59 — A QUOTE OPENS ON ITS FIRST WORD. `"[speak in a dry tone] [scoff] Hadi ordan…"` came out as `" Hadi ordan…"`:
+   the spaces the tags left were collapsed to one and kept, inside the quotation mark, and the next payload quoted the
+   line that way. Whitespace just inside a pair of quotes on one line is trimmed (straight and curly). */
+function _trimQuoteInsides(s){
+  return String(s)
+    // only a real pair: the opening mark not glued to a word before it, the closing one not glued to a word after it
+    .replace(/(^|[^\p{L}\p{N}])"([^"\n]*)"(?![\p{L}\p{N}])/gu,(m,pre,inner)=>pre+'"'+inner.replace(/^[ \t]+|[ \t]+$/g,"")+'"')
+    .replace(/([“«])[ \t]+/g,"$1").replace(/[ \t]+([”»])/g,"$1");
+}
 function stripDeliveryTags(t){
-  return String(t==null?"":t)
+  return _trimQuoteInsides(String(t==null?"":t)
     .replace(/\[\/?[^\[\]\n]{1,80}\]/g,"")
     .replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,"")
     .replace(/[ \t]{2,}/g," ")
-    .replace(/"[ \t]+/g,'" ').replace(/[ \t]+"/g,' "')
+    .replace(/"[ \t]+/g,'" ').replace(/[ \t]+"/g,' "'))
     .trim();
 }
 function _dispText(t){
   if(!(state.narrMode||state.autoSpeak)) return t;
-  return String(t||"")
+  return _trimQuoteInsides(String(t||"")
     .replace(/\[\/?[^\[\]\n]{1,80}\]/g,"")
     .replace(/<\/?[a-zA-Z][a-zA-Z0-9 _-]{1,24}>/g,"")
     .replace(/[ \t]{2,}/g," ")
-    .replace(/"[ \t]+/g,'" ').replace(/[ \t]+"/g,' "')
+    .replace(/"[ \t]+/g,'" ').replace(/[ \t]+"/g,' "'))
     .replace(/^[ \t]+|[ \t]+$/gm,"");
 }
 function typewriterReveal(mid,fullText,onDone){
@@ -16435,6 +16449,25 @@ async function maybeSeedLocationNpcs(chat,locId){
    left; a later trip without them releases their lock; the scene cut never picks them again that
    day; and the Gamemaster cannot summon them for the rest of that part of the day. A due meeting
    with them, or the player bringing them (/bring, the map), still works — that is a choice. */
+/* (!) v150.59 — LEFT BEHIND, BUT ON THEIR WAY. Duygu said "Ben toparlanıp geçiyorum artık, Nil evde tek başına ne yapıyor
+   kim bilir" as the player walked off the beach; he left first, so she was recorded as left at Palmera Beach Club, and
+   for the next part of the day her texts and the arrival check still had her there. Someone the player walks away
+   from who said, in their own last lines of the scene, that they are going — a place named in those lines, or else
+   home — is placed there instead. Their spoken words only (narration and thoughts are not a plan). */
+const _LEAVING_RE=/(?<![\p{L}])(?:kalk(?:ıyorum|alım|ayım|acağım|ıp)|toparlan\p{L}*|gidiyorum|gideyim|gidelim|gideceğim|(?<!dalga\s)geçiyorum|dönüyorum|döneyim|döneceğim|kaçıyorum|ben kaçtım|eve (?:gid|geç|dön|kaç|git)\p{L}*|i'?m (?:off|leaving|heading (?:home|out|off|back)|going home)|i (?:should|have to|must|gotta|need to) (?:go|head|get going|leave)|i'?ll (?:head (?:home|off|out|back)|get going|be off)|heading (?:home|out|off|back)|going (?:home|back home))(?![\p{L}])/u;
+function _saidLeavingTo(chat,id,fromLocId){
+  try{
+    const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p)return null;
+    const all=(chat&&chat.messages)||[];
+    const own=all.slice(_playerSceneStart(all)).filter(m=>m&&m.role==="assistant"&&m.speakerId===id&&!m.textMsg&&!m.sysError).slice(-3);
+    const said=own.map(m=>_limitSpoken(m)).join(" ").toLocaleLowerCase("tr");
+    if(!said||!_LEAVING_RE.test(said))return null;
+    const named=chatLocations(chat).find(l=>l&&l.id!==fromLocId&&l.name&&nameInText(said,l.name));
+    if(named)return named.id;
+    const home=personaHome(p);
+    return (home&&home!==fromLocId)?home:null;
+  }catch(e){ return null; }
+}
 function noteLeftBehind(chat,ids,locId){
   if(!chat||!ids||!ids.length)return;
   const day=chat.gameDay||1, per=chatPeriod(chat);
@@ -16510,13 +16543,16 @@ async function travelTo(locId,companionIds,opts){
   /* Released and left where they were: anyone locked to the player earlier today who was not taken
      this time, and everyone else the player walked away from. The reroll above may have put them
      anywhere, including at the destination — they stay put instead. */
+  let _goesTo=null;   // v150.59 — where each one left behind went (see _saidLeavingTo)
   if(_fromLocId&&_fromLocId!==dest.id){
     const keep=new Set([...(companionIds||[]),...(opts.meetIds||[])]);
     const released=Object.keys(chat.companionLock||{}).filter(id=>chat.companionLock[id]&&!keep.has(id));
     released.forEach(id=>{ delete chat.companionLock[id]; });
     const stay=[...new Set([..._stayIds,...released])];
-    stay.forEach(id=>{ if(chat.worldPositions)chat.worldPositions[id]=_fromLocId; });
-    noteLeftBehind(chat,stay,_fromLocId);
+    // v150.59 — unless they said they were going themselves (_saidLeavingTo): then where they said, or home
+    const _goes=_goesTo={}; stay.forEach(id=>{ _goes[id]=(_stayIds.includes(id)&&_saidLeavingTo(chat,id,_fromLocId))||_fromLocId; });
+    stay.forEach(id=>{ if(chat.worldPositions)chat.worldPositions[id]=_goes[id]; });
+    [...new Set(stay.map(id=>_goes[id]))].forEach(loc=>noteLeftBehind(chat,stay.filter(id=>_goes[id]===loc),loc));
   }
   const companions=(companionIds||[]).map(id=>state.personas.find(p=>p.id===id)).filter(Boolean)
     // v21 WORLD RULES: whoever is barred from the destination cannot come along (UI list is
@@ -16542,6 +16578,9 @@ async function travelTo(locId,companionIds,opts){
   if(state.mem && state.key && leftLoc && leftLoc.id!==dest.id){ try{ await flushMemoryArc(chat); }catch(e){} }
   chat.presentIds=present.map(p=>p.id);
   chat.location=dest.name; chat.locationId=dest.id;
+  /* v150.59 — the positions of the people left behind, again: until the line above they were still in the scene, and
+     a read of the map in between (charactersAtLocation) put everyone in it back where the player stood. */
+  if(_goesTo&&chat.worldPositions)Object.keys(_goesTo).forEach(id=>{ if(!chat.presentIds.includes(id))chat.worldPositions[id]=_goesTo[id]; });
   // Arriving drops everyone at the ENTRANCE of the destination (areas reset per location).
   ensureSublocations(dest);
   chat.subId=entranceSubId(dest); chat.subSelf=false;   // v26.5 — a new place, a fresh scene
@@ -16900,7 +16939,7 @@ function resolveWorldPositions(chat,force){
   // momentary scene moves (presence tracker entries/exits, GM summon/send) live on this object
   // and must not be wiped on every read.
   const key=`${day}|${per}`;
-  if(!fresh && c.worldPositions && (c._wpKey===key || (legacy&&c._wpKey===`${day}`))) return c.worldPositions;
+  if(!fresh && c.worldPositions && (c._wpKey===key || (legacy&&c._wpKey===`${day}`))) return _wpOverlay(c,c.worldPositions);
   const pos={};
   const rolled=(c.dayPlacement&&c.dayPlacement.positions)||{};
   (state.personas||[]).filter(p=>p.universeId===c.universeId && isActiveChar(p)).forEach(p=>{
@@ -16911,6 +16950,18 @@ function resolveWorldPositions(chat,force){
     for(const id in c.companionLock){ if(c.companionLock[id])pos[id]=c.locationId; }
   }
   c.worldPositions=pos; c._wpKey=legacy?`${day}`:key;
+  return _wpOverlay(c,pos);
+}
+/* (!) v150.59 — WHO IS WHERE, IN ORDER OF AUTHORITY: the player's scene, then an offstage event of this part of
+   the day (one that resolved, or a due plan whose actor can go — see _stretchClaims), then the schedule. The
+   offstage resolvers ask charAvailability, which reads the same claims, so the map shows people where the
+   narration has them: Burak at Vanadium Cafe for his coffee plan, Özlem in the player's house while she is there. */
+function _wpOverlay(c,pos){
+  try{
+    const claims=_stretchClaims(c);
+    for(const id in claims){ if(claims[id]&&claims[id].locId&&(id in pos))pos[id]=claims[id].locId; }
+    if(c.locationId)_playerSceneIdSet(c).forEach(id=>{ if(id in pos)pos[id]=c.locationId; });
+  }catch(e){}
   return pos;
 }
 function charactersAtLocation(chat,locId){
@@ -21816,7 +21867,7 @@ function recentExchangeFor(chat,p,n){
   const head=all[cut]&&all[cut].dayMarker?all[cut]:null;
   const lines=all.slice(cut).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.textMsg&&!m.uiNote
       &&!m.worldEvent&&!m.questNote&&!m.calNote&&!m.dayMarker
-      &&(!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-(n||6));
+      &&((!Array.isArray(m.present)&&_untaggedReaches(chat,p))||witnessedBy(m,p)||m.speakerId===p.id)).slice(-(n||6));
   if(head&&lines.length<(n||6))lines.unshift(head);
   return lines
     .map(m=>{ if(m.dayMarker)return {role:'user',name:"Narrator",content:`[${m.content}]${m.narration?" "+m.narration:""}`};
@@ -22837,8 +22888,22 @@ function _emoFeelState(chat,p,targetId,targetName){
    to them earlier today (their own latest memories of today), and whether the want or the conscience wins
    depends on what is at stake: the people they answer to (spouse, partner, lover, family — read off their own
    ties, whether or not those people are here) and who in the scene could see or hear. */
-function _emoStakeState(chat,p,targetId){
+function _emoStakeState(chat,p,targetId,kind){
   const out={};
+  /* (!) v150.59 — A TEXT IS NOT A ROOM. For a text reply this said "nobody — they are alone with Emre": they are not
+     together at all. It says they are texting, and who is around the TEXTER, where the texter is. */
+  if(kind==="text"){
+    try{ Object.assign(out,_emoStakeState(chat,p,targetId)); }catch(e){}
+    try{
+      const un=chatUserName(chat)||"the player";
+      const at=(resolveWorldPositions(chat)||{})[p.id]||null, loc=at?chatLocById(chat,at):null;
+      const around=(charCompanions(chat,p)||[]).filter(x=>x&&x.id!==targetId).map(x=>x.name);
+      if(loc&&loc.type!=="home")around.push(`strangers and staff at ${loc.name}`);
+      out.who_else_can_see_or_hear=[`${p.name} and ${un} are texting, not together: ${p.name} is ${loc?"at "+loc.name:"somewhere else"}, ${un} is ${chat.location?"at "+chat.location:"elsewhere"}.`,
+        around.length?`Around ${p.name} right now: ${around.join(", ")}.`:`Nobody is around ${p.name} right now.`];
+    }catch(e){}
+    return out;
+  }
   try{
     const day=(chat&&chat.gameDay)||1;
     const today=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&m.gameDay===day&&_memOfChat(m,chat)&&!memSpansTime(m))
@@ -22944,7 +23009,28 @@ function goalDoneQuestions(chat,p,vars){
   const questions={}, keyed={};
   L.forEach((g,i)=>{ const k="goal_done_G"+(i+1); keyed[k]=g;
     questions[k]=_decQuestionFrom(fillTpl(up("x_goal_done",chat.universeId),Object.assign({},vars,{text:g}))); });
-  return {questions,keyed,state:{their_goals:L.map((g,i)=>`[G${i+1}] ${g}`)}};
+  return {questions,keyed,state:Object.assign({their_goals:L.map((g,i)=>`[G${i+1}] ${g}`)},_goalDoneEvidence(chat,p,L))};
+}
+/* (!) v150.59 — WHAT A GOAL CHECK JUDGES FROM, BEYOND THE SCENE. Duygu asked "did you call Ayça?" three times by text
+   while her own memories said he had: the check saw the scene and the reply-decision memories cut at 160 characters
+   ("…saying he had already…"). It gets the memories that share words with a goal (or name the player), whole up to
+   500 characters, oldest first and dated so the newest can win, and the player's latest lines she took in. */
+function _goalDoneEvidence(chat,p,goals){
+  const out={};
+  try{
+    const gw=new Set(); (goals||[]).forEach(g=>memTokens(g).forEach(w=>{ if(w.length>3)gw.add(w); }));
+    const un=chatUserName(chat)||"";
+    const mine=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&_memOfChat(m,chat)&&!m.superseded);
+    const hits=mine.filter(m=>{ const t=memText(m); let n=0; memTokens(t).forEach(w=>{ if(gw.has(w))n++; }); return n>=2||(n>=1&&un&&nameInText(t,un)); });
+    out.memories_bearing_on_goals=hits.slice(-8).map(m=>`[day ${m.gameDay!=null?m.gameDay:"?"}${m.gamePeriod?", "+m.gamePeriod:""}] ${memPayloadText(memText(m),500)}`);
+    if(!out.memories_bearing_on_goals.length)out.memories_bearing_on_goals=["(none)"];
+  }catch(e){}
+  try{
+    const msgs=(chat.messages||[]).filter(m=>m&&m.role==='user'&&!m.sysError&&!m.uiNote&&_heardByOwner(m,p)).slice(-6);
+    out.player_lines=msgs.map(m=>_heardLineOwner(chat,m,p)).filter(Boolean).map(t=>memPayloadText(t,400));
+    if(!out.player_lines.length)out.player_lines=["(none)"];
+  }catch(e){}
+  return out;
 }
 function goalDoneApply(p,gq,answers){
   const at=gateAt(), done=[];
@@ -22971,7 +23057,7 @@ async function emotionEnsure(chat,p,line,tgt){
   const job=(async()=>{
     try{
       const list=emotionList(); if(wantEmo&&!list.length&&!wantFrag)return null;
-      const scene=_memJudgeScene(chat,p.id,line); if(!scene)return null;
+      const scene=_memJudgeScene(chat,p.id,line,kind==="text"?{text:true}:null);   // v150.59 — a text reply reads the thread if(!scene)return null;
       const vars={char:p.name||"the character",user:chatUserName(chat)||"the player"};
       const prev=charEmotion(chat,p.id);
       /* (!) v150.35 — the feelings toward the one they answer go along (right now, lasting, the tie), and the
@@ -22981,7 +23067,7 @@ async function emotionEnsure(chat,p,line,tgt){
       const st={character:{name:p.name||"",personality:memPayloadText(p.personality||"",500)},
           feeling_earlier_in_this_scene:prev&&prev.scene===_placeSig(chat)&&prev.emotion?`${prev.emotion} (${prev.intensity})${prev.ego?", "+prev.ego.replace(/_/g," "):""}`:"(not known)",scene};
       if(feel)st.toward_the_one_they_answer=feel;
-      Object.assign(st,_emoStakeState(chat,p,tgt.targetId||"__user__"));   // v150.36 — earlier today, the people they answer to, who can see
+      Object.assign(st,_emoStakeState(chat,p,tgt.targetId||"__user__",kind));   // v150.36 — earlier today, the people they answer to, who can see
       const questions={};
       if(wantEmo&&list.length){
         const crit={}; list.forEach(e=>{ crit[_emoKey(e.name)]=`${e.name}: ${String(e.desc||"").trim()}`; });
@@ -23089,7 +23175,7 @@ function _replyCheckState(chat,msg,p){
   const msgs=(chat&&chat.messages)||[], i=msgs.indexOf(msg);
   const _upto=i>=0?msgs.slice(0,i):msgs;
   // v150.32 — this scene only, as the relevance judge
-  const before=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&(!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-6)
+  const before=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&((!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-6)
     .map(m=>memHeardLine(m,p,p.name)).filter(Boolean).map(t=>memPayloadText(t,700));
   // v150.49 — for the repeat and continuity questions: their own earlier lines in this scene, and where and who
   const own=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role==="assistant"&&!m.sysError&&m.speakerId===p.id&&m.content).slice(-4)
@@ -25625,7 +25711,10 @@ function relAbsentTies(persona,hereIds){
 // Who among `cands` is named in the latest lines this character heard (code: a fixed fact).
 function relNamedInLines(chat,p,cands){
   try{
-    const txt=asciiFold((recentExchangeFor(chat,p,4)||[]).map(m=>`${m.content||""}`).join(" ")).toLocaleLowerCase("tr");
+    // v150.59 — and the text thread, when a text with them is the newest thing (a name typed is a name said)
+    const _ms=(chat&&chat.messages)||[], _last=_ms[_ms.length-1];
+    const _th=(_last&&_last.textMsg&&(_last.textWith===p.id||_last.speakerId===p.id))?textThreadMsgs(chat,p.id).slice(-4):[];
+    const txt=asciiFold((recentExchangeFor(chat,p,4)||[]).concat(_th).map(m=>`${m.content||""}`).join(" ")).toLocaleLowerCase("tr");
     const words=new Set(txt.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
     return cands.filter(c=>{ const first=asciiFold(String(c.name||"")).toLocaleLowerCase("tr").split(/\s+/)[0];
       return first&&first.length>=2&&[...words].some(w=>w===first||(w.startsWith(first)&&w.length<=first.length+4)); }).map(c=>c.id);
@@ -28081,12 +28170,13 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
     if(live.length){
       // strongest one wins the beat (don't pile multiple colorings on one turn)
       const it=live.sort((a,b)=>intentWeight(b)-intentWeight(a))[0];
+      const _tName=it.targetName||"them";
       // (!) This block colours how the character treats the INTENT's target. When the turn is being
       // spoken to somebody else, say so — otherwise the payload asks for extra warmth toward one
       // person inside a reply addressed to another, with nothing ranking the two.
       const _who=addresseeName||(addresseeId==="__user__"?state.user:"");
       const _aside=(addresseeId&&addresseeId!==it.targetId&&_who)
-        ? fillTpl(blkTpl("intent_side"),{addressee:_who,target:it.targetName||"them"}) : "";
+        ? fillTpl(blkTpl("intent_side"),{addressee:_who,target:_tName}) : "";
       /* (!) v104.1 — THERE ARE THREE VALENCES AND THERE WERE TWO BLOCKS. The schema writes
          warm | hostile | self_serving, and an unrecognised kind normalises to self_serving — so
          "ambition", the commonest motive between two people building something together, fell down
@@ -28097,10 +28187,10 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
       out.coloringKey=it.valence==="warm"?"intent_warm"
                      :it.valence==="hostile"?"intent_hostile":"intent_self";
       out.coloring=fillTpl(blkTpl(out.coloringKey),
-        {target:it.targetName||"them",kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim),aside:_aside});
+        {target:_tName,kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim),aside:_aside});
       /* v150.59 — the same motive as data (motive_*_raw: RAW_DATA_KEYS), its valence for the `motive` flag: the "Your
          private motive" fragment writes the wording for each valence, and the aside, itself */
-      out.motive={valence:out.coloringKey.replace(/^intent_/,""),raw:{motive_target_raw:it.targetName||"them",motive_kind_raw:String(it.kind||""),
+      out.motive={valence:out.coloringKey.replace(/^intent_/,""),raw:{motive_target_raw:_tName,motive_kind_raw:String(it.kind||""),
         motive_a_kind_raw:_aKind(it.kind),motive_aim_raw:_aimText(it.aim)}};
       if(_aside)out.motive.raw.motive_aside_raw=_who;
       return out;
@@ -28130,6 +28220,20 @@ function intentParts(chat,selfId,addresseeId,addresseeName){
       // v150.59 — the same wants as data, for the "Who you are" fragment, which words each one by its valence itself
       out.quietWants=fresh.slice(0,intentsPerChar()>1?2:1).map(it=>({valence:it.valence==="warm"?"warm":it.valence==="hostile"?"hostile":"self",
         target:it.targetId==="__user__"?state.user:(it.targetName||"someone"),kind:String(it.kind||""),a_kind:_aKind(it.kind),aim:_aimText(it.aim)}));
+    }
+    /* (!) v150.59 — AND A MOTIVE TOWARD THE PLAYER, WHEN THE PLAYER IS THE ONE THEY ANSWER. The reply's decision request
+       asks "does your private motive toward {{target}} bear on this moment?" (q_motive__bears, flag has_motive) about
+       the player every turn, but a motive toward the player never became a colouring, so a yes injected nothing. It is
+       their own private motive, in their own payload. The colouring is offered beside the standing aim (which stays in
+       the bio as before) and only with the fragment model on: there it reaches the reply through that ask alone, on a
+       yes; the older layouts print private_intent every turn, and would say the aim twice. */
+    if(state.fragOn&&addresseeId==="__user__"){
+      const mine=chat.intents.filter(i=>i.holderId===selfId&&i.status!=="spent"&&i.targetId==="__user__"&&i.aim)
+        .sort((a,b)=>intentWeight(b)-intentWeight(a));
+      if(mine.length){ const it=mine[0], un=it.targetName||chatUserName(chat)||state.user;
+        out.coloringKey=it.valence==="warm"?"intent_warm":it.valence==="hostile"?"intent_hostile":"intent_self";
+        out.coloring=fillTpl(blkTpl(out.coloringKey),{target:un,kind:it.kind,a_kind:_aKind(it.kind),aim:_aimText(it.aim),aside:""});
+        out.towardPlayer=true; }
     }
   }catch(e){}
   return out;
@@ -30117,7 +30221,7 @@ function _fragCtxState(chat,p,targetId,needs){
     st.pursuits=uni?_cqActive(uni).filter(q=>q&&q.holderId===p.id).map(q=>`${q.title}${q.targetName?" (with "+q.targetName+")":""}`):[];
   } }catch(e){}
   try{ if(needs.has("memories")){
-    st.memories=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&_memOfChat(m,chat)).slice(-20).map(m=>memPayloadText(memText(m),160));
+    st.memories=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&_memOfChat(m,chat)).slice(-20).map(m=>memPayloadText(memText(m),400));   // v150.59 — 160 cut the answer off ("…saying he had already…")
   } }catch(e){}
   return st;
 }
@@ -37074,6 +37178,8 @@ function _mergeIntoLastPresenceNote(chat,add){
 function charPlaceName(chat,p){
   try{
     if(!p)return "";
+    // v150.59 — an offstage event of this part of the day wins over the rolled schedule (see _wpOverlay)
+    try{ const cl=_stretchClaims(chat)[p.id]; const l=cl&&cl.locId?chatLocById(chat,cl.locId):null; if(l&&l.name)return l.name; }catch(_){}
     const pos=(chat&&chat.worldPositions)||{};
     const wp=pos[p.id];
     if(wp){ const l=chatLocById(chat,wp); if(l&&l.name)return l.name; }   // v146.1 — this chat's places
@@ -39348,25 +39454,54 @@ function _textTimingNote(chat,p){
    reply to "did you get the keys?" searched memory with the room's small talk. Now: the thread's tail
    (both sides) and the in-person lines this character actually witnessed, as they reached them
    (memHeardLine: no one else's thoughts, no one else's asides), in order, newest last. */
-function _textMemQuery(chat,p){
-  const msgs=(chat&&chat.messages)||[], picked=new Set();
-  const thread=msgs.filter(m=>m&&m.textMsg&&(m.textWith===p.id||m.speakerId===p.id)).slice(-4);
-  thread.forEach(m=>picked.add(m));
-  msgs.filter(m=>m&&!m.textMsg&&m.role!=='system'&&!m.sysError&&!m.narratorEvent&&!m.dayMarker&&!m.presenceNote
-    &&(witnessedBy(m,p)||(m.role!=='user'&&m.speakerId===p.id))).slice(-4).forEach(m=>picked.add(m));
-  const u=chatUserName(chat);
-  return inChatWorld(chat,()=>msgs.filter(m=>picked.has(m)).map(m=>m.textMsg
-    ? `${m.role==='user'?u:(m.speaker||p.name)}: ${m.content}`
-    : memHeardLine(m,p,p.name)).filter(Boolean).join("\n"));
+/* (!) v150.59 — THE THREAD LAST, AND CUT FROM THE FRONT. The in-person lines came first and the thread after them,
+   and the judge cut the blob at 700 characters — so it read the old beach scene and never the texts. Now: the few
+   in-person lines first, then the thread, newest last; anything over the budget goes from the front. */
+function _textMemQuery(chat,p,max){
+  const t=_textSceneLines(chat,p).join("\n"), cap=max||1600;
+  return t.length>cap?"…"+t.slice(t.length-cap).replace(/^[^\n]*\n/,""):t;
+}
+/* (!) v150.59 — A LINE WITH NO WITNESS LIST reaches only someone IN the player's scene. Narration and move notes are
+   often untagged, and every per-character reader let them through: Burcu, at home and only texting, had "Özlem was
+   carried into the bedroom" and the player's moves through his house as her emotion pick's "scene". */
+function _untaggedReaches(chat,p){ try{ return !!p&&presentIds(chat).indexOf(p.id)>=0; }catch(e){ return false; } }
+/* A text exchange is heard by the one on the other end: the player's text to them (textWith) and their own. */
+function _heardByOwner(m,p){
+  if(!m||!p)return false;
+  return witnessedBy(m,p)||(!!m.speakerId&&m.speakerId===p.id)||(!!m.textMsg&&(m.textWith===p.id||m.speakerId===p.id));
+}
+// "Name: text" as the owner took it in, with a text marked as typed and to whom (who said what is never in doubt).
+function _heardLineOwner(chat,m,p){
+  if(m&&m.textMsg){
+    const c=stripChannelLabel(String(m.content||"")).trim(); if(!c)return "";
+    return m.role==='user'?`${chatUserName(chat)||state.user} (text message to ${p.name}): ${c}`:`${m.speaker||p.name} (text message to ${chatUserName(chat)||state.user}): ${c}`;
+  }
+  const l=memHeardLine(m,p,p.name);
+  return l?stripDeliveryTags(l):l;   // voice-engine tags are not what was heard
+}
+// The lines a text reply is about: the last `spoken` in-person lines they heard (wherever they fall), then the thread (`thread` messages) — the thread always last.
+function _textSceneLines(chat,p,o){
+  const msgs=(chat&&chat.messages)||[]; o=o||{};
+  const thread=msgs.filter(m=>m&&m.textMsg&&(m.textWith===p.id||m.speakerId===p.id)).slice(-(o.thread||8));
+  const spoken=msgs.filter(m=>m&&!m.textMsg&&m.role!=='system'&&!m.sysError&&!m.narratorEvent&&!m.dayMarker&&!m.presenceNote&&!m.uiNote
+    &&(witnessedBy(m,p)||(m.role!=='user'&&m.speakerId===p.id))).slice(-(o.spoken==null?4:o.spoken));
+  return inChatWorld(chat,()=>spoken.concat(thread).map(m=>_heardLineOwner(chat,m,p)).filter(Boolean).map(t=>memPayloadText(t,700)));
+}
+// The newest text the player sent this character, or "".
+function _newestPlayerText(chat,p){
+  const m=textThreadMsgs(chat,p.id).filter(x=>x.role==='user').slice(-1)[0];
+  return m?stripChannelLabel(String(m.content||"")).trim():"";
 }
 async function buildTextPayload(chat,p,how){
   /* The proactive texter's decision context (timing:false) is not a reply and does not pay for the reply's
      Decisions request. */
-  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,"",{targetId:"__user__",targetName:chatUserName(chat),kind:"text"});   // v150.34
+  // (!) v150.59 — the line being answered is the player's newest text (it was "", and the decisions read no line at all)
+  const _line=_newestPlayerText(chat,p);
+  const _emo=(how&&how.timing===false)?null:emotionEnsure(chat,p,_line,{targetId:"__user__",targetName:chatUserName(chat),kind:"text"});   // v150.34
   let injected={recent:[],diary:[],longterm:[]};
   if(state.mem && state.memory.length){
     try{
-      const r=await retrieveMemories(_textMemQuery(chat,p)||p.name,chat,p.id);
+      const r=await retrieveMemories(_textMemQuery(chat,p)||p.name,chat,p.id,{line:_line,text:true});
       injected={recent:(r.recent||[]),diary:(r.diary||[]),longterm:(r.longterm||[])};
     }catch(e){ injected={recent:[],diary:[],longterm:[]}; }
   }
@@ -39452,6 +39587,7 @@ function _cleanTextReply(reply,name){
   s=s.replace(new RegExp("^\\s*"+String(name||"").replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*:\\s*","i"),"");
   s=stripChannelLabel(s);                       // "Hakan: (text message) …" puts the label second
   s=s.replace(/<\/?[a-z-]{2,24}>/gi,"");        // delivery/audio tags — never in a text
+  s=stripDeliveryTags(s);                       // v150.59 — and [say …] tags, trimmed inside the quotes they leave
   s=s.replace(/\*[^*]*\*/g,"");                 // *narration*
   // Only when the WHOLE message is wrapped — otherwise this eats one half of a real quoted phrase.
   if(/^["'\u201c\u2018][\s\S]*["'\u201d\u2019]$/.test(s)) s=s.slice(1,-1);
@@ -39526,6 +39662,9 @@ async function _replyToText(chat,p,out){
    It now runs the SAME evaluator the spoken path runs (memEval): the arc stays open while the
    topic holds, and one memory is written when the topic finishes or turns. Per thread, so two
    conversations with two people never share an arc. The cap is the same safety valve. */
+/* (!) v150.59 — WHO TYPED IT. The text arc tracker summarised "Lafı dolandıracağına Ayça'yı aradın mı sen" (Duygu asking
+   Emre) as "Emre asks if she called Ayça": the lines were labelled, nothing said the labels decide. */
+function _textWhoSaidRule(u,c){ return `WHO SAID IT: every line begins with the name of the person who typed it (${u} or ${c}). Attribute each question, answer, request and refusal to exactly that person — never swap who asked and who answered.`; }
 async function rememberTextExchange(chat,p){
   if(!state.mem||!state.key||!chat||!p)return;
   const th=textThreadMsgs(chat,p.id);
@@ -39536,12 +39675,14 @@ async function rememberTextExchange(chat,p){
   const open=th.length-arc.start;
   if(open<3)return;                                       // nothing new enough to judge
 
-  const exchange=th.slice(-6).map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+  const _un=chatUserName(chat)||state.user;
+  const exchange=th.slice(-6).map(m=>`${m.role==="user"?_un:p.name}: ${stripChannelLabel(String(m.content||""))}`).join("\n");
   const tracked=!!arc.summary;   // v148.4 — see "different" below
+  const _closing=arc.summary||"";   // v150.59 — what the arc being closed was about, for the memory writer
   let progress="ongoing",topic="same",summary=arc.summary||"";
   try{
     const out=await chatCompletion(
-      epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective(),
+      epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective()+"\n\n"+_textWhoSaidRule(_un,p.name),
              {}),
       mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker (text) · "+p.name});
     const j=parseJSON(out)||{};
@@ -39563,13 +39704,13 @@ async function rememberTextExchange(chat,p){
     for(let i=th.length-1;i>arc.start;i--){ if(th[i]&&th[i].role==="user"){ newStart=i; break; } }
     const span=th.slice(arc.start,newStart);
     chat._textArc[p.id]={start:newStart,summary}; markChatDirty(chat);
-    if(span.length>=2) await _commitTextArc(chat,p,span);
+    if(span.length>=2) await _commitTextArc(chat,p,span,null,{topic:_closing});
     return;
   }
   if(progress==="finished" || open>=MEM_ARC_CAP){
     const span=th.slice(arc.start);
     chat._textArc[p.id]={start:th.length,summary:""}; markChatDirty(chat);
-    if(span.length>=2) await _commitTextArc(chat,p,span);
+    if(span.length>=2) await _commitTextArc(chat,p,span,null,{topic:summary});
     return;
   }
   // still going — nothing written yet, on purpose
@@ -39590,23 +39731,46 @@ async function flushTextArcs(chat,day,period){
       const span=rest.slice(0,n);
       if(!span.length)continue;
       chat._textArc[pid]={start:arc.start+span.length,summary:""}; markChatDirty(chat);
-      if(span.length>=2) await _commitTextArc(chat,p,span,{day,period});
+      if(span.length>=2) await _commitTextArc(chat,p,span,{day,period},{topic:arc.summary||""});
     }catch(e){}
   }
 }
 /* Write ONE memory for a finished stretch of a phone thread. */
 /* v148.4 — `stamp` {day, period}: a flush at the period change / day end files it under the stretch
    that ended (the clock already reads the next one). */
-async function _commitTextArc(chat,p,span,stamp){
+/* (!) v150.59 — `opts.topic`: what the arc tracker said this stretch of the thread is about. The writer read four
+   lines cut from the middle of a thread — "aradıysan mesele kalmadı" (if you called, it's settled) became "he said he'd
+   already checked", and Ayça, the person the whole stretch was about, was left out of people. It now gets the topic,
+   the few lines before the stretch (context, already remembered), what it already remembers of the thread, and two
+   rules: who typed each line is the name in front of it, and people includes whoever the messages are about. */
+/* The stretch, with what it is about and what came before it, for _commitTextArc (v150.59). */
+function _textArcConvo(chat,p,span,day,period,opts){
+  const _un=chatUserName(chat)||state.user;
+  const _ln=m=>`${m.role==="user"?_un:p.name}: ${stripChannelLabel(String(m.content||""))}`;
+  const th=textThreadMsgs(chat,p.id), at=th.indexOf(span[0]);
+  const before=at>0?th.slice(Math.max(0,at-4),at):[];
+  const prevMem=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&m.source==="text"&&_memOfChat(m,chat)&&!m.superseded).slice(-1)[0];
+  const topic=String((opts&&opts.topic)||"").trim();
+  /* A phone thread has no scene location — the record stores location:"" for that reason — so
+     this one is given the WHEN and no WHERE rather than a place it would then have to invent. */
+  return `${memWhenWhereLine(chat,day,period,{noWhere:true})}\n\n`
+    +(topic?`WHAT THIS STRETCH OF THE THREAD IS ABOUT (the tracker's note): ${topic}\n\n`:"")
+    +(prevMem?`WHAT ${p.name} ALREADY REMEMBERS OF THIS THREAD (context — do not retell it): ${memPayloadText(memText(prevMem),500)}\n\n`:"")
+    +(before.length?`EARLIER IN THE THREAD (context only, already remembered):\n${before.map(_ln).join("\n")}\n\nTHE STRETCH TO REMEMBER:\n`:"")
+    +span.map(_ln).join("\n");
+}
+// The two reading rules a thread needs, after the phone-thread note (v150.59).
+function _textArcRules(chat,p){
+  const _un=chatUserName(chat)||state.user;
+  return `# READING A THREAD\n- ${_textWhoSaidRule(_un,p.name)}\n- Read every line as it is written: a question is a question, and a condition ("if you called") is not a statement that it happened — nor a different verb ("called" is not "checked").\n- "people" for a thread: ${_un} AND everyone the messages are about — a person asked about, talked about or named in the stretch, by the full name the cast gives them (or as written when they are not in the cast).`;
+}
+async function _commitTextArc(chat,p,span,stamp,opts){
   try{
     const _sd=(stamp&&typeof stamp.day==="number")?stamp.day:(chat.gameDay||1);
     const _sp=(stamp&&stamp.period)||_memPeriod(chat);
-    /* A phone thread has no scene location — the record stores location:"" for that reason — so
-       this one is given the WHEN and no WHERE rather than a place it would then have to invent. */
-    const convo=`${memWhenWhereLine(chat,_sd,_sp,{noWhere:true})}\n\n`
-      +span.map(m=>`${m.role==="user"?state.user:p.name}: ${m.content}`).join("\n");
+    const convo=_textArcConvo(chat,p,span,_sd,_sp,opts);
     const sys=fillTpl(up("memBuild"),{char:p.name,user:state.user})+
-      "\n\n"+fillTpl(up("x_membuild_text_note"),{char:p.name,user:state.user})+"\n\n"+engineLangDirective();
+      "\n\n"+fillTpl(up("x_membuild_text_note"),{char:p.name,user:state.user})+"\n\n"+_textArcRules(chat,p)+"\n\n"+engineLangDirective();
     const out=await chatCompletion(epSend("memBuild",sys,{convo},{who:p.name}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",480),dbg:"Memory (text) · "+p.name});
     /* (!) v76.1 — THE SAME TRAP THE RECONCILER FELL INTO IN v56.1, one engine over. This read
        j.content off the top level and nothing else, so a phone-thread note that asks for
@@ -40970,6 +41134,7 @@ function castHistory(chat,forP,opts){
     if(m.narratorEvent){
       if(forP && (m.worldEvent||m.questNote||m.calNote)) return false;
       if(forP && Array.isArray(m.present) && !witnessedBy(m,forP)) return false;
+      if(forP && _absent && !witnessedBy(m,forP)) return false;   // v150.59 — an untagged beat of the room never reaches a texter
       return idx>=arrivalCut;
     }
     // TEXT MESSAGES: a phone thread is private (present:[]) so the witness filter below would drop it.
@@ -49638,8 +49803,34 @@ function clipAtSentence(s,max){
   if(m&&m[0].length>=max*0.5) return m[0].trim();
   const sp=head.lastIndexOf(" "); return (sp>max*0.5?head.slice(0,sp):head).replace(/[\s,;:—–-]+$/,"")+"…";
 }
+/* (!) v150.59 — A MEMORY IS ENGLISH AND IN THE FIRST PERSON. A quest step copied its narrated event (story language,
+   third person) into the holder's memory: "Duygu, Nil evde kulaklığıyla kapalıyken telefonu eline aldı ve Özlem'i
+   aradı…" sat in Duygu's English first-person bank. Returns why a world-engine memory is not one, or "": almost no
+   English function words over six or more words (another language), or it opens with its owner's own name and
+   never says I / my / me (third person). */
+const _EN_FN_WORDS=new Set(["the","and","to","of","a","i","my","me","was","in","at","it","that","he","she","her","his","with","for","on","we","not","but","is","had","they","you","as","then","so","about","from","what","did"]);
+const _MEM_FIRST_PERSON_RULE=`MEMORIES: each "memories" content is that person's OWN memory — in ENGLISH, in the FIRST PERSON ("I called her…", never "<their own name> called her…"), one or two sentences. Never the "event" text again, and never in the story's language.`;
+/* The engine's English note ("Duygu phoned Hakan and …") standing in for a memory: its owner's own name, where it
+   opens the note, becomes "I" — a memory of one's own is never about oneself by name. */
+function _noteAsOwnMemory(note,p){
+  let t=String(note||"").trim(); if(!t||!p||!p.name)return t;
+  const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  const first=String(p.name).split(/\s+/)[0];
+  return t.replace(new RegExp("^(?:"+esc(p.name)+"|"+esc(first)+")(?:'s)?(?![\\p{L}])","u"),m=>/'s$/.test(m)?"My":"I");
+}
+function _memRecordProblem(content,p){
+  const t=String(content||"").trim(); if(!t)return "empty";
+  const words=(t.toLowerCase().match(/[\p{L}']+/gu)||[]);
+  if(words.length>=6){ const en=words.filter(w=>_EN_FN_WORDS.has(w.replace(/'.*$/,""))).length; if(en/words.length<0.08)return "not English"; }
+  if(p&&p.name){ const first=String(p.name).split(/\s+/)[0];
+    const lead=_nmFold(t.slice(0,String(p.name).length+3));
+    if((lead.indexOf(_nmFold(p.name))===0||new RegExp("^"+_nmFold(first).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"(?![\\p{L}])","u").test(lead))&&!/(?<![\p{L}])(?:I|I'm|I've|I'd|I'll|my|me|myself|we|us|our)(?![\p{L}])/u.test(t))return "third person"; }
+  return "";
+}
 function _plantWorldMemory(chat,uni,p,m,day,placeName,who,period,extra){
   if(!p||!m||!m.content)return null;
+  { const why=_memRecordProblem(m.content,p);
+    if(why){ try{ console.warn("[world memory] not planted ("+why+") for "+p.name+":",String(m.content).slice(0,90)); }catch(_){} return null; } }
   const rec=rememberMemory(Object.assign({
     people:memPeople(p.name, Array.isArray(m.people)?m.people:[], who||[]),
     id:"m_"+Date.now()+Math.random().toString(36).slice(2,6)+String(p.id).slice(-3),
@@ -49898,6 +50089,182 @@ function _pulseHasDuePlan(chat,p){
     return planCharIds(e).indexOf(p.id)>=0||nameInText(e.who,p.name)||sameName(e.executor,p.name);
   });
 }
+/* ===== v150.59 — WHO CAN BE WHERE: ONE ANSWER FOR THE MAP AND EVERY OFFSTAGE RESOLVER ==================
+   Reported: Özlem was in the player's house (the scene, entries 57-78) when the calendar executor resolved
+   Burak's plan "Özlem'i kahveye tekrar çağır" at Vanadium Cafe and narrated "Özlem geldi". The plan listed
+   only Burak, so nothing checked the person it was about; the map and the resolver each had their own idea
+   of where people were. Now one function answers "where is this person this part of the day, and can an
+   offstage event have them in person?":
+     1. the player's scene wins over everything — whoever is in it (presentIds, a companion the player took
+        along) is with the player and nowhere else;
+     2. then an offstage event of this part of the day — one that already resolved (chat.eventPins) or a due
+        offstage plan whose actor can go (first plan in calendar order claims a person);
+     3. then the schedule (the rolled placement).
+   resolveWorldPositions lays 2 and 3 under 1 for the map, and the resolvers ask charAvailability, which
+   reads the same claims — so the map and the narration cannot disagree. */
+function _playerSceneIdSet(chat){
+  const s=new Set();
+  try{ presentIds(chat).forEach(id=>s.add(id)); }catch(e){}
+  try{ const cl=chat&&chat.companionLock; if(cl)for(const id in cl){ if(cl[id])s.add(id); } }catch(e){}
+  return s;
+}
+// The people an offstage event of THIS part of the day has (pins written when it resolved). They live on the
+// stretch's busy set (chat.pulseBusy), so they turn over with it and a fresh world clears both together.
+function _eventPinsNow(chat){
+  const b=chat?_pulseBusySet(chat):null;
+  return (b&&b.pins&&typeof b.pins==="object")?b.pins:{};
+}
+function _noteEventPins(chat,ids,o){
+  if(!chat)return;
+  const b=_pulseBusySet(chat); if(!b.pins||typeof b.pins!=="object")b.pins={};
+  (ids||[]).filter(Boolean).forEach(id=>{ b.pins[id]={locId:(o&&o.locId)||null,place:String((o&&o.place)||""),
+    title:String((o&&o.title)||"").slice(0,90),eventId:(o&&o.eventId)||null,src:(o&&o.src)||"event"}; });
+  try{ markChatDirty(chat); }catch(e){}
+}
+/* Everyone a calendar plan involves. `listed` are its participants (who/charIds), `exec` the one who acts,
+   `targets` the people its TITLE is about ("Özlem'i kahveye çağır" → Özlem) or its id fields name, and
+   `mentioned` anyone else its reason names. A first name counts only when no one else in the cast shares it. */
+function _castNamedIn(chat,text,skip){
+  const out=[]; const t=String(text||""); if(!t.trim())return out;
+  const cast=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p));
+  const firstCount={}; cast.forEach(p=>{ const f=_nmFold(String(p.name||"").split(/\s+/)[0]); if(f)firstCount[f]=(firstCount[f]||0)+1; });
+  const un=String(chatUserName(chat)||"");
+  cast.forEach(p=>{
+    if(skip&&skip.has(p.id))return;
+    if(un&&sameName(p.name,un))return;
+    const first=String(p.name||"").split(/\s+/)[0];
+    if(nameInText(t,p.name)||(first&&first.length>=3&&firstCount[_nmFold(first)]===1&&nameInText(t,first)))out.push(p);
+  });
+  return out;
+}
+function _calPlanPeople(chat,e,listedIn){
+  const byId=id=>(state.personas||[]).find(p=>p&&p.id===id&&p.universeId===chat.universeId&&isActiveChar(p))||null;
+  const listed=(listedIn||_pulsePersonasByName(chat,e&&e.who)).slice();
+  planCharIds(e).map(byId).filter(Boolean).forEach(p=>{ if(!listed.includes(p))listed.push(p); });
+  const exec=(e&&e.executorId&&byId(e.executorId))||(e&&e.executor?_pulsePersonasByName(chat,e.executor)[0]:null)||listed[0]||null;
+  const skip=new Set(listed.map(p=>p.id));
+  const targets=[];
+  [e&&e.targetId].concat(Array.isArray(e&&e.whoIds)?e.whoIds:[]).map(byId).filter(Boolean)
+    .forEach(p=>{ if(!skip.has(p.id)){ skip.add(p.id); targets.push(p); } });
+  _castNamedIn(chat,e&&e.title,skip).forEach(p=>{ skip.add(p.id); targets.push(p); });
+  const mentioned=_castNamedIn(chat,[e&&e.detail,e&&e.aim].filter(Boolean).join(" \n "),skip);
+  return {listed,exec,targets,mentioned};
+}
+// Who is claimed by an offstage event this part of the day: id → {locId, place, title, eventId, src}.
+function _stretchClaims(chat){
+  const out={};
+  if(!chat)return out;
+  const scene=_playerSceneIdSet(chat);
+  const pins=_eventPinsNow(chat);
+  for(const id in pins){ if(!scene.has(id))out[id]=pins[id]; }
+  try{
+    for(const e of chatCalendar(chat)){
+      if(!e||e.done||!planDueNow(chat,e)||_planIncludesUser(e,chat))continue;
+      const pp=_calPlanPeople(chat,e);
+      if(!pp.exec||scene.has(pp.exec.id)||out[pp.exec.id])continue;   // the one who acts cannot go now: it claims nobody
+      const loc=e.locationId?chatLocById(chat,e.locationId):(e.where?locByName(String(e.where),chatLocations(chat)):null);
+      pp.listed.forEach(p=>{ if(scene.has(p.id)||out[p.id])return;
+        out[p.id]={locId:loc?loc.id:null,place:(loc&&loc.name)||String(e.where||""),title:String(e.title||"").slice(0,90),eventId:e.id||null,src:"plan"}; });
+    }
+  }catch(err){}
+  return out;
+}
+/* Can an offstage event have this person in person right now? `except`: the event asking (its own claim
+   does not count against it). kind: "with_player" | "event" (committed to another event) | "free". */
+function charAvailability(chat,id,opts){
+  const o=opts||{};
+  const p=(state.personas||[]).find(x=>x&&x.id===id)||null;
+  const nm=p?p.name:"";
+  if(!chat||!id)return {ok:false,kind:"unknown",name:nm};
+  const scene=_playerSceneIdSet(chat);
+  if(scene.has(id)){
+    const un=chatUserName(chat)||"the player";
+    const others=presentCast(chat).filter(x=>x&&x.id!==id).map(x=>x.name);
+    return {ok:false,kind:"with_player",name:nm,locId:chat.locationId||null,place:chat.location||((chatLocById(chat,chat.locationId)||{}).name)||"",
+      with:[un].concat(others)};
+  }
+  const cl=(o.claims||_stretchClaims(chat))[id];
+  if(cl&&!(o.except&&cl.eventId&&cl.eventId===o.except))
+    return {ok:false,kind:"event",name:nm,locId:cl.locId||null,place:cl.place||"",title:cl.title||"",eventId:cl.eventId||null};
+  try{ if(!(o.except&&_eventPinsNow(chat)[id])&&_pulseIsBusy(chat,[id]))return {ok:false,kind:"event",name:nm,locId:((chat.worldPositions||{})[id])||null,place:((chatLocById(chat,(chat.worldPositions||{})[id])||{}).name)||"",title:""}; }catch(e){}
+  const at=(chat.worldPositions||{})[id]||null;
+  return {ok:true,kind:"free",name:nm,locId:at,place:at?((chatLocById(chat,at)||{}).name||""):""};
+}
+// The line a resolver reads about somebody who cannot be there in person.
+function _unavailLine(chat,a){
+  if(a.kind==="with_player")
+    return `${a.name} is at ${a.place||"the player's place"} with ${_nameList(a.with||[])} right now. ${a.name} cannot be there in person, cannot arrive, join or be met; at most ${a.name} answers a text or a call.`;
+  return `${a.name} is committed elsewhere this part of the day${a.title?` ("${a.title}"`+(a.place?` at ${a.place})`:")"):(a.place?` (at ${a.place})`:"")}. ${a.name} cannot be there in person; at most ${a.name} answers a text or a call.`;
+}
+// Attach a note to the newest debug entry with this label (what a post-check changed, for the export).
+function dbgNote(label,text){
+  try{ for(let i=dbgLog.length-1;i>=0;i--){ if(dbgLog[i]&&dbgLog[i].label===label){ (dbgLog[i].notes=dbgLog[i].notes||[]).push(String(text).slice(0,600)); return; } } }catch(e){}
+}
+/* THE BLOCK every offstage resolver is handed, and THE CHECK its answer goes through.
+   `people`: [{p, role:"listed"|"target"|"mentioned"}]. Returns {block, free:[persona], unavailable:[{p,a}]}. */
+function _availabilityFor(chat,people,except){
+  const claims=_stretchClaims(chat);
+  const free=[], unavailable=[];
+  const seen=new Set();
+  (people||[]).forEach(x=>{ if(!x||!x.p||seen.has(x.p.id))return; seen.add(x.p.id);
+    const a=charAvailability(chat,x.p.id,{except,claims});
+    if(a.ok)free.push(x.p); else unavailable.push({p:x.p,a,role:x.role}); });
+  const lines=[]
+    .concat(free.map(p=>`- ${p.name}: free — may be there in person.`))
+    .concat(unavailable.map(u=>`- NOT AVAILABLE — ${_unavailLine(chat,u.a)}`));
+  const block=`WHO CAN BE THERE IN PERSON (checked by the engine — absolute):\n${lines.join("\n")}\n`
+    +`Add "present" to your JSON: the names of everyone physically there — only people marked free above. `
+    +`Anyone NOT AVAILABLE is not there: never have them arrive, sit, speak in the room or be met; resolve the plan without them (someone waits, is stood up, or gets a text saying they cannot come). `
+    +`"memories" carries one memory for EVERY name in "present", each from that person's own point of view, and nobody else; "rel" lines come only from people in "present".`;
+  return {block,free,unavailable};
+}
+/* Validate a resolver answer against availability. Returns {ok, present:[persona], memories, rel, notes}.
+   ok:false — it put somebody who cannot be there in "present": the answer is rejected whole. */
+function _offstagePostCheck(chat,j,av,base){
+  const notes=[];
+  const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
+  const unIds=new Set(av.unavailable.map(u=>u.p.id));
+  const freeIds=new Set(av.free.map(p=>p.id));
+  let present=null;
+  if(Array.isArray(j&&j.present)){
+    present=[];
+    for(const n of j.present){ const p=byName(n); if(!p)continue;
+      if(unIds.has(p.id)){ notes.push(`rejected: "present" names ${p.name}, who cannot be there`); return {ok:false,notes}; }
+      if(freeIds.has(p.id)&&!present.includes(p))present.push(p); }
+  }
+  (base||[]).forEach(p=>{ if(p&&freeIds.has(p.id)&&(!present||!present.includes(p))){ if(!present)present=[]; present.push(p); } });
+  present=present||[];
+  const pIds=new Set(present.map(p=>p.id));
+  const memories=(Array.isArray(j&&j.memories)?j.memories:[]).filter(m=>{ const p=byName(m&&m.name);
+    if(p&&pIds.has(p.id))return true;
+    if(p&&unIds.has(p.id))notes.push(`dropped a memory for ${p.name} (not there in person)`);
+    return false; });
+  const rel=(Array.isArray(j&&j.rel)?j.rel:[]).filter(r=>{ const a=byName(r&&r.from);
+    if(a&&pIds.has(a.id))return true;
+    if(a&&unIds.has(a.id))notes.push(`dropped a rel line from ${a.name} (not there in person)`);
+    return false; });
+  return {ok:true,present,memories,rel,notes};
+}
+/* Everyone who was there takes it away: a memory (the model's, or a plain one when it gave none), the
+   day's whereabouts row with the others, and the event's pin for the map. */
+function _offstageLand(chat,uni,o){
+  const names=o.present.map(p=>p.name);
+  if(o.sameDay)try{ noteWhereabouts(chat,o.present.map(p=>p.id),{period:o.period,placeId:o.locId||null,place:o.place,what:String(o.what||"").slice(0,90)}); }catch(_){}
+  if(o.sameStretch){
+    if(chat.worldPositions&&o.locId)o.present.forEach(p=>{ chat.worldPositions[p.id]=o.locId; });
+    _noteEventPins(chat,o.present.map(p=>p.id),{locId:o.locId,place:o.place,title:o.what,eventId:o.eventId,src:o.src});
+    _pulseMarkBusy(chat,o.present.map(p=>p.id));
+  }
+  const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
+  const got=new Set();
+  (o.memories||[]).slice(0,Math.max(4,o.present.length)).forEach(m=>{ const p=byName(m&&m.name);
+    if(!p||got.has(p.id)||!o.present.includes(p))return;
+    if(_plantWorldMemory(chat,uni,p,m,o.day,o.place,names,o.period))got.add(p.id); });
+  o.present.forEach(p=>{ if(got.has(p.id))return;
+    const others=names.filter(n=>n!==p.name);
+    _plantWorldMemory(chat,uni,p,{content:`I was at ${o.place||"the place we had agreed on"}${others.length?` with ${_nameList(others)}`:""} for "${String(o.what||"").slice(0,90)}".`,
+      emotion:"neutral",importance:0.45},o.day,o.place,names,o.period); });
+}
 // What a character privately wants right now — their live intents, fed to the encounter judge so
 // brewing motives can steer who seeks out whom.
 /* v28.4 — does this character carry a live motive that points at `other`, or at the player? Either
@@ -49927,8 +50294,9 @@ function _pulsePlaces(chat){
 async function runOffstageInteraction(chat,uni){
   resolveWorldPositions(chat);
   const onstage=new Set(presentIds(chat));
+  const _oClaims=_stretchClaims(chat);   // v150.59 — one availability for the map and every resolver
   const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)&&!onstage.has(p.id)
-    &&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p));
+    &&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p)&&charAvailability(chat,p.id,{claims:_oClaims}).ok);
   const pos=chat.worldPositions||{};
   const byLoc={};
   pool.forEach(p=>{ const l=pos[p.id]; if(!l||l===chat.locationId)return; (byLoc[l]=byLoc[l]||[]).push(p); });
@@ -49991,6 +50359,9 @@ async function runOffstageInteraction(chat,uni){
   const _on=new Set(presentIds(chat));
   if(_on.has(best.a.id)||_on.has(best.b.id))return false;
   const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
+  // v150.59 — nor taken by another event while the call ran
+  if(sameStretch&&(!charAvailability(chat,best.a.id).ok||!charAvailability(chat,best.b.id).ok)){
+    dbgNote("World pulse (offstage interaction)","dropped — one of them was claimed by another event meanwhile"); return false; }
   const uniObj=uni||universeById(chat.universeId);
   const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
   // PHYSICAL PLACEMENT — the event pins both characters to where it happened. If the model chose a
@@ -50002,6 +50373,7 @@ async function runOffstageInteraction(chat,uni){
   if(sameStretch){
     if(chat.worldPositions){ chat.worldPositions[best.a.id]=evLocId; chat.worldPositions[best.b.id]=evLocId; }
     _pulseMarkBusy(chat,[best.a.id,best.b.id]);
+    _noteEventPins(chat,[best.a.id,best.b.id],{locId:evLocId,place:evPlace,title:String(j.headline||"").slice(0,90),src:"pulse"});   // v150.59
   }
   // v96.1 — and both of them now know where they spent this part of the day, and with whom.
   if(sameDay)try{ noteWhereabouts(chat,[best.a.id,best.b.id],
@@ -50211,8 +50583,9 @@ async function runWorldRound(chat,uni){
     /* Everyone the world can move: in this universe, active, not in the player's scene, not
        already claimed by an encounter or by a plan that is due right now. The busy set is what
        keeps this and the older single-pair pulse from writing over each other. */
+    const _rClaims=_stretchClaims(chat);   // v150.59 — the same availability the map and the executor use
     const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)
-      &&!onstage.has(p.id)&&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p));
+      &&!onstage.has(p.id)&&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p)&&charAvailability(chat,p.id,{claims:_rClaims}).ok);
     if(pool.length<1){ chat._roundAt=mark; return 0; }
     const pos=chat.worldPositions||{};
     const _locs=chatLocations(chat), _lb=id=>id?_locs.find(l=>l&&l.id===id):null;   // v146.1 — this chat's places
@@ -50295,6 +50668,13 @@ async function runWorldRound(chat,uni){
              String(en.headline||"").slice(0,60)); }catch(_){}
         continue;
       }
+      /* (!) v150.59 — and nobody the round was not given: a name outside the pool is somebody with the player or
+         at another event this part of the day. The entry was written about the group, so it goes whole. */
+      const _outside=named.filter(pp=>!pool.includes(pp)||(sameStretch&&!charAvailability(chat,pp.id).ok));
+      if(_outside.length){
+        try{ dbgNote("The day around you (whole-cast round)",`entry dropped — ${_outside.map(x=>x.name).join(", ")} cannot be there: "${String(en.headline||"").slice(0,60)}"`); }catch(_){}
+        continue;
+      }
       const who=named;
       who.forEach(pp=>placed.add(pp.id));
       const loc=locByName(String(en.place||"").trim(),_locs);
@@ -50303,6 +50683,7 @@ async function runWorldRound(chat,uni){
       if(sameStretch){
         if(chat.worldPositions&&evLocId) who.forEach(pp=>{ chat.worldPositions[pp.id]=evLocId; });
         _pulseMarkBusy(chat,who.map(pp=>pp.id));
+        if(evLocId)_noteEventPins(chat,who.map(pp=>pp.id),{locId:evLocId,place:evPlace,title:String(en.headline||"").slice(0,90),src:"round"});   // v150.59 — the map keeps them there
       }
       if(sameDay)try{ noteWhereabouts(chat,who.map(pp=>pp.id),
         {period:per,placeId:evLocId,place:evPlace,what:String(en.headline||"").slice(0,90)}); }catch(_){}
@@ -50383,6 +50764,14 @@ function _calExecTransient(err){
   const st=+err.status||0; if(st===429||st>=500)return true;
   return (err instanceof Error)&&(err.kind==="timeout"||err.kind==="network"||err.kind==="abort");
 }
+/* v150.59 — the next sensible part of the day for a plan somebody could not make: later today while the day has
+   a later part before the evening, otherwise the next day at the plan's own time (never the night). Numbers only. */
+function _offstageNextSlot(chat,e){
+  const day=chat.gameDay||1, i=chatPeriodIndex(chat);
+  if(i>=0&&i<PERIODS.indexOf("Evening"))return {day,period:PERIODS[i+1]};
+  const own=(e&&PERIODS.includes(e.period)&&e.period!=="Night")?e.period:"Morning";
+  return {day:day+1,period:own};
+}
 async function runCalendarExecutor(chat,uni){
   if(!state.calOn||!chat)return 0;
   return (await withChatLock(chat,"calExec",async()=>{
@@ -50398,10 +50787,32 @@ async function runCalendarExecutor(chat,uni){
   let ran=0, calls=0;
   for(const e of due){
     if(calls>=3)break;
-    const parts=_pulsePersonasByName(chat,e.who);
-    const onstage=new Set(presentIds(chat));
-    if(_pulseIsBusy(chat,parts.map(p=>p.id)))continue;               // claimed this period → wait
-    if(parts.some(p=>onstage.has(p.id)))continue;                    // in the player's scene → the plan waits
+    const listed=_pulsePersonasByName(chat,e.who);
+    /* (!) v150.59 — EVERYONE THE PLAN INVOLVES, AND WHETHER THEY CAN BE THERE. Only the listed participants were
+       checked, so "Özlem'i kahveye tekrar çağır" (listed: Burak) was resolved with Özlem arriving at Vanadium Cafe
+       while she stood in the player's house. The one who acts must be free, or the plan waits (as before). Anybody
+       else it needs — a listed participant, or the person its title is about — who is with the player or committed
+       to another event: the plan moves to the next part of the day once; after that it is resolved without them,
+       and the resolver is told where they really are. */
+    const _pp=_calPlanPeople(chat,e,listed);
+    if(!_pp.exec)continue;
+    const _claims=_stretchClaims(chat);
+    if(!charAvailability(chat,_pp.exec.id,{except:e.id,claims:_claims}).ok)continue;   // the actor is with the player or busy → wait
+    const _req=_pp.listed.filter(p=>p.id!==_pp.exec.id).concat(_pp.targets);
+    const _reqOff=_req.filter(p=>!charAvailability(chat,p.id,{except:e.id,claims:_claims}).ok);
+    if(_reqOff.length&&!(e.postponed>0)){
+      const nx=_offstageNextSlot(chat,e);
+      e.postponed=(e.postponed||0)+1;
+      e.postponedWhy=`${_reqOff.map(p=>p.name).join(", ")} could not be there on day ${chat.gameDay||1} (${chatPeriod(chat)})`;
+      e.day=nx.day; e.period=nx.period; _calFreshSlot(e);
+      try{ dbgDone(dbg("Offstage availability · postponed","local","",{plan:e.title,
+        unavailable:_reqOff.map(p=>{ const a=charAvailability(chat,p.id,{except:e.id,claims:_claims}); return {name:p.name,kind:a.kind,place:a.place}; }),to:nx}),"ok","postponed"); }catch(_){}
+      markChatDirty(chat); persistChats(chat); try{ updateCalendarBadge(); }catch(_){}
+      continue;
+    }
+    const parts=listed.filter(p=>charAvailability(chat,p.id,{except:e.id,claims:_claims}).ok);
+    if(!parts.length)continue;
+    const _av=_availabilityFor(chat,_pp.listed.map(p=>({p,role:"listed"})).concat(_pp.targets.map(p=>({p,role:"target"})),_pp.mentioned.map(p=>({p,role:"mentioned"}))),e.id);
     calls++;
     const day=chat.gameDay||1, per=chatPeriod(chat)||"";
     const closeMissed=()=>{ e.done=true; e.prompted=true; e.outcome="missed"; e.completedDay=day; e.completedPeriod=per; updateCalendarBadge(); };
@@ -50432,38 +50843,43 @@ async function runCalendarExecutor(chat,uni){
          this list; it got the one venue and nothing to check an invention against. */
       places:_pulsePlaces(chat),
       origin,
-      sheets:parts.map(_pulseSheet).join("\n"),ties:ties.join(" | ")||"(none on record)",
+      sheets:parts.concat(_av.free.filter(p=>!parts.includes(p))).map(_pulseSheet).join("\n"),ties:ties.join(" | ")||"(none on record)",
       knows,
       user:chatUserName(chat)||"the player",world:String(chatWorldSetting(chat)||"").slice(0,700)
     });
     try{
       const _prB=promiseContextForNames(chat,parts.map(pp=>pp.name));
-      const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{pursuits:pursuitStatusBlock(parts,chat),promises:_prB||""}),
-        state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (calendar executor)"});
+      const _dbgL="World pulse (calendar executor)";
+      const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+_av.block+"\n\n"+mixedLangDirective(["headline","event"]),{pursuits:pursuitStatusBlock(parts,chat),promises:_prB||""}),
+        state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:_dbgL});
       const j=parseJSON(out); if(!j||!j.event){ gaveUp(); continue; }
       if(e.done)continue;                                              // settled some other way meanwhile
-      // Somebody joined the player while the call ran: they are here, not there. The plan waits.
-      const _on=new Set(presentIds(chat));
-      if(parts.some(p=>_on.has(p.id)))continue;
+      /* (!) v150.59 — availability is checked again AFTER the call: somebody who joined the player (or another
+         event) while it ran is there, not here. The actor gone → the plan waits; anyone else → not present.
+         The answer is then checked: "present" naming somebody who cannot be there rejects it (a try, like an
+         unreadable answer); a memory or a rel line for them is dropped. The note lands on the debug entry. */
+      if(!charAvailability(chat,_pp.exec.id,{except:e.id}).ok){ dbgNote(_dbgL,`${_pp.exec.name} became unavailable during the call — the plan waits`); continue; }
+      const _av2=_availabilityFor(chat,_pp.listed.map(p=>({p})).concat(_pp.targets.map(p=>({p})),_pp.mentioned.map(p=>({p}))),e.id);
+      const chk=_offstagePostCheck(chat,j,_av2,[_pp.exec].concat(parts));
+      if(chk.notes.length)dbgNote(_dbgL,"availability post-check: "+chk.notes.join("; "));
+      if(!chk.ok){ gaveUp(); continue; }
+      const present=chk.present;
       const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
       e.done=true; e.prompted=true; updateCalendarBadge();
-      // v96.1 — a plan that actually ran is a place these people were, together.
-      if(sameDay)try{ noteWhereabouts(chat,parts.map(pp=>pp.id),
-        {period:per,placeId:e.locationId||null,place,what:String(e.title||"").slice(0,90)}); }catch(_){}
       const uniObj=uni||universeById(chat.universeId);
       const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
-      // PHYSICAL PLACEMENT — the participants really went there: pin them to the plan's place for
-      // the rest of the period so the player can travel there and find them, aware of what happened.
+      // PHYSICAL PLACEMENT — the people who were really there: pinned to the plan's place for the rest of the
+      // period (the map shows them there; the player can travel there and find them), each with a memory and
+      // the day's whereabouts row with the others (v150.59 — everyone present, not only the listed participants).
       const evLoc=e.locationId?chatLocById(chat,e.locationId):(e.where?locByName(e.where,chatLocations(chat)):null);
-      if(sameStretch){
-        if(evLoc&&chat.worldPositions){ parts.forEach(p=>{ chat.worldPositions[p.id]=evLoc.id; }); }
-        _pulseMarkBusy(chat,parts.map(p=>p.id));
-      }
       e.result=briefDesc(String(j.event||""),300); e.completedDay=day; e.completedPeriod=per;
-      _pushWorldEvent(chat,j.headline||e.title,j.event,parts.map(pp=>pp.id));
-      (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p&&parts.some(x=>x.id===p.id))_plantWorldMemory(chat,uniObj,p,m,day,(evLoc&&evLoc.name)||place,parts.map(pp=>pp.name),per); });
-      _applyWorldRel(chat,j.rel,byName);
-      _calExecFollowup(chat,j,e,parts,day);
+      if(_av2.unavailable.length)e.absent=_av2.unavailable.map(u=>u.p.name);
+      // the popup and the bubble show the answer as it passed the check — nobody who was with the player is in "present"
+      _pushWorldEvent(chat,j.headline||e.title,j.event,present.map(pp=>pp.id));
+      _offstageLand(chat,uniObj,{present,memories:chk.memories,day,period:per,place:(evLoc&&evLoc.name)||place,locId:evLoc?evLoc.id:null,
+        what:String(e.title||"").slice(0,90),sameDay,sameStretch,eventId:e.id,src:"calExec"});
+      _applyWorldRel(chat,chk.rel,byName);
+      _calExecFollowup(chat,j,e,present,day);
       ran++;
     }catch(err){
       /* (!) v146.1 — a call that never came back (a timeout, the network, a paused provider, Stop) is
@@ -50684,7 +51100,7 @@ async function runGoalPursuit(chat,day,uni,period){
       /* (!) v150.52 — no memory of their own came back: the engine's note (English) stands in, never the narrated event,
          which is in the story language and in the third person; "determined" is not an emotion memories know. */
       if(j.note&&!mems.some(m=>m&&m.name&&String(m.name).toLowerCase()===p.name.toLowerCase())){
-        mems.unshift({name:p.name,content:clipAtSentence(String(j.note),360),emotion:"neutral",importance:0.5});
+        mems.unshift({name:p.name,content:_noteAsOwnMemory(clipAtSentence(String(j.note),360),p),emotion:"neutral",importance:0.5});
       }
       mems.forEach(m=>{ const q=byName(m&&m.name); if(q)_plantWorldMemory(chat,uni,q,m,day,place,mems.map(x=>x&&x.name),nowPer); });
       _applyWorldRel(chat,j.rel,byName);
@@ -53508,6 +53924,7 @@ async function runBackgroundTasks(chat,day,uni){
     let ran=0; const cap=Math.max(1,Math.min(6,+state.pulseMax||4));
     for(const {e,doer} of todo){
       if(ran>=cap)break;
+      if(charAvailability(chat,doer.id).kind==="with_player")continue;   // v150.59 — with the player: not off doing it
       e._bgResolved=day;
       const success=rollDice("1d6")>=3;   // ~66% succeed, ~33% fail — a real chance to fail
       const sys=fillTpl(up("x_bg_task"),{
@@ -54480,6 +54897,15 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
           sLine({en:`${q.targetName||"They"} is no longer around, and the pursuit came to nothing.`,tr:`${q.targetName||"O"} artık ortalıkta olmadığı için emel askıda kaldı.`,de:`${q.targetName||"Sie"} ist nicht mehr da, und das Vorhaben verlief im Sand.`}));
         continue;
       }
+      /* (!) v150.59 — THE SAME AVAILABILITY AS THE MAP AND THE CALENDAR EXECUTOR. The holder must be free (not
+         at another event this part of the day); the person it runs through, when they are with the player or
+         at another event, cannot be met face to face — the step is told where they are, and what comes back
+         is checked: a memory or a rel line for them is dropped. */
+      if(!charAvailability(chat,holder.id).ok)continue;
+      let _tOff=null;
+      if(target){ const a=charAvailability(chat,target.id); if(!a.ok)_tOff=a;
+        else if(_withPlayerIn(chat,target.id,period||chatPeriod(chat)))_tOff={ok:false,kind:"with_player",name:target.name,place:chat.location||"",with:[chatUserName(chat)||"the player"]}; }
+      const _tBlock=_tOff?`\n\nWHO CAN BE MET IN PERSON (checked by the engine — absolute):\n- NOT AVAILABLE — ${_unavailLine(chat,_tOff)}\nNo move this time is made face to face with ${target.name}: it is a text or a call, something ${holder.name} does alone, or no move at all. Write no memory for ${target.name}.`:"";
       const place=(chatLocById(chat,pos[holder.id])||{}).name||"";   // v146.1 — this chat's world (period engines run in the background)
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===holder.id&&day-(m.gameDay||0)<=3)
         .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
@@ -54505,7 +54931,7 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[holder.name].concat(target?[target.name]:[]));
-        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+noWeekdaysRule(day)+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
+        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+noWeekdaysRule(day)+_tBlock+"\n\n"+_MEM_FIRST_PERSON_RULE+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (step) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -54517,16 +54943,26 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
         continue;
       }
       q.stalls=0; q.lastMoveDay=day; moved++;
-      const byName=n=>{ const hit=_pulsePersonasByName(chat,n)[0]; if(hit)return hit;
+      const _byAny=n=>{ const hit=_pulsePersonasByName(chat,n)[0]; if(hit)return hit;
         if(sameName(n,holder.name))return holder;
         if(target&&sameName(n,target.name))return target;
         return null; };
+      // v150.59 — only the holder, and the target when they could be met, take anything from the step
+      const byName=n=>{ const x=_byAny(n); if(!x)return null;
+        if(x===holder||x.id===holder.id)return holder;
+        if(target&&x.id===target.id&&!_tOff)return target;
+        try{ dbgNote("Char quest (step) · "+holder.name,`availability post-check: dropped a memory/rel line for ${x.name}`); }catch(_){}
+        return null; };
       // The player always learns what happened — a news-style narration bubble (present:[]).
-      _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&target.id]);
+      _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&!_tOff&&target.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
+      /* (!) v150.59 — a memory that is the narrated event again (story language, third person) is not one: the note
+         (English) stands in for the holder's, and anyone else's is dropped (see _memRecordProblem). */
+      for(let i=mems.length-1;i>=0;i--){ const m=mems[i]; const who=m&&byName(m.name);
+        if(who&&_memRecordProblem(m.content,who)){ try{ dbgNote("Char quest (step) · "+holder.name,`memory for ${who.name} not kept (${_memRecordProblem(m.content,who)})`); }catch(_){} mems.splice(i,1); } }
       // (!) v150.52 — as the goal pursuit: the English note stands in, never the narrated event
       if(j.note&&!mems.some(m=>m&&m.name&&sameName(m.name,holder.name))){
-        mems.unshift({name:holder.name,content:clipAtSentence(String(j.note),360),emotion:"neutral",importance:0.5});
+        mems.unshift({name:holder.name,content:_noteAsOwnMemory(clipAtSentence(String(j.note),360),holder),emotion:"neutral",importance:0.5});
       }
       mems.forEach(m=>{ const who=byName(m&&m.name); if(who)_plantWorldMemory(chat,uni,who,m,day,place,mems.map(x=>x&&x.name),period||""); });   // v147.2 — filed under the stretch it closed, not the clock's
       _applyWorldRel(chat,j.rel,byName);
@@ -57748,10 +58184,13 @@ async function condenseAllNow(){
 /* (!) v144.1 — for the character who is REPLYING (ownerId), not the player's current persona pick,
    and from what that character took in: another character's whisper or thought used to steer
    whose memories came back. */
-async function genQuery(userText,chat,ownerId){
+/* (!) v150.59 — the player's texts to the owner are lines the owner read (_heardByOwner), and opts.text — a text
+   reply — hands the thread itself, newest last. The answer is sanitized (_cleanMemQuery). */
+async function genQuery(userText,chat,ownerId,opts){
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
-  const recent=chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-4)
-    .map(m=>ownerId?memHeardLine(m,p,p.name):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean).join("\n");
+  const recent=(opts&&opts.text&&ownerId)?_textSceneLines(chat,p,{spoken:2,thread:6}).join("\n")
+    :chat.messages.filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||(!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-4)
+    .map(m=>ownerId?_heardLineOwner(chat,m,p):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean).join("\n");
   const out=await chatCompletion([
     /* (!) v30.5 — THE QUERY MUST BE IN THE LANGUAGE THE MEMORIES ARE IN, and since v30.3 that is
        ENGLISH, not the story language. This line used to say "write the query in {storyLang} — the
@@ -57765,7 +58204,22 @@ async function genQuery(userText,chat,ownerId){
     {role:"system",content:up("queryGen")+"\n\n"+blkTpl("query_lang")},
     {role:"user",content:`Recent conversation:\n${recent}\n\n${chatUserName(chat)}'s newest message:\n${userText}`}
   ],agentModel(["mc",state.mcModel],["mem",state.memModel],["rp",state.model]).model,{fn:"mc",temp:fnTemp("mc",0.3),prov:agentModel(["mc",state.mcModel],["mem",state.memModel],["rp",state.model]).prov,max:fnTok("mc",120),dbg:"Memory query generator"});
-  return (out||"").replace(/```/g,"").trim();
+  return _cleanMemQuery(out);
+}
+/* (!) v150.59 — THE QUERY IS ONE LINE OF KEYWORDS. An answer came back as "天天买彩票\nETwitter" and another with
+   every term twice, and both were embedded as the query. Kept: the first line that has keywords in it (a "Query:"
+   label stripped); runs of a non-Latin script are dropped (every story language — STORY_LANGS — and the English
+   memory bank are written in Latin script); each term once. */
+function _cleanMemQuery(out){
+  let s=String(out==null?"":out).replace(/```[a-z]*/gi,"");
+  const keep=/[^\p{Script=Latin}\p{N}\p{P}\p{Zs}]+/gu;
+  const lines=s.split(/\r?\n/).map(l=>l.replace(/^\s*(?:search\s+)?query\s*:\s*/i,"").replace(keep," ").replace(/\s+/g," ").trim())
+    .filter(l=>/\p{L}{2,}/u.test(l));
+  if(!lines.length)return "";
+  const seen=new Set(), terms=[];
+  lines[0].split(/\s*[,;]\s*/).forEach(t=>{ const x=t.replace(/^[\s\-–—•*"'.]+|[\s\-–—•*"'.]+$/g,"").trim(); const k=x.toLowerCase();
+    if(x&&/\p{L}/u.test(x)&&!seen.has(k)){ seen.add(k); terms.push(x); } });
+  return terms.join(", ").slice(0,400);
 }
 /* v147.2 — a keyword line without the given names (whole words, Turkish-aware, with a suffix after an
    apostrophe: "Emre'nin"), and each full name's first word as well. Returns the trimmed rest. */
@@ -58212,11 +58666,16 @@ function memJudgeReady(){ return !!state.memJudgeOn&&_decReady(_memJudgeBreak); 
 /* (!) v150.32 — THIS scene only (_playerSceneStart: from the last travel beat or scene cut, or after the last
    day marker). The first live run handed the judge a beach scene with someone else before the door scene it
    was judging for; narrator lines carry no witness list, so the witness filter let them through. */
-function _memJudgeScene(chat,ownerId,userText){
+/* (!) v150.59 — opts.text: a TEXT reply. The scene is the thread, newest last, after the few in-person lines the
+   texter heard before it (_textSceneLines) — the thread used to be cut off by the last travel beat, and the
+   player's texts (present:[]) were never in it at all: on the first text of a thread the scene was empty and
+   the emotion pick did not run. */
+function _memJudgeScene(chat,ownerId,userText,opts){
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
   const _all=(chat&&chat.messages)||[];
-  const lines=_all.slice(_playerSceneStart(_all)).filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-8)
-    .map(m=>ownerId?memHeardLine(m,p,p.name):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean)
+  const lines=(opts&&opts.text&&ownerId)?_textSceneLines(chat,p)
+    :_all.slice(_playerSceneStart(_all)).filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||(!Array.isArray(m.present)&&_untaggedReaches(chat,p))||_heardByOwner(m,p))).slice(-8)
+    .map(m=>ownerId?_heardLineOwner(chat,m,p):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean)
     .map(t=>memPayloadText(t,700));
   /* (!) v150.52 — compared as the lines are written (whitespace collapsed, markup gone): the raw text kept its "\n\n",
      never matched, and the player's last line went in twice. */
@@ -58232,10 +58691,10 @@ function _memJudgeText(m){
   return memPayloadText(memText(m)+who+(where?" · at "+where:""),420);
 }
 /* Returns Map(memory → probability 0..1) for the memories it got an answer for, or null. */
-async function memRelevanceJudge(chat,ownerId,userText,cands){
+async function memRelevanceJudge(chat,ownerId,userText,cands,opts){
   if(!memJudgeReady()||!cands||!cands.length) return null;
   const p=(ownerId&&(state.personas||[]).find(x=>x&&x.id===ownerId))||curPersona()||{};
-  const scene=_memJudgeScene(chat,ownerId,userText);
+  const scene=_memJudgeScene(chat,ownerId,userText,opts);
   if(!scene) return null;
   const list=cands.slice(0,MEM_JUDGE_MAX_Q);
   const vars0={char:p.name||"the character",user:chatUserName(chat)||"the player"};
@@ -58259,7 +58718,11 @@ async function memRelevanceJudge(chat,ownerId,userText,cands){
   dbgDone(e,"ok",{answered:out.size+"/"+list.length,relevance:rows,usage:res.usage});
   return out;
 }
-async function retrieveMemories(userText,chat,ownerId){
+async function retrieveMemories(userText,chat,ownerId,ropts){
+  /* v150.59 — ropts {line, text}: for a text reply the line being answered is the newest text (the judge and the
+     query writer read it as "the newest message"; userText, the thread blob, still feeds the lexical facet). */
+  const _line=(ropts&&ropts.line!=null&&String(ropts.line).trim())?String(ropts.line):userText;
+  const _jOpts=(ropts&&ropts.text)?{text:true}:null;
   const recCount=Math.max(0, state.memRecentCount!=null?state.memRecentCount:2);   // working memories
   const disCount=Math.max(0, state.memDistantCount!=null?state.memDistantCount:2);  // DIARY entries (own tier)
   const ltCount=Math.max(0, state.memLongtermCount!=null?state.memLongtermCount:2);  // LONG-TERM memories (own tier)
@@ -58323,7 +58786,7 @@ async function retrieveMemories(userText,chat,ownerId){
        nearly every line ("Emre asks Ayla about…"), and they are in nearly every memory too, so they
        only pulled whatever named them most toward the top — about three on-topic hits lost a turn.
        A line that was nothing but the names falls back to the inline text. */
-    try{ const q=await genQuery(userText||"",chat,ownerId); const qs=_memStripNames(q,[chatUserName(chat),_ownerP&&_ownerP.name]);
+    try{ const q=await genQuery(_line||"",chat,ownerId,_jOpts); const qs=_memStripNames(q,[chatUserName(chat),_ownerP&&_ownerP.name]);
       if(qs){ cleanQuery=qs; query=cleanQuery+" "+inlineQuery; } }catch(e){/* fall back to inline */}
   }
 
@@ -58459,7 +58922,7 @@ async function retrieveMemories(userText,chat,ownerId){
       recCount>0?short(recentPool,20):[], ltCount>0?short(longtermPool,10):[]))];
     if(cands.length){
       _judgeAsked=cands.length;
-      try{ _rel=await memRelevanceJudge(chat,ownerId,userText,cands); }catch(_){ _rel=null; }
+      try{ _rel=await memRelevanceJudge(chat,ownerId,_line,cands,_jOpts); }catch(_){ _rel=null; }
     }
   }
   const _relOk=m=>!_rel||_minRel<=0||((_rel.has(m)?_rel.get(m):0)>=_minRel);

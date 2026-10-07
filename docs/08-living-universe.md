@@ -823,3 +823,39 @@ The likeliest yes at `textGateAt()` (0.6) is the one the writer is asked for, ev
 pull. With nobody at the bar, nothing is written and the writer is not called. A failed request, or the
 switch off (Settings → Texts → "Ask before a text is written", `textGateOn`), leaves the writer to
 decide alone as before. Pinned by `tests/text-gate.browser.js`.
+
+## v150.59 — who can be where (offstage availability)
+
+Reported: Özlem was in the player's house when the calendar executor resolved Burak's plan "Özlem'i kahveye
+tekrar çağır" at Vanadium Cafe and narrated her arriving. The plan listed only Burak, so nothing checked the
+person it was about; only Burak got a memory, so Özlem later had no trace of it.
+
+One answer now serves the map and every offstage resolver:
+
+- **Order of authority** — the player's scene (`presentIds`, a companion the player took along) beats an
+  offstage event of this part of the day, which beats the schedule. `_stretchClaims(chat)` lists who an event
+  claims: events that already resolved (`pulseBusy.pins`, written by `_noteEventPins`) and due offstage plans
+  whose actor can go (first plan in calendar order claims a person). `resolveWorldPositions` lays them over the
+  rolled placement (`_wpOverlay`), and `charPlaceName` reads the same claims, so the map, the move narration and
+  the resolvers agree. When the part of the day ends, people go back to their schedule.
+- **`charAvailability(chat,id,{except})`** — `with_player` / `event` / `free`. Every resolver uses it:
+  the calendar executor, the whole-cast round (pool and entries), the offstage interaction, character quest
+  steps and background tasks.
+- **Everyone a plan involves** (`_calPlanPeople`): the listed participants, the actor, the people its title is
+  about ("Özlem'i…" → Özlem; `targetId` / `whoIds`), and people its reason mentions. A first name counts only
+  when it is unique in the cast.
+- **Calendar executor** — the actor unavailable: the plan waits, as before. Anybody else it needs unavailable:
+  it moves to the next part of the day once (`_offstageNextSlot`, no weekdays; `e.postponed`), then resolves
+  without them. The resolver gets a `WHO CAN BE THERE IN PERSON` block (`_availabilityFor`) naming where each
+  unavailable person is ("Özlem Özüçak is at Emre's House with Emre Tokmak … at most answers a text") and must
+  return `present`.
+- **Post-check** (`_offstagePostCheck`) — `present` naming somebody unavailable rejects the answer (a try);
+  a memory or a rel line for them is dropped. What it did is noted on the debug entry (`dbgNote` → `notes`,
+  shown in the Debug view and exported).
+- **One truth for everyone there** (`_offstageLand`) — everyone in the checked `present` gets a memory (a plain
+  one when the model gave none), the day's whereabouts row with the others, and the event's pin; rel lines from
+  anyone present apply. The popup is pushed after the check, so it never shows someone who was with the player.
+- Character quest steps: a target with the player (or at another event) is named NOT AVAILABLE in the prompt,
+  and the step keeps no memory or rel line for them.
+
+Pinned by `tests/offstage-availability.browser.js`.

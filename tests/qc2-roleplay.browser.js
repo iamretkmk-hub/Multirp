@@ -37,6 +37,8 @@ const {chromium}=require('playwright');
     window.__stub={reply:'"Fine."', delay:0, fail:false, bg:{}, bgDelay:0};
     window.__sleep=ms=>new Promise(r=>setTimeout(r,ms));
     window.fetch=async(url,init)=>{
+      // v150.30 — the reply check's Decisions request is not a roleplay call: answered empty, never recorded
+      if(String(url).indexOf("/api/alpha/decisions")>-1) return new Response(JSON.stringify({answers:{}}),{status:200,headers:{'content-type':'application/json'}});
       const body=JSON.parse(init.body); window.__fetches.push(body);
       const d=typeof __stub.delay==="function"?__stub.delay(body):__stub.delay;
       if(d) await new Promise(r=>setTimeout(r,d));

@@ -258,7 +258,7 @@ Off via `state.promiseOn`.
 
 ## Strict gates (v150.33) — is it real?
 
-Promises, tasks, meetings, character quests and motives were filed far too easily: every future tense
+Promises, tasks, meetings, character quests, motives and limits were filed far too easily: every future tense
 became a promise ("I'll make a salad"), every errand a task, every flicker a motive. Each **new** one is
 now put to the Decisions API (doc 06) as a yes/no question and filed only at `gateAt()` certainty
 (Settings → Features → Gate strictness, default 0.8). `strictGate(chat, label, state, items)` sends one
@@ -272,6 +272,12 @@ request per batch; the prompts are registry prompts (Payloads → Strict gates),
 | `x_gate_meeting` | future tracker, before `runCalendarEngine` | only suggested, unanswered, a "maybe", or already together |
 | `x_gate_quest` | `runCharQuestSpawn`, on the designer's proposal | a mood, a standing goal with nothing new, an errand |
 | `x_gate_intent` | `runIntentEngine` FORM, on each proposed new motive | a passing feeling, small friction or warmth |
+| `x_gate_limit` | `_writePsyche`, on each new limit the drives writer found | an errand ("go make a salad"), logistics, a joke, a passing hesitation |
+
+- **What is already on record goes with every gate** and each prompt says it is a NO, so the same promise,
+  quest, motive or limit is not re-filed every turn while the line that made it is still in view: the future
+  tracker's gate gets `_ftRecord` (meetings, promises, tasks with ids), the quest gate `openQuestLines`, the
+  motive gate `holderIntentRecord`, the limit gate the character's live limits (`limitLines`).
 
 - The future-tracker gate asks only about **new agreed** items; planning items, updates and endings of
   entries on record, and lines already read are not gated. A promise/task/meeting that fails is kept on

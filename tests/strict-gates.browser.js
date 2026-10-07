@@ -72,12 +72,18 @@ const {chromium}=require('playwright');
   ok("one gate request for the three new agreed items (the planning one is not asked)", f1.reqs.length===1&&gq.length===3, f1.reqs.length+" requests, "+gq.length+" questions");
   ok("the questions name the item and its line; promise/task/meeting each get their own prompt", gq.some(q=>/^Line #2 was noted as a PROMISE: Burcu — make a salad/.test(q.instructions))&&gq.some(q=>/^Line #2 was noted as a TASK for Burcu/.test(q.instructions))&&gq.some(q=>/^Line #4 was noted as a MEETING/.test(q.instructions)), JSON.stringify(gq.map(q=>q.instructions.slice(0,70))));
   ok("the YES/NO meanings are the criteria", gq.every(q=>q.type==="noul"&&q.criteria.true.length>20&&q.criteria.false.length>20), JSON.stringify(gq[0]));
-  ok("the state is the numbered conversation", f1.reqs[0]&&/#2 Burcu: Salata/.test(f1.reqs[0].state)&&/^Now: Day 3/.test(f1.reqs[0].state), JSON.stringify(f1.reqs[0]&&f1.reqs[0].state));
+  ok("the state is the numbered conversation", f1.reqs[0]&&/#2 Burcu: Salata/.test(f1.reqs[0].state)&&/\nNow: Day 3/.test(f1.reqs[0].state), JSON.stringify(f1.reqs[0]&&f1.reqs[0].state));
   ok("the salad 'promise' (10%) never reaches the promise writer", !f1.calls.some(d=>/^Promises & commitments/.test(d)), JSON.stringify(f1.calls));
   ok("…and stays on the watch list in case it is agreed later", f1.watch.some(w=>/^promise:make a salad/.test(w)), JSON.stringify(f1.watch));
   ok("the real task (90%) reaches the task writer", f1.calls.filter(d=>/^Task writer/.test(d)).length===1, JSON.stringify(f1.calls));
   ok("the agreed meeting (95%) reaches the calendar", f1.calls.some(d=>/^Meetings tracker/.test(d)), JSON.stringify(f1.calls));
 
+  ok("the gate sees what is already on record, and each question says that is a NO", await pg.evaluate(async()=>{
+      __reset(); const c=curChat(); c.calendar=[{id:"cal_dinner",kind:"meeting",title:"Dinner with Emre on Friday",who:"Emre",day:5,period:"Evening",done:false}];
+      window.__reqs=[]; await runFutureTracker(c);
+      const r=window.__reqs[0]; if(!r) return "no request";
+      const q=Object.values(r.questions);
+      return (/^ALREADY ON RECORD/.test(r.state)&&/\[cal_dinner\] MEETING: Dinner with Emre on Friday/.test(r.state)&&q.every(x=>/already on record/i.test(x.criteria.false))) ? true : JSON.stringify([r.state.slice(0,200),q[0].criteria.false.slice(0,80)]); }));
   ok("at strictness 0.95 the 90% task is refused too", await pg.evaluate(async()=>{
       __reset(); state.gateAt=0.95; window.__calls=[]; await runFutureTracker(curChat()); state.gateAt=0.8;
       return !window.__calls.some(d=>/^Task writer/.test(d))&&window.__calls.some(d=>/^Meetings tracker/.test(d)) ? true : JSON.stringify(window.__calls); }));
@@ -106,11 +112,12 @@ const {chromium}=require('playwright');
       window.__out={"Char quest (spawn)":quest}; window.__p=q=>prob; window.__reqs=[];
       await runCharQuestSpawn(c,3,uni,{period:"Midday"});
       const filed=(uni.gameData.charQuests||[]).filter(q=>q&&q.holderId==="p_b").map(q=>q.title);
-      return {filed,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0]};
+      return {filed,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
     },[prob,quest]);
   const q1=await cq(0.2), q2=await cq(0.9);
   ok("a pursuit the gate refuses (20%) is not filed", q1.reqs===1&&q1.filed.length===0, JSON.stringify(q1));
   ok("one it passes (90%) is filed", q2.reqs===1&&q2.filed.length===1&&q2.filed[0]==="Win the clinic promotion", JSON.stringify(q2));
+  ok("the quest gate sees the pursuits already on record", /^ALREADY ON RECORD/.test(q2.st||"")&&/already on record/i.test(q1.q.criteria.false), JSON.stringify([String(q1.st).slice(0,120),q1.q&&q1.q.criteria.false.slice(0,80)]));
   ok("the quest question carries its title and detail", q1.q&&/Win the clinic promotion/.test(q1.q.instructions)&&/head doctor/.test(q1.q.instructions), JSON.stringify(q1.q));
 
   console.log("\n[motives]");
@@ -120,16 +127,32 @@ const {chromium}=require('playwright');
       window.__out={"Intent form":JSON.stringify({intents:[{kind:"grievance",valence:"hostile",target:"Emre",trigger:"he laughed at her",aim:"make him apologise in front of Nil",strength:0.6,priority:"medium"}],revise:[]})};
       window.__p=q=>prob; window.__reqs=[];
       await runIntentEngine(c,3,state.curUniverse,{tick:false,period:"Evening"});
-      return {n:(c.intents||[]).length,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0]};
+      return {n:(c.intents||[]).length,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
     },prob);
   const i1=await iv(0.3), i2=await iv(0.92);
   ok("a motive the gate refuses (30%) is not filed", i1.reqs===1&&i1.n===0, JSON.stringify(i1));
   ok("one it passes (92%) is filed", i2.reqs===1&&i2.n===1, JSON.stringify(i2));
+  ok("the motive gate sees the motives already carried", /^MOTIVES Burcu ALREADY CARRIES/.test(i1.st||"")&&/already carries/i.test(i1.q.criteria.false), JSON.stringify([String(i1.st).slice(0,120)]));
   ok("the motive question carries kind, target and aim", i1.q&&/a grievance toward Emre/.test(i1.q.instructions)&&/apologise/.test(i1.q.instructions), JSON.stringify(i1.q));
 
+  console.log("\n[limits]");
+  const lim=async(probs)=>pg.evaluate(async(probs)=>{
+      const c=curChat(); c.spokenLimits={p_b:[{id:"lim_old",text:"not in front of Nil",kind:"limit",about:"",saidMid:"m_old",day:3,period:chatPeriod(c),expires:"until_changed",at:1}]}; c.spokenLimitsRead={};
+      const _o=__L("Burcu","Nil'in önünde olmaz."); _o.mid="m_old";
+      c.messages=[_o,__L("Emre","Bana bir salata yapar mısın?"),__L("Burcu","Git kendin yap salatayı. Ve bu gece olmaz, bunu bilmeni istiyorum.")];
+      window.__out={"Drives & brakes":JSON.stringify({toward:"x",against:"y",released:[],
+        limits:[{line:"L1",text:"go make your own salad",about:"",expires:"scene"},{line:"L1",text:"not tonight",about:"being together tonight",expires:"day"}]})};
+      window.__p=q=>/salad/.test(q)?probs[0]:probs[1]; window.__reqs=[];
+      await _writePsyche(c,state.personas.find(p=>p.id==="p_b"),"__user__","Emre","sig"+Math.random(),{line:"Ve bu gece olmaz"});
+      return {kept:(c.spokenLimits.p_b||[]).map(l=>l.text),reqs:window.__reqs.length,st:window.__reqs[0]&&window.__reqs[0].state,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)};
+    },probs);
+  const l1=await lim([0.05,0.9]);
+  ok("the salad 'limit' (5%) is not kept; the real one (90%) is", l1.reqs===1&&l1.kept.indexOf("go make your own salad")<0&&l1.kept.indexOf("not tonight")>=0, JSON.stringify(l1.kept)+" reqs="+l1.reqs);
+  ok("the limit gate sees the limits already drawn, and that is a NO", /^LIMITS Burcu HAS ALREADY DRAWN[\s\S]*not in front of Nil/.test(l1.st||"")&&l1.q&&l1.q.every(x=>/already on record/i.test(x.criteria.false)), JSON.stringify([String(l1.st).slice(0,160)]));
+
   console.log("\n[prompts and settings]");
-  ok("the five prompts are registry prompts on the Strict gates card", await pg.evaluate(()=>{
-      const keys=["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent"];
+  ok("the six prompts are registry prompts on the Strict gates card", await pg.evaluate(()=>{
+      const keys=["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent","x_gate_limit"];
       const card=ENGINE_PAYLOAD_DEFS.find(d=>d.key==="strict_gates");
       return (keys.every(k=>PROMPT_BY_KEY[k])&&card&&keys.every(k=>card.blocks.some(x=>x.promptKey===k))) ? true : "missing"; }));
   ok("settings round-trip; a fresh install has it on at 0.8", await pg.evaluate(()=>{

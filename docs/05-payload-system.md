@@ -1232,6 +1232,18 @@ main body is what every path shares (the leading part they have in common); a pa
 Paths that share nothing have an empty main body and a box each. Ticking a path in the editor opens an empty box,
 "added under the main body on this path". Ticking anything leaves the list and the page where they were.
 
+**No text twice.** No shipped fragment or option holds the same text in two path boxes:
+- `guardrails`: the main body is the heading and every rule all paths share; text and heat add only their own rules.
+  On those two paths the shared rules now come first and theirs after them (the only order change in this version).
+- `memories` and `compass`: one shared main body, with solo's single difference written inline
+  (`{{if render_mode = solo}}…{{else}}…{{endif}}`).
+- `format`: no main body; three options pick the format: `spoken` (solo, multi and gamemaster, with the gamemaster's
+  extra sentence inline), `texting`, and `heat`, which comes before the heat-only options.
+- Options whose paths split into groups with different text became one option per group, each holding its full text:
+  `target/carry_on` + `carry_on_heat`, `talk_into/ask` + `ask_multi` + `ask_gm`, `talk_into/opening` + `opening_gm`,
+  `delivery/voiced` + `voiced_heat`. The group with the most paths keeps the old id; only one of them is active on a
+  path, so an asked option is still one question per path.
+
 **Faithfulness.** 299 situations over all five paths were compared with the v150.58 build, line by line (blank lines
 and the indent at the start of a paragraph ignored): continuing or not, player or character target, a brief,
 arriving, leaving, an opener, stalled, voiced or not, a stale voice session, heat beats first and last, text, promises,

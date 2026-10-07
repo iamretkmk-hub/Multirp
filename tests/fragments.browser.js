@@ -35,8 +35,8 @@ const {chromium}=require('playwright');
       return g("language").paths.includes("heat")&&g("talk_into").paths.includes("heat")&&!g("others").paths.includes("heat")&&g("biology").paths.join()==="heat"; }));
   ok("the guardrails are a fragment: shared body, text and heat variants, coded options; empty and 'never' rails gone", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="guardrails");
       const ids=f.options.map(o=>o.id).join();
-      // v150.59 — the main body is the heading every path shares; each path's box adds its own rules under it
-      return (/^# FINAL GUARDRAILS$/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.byPath.solo)&&!/\{\{if/.test(JSON.stringify(f))&&/typed message/.test(f.byPath.text)&&/Dialogue-dense/.test(f.byPath.heat)
+      // v150.59 — the main body is the heading and the rules every path shares; text and heat add only their own rules under it
+      return (/^# FINAL GUARDRAILS\n\nNothing you were given/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!f.byPath.solo&&!f.byPath.multi&&!f.byPath.gm&&!/\{\{if/.test(JSON.stringify(f))&&/^This is a typed message/.test(f.byPath.text)&&/^Dialogue-dense/.test(f.byPath.heat)&&!/You are \{\{self\}\} and nobody else/.test(f.byPath.text+f.byPath.heat)
         &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);

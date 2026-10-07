@@ -116,7 +116,12 @@ const {chromium}=require('playwright');
   console.log("\n[the same sentences as the v150.56 fragments, on every path and in every case]");
   const cmp=await pg.evaluate(()=>{
     // (v150.59 fixed one line: the v150.58 "already said" box sent a literal "\u2014" where it meant a dash)
-    const norm=t=>t.split("\\u2014").join("\u2014").split("\n").map(l=>l.trim()).filter(Boolean).join("\n");
+    /* v150.59 — the final guardrails hold the shared rules once and text / heat add theirs under them, so on those two paths
+       the same rules arrive in another order: compared as a set from the heading on */
+    const norm=t=>{ const L=t.split("\\u2014").join("\u2014").split("\n").map(l=>l.trim()).filter(Boolean);
+      const g=L.indexOf("# FINAL GUARDRAILS"); if(g<0)return L.join("\n");
+      let e=g+1; while(e<L.length&&!/^# /.test(L[e]))e++;
+      return L.slice(0,g+1).concat(L.slice(g+1,e).sort(),L.slice(e)).join("\n"); };
     const out={diff:[],n:0,raw:0,left:[]};
     __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,null); out.n++;
       if(a!==b)out.raw++;

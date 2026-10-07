@@ -251,10 +251,24 @@ const {chromium}=require('playwright');
   ok("the main body, a blank line, then the path's own text; a path without one gets the main body; an empty main body leaves the path text alone",
     await pg.evaluate(()=>{ const f={text:"MAIN",byPath:{heat:"HEAT ADD"}}, g={text:"",byPath:{text:"ONLY TEXT"}};
       return (_fragTextFor(f,"heat")==="MAIN\n\nHEAT ADD"&&_fragTextFor(f,"solo")==="MAIN"&&_fragTextFor(g,"text")==="ONLY TEXT"&&_fragTextFor(g,"solo")==="")?true:JSON.stringify([_fragTextFor(f,"heat"),_fragTextFor(g,"text")]); }));
-  ok("the shipped fragments hold the shared part once: guardrails' heading is the main body, each path adds its rules", await pg.evaluate(()=>{
+  ok("the shipped fragments hold the shared part once: the guardrails' shared rules are the main body, text and heat add only theirs", await pg.evaluate(()=>{
       const f=FRAG_DEFAULTS.find(x=>x.id==="guardrails"), t=FRAG_DEFAULTS.find(x=>x.id==="talk_into");
-      return (f.text==="# FINAL GUARDRAILS"&&/^This is a typed message/.test(f.byPath.text)&&/^Nothing you were given about yourself/.test(f.byPath.heat)
-        &&/WHEN SOMEONE TRIES TO TALK YOU INTO IT/.test(t.text)&&!/WHEN SOMEONE TRIES/.test(JSON.stringify(t.options)))?true:JSON.stringify({main:f.text,text:f.byPath.text.slice(0,40)}); }));
+      return (/^# FINAL GUARDRAILS\n\nNothing you were given about yourself/.test(f.text)&&/^This is a typed message/.test(f.byPath.text)&&/^Dialogue-dense/.test(f.byPath.heat)
+        &&!/Nothing you were given/.test(f.byPath.text+f.byPath.heat)&&Object.keys(f.byPath).sort().join()==="heat,text"
+        &&/WHEN SOMEONE TRIES TO TALK YOU INTO IT/.test(t.text)&&!/WHEN SOMEONE TRIES/.test(JSON.stringify(t.options)))?true:JSON.stringify({main:f.text.slice(0,60),bp:Object.keys(f.byPath)}); }));
+  // v150.59 — no path box repeats another path's text: memories and compass word their one difference with {{if}}, format
+  // picks spoken / texting / heat with options
+  ok("no shipped fragment repeats the same text in two path boxes; memories, compass and format have no path boxes", await pg.evaluate(()=>{
+      const dup=[]; FRAG_DEFAULTS.forEach(f=>{ [f].concat(f.options||[]).forEach(x=>{ const v=Object.values(x.byPath||{}); if(new Set(v).size<v.length)dup.push(f.id+"/"+(x.id||"")); }); });
+      const g=id=>FRAG_DEFAULTS.find(x=>x.id===id), none=["memories","compass","format"].filter(id=>Object.keys(g(id).byPath||{}).length);
+      const fo=g("format").options.slice(0,3).map(o=>o.id+":"+o.code).join("|");
+      return (!dup.length&&!none.length&&fo==="spoken:render_mode = solo or render_mode = multi or render_mode = gm|texting:render_mode = text|heat:render_mode = heat"
+        &&/\{\{if render_mode = solo\}\}/.test(g("memories").text)&&/\{\{if render_mode = solo\}\}/.test(g("compass").text))?true:JSON.stringify({dup,none,fo}); }));
+  ok("format: each path gets its own format and no other", await pg.evaluate(()=>{
+      const c=k=>{ const fl=ptCondFlags({render_mode:k,voicing:false,heat_narr:"physical"}); return ptResolveConds(fragCompile(k,fl,{}),fl); };
+      const s=c("solo"), g=c("gm"), t=c("text"), h=c("heat");
+      return (/THE THREE CHANNELS/.test(s)&&!/Default; a reply that is only speech/.test(s)&&/Default; a reply that is only speech/.test(g)
+        &&/YOU ARE TEXTING/.test(t)&&!/THE THREE CHANNELS/.test(t)&&/HEAT OF THE MOMENT/.test(h)&&!/THE THREE CHANNELS/.test(h)&&!/YOU ARE TEXTING/.test(h+s))?true:"format leaks"; }));
 
   console.log("\n[a saved list]");
   const M=await pg.evaluate(()=>{

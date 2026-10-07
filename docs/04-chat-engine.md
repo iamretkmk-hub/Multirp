@@ -329,6 +329,11 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **The clock follows the scene** (v150.53, `clockFollowOn`): time used to move only by travel, Story mode or by hand.
+  The reply check's request carries `time_moved` (`x_clock_moved`), with `story_clock` in the state. A yes at
+  `CLOCK_AT` (0.85) calls `advanceTime(chat, 1)`, which runs the period engines as usual, and adds a short note.
+  It moves at most once in `CLOCK_GAP` (6) turns and never past Night (End Day ends the day). Pinned by
+  `tests/clock-follows.browser.js`.
 - **A goal already done** (v150.50, `goalDoneQuestions` / `goalDoneApply`, switch `goalCheckOn`): the maintained
   goals (`goalsLive`) are rewritten once a day, so a goal the scene had just settled was still pushed at the
   character. When the reply's Decisions request goes anyway (it never sends one of its own), each live goal (at

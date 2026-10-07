@@ -90,6 +90,10 @@ fire.
     with `MOVE_NARR_TIMEOUT_MS` (45 s), one retry and `MOVE_NARR_RESCUE_MS` (30 s) for the empty-response
     rescue, instead of the 180 s default twice over (one narration was seen taking 246 s). The terse
     note stands in when it fails. This covers the presence tracker's moves too.
+  - **The player moves too** (v150.53, `moveDecPlayer`, on by default): the same request carries `player_area`
+    (`x_move_player`: stay, or each other area with who is there). A move at the bar calls `moveToSub(…, {chat, quiet})`.
+    Whoever the picks send to the same area goes with the player, in the player's own move note. It is not asked
+    when the player already changed area this turn (a `subTo` note since their last line).
   - **Unchanged:** moves a line asks for are still read by the presence tracker.
   - Pinned by `tests/move-decision.browser.js`.
 - **Stage 2 — author** (`gmAuthor`): writes the hidden nudge, grounded in

@@ -58,7 +58,7 @@ const {chromium}=require('playwright');
   const q=(r.req[0]||{body:{questions:{}}}).body;
   ok("one request to the Decisions endpoint with the OpenRouter key", r.req.length===1&&r.req[0].url==="https://openrouter.ai/api/alpha/decisions"&&r.req[0].headers.Authorization==="Bearer sk-test", JSON.stringify(r.req.map(x=>x.url)));
   ok("default model is openai/gpt-6-luna-decisions", q.model==="openai/gpt-6-luna-decisions", q.model);
-  ok("five noul questions: refusal, player, character, and (v150.49) repeat and continuity", JSON.stringify(Object.keys(q.questions||{}))==='["refusal","player","character","repeat","continuity"]'&&Object.values(q.questions).every(x=>x.type==="noul"), JSON.stringify(Object.keys(q.questions||{})));
+  ok("five noul questions: refusal, player, character, and (v150.49) repeat and continuity", JSON.stringify(Object.keys(q.questions||{}).filter(k=>k!=="time_moved"))==='["refusal","player","character","repeat","continuity"]'&&Object.values(q.questions).every(x=>x.type==="noul"), JSON.stringify(Object.keys(q.questions||{})));
   ok("YES:/NO: lines become the criteria, the rest the instructions, placeholders filled", (()=>{ const x=q.questions.player||{};
       return /^Does the reply write Emre's part/.test(x.instructions||"")&&!/YES:|NO:/.test(x.instructions)&&/^It puts words in Emre's mouth/.test(x.criteria.true)&&/^It plays only Burcu/.test(x.criteria.false)
         &&!/\{\{/.test(JSON.stringify(q.questions)); })(), JSON.stringify(q.questions&&q.questions.player));

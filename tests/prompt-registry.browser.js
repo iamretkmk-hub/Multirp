@@ -163,6 +163,7 @@ const {chromium}=require('playwright');
         "swap",
         "memory",                 // v150.29 — x_mem_relevance*: the memory being judged, filled by memRelevanceJudge
         "holder","line","detail","kind","aim","trigger","text","tie","story_language","sensitivity","area","speaker",   // v150.44 x_router2;   // v150.42 x_move_*: the area they are in;   // v150.41 x_gm_dec_*: the eagerness; v150.40 x_style_writer   // v150.39 x_rel_about: the absent person's tie; v150.33 — x_gate_*: the item being gated, filled by its caller through strictGate
+        "period","day","next",    // v150.53 — x_clock_moved: the story clock, filled by _clockQuestion
         "bodies"]);               // v150.21 — x_body_block: each person's Body field, filled by bodyBlock                 // v150.18 — x_img_pose_roster: who replaces which grey figure, filled by editPrompt                // v150.17 — x_vid_motion_ref: the reference video's @token, filled by animateScene / sceneVideo // v150.12 — x_img_type_changed: the two scene types and the clothing to keep, filled by illustrate                    // v150.5 — x_img_edit_roster_*: the number of the scene picture, filled by editPrompt
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{

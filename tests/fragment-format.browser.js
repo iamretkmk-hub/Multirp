@@ -22,7 +22,10 @@ const {chromium}=require('playwright');
     const uni=state.universes[0];
     window.__CONV=["target","target_sheet","last_line","guidance","rumors","situation","brief","delivery","promises","threads","others","style","respond_as","memories"];
     // the v150.56 shipped list: today's defaults with the frozen old copies swapped back in, and no target_sheet
-    window.__oldList=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||f)));
+    // (v150.59: the v150.58 copies first, then the v150.56 ones; their path texts replaced the main body, so for building a
+    // payload they are converted to today's "adds under the main body", exactly as a saved list is)
+    window.__oldRaw=()=>FRAG_DEFAULTS.filter(f=>f.id!=="target_sheet").map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_56[f.id]||FRAG_DEFAULTS_V150_58[f.id]||FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));   // v150.60: the v150.59 wording of what it rewrote
+    window.__oldList=()=>__oldRaw().map(f=>{ _fragByPathToAdd(f,f.paths||FRAG_PATHS); (f.options||[]).forEach(o=>_fragByPathToAdd(o,(o.paths&&o.paths.length)?o.paths:(f.paths||FRAG_PATHS))); return f; });
     window.__base=(frags)=>{
       state.personas=[
         {id:"p_a",name:"Ayla",universeId:uni.id,personality:"Ayla is sharp.",look:{},style:"Short, dry sentences.",instructions:"Hold the pause before answering.",relationships:{p_b:{tie:"my older brother"}}},
@@ -103,7 +106,7 @@ const {chromium}=require('playwright');
     return {bad,n:FRAG_DEFAULTS.length,order:FRAG_DEFAULTS.map(f=>f.id).join(",")};
   },OLD_PIECES);
   ok("no converted fragment calls an old header / intro / body / footer piece", scan.bad.length===0, scan.bad.join("; "));
-  ok("40 shipped fragments, with \"What you know of them\" right after \"Who you are answering\"", scan.n===40&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
+  ok("41 shipped fragments (v150.58: + what you already said), with \"What you know of them\" right after \"Who you are answering\"", scan.n===41&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
   ok("every *_raw name a converted fragment calls is a known data name, and none is in an ORDER list the classic template prints",
     await pg.evaluate(()=>{ const used=new Set(); FRAG_DEFAULTS.forEach(f=>{ JSON.stringify(f).replace(/\{\{call\/\/([a-z_]+_raw)\}\}/g,(m,k)=>used.add(k)); });
       const miss=[...used].filter(k=>RAW_DATA_KEYS.indexOf(k)<0), printed=RAW_DATA_KEYS.filter(k=>RT_ORDER.concat(PL_ORDER,SI_ORDER,LL_ORDER,RG_ORDER,RU_ORDER,SS_ORDER,WN_ORDER,PR_ORDER,PRE_ORDER).indexOf(k)>=0);
@@ -112,9 +115,18 @@ const {chromium}=require('playwright');
 
   console.log("\n[the same sentences as the v150.56 fragments, on every path and in every case]");
   const cmp=await pg.evaluate(()=>{
-    const norm=t=>t.split("\n").map(l=>l.trim()).filter(Boolean).join("\n");
+    // (v150.59 fixed one line: the v150.58 "already said" box sent a literal "\u2014" where it meant a dash)
+    /* v150.59 — the final guardrails hold the shared rules once and text / heat add theirs under them, so on those two paths
+       the same rules arrive in another order: compared as a set from the heading on */
+    const norm=t=>{ const L=t.split("\\u2014").join("\u2014").split("\n").map(l=>l.trim()).filter(Boolean);
+      const g=L.indexOf("# FINAL GUARDRAILS"); if(g<0)return L.join("\n");
+      let e=g+1; while(e<L.length&&!/^# /.test(L[e]))e++;
+      return L.slice(0,g+1).concat(L.slice(g+1,e).sort(),L.slice(e)).join("\n"); };
     const out={diff:[],n:0,raw:0,left:[]};
-    __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,null); out.n++;
+    /* v150.60 — last_before, language and privacy have their own text-path wording on purpose; this check holds the rest
+       of the payload to v150.56, so those three are compared at their v150.59 wording */
+    const at59=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
+    __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,at59); out.n++;
       if(a!==b)out.raw++;
       if(norm(a)!==norm(b)){ const A=norm(a).split("\n"), B=norm(b).split("\n"); let i=0; while(i<A.length&&A[i]===B[i])i++;
         out.diff.push(k+"_"+n+" @"+i+": OLD «"+(A[i]||"").slice(0,120)+"» NEW «"+(B[i]||"").slice(0,120)+"»"); }
@@ -188,7 +200,7 @@ const {chromium}=require('playwright');
 
   console.log("\n[a saved list]");
   const M=await pg.evaluate(()=>{
-    const old=__oldList(); const ed=old.find(f=>f.id==="others"); ed.text=ed.text+"\nNobody else is here.";
+    const old=__oldRaw(); const ed=old.find(f=>f.id==="others"); ed.text=ed.text+"\nNobody else is here.";
     state.fragments=old; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
     const L=fragList(), ids=L.map(f=>f.id);
     const same=id=>_fragCanon(L.find(f=>f.id===id))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id===id));
@@ -200,8 +212,9 @@ const {chromium}=require('playwright');
     const L2=L.filter(f=>f.id!=="target_sheet"); state.fragments=L2; _fragMigratedFor=null; fragList();
     r.once=!state.fragments.some(f=>f.id==="target_sheet");
     // an edited "Who you are answering" is left alone and gets no sheet
-    const old2=__oldList(); old2.find(f=>f.id==="target").text+="\n(mine)"; state.fragments=old2; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
-    const L3=fragList(); r.editedTarget=/\(mine\)/.test(L3.find(f=>f.id==="target").text)&&!L3.some(f=>f.id==="target_sheet")&&_fragCanon(L3.find(f=>f.id==="guidance"))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id==="guidance"));
+    const old2=__oldRaw(); old2.find(f=>f.id==="target").text+="\n(mine)"; state.fragments=old2; store.setRaw(K.fragAdds,"limits,guardrails.consistency"); _fragMigratedFor=null;
+    // (v150.59: kept as the user wrote it, its path text converted to "adds under the main body" — see fragment-wording)
+    const L3=fragList(); r.editedTarget=/\(mine\)/.test(JSON.stringify(L3.find(f=>f.id==="target")))&&!L3.some(f=>f.id==="target_sheet")&&_fragCanon(L3.find(f=>f.id==="guidance"))===_fragCanon(FRAG_DEFAULTS.find(f=>f.id==="guidance"));
     state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,"");
     return r; });
   ok("an untouched old default is replaced by the new one, with \"What you know of them\" inserted after it, and saved",
@@ -209,6 +222,29 @@ const {chromium}=require('playwright');
   ok("an edited fragment is the user's and stays as it is", M.othersKept&&M.editedTarget, JSON.stringify(M));
   ok("the rewrite runs once: a sheet deleted afterwards is not put back", M.once, JSON.stringify(M));
   ok("saving from the editor marks the rewrite as done", await pg.evaluate(()=>FRAG_SHIPPED_ADDS.some(a=>a.key==="v150.57.format")));
+
+  // v150.58 — "YOU ALREADY SAID THESE" as a fragment of its own
+  console.log("\n[what you already said]");
+  const AS=await pg.evaluate(()=>{
+    const f=FRAG_DEFAULTS.find(x=>x.id==="already_said"), ids=FRAG_DEFAULTS.map(x=>x.id);
+    const plain=__build("solo",{}), cont=__build("solo",{s:["cont"]}), heat=__build("heat",{s:["cont"]});
+    const c=__base(null); c.messages=[{mid:"u1",role:"user",content:'"Hi there."'}];
+    const p=state.personas[0]; const B=Object.assign({},buildCharPromptBlocks(p,[],{recent:[],diary:[],longterm:[]},null,{chat:c,targetName:"Emre",targetId:"__user__"}),
+      buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}}));
+    const none=(ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B)||[]).map(x=>x.content).join("\n");
+    return {f,at:ids.indexOf("already_said")===ids.indexOf("last_line")+1&&ids.indexOf("stuck")===ids.indexOf("already_said")+1,plain,cont,heat,none}; });
+  ok("a fragment of its own on every path, between the last line and 'when it goes in circles', with its data as a call",
+     AS.f&&AS.f.paths.length===5&&AS.at&&/\{\{call\/\/said_line1_raw\}\}/.test(AS.f.text)&&/YOU ALREADY SAID THIS/.test(AS.f.text), JSON.stringify(AS.f).slice(0,300));   // v150.59 — the lines as data, the labels in the box
+  ok("a reply after their own earlier line quotes it under the heading", /YOU ALREADY SAID THIS — DO NOT SAY IT AGAIN[\s\S]*your last line, word for word[\s\S]*Hello\./.test(AS.plain), AS.plain.slice(-1500));
+  ok("carrying on: the 'continues' sentence, and the window slides past the newest line", /Your newest line is the one quoted above[\s\S]*the line before the one quoted above[\s\S]*Hello\./.test(AS.cont)&&!/\{\{(if|endif|gap)/.test(AS.cont), AS.cont.slice(-1500));
+  ok("on heat too", /YOU ALREADY SAID THIS/.test(AS.heat), "");
+  ok("nothing said yet: no heading standing alone", !/YOU ALREADY SAID THIS/.test(AS.none), "");
+  ok("(v150.58) an {{endif}} written right before another token is resolved, not left as text", await pg.evaluate(()=>{
+      const t="A {{if continuing}}C {{endif}}{{call//x}}"; return (ptResolveConds(t,ptCondFlags({continuing:true}))==="A C {{call//x}}"&&ptResolveConds(t,ptCondFlags({continuing:false}))==="A {{call//x}}")?true:"resolver"; }));
+  ok("a saved list gets it once, before 'stuck'", await pg.evaluate(()=>{
+      const old=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="already_said"); store.setRaw(K.fragAdds,"limits,guardrails.consistency,v150.57.format"); state.fragments=old; _fragMigratedFor=null;
+      const L=fragList(), ids=L.map(f=>f.id), ok1=ids.indexOf("already_said")===ids.indexOf("stuck")-1;
+      state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); return ok1?true:ids.join(","); }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

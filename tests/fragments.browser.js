@@ -27,35 +27,41 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("forty fragments (v150.48: + the spoken limits; v150.57: + what you know of them), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===40&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
-  ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties");
-      return /^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(f.text)&&/\{\{call\/\/relationships\}\}$/.test(f.text) ? true : f.text; }));
+  ok("forty-one fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===41&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  // v150.59 — the heading, the intro and the data in one box: the "Your ties" option, injected when there are ties (has_ties)
+  ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties"), o=(f.options||[]).find(x=>x.id==="ties");
+      return (o&&o.code==="has_ties"&&/^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(o.text)&&/\{\{call\/\/rel_sheet_raw\}\}/.test(o.text)) ? true : JSON.stringify(f); }));
   ok("heat has the language and 'talk you into it'; others present is not on heat", await pg.evaluate(()=>{ const g=id=>FRAG_DEFAULTS.find(x=>x.id===id);
       return g("language").paths.includes("heat")&&g("talk_into").paths.includes("heat")&&!g("others").paths.includes("heat")&&g("biology").paths.join()==="heat"; }));
   ok("the guardrails are a fragment: shared body, text and heat variants, coded options; empty and 'never' rails gone", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="guardrails");
       const ids=f.options.map(o=>o.id).join();
-      return (/^# FINAL GUARDRAILS/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!/\{\{if/.test(JSON.stringify(f))&&/typed message/.test(f.byPath.text)&&/Dialogue-dense/.test(f.byPath.heat)
-        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
+      // v150.59 — the main body is the heading and the rules every path shares; text and heat add only their own rules under it
+      return (/^# FINAL GUARDRAILS\n\nNothing you were given/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!f.byPath.solo&&!f.byPath.multi&&!f.byPath.gm&&!/\{\{if/.test(JSON.stringify(f))&&/^This is a typed message/.test(f.byPath.text)&&/^Dialogue-dense/.test(f.byPath.heat)&&!/You are \{\{self\}\} and nobody else/.test(f.byPath.text+f.byPath.heat)
+        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);
       return (f.options.length===3&&o("unknown_past").ctx.join()==="memories"&&/not in \{\{char\}\}'s memories/.test(o("unknown_past").ask)&&/Being warm is not agreeing/.test(o("pushed").text)&&/AND IF YOU DO CROSS IT/.test(o("crossed").text)) ? true : JSON.stringify(f.options.map(x=>x.id)); }));
 
   /* v150.48 — the spoken limits were judged on every reply and never reached it under the fragment model. */
   ok("the spoken limits are a shipped fragment, before the guidance, on every path", await pg.evaluate(()=>{ const ids=FRAG_DEFAULTS.map(f=>f.id), f=FRAG_DEFAULTS.find(x=>x.id==="limits");
-      return (f&&f.text==="{{call//limits//full}}"&&f.seg==="tail"&&f.paths.length===5&&ids.indexOf("limits")===ids.indexOf("guidance")-1)?true:JSON.stringify(f); }));
+      return (f&&/^# WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES\n[\s\S]*\n\{\{call\/\/limits_lines_raw\}\}$/.test(f.text)&&f.seg==="tail"&&f.paths.length===5&&ids.indexOf("limits")===ids.indexOf("guidance")-1)?true:JSON.stringify(f); }));
   ok("a list saved before them gets the limits and the consistency option once; deleting them afterwards sticks", await pg.evaluate(()=>{
-      const old=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="limits"); old.find(f=>f.id==="guardrails").options=old.find(f=>f.id==="guardrails").options.filter(o=>o.id!=="consistency");
-      store.setRaw(K.fragAdds,""); state.fragments=old;
-      const L=fragList(), ids=L.map(f=>f.id), got=ids.indexOf("limits")===ids.indexOf("guidance")-1&&L.find(f=>f.id==="guardrails").options.some(o=>o.id==="consistency");
+      // (v150.59: a list from before v150.45 holds the v150.58 guardrails without the note; it gets the note option, and the
+      // v150.59 rewrite then turns that still-untouched fragment into today's, with one option per flag)
+      const old=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="limits"); const gi=old.findIndex(f=>f.id==="guardrails");
+      old[gi]=JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_58.guardrails)); old[gi].options=old[gi].options.filter(o=>o.id!=="consistency");
+      store.setRaw(K.fragAdds,""); state.fragments=old; _fragMigratedFor=null;
+      const L=fragList(), ids=L.map(f=>f.id), got=ids.indexOf("limits")===ids.indexOf("guidance")-1&&L.find(f=>f.id==="guardrails").options.some(o=>o.id==="consistency_repeat")
+        &&!L.find(f=>f.id==="guardrails").options.some(o=>o.id==="consistency");
       const stored=JSON.parse(store.raw(K.fragments,"[]")).some(f=>f.id==="limits");
       const mine=JSON.parse(JSON.stringify(L)).filter(f=>f.id!=="limits"); state.fragments=mine; const again=fragList().some(f=>f.id==="limits");
       state.fragments=null; store.setRaw(K.fragments,"");
       return (got&&stored&&!again&&/limits/.test(store.raw(K.fragAdds,"")))?true:JSON.stringify({got,stored,again}); }));
-  ok("the compiled layout calls the limits", await pg.evaluate(()=>/\{\{call\/\/limits\/\/full\}\}/.test(fragCompile("solo",ptCondFlags({}),{}))?true:"missing"));
+  ok("the compiled layout calls the limits", await pg.evaluate(()=>/\{\{call\/\/limits_lines_raw\}\}/.test(fragCompile("solo",ptCondFlags({}),{}))?true:"missing"));
 
   console.log("\n[compile]");
   const base=await C("solo",{render_mode:"solo"},{});
-  ok("solo, nothing applying: the main bodies, in order, head before the history and tail after", /^\[system\]\n\{\{call\/\/rp_task\}\}/.test(base)&&base.indexOf("# THIS IS WHO YOU ARE")<base.indexOf("{{call//dialogue_history}}")&&base.indexOf("# FINAL GUARDRAILS")>base.indexOf("{{call//dialogue_history}}")&&/\[user end\]\n$/.test(base), base.slice(0,300));
+  ok("solo, nothing applying: the main bodies, in order, head before the history and tail after", /^\[system\]\nYou are \{\{char\}\}\.\n\n# TASK/.test(base)&&base.indexOf("# THIS IS WHO YOU ARE")<base.indexOf("{{call//dialogue_history}}")&&base.indexOf("# FINAL GUARDRAILS")>base.indexOf("{{call//dialogue_history}}")&&/\[user end\]\n$/.test(base), base.slice(0,300));
   ok("…and no choose-when text: no compass level, no 'what happened just before', no stalled warning, no say-no", !/Right now your|WHAT HAPPENED JUST BEFORE|made this same move|YOU CAN SAY NO/.test(base), base.slice(-400));
   ok("solo uses its own memory wording", /answer from that time/.test(base));
   const coded=await C("solo",{render_mode:"solo",emotion:"Anger",intensity:"intense",ego:"id_ahead",stalled:true,scene_start:true},{});
@@ -67,17 +73,17 @@ const {chromium}=require('playwright');
       return !/it has not happened for you/.test(t); }));
   ok("code and ask together: a motive is injected only when they carry one AND it bears on now", await pg.evaluate(()=>{
       const a=fragCompile("solo",ptCondFlags({has_motive:true}),{"q_motive__bears":0.9}), b=fragCompile("solo",ptCondFlags({has_motive:false}),{"q_motive__bears":0.9}), c=fragCompile("solo",ptCondFlags({has_motive:true}),{"q_motive__bears":0.2});
-      return (/intent_warm/.test(a)&&!/intent_warm/.test(b)&&!/intent_warm/.test(c)) ? true : [a.length,b.length,c.length].join(); }));
+      return (/QUIETLY AFTER WITH/.test(a)&&!/QUIETLY AFTER WITH/.test(b)&&!/QUIETLY AFTER WITH/.test(c)) ? true : [a.length,b.length,c.length].join(); }));   // v150.59 — the wording is in the box
   ok("mode 'one' keeps only the most likely of the options that apply", await pg.evaluate(()=>{
       const keep=state.fragments; state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)); state.fragments.find(f=>f.id==="say_no").mode="one";
       const t=fragCompile("solo",ptCondFlags({}),{"q_say_no__unknown_past":0.8,"q_say_no__pushed":0.95}); state.fragments=keep;
       return (/Being warm is not agreeing/.test(t)&&!/it has not happened for you/.test(t)) ? true : "both or neither"; }));
-  const heatV=await C("heat",{render_mode:"heat",voicing:true},{});
-  const heatS=await C("heat",{render_mode:"heat",voicing:false},{});
+  const heatV=await C("heat",{render_mode:"heat",voicing:true,has_trackers:true},{});
+  const heatS=await C("heat",{render_mode:"heat",voicing:false,has_trackers:true},{});
   ok("heat: its own guardrails, the language, talk-you-into-it, biology; spoken → the sound rule, silent → the silent rule",
      /Dialogue-dense/.test(heatV)&&/## YOUR LANGUAGE/.test(heatV)&&/WHEN SOMEONE TRIES TO TALK YOU INTO IT/.test(heatV)&&/YOUR WOMAN BIOLOGY/.test(heatV)&&/break with SOUNDS/.test(heatV)&&!/break between words/.test(heatV)&&/break between words/.test(heatS)&&!/OTHERS PRESENT/.test(heatV), heatV.slice(-500));
   const txt=await C("text",{render_mode:"text",continuing:true},{});
-  ok("text: the format call, the texting guardrails, 'do not echo' always (text), oblique-once never on text", /\{\{call\/\/format\}\}/.test(txt)&&/typed message/.test(txt)&&/Do not echo/.test(txt)&&!/CIRCLE IT ONCE/.test(await C("text",{render_mode:"text",stalled:true},{})), txt.slice(-300));
+  ok("text: the texting format, the texting guardrails, 'do not echo' always (text), oblique-once never on text", /# FORMAT — YOU ARE TEXTING/.test(txt)&&/typed message/.test(txt)&&/Do not echo/.test(txt)&&!/CIRCLE IT ONCE/.test(await C("text",{render_mode:"text",stalled:true},{})), txt.slice(-300));
   ok("solo continuing: no echo rule; not continuing: it is there", !/Do not echo/.test(await C("solo",{render_mode:"solo",continuing:true},{}))&&/Do not echo/.test(await C("solo",{render_mode:"solo",continuing:false},{})));
 
   console.log("\n[a reply payload]");
@@ -160,12 +166,12 @@ const {chromium}=require('playwright');
       const code=host.querySelector(`input[data-fp="${i}.o.${j}.code"]`); code.value="emotion = anger"; fragEdInput(code);
       const txt=host.querySelector(`textarea[data-fp="${i}.o.${j}.text"]`); txt.value="ANGRY NO"; fragEdInput(txt);
       await fragEdOptDel(i,0);
-      fragEdByPath(String(i),"heat",true); const hb=host.querySelector(`textarea[data-fp="${i}.byPath.heat"]`); hb.value="HEAT MAIN"; fragEdInput(hb);
+      fragEdByPath(String(i),"heat",true); const hb=host.querySelector(`textarea[data-fp="${i}.byPath.heat"]`); const emptyBox=hb.value===""; hb.value="HEAT MAIN"; fragEdInput(hb);
       fragEdSave();
       const f=state.fragments&&state.fragments[i], st=JSON.parse(localStorage.getItem(K.fragments)||"null");
       const solo=fragCompile("solo",ptCondFlags({emotion:"Anger"}),{}), heat=fragCompile("heat",ptCondFlags({emotion:"Anger",render_mode:"heat"}),{});
       return (f&&f.text==="EDITED MAIN"&&f.options.length===before&&f.options[f.options.length-1].text==="ANGRY NO"&&Array.isArray(st)&&st[i].byPath.heat==="HEAT MAIN"
-        &&/EDITED MAIN/.test(solo)&&/ANGRY NO/.test(solo)&&/HEAT MAIN/.test(heat)&&!/EDITED MAIN/.test(heat)) ? true : JSON.stringify({f:f&&{text:f.text,n:f.options.length},solo:solo.slice(0,200)}); }));
+        &&/EDITED MAIN/.test(solo)&&/ANGRY NO/.test(solo)&&!/HEAT MAIN/.test(solo)&&/EDITED MAIN\n\nHEAT MAIN/.test(heat)&&emptyBox) ? true : JSON.stringify({emptyBox,f:f&&{text:f.text,n:f.options.length},solo:solo.slice(0,200)}); }));   // v150.59 — the heat box starts empty and adds under the main body
   ok("adding a fragment, moving it up and limiting it to one path", await pg.evaluate(()=>{
       fragEdAdd(); const L=_fragDraft, k=L.length-1; L[k].text="NEW ONE"; fragEdMove(k,-1);
       if(L[k-1].text!=="NEW ONE") return "move failed";

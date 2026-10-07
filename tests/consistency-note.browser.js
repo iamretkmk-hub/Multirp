@@ -33,7 +33,7 @@ const {chromium}=require('playwright');
   ok("both flags: both notes, the player's named", /SLIPPED OUT OF CHARACTER/.test(P.g)&&/LAST TIME YOU WROTE Emre'S PART/.test(P.g), (P.g||"").slice(-500));
   ok("(v150.49) repeated, and lost track: their own notes, and the flags fragments can test", await pg.evaluate(()=>{ __setup(["repeat","continuity"]); const B=__tail(), g=B.final_guardrails;
       return (/LAST TIME YOU REPEATED YOURSELF/.test(g)&&/LAST TIME YOU LOST TRACK OF THE SCENE/.test(g)&&B._railFlags.repeated===true&&B._railFlags.lost_track===true
-        &&/\{\{call\/\/consistency_note\}\}/.test(fragCompile("solo",ptCondFlags({repeated:true}),{})))?true:(g||"").slice(-600); }));
+        &&/LAST TIME YOU REPEATED YOURSELF/.test(fragCompile("solo",ptCondFlags({repeated:true}),{})))?true:(g||"").slice(-600); }));   // v150.59 — the wording is an option of its own
   ok("no flag: no note", await pg.evaluate(()=>{ __setup([]); const B=__tail(); return (!/LAST TIME YOU/.test(B.final_guardrails)&&!B._rails.consistency_note)?true:"note present"; }));
   ok("only the flagged character's next reply carries it, not Berk's", await pg.evaluate(()=>{ __setup(["character"]); const B=__tail("p_b"); return !/LAST TIME YOU/.test(B.final_guardrails)?true:"Berk got it"; }));
   ok("once: after Ayla's next reply (unflagged) it is gone", await pg.evaluate(()=>{ const c=__setup(["character"]); c.messages.push({mid:"a2",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"Fine."'});
@@ -51,9 +51,10 @@ const {chromium}=require('playwright');
   ok("a layout calling final_guardrails//full gets it", await pg.evaluate(()=>{ __setup(["character"]); const p=state.personas[0], c=curChat(); const B=__tail();
       state.payloadTplOn=true; ptSetTemplate("solo","[user]\n{{call//final_guardrails//full}}\n[user end]"); const m=ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B);
       ptSetTemplate("solo",""); state.payloadTplOn=false; return /SLIPPED OUT OF CHARACTER/.test((m||[]).map(x=>x.content).join("\n"))?true:"missing"; }));
+  // v150.59 — one choose-when option per flag, each holding its own wording
   ok("the fragment model's guardrails carry it as a choose-when option", await pg.evaluate(()=>{
       const on=fragCompile("solo",ptCondFlags({broke_character:true}),{}), off=fragCompile("solo",ptCondFlags({broke_character:false,spoke_for_player:false}),{});
-      return (/\{\{call\/\/consistency_note\}\}/.test(on)&&!/consistency_note/.test(off))?true:"fragment option"; }));
+      return (/LAST TIME YOU SLIPPED OUT OF CHARACTER/.test(on)&&!/LAST TIME YOU WROTE/.test(on)&&!/LAST TIME YOU/.test(off))?true:"fragment option"; }));
   ok("both wordings are editable fragments of the guardrails block", await pg.evaluate(()=>{
       return (!!BLOCK_TPL_DEFAULTS.consistency_character&&!!BLOCK_TPL_DEFAULTS.consistency_player)?true:"defaults missing"; }));
 

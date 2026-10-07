@@ -128,6 +128,45 @@ const {chromium}=require('playwright');
       const r=peStyleRead();
       return (r.styleBy.multi==="Guarded in company."&&r.styleBy.heat==="Breathless, broken."&&r.styleEmoBy.multi.Anger==="Icy, polite."&&r.styleEmoBy.all.Anger==="Clipped, cold.") ? true : JSON.stringify(r); }));
 
+  console.log("\n[the fragment editor]");
+  ok("the editor lists every fragment and opens one for editing", await pg.evaluate(()=>{
+      window.confirm=()=>true; _fragDraft=null; _fragOpen=null; state.fragments=null;
+      const d=document.getElementById('fragDetails'); if(!d) return "no #fragDetails";
+      renderFragEditor(); const host=document.getElementById('fragHost');
+      const n=host.querySelectorAll('button[onclick^="fragEdOpen"]').length;
+      if(n!==FRAG_DEFAULTS.length) return n+" rows, want "+FRAG_DEFAULTS.length;
+      const i=FRAG_DEFAULTS.findIndex(f=>f.id==="say_no"); fragEdOpen(i);
+      const ta=host.querySelector(`textarea[data-fp="${i}.text"]`); if(!ta) return "no main body box";
+      const opts=host.querySelectorAll(`button[onclick^="fragEdOptDel(${i},"]`).length;
+      return opts===(FRAG_DEFAULTS[i].options||[]).length ? true : opts+" option forms"; }));
+  ok("typing, adding and deleting a condition, ticking a path and saving land in the saved list", await pg.evaluate(()=>{
+      const host=document.getElementById('fragHost'), i=FRAG_DEFAULTS.findIndex(f=>f.id==="say_no");
+      const ta=host.querySelector(`textarea[data-fp="${i}.text"]`); ta.value="EDITED MAIN"; fragEdInput(ta);
+      const before=_fragDraft[i].options.length;
+      fragEdOptAdd(i); const j=_fragDraft[i].options.length-1;
+      const code=host.querySelector(`input[data-fp="${i}.o.${j}.code"]`); code.value="emotion = anger"; fragEdInput(code);
+      const txt=host.querySelector(`textarea[data-fp="${i}.o.${j}.text"]`); txt.value="ANGRY NO"; fragEdInput(txt);
+      fragEdOptDel(i,0);
+      fragEdByPath(String(i),"heat",true); const hb=host.querySelector(`textarea[data-fp="${i}.byPath.heat"]`); hb.value="HEAT MAIN"; fragEdInput(hb);
+      fragEdSave();
+      const f=state.fragments&&state.fragments[i], st=JSON.parse(localStorage.getItem(K.fragments)||"null");
+      const solo=fragCompile("solo",ptCondFlags({emotion:"Anger"}),{}), heat=fragCompile("heat",ptCondFlags({emotion:"Anger",render_mode:"heat"}),{});
+      return (f&&f.text==="EDITED MAIN"&&f.options.length===before&&f.options[f.options.length-1].text==="ANGRY NO"&&Array.isArray(st)&&st[i].byPath.heat==="HEAT MAIN"
+        &&/EDITED MAIN/.test(solo)&&/ANGRY NO/.test(solo)&&/HEAT MAIN/.test(heat)&&!/EDITED MAIN/.test(heat)) ? true : JSON.stringify({f:f&&{text:f.text,n:f.options.length},solo:solo.slice(0,200)}); }));
+  ok("adding a fragment, moving it up and limiting it to one path", await pg.evaluate(()=>{
+      fragEdAdd(); const L=_fragDraft, k=L.length-1; L[k].text="NEW ONE"; fragEdMove(k,-1);
+      if(L[k-1].text!=="NEW ONE") return "move failed";
+      ["solo","multi","gm","heat"].forEach(p=>fragEdPath(String(k-1),p,false)); fragEdSave();
+      return (/NEW ONE/.test(fragCompile("text",{},{}))&&!/NEW ONE/.test(fragCompile("solo",{},{}))) ? true : JSON.stringify(L[k-1].paths); }));
+  ok("reset puts the shipped fragments back, and saving that clears the stored copy", await pg.evaluate(()=>{
+      fragEdReset(); fragEdSave();
+      return (state.fragments===null&&(localStorage.getItem(K.fragments)||"")===""&&fragList()===FRAG_DEFAULTS) ? true : "stored: "+String(localStorage.getItem(K.fragments)).slice(0,60); }));
+  ok("the switch and the threshold are saved", await pg.evaluate(()=>{
+      fragToggle(true); const on=localStorage.getItem(K.fragOn)==="1"&&document.getElementById('fragOnSw').checked;
+      fragAtSet("0.85"); const at=state.fragAt===0.85&&localStorage.getItem(K.fragAt)==="0.85";
+      fragAtSet("3"); const cl=state.fragAt===0.99;
+      fragToggle(false); return (on&&at&&cl&&state.fragOn===false) ? true : JSON.stringify({on,at,cl}); }));
+
   console.log("\n[settings]");
   ok("a fresh install has the switch off and the threshold at 0.7", await pg.evaluate(()=>{ localStorage.removeItem(K.fragOn); localStorage.removeItem(K.fragAt); loadState(); return state.fragOn===false&&state.fragAt===0.7; }));
 

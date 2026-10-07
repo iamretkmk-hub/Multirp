@@ -1594,7 +1594,8 @@
         <div class="card">
           <h3><svg class="ic"><use href="#i-edit"/></svg> Payload templates — write it yourself</h3>
           <div class="desc">Instead of ordering the parts above, write the whole payload as text and call the pieces you want, wherever you want them. Use <code>[system]</code> / <code>[system end]</code> and <code>[user]</code> / <code>[end user]</code> to choose which message each part goes into, <code>{{call//piece}}</code> to drop a piece in, and <code>{{call//dialogue_history}}</code> for the conversation itself. A heading you write above a piece that turns out to be empty is removed along with it.</div>
-          <div id="payloadTplList"></div>
+          <details id="fragDetails" style="margin-bottom:10px" ontoggle="if(this.open)renderFragEditor()"><summary style="cursor:pointer"><b>Fragments</b> — the reply as fragments with choose-when conditions</summary><div id="fragHost" style="margin-top:6px"></div></details>
+<div id="payloadTplList"></div>
         </div>
         <div class="card">
           <h3><svg class="ic"><use href="#i-tools"/></svg> Engine payload templates — write those yourself too</h3>
@@ -57766,6 +57767,111 @@ async function abRun(){
   }finally{
     _abBusy=false; if(btn){btn.disabled=false;btn.textContent="Run both";}
   }
+}
+/* ===== v150.37 — THE FRAGMENT EDITOR (Payloads) ======================================================
+   Edits a draft of the fragment list; Save writes it (state.fragments / sm_fragments). Typing updates the
+   draft in place (data-fp="i.field" / "i.o.j.field"); adding, removing, moving and ticking re-render. */
+let _fragDraft=null, _fragOpen=null;
+const FRAG_PATH_LABEL={solo:"Solo",multi:"Multi",gm:"Gamemaster",text:"Text",heat:"Heat"};
+function _fragDraftGet(){ if(!_fragDraft)_fragDraft=JSON.parse(JSON.stringify(fragList())); return _fragDraft; }
+function _fragAt(path){ const d=_fragDraftGet(); const a=String(path).split("."); let o=d[+a[0]];
+  if(a[1]==="o"){ o=o&&o.options&&o.options[+a[2]]; return {obj:o,key:a.slice(3).join(".")}; }
+  return {obj:o,key:a.slice(1).join(".")}; }
+function fragEdInput(el){
+  const r=_fragAt(el.dataset.fp); if(!r.obj)return;
+  const k=r.key;
+  if(k.indexOf("byPath.")===0){ r.obj.byPath=r.obj.byPath||{}; r.obj.byPath[k.slice(7)]=el.value; return; }
+  r.obj[k]=el.value;
+}
+function _fragChips(fp,sel,from){
+  return (from||FRAG_PATHS).map(p=>`<label style="display:inline-flex;gap:3px;align-items:center;margin-right:8px;font-size:12px"><input type="checkbox" ${sel.indexOf(p)>=0?"checked":""} onchange="fragEdPath('${fp}','${p}',this.checked)">${FRAG_PATH_LABEL[p]}</label>`).join("");
+}
+function fragEdPath(fp,p,on){
+  const r=_fragAt(fp+".paths"); if(!r.obj)return;
+  let a=Array.isArray(r.obj.paths)?r.obj.paths.slice():(fp.indexOf(".o.")>0?[]:FRAG_PATHS.slice());
+  a=a.filter(x=>x!==p); if(on)a.push(p); r.obj.paths=FRAG_PATHS.filter(x=>a.indexOf(x)>=0); renderFragEditor();
+}
+function fragEdByPath(fp,p,on){
+  const r=_fragAt(fp+".x"); if(!r.obj)return; r.obj.byPath=r.obj.byPath||{};
+  if(on)r.obj.byPath[p]=r.obj.byPath[p]||r.obj.text||""; else delete r.obj.byPath[p]; renderFragEditor();
+}
+function fragEdCtx(fp,c,on){
+  const r=_fragAt(fp+".ctx"); if(!r.obj)return; let a=Array.isArray(r.obj.ctx)?r.obj.ctx.slice():[];
+  a=a.filter(x=>x!==c); if(on)a.push(c); r.obj.ctx=a; renderFragEditor();
+}
+function fragEdMove(i,d){ const L=_fragDraftGet(); const j=i+d; if(j<0||j>=L.length)return; const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
+function fragEdOpen(i){ _fragOpen=(_fragOpen===i)?null:i; renderFragEditor(); }
+function fragEdDel(i){ const L=_fragDraftGet(); if(!confirm(`Delete the fragment "${L[i].name||L[i].id}"?`))return; L.splice(i,1); _fragOpen=null; renderFragEditor(); }
+function fragEdAdd(){ const L=_fragDraftGet(); L.push({id:"f_"+Date.now().toString(36),name:"New fragment",seg:"tail",paths:FRAG_PATHS.slice(),text:"",byPath:{},mode:"any",options:[]}); _fragOpen=L.length-1; renderFragEditor(); }
+function fragEdOptAdd(i){ const f=_fragDraftGet()[i]; f.options=f.options||[]; f.options.push({id:"o_"+Date.now().toString(36),name:"New condition",code:"",ask:"",ctx:[],text:"",paths:[],byPath:{}}); renderFragEditor(); }
+function fragEdOptDel(i,j){ const f=_fragDraftGet()[i]; if(!confirm(`Delete the condition "${(f.options[j]||{}).name||""}"?`))return; f.options.splice(j,1); renderFragEditor(); }
+function fragEdSet(fp,v){ const r=_fragAt(fp); if(r.obj){ r.obj[r.key]=v; renderFragEditor(); } }
+function fragEdSave(){
+  const L=_fragDraftGet();
+  const same=JSON.stringify(L)===JSON.stringify(FRAG_DEFAULTS);
+  state.fragments=same?null:JSON.parse(JSON.stringify(L));
+  store.setRaw(K.fragments,same?"":JSON.stringify(L));
+  toast("Fragments saved");
+}
+function fragEdReset(){ if(!confirm("Put the shipped fragments back? Your edits to fragments are lost once you save."))return; _fragDraft=JSON.parse(JSON.stringify(FRAG_DEFAULTS)); _fragOpen=null; renderFragEditor(); }
+function fragToggle(on){ state.fragOn=!!on; store.setRaw(K.fragOn,on?"1":""); renderFragEditor(); }
+function fragAtSet(v){ const n=parseFloat(v); state.fragAt=isNaN(n)?0.7:Math.max(0.5,Math.min(0.99,n)); store.setRaw(K.fragAt,String(state.fragAt)); }
+function _fragTa(fp,val,ph,min){ return `<textarea class="fld" data-fp="${fp}" oninput="fragEdInput(this)" placeholder="${esc(ph||"")}" style="min-height:${min||60}px;font-family:monospace;font-size:12px">${esc(val||"")}</textarea>`; }
+function _fragByPathBlock(fp,obj,paths){
+  const bp=obj.byPath||{};
+  return `<div class="desc" style="margin-top:4px">Different text on a path: ${paths.map(p=>`<label style="display:inline-flex;gap:3px;align-items:center;margin-right:8px;font-size:12px"><input type="checkbox" ${bp[p]!=null?"checked":""} onchange="fragEdByPath('${fp}','${p}',this.checked)">${FRAG_PATH_LABEL[p]}</label>`).join("")}</div>`
+    +paths.filter(p=>bp[p]!=null).map(p=>`<div class="desc" style="margin-top:4px"><b>${FRAG_PATH_LABEL[p]}</b> — replaces the text above on this path</div>${_fragTa(fp+".byPath."+p,bp[p],"",50)}`).join("");
+}
+function _fragOptForm(i,j,f,o){
+  const fp=i+".o."+j, fpaths=f.paths||FRAG_PATHS;
+  return `<div style="border:1px dashed var(--border);border-radius:8px;padding:8px;margin-top:8px">
+    <div style="display:flex;gap:6px;align-items:center"><input class="fld" data-fp="${fp}.name" oninput="fragEdInput(this)" value="${esc(o.name||"")}" placeholder="Condition name" style="flex:1">
+      <button class="btn sec small" style="width:auto" title="Delete this condition" onclick="fragEdOptDel(${i},${j})">${icon("trash")}</button></div>
+    <div class="desc" style="margin-top:6px"><b>Code condition</b> — a fact the app knows. Flags: render_mode, emotion, intensity, tone, ego, stalled, thought_stuck, continuing, voicing, scene_start, has_motive, alone, target_tie (spouse / lover / kin / friend / …), target_kind (player / character). E.g. <code>emotion = anger and intensity = intense</code>. Blank = no code condition.</div>
+    <input class="fld" data-fp="${fp}.code" oninput="fragEdInput(this)" value="${esc(o.code||"")}" placeholder="e.g. ego = id_winning" style="font-family:monospace;font-size:12px">
+    <div class="desc" style="margin-top:6px"><b>Ask the decision model</b> — a plain question about this moment, answered yes or no before the reply (optional "YES:" and "NO:" lines say what each means). {{char}}, {{user}}, {{target}} are filled. Blank = not asked. With both, both must hold.</div>
+    ${_fragTa(fp+".ask",o.ask,"e.g. Someone is asking {{char}} for something significant right now.",44)}
+    <div class="desc" style="margin-top:4px">What the question also gets (the scene, the character, their feelings toward who they answer, their day and the stakes always go): ${FRAG_CTX.map(c=>`<label style="display:inline-flex;gap:3px;align-items:center;margin-right:8px;font-size:12px"><input type="checkbox" ${(o.ctx||[]).indexOf(c.k)>=0?"checked":""} onchange="fragEdCtx('${fp}','${c.k}',this.checked)">${esc(c.label)}</label>`).join("")}</div>
+    <div class="desc" style="margin-top:6px"><b>Text injected when it applies</b></div>
+    ${_fragTa(fp+".text",o.text,"",70)}
+    <div class="desc" style="margin-top:4px">Only on these paths (none ticked = every path of the fragment): ${_fragChips(fp,o.paths||[],fpaths)}</div>
+    ${_fragByPathBlock(fp,o,fpaths)}
+  </div>`;
+}
+function renderFragEditor(){
+  const host=document.getElementById('fragHost'); if(!host)return;
+  const L=_fragDraftGet();
+  const rows=L.map((f,i)=>{
+    const open=_fragOpen===i, paths=f.paths||FRAG_PATHS;
+    const head=`<div style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid var(--border)">
+      <span style="flex:1;min-width:0"><b>${esc(f.name||f.id)}</b> <span class="desc" style="display:inline">${f.seg==="tail"?"after the history":"before the history"} · ${paths.map(p=>FRAG_PATH_LABEL[p]).join(", ")}${(f.options||[]).length?` · ${f.options.length} choose-when`:""}</span></span>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move up" onclick="fragEdMove(${i},-1)">↑</button>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move down" onclick="fragEdMove(${i},1)">↓</button>
+      <button class="btn sec small" style="width:auto;padding:4px 9px" onclick="fragEdOpen(${i})">${open?"Close":"Edit"}</button></div>`;
+    if(!open)return head;
+    return head+`<div style="padding:8px;background:var(--panel,transparent)">
+      <div style="display:flex;gap:6px"><input class="fld" data-fp="${i}.name" oninput="fragEdInput(this)" value="${esc(f.name||"")}" style="flex:1">
+        <button class="btn sec small" style="width:auto" title="Delete this fragment" onclick="fragEdDel(${i})">${icon("trash")}</button></div>
+      <div class="desc" style="margin-top:6px">Paths: ${_fragChips(String(i),paths)}</div>
+      <div class="desc" style="margin-top:4px">Placed <select onchange="fragEdSet('${i}.seg',this.value)"><option value="head" ${f.seg!=="tail"?"selected":""}>before the conversation history</option><option value="tail" ${f.seg==="tail"?"selected":""}>after the conversation history</option></select>
+        · When several conditions apply: <select onchange="fragEdSet('${i}.mode',this.value)"><option value="any" ${f.mode!=="one"?"selected":""}>inject every one that applies</option><option value="one" ${f.mode==="one"?"selected":""}>inject only the most likely</option></select></div>
+      <div class="desc" style="margin-top:6px"><b>Main body</b> — always injected on its paths. <code>{{call//name}}</code> brings in app data.</div>
+      ${_fragTa(i+".text",f.text,"",90)}
+      ${_fragByPathBlock(String(i),f,paths)}
+      <div class="desc" style="margin-top:8px"><b>Choose when</b> — injected only when they apply</div>
+      ${(f.options||[]).map((o,j)=>_fragOptForm(i,j,f,o)).join("")}
+      <button class="btn sec small" style="width:auto;margin-top:8px" onclick="fragEdOptAdd(${i})">+ Add a choose-when condition</button>
+    </div>`;
+  }).join("");
+  host.innerHTML=`<div class="kvline" style="padding:0 0 6px"><label style="margin:0"><b>Build replies from fragments</b></label>
+      <label class="switchLbl"><input type="checkbox" id="fragOnSw" ${state.fragOn?"checked":""} onchange="fragToggle(this.checked)"><span class="sl"></span></label></div>
+    <div class="desc" style="margin-bottom:6px">When on, every reply (solo, multi, gamemaster, text, heat) is built from the fragments below instead of the templates: each fragment's main body, plus the choose-when parts that apply this turn — by code, or by the decision model's answer before the reply.</div>
+    <div class="desc">Inject an asked condition when the model is at least this sure: <input type="number" min="0.5" max="0.99" step="0.05" value="${fragAt()}" style="width:70px" onchange="fragAtSet(this.value)"></div>
+    <div style="border:1px solid var(--border);border-radius:10px;margin-top:8px;max-height:min(75vh,700px);overflow:auto">${rows}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn small" style="width:auto" onclick="fragEdSave()">Save fragments</button>
+      <button class="btn sec small" style="width:auto" onclick="fragEdAdd()">+ Add fragment</button>
+      <button class="btn sec small" style="width:auto" onclick="fragEdReset()">Reset to the shipped fragments</button></div>`;
 }
 function renderPayloadTemplates(){
   const host=document.getElementById('payloadTplList'); if(!host)return;

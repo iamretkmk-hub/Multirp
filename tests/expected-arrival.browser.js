@@ -48,7 +48,7 @@ const {chromium}=require('playwright');
       state.universes=[U];
       const mk=(id,n)=>({id,name:n,universeId:"u1",personality:"x",instructions:"x",backstory:"x",style:"x",goals:"x",look:{},relationships:{}});
       state.personas=[mk("p_d","Duygu Akbaba"),mk("p_h","Hakan Akbaba"),mk("p_o","Özlem Kaya")];
-      Object.assign(state,{key:"k",user:"Emre",mem:false,sceneOn:false,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,
+      Object.assign(state,{key:"k",user:"Emre",routerDecOn:false,moveDecOn:false,textGateOn:false,mem:false,sceneOn:false,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,
         relOn:false,trackOn:false,calOn:false,promiseOn:false,gossipOn:false,intentOn:false,pulseOn:false,roundOn:false,charQuestsOn:false,
         goalPursuitOn:false,textsOn:false,autoImg:false,imgMode:"off",streamReveal:false,storyLang:"tr",travelTime:0,presenceOff:false,presenceCueGate:false});
       state.payloadTplOn=false;

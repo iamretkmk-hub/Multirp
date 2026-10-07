@@ -230,6 +230,20 @@ memory retrieval scoped to them, target resolution from the *freshest real line 
 transcript* (not the router's stale `addressed`), witness-scoped history, refusal fallback,
 `Name:` prefix stripping, and awaits the on-screen reveal so chains pace correctly.
 
+**v150.44 — router 2 as one Decisions pick.**
+
+After each character line in a group turn, and after a narrator event (`gamemasterReactions`),
+`router2Decision` asks one choice: `nobody` (the default: the turn returns to the player) or one of the
+characters who may speak. Each candidate is listed with their hooks. Someone who already spoke is offered
+only "to answer a jab at them just now".
+
+The state carries the last line, who spoke, who is present and the latest exchange. The likeliest
+character is chosen only at `routerDecAt()` (0.6) and above `nobody`.
+
+The question is `x_router2` (Payloads → Turn router). If the request fails, or the switch is off
+(Settings → "Who answers next: ask the Decisions API", `routerDecOn`), the chat router (`routerChar`)
+decides as before. Pinned by `tests/router2-decisions.browser.js`.
+
 ## The emotion pick (v150.34)
 
 Before each character reply (solo, multi, Gamemaster reaction, text), `emotionEnsure(chat, p, line)` asks the

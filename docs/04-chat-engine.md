@@ -385,6 +385,10 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
     `runGoalPursuit` skip them, and the quest step runs once per holder per run.
   - The period reconcile's token room grows with its fragments: `300 + 110 × n`, capped at 6000.
   - The debug export holds the last 120 entries (from a log of 200), with answers up to 12000 characters.
+  - (v150.54) The world pulse drops a companion already booked on the calendar for that day and part of the day.
+  - (v150.54) A confrontation about someone else (c2c) opens at conviction 0.75 at most, not 0.9. Its memory
+    reads "I went to {player} about {them}…", not "I confronted", with importance 0.65 at most. Its aim is
+    clipped at a sentence (`clipAtSentence`), never mid-word.
   - Pinned by `tests/export-fixes-1552.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.

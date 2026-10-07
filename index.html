@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.53</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.54</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -48307,6 +48307,10 @@ async function runGoalPursuit(chat,day,uni,period){
           else comp=_pulsePersonasByName(chat,withNm)[0]||null;
         }
         if(comp&&(claimed.has(comp.id)||onstage.has(comp.id)))comp=null;        // companion unavailable → solo
+        /* (!) v150.52 — and not someone already booked for that day and part of the day: Özlem was put into Duygu's
+           afternoon visit while her own afternoon held two other plans. */
+        if(comp&&per){ try{ const busy=chatCalendar(chat).some(e=>e&&!e.done&&+e.day===pDay&&e.period===per
+            &&String(e.who||"").split(/\s*,\s*/).some(n=>sameName(n,comp.name))); if(busy)comp=null; }catch(_){} }
         const loc=pl.where?locByName(pl.where,chatLocations(chat)):null;
         /* (!) v92.2 — THE TITLE IS NOT A REASON, AND IT USED TO BE ALLOWED TO PRETEND IT WAS.
            This fell back to `pl.title` when the writer returned no purpose, so a plan titled
@@ -48822,7 +48826,8 @@ function surfaceIntent(chat,it,roster,nameById){
   /* v148.4 — the aftermath memory's topic, in the holder's first person: the aim is written to them ("to be
      asked back"), so it reads after "wanting" as long as it does not address them as "you". */
   const _aim=String(it.aim||"").trim(), _aimOk=/^to\s/i.test(_aim)&&!/(?<![\p{L}])(?:you|your|yours|yourself)(?![\p{L}])/iu.test(_aim);
-  const gistOf=tn=>`${tn?tn+" — ":""}my ${it.kind||"feelings"}${_aimOk?", wanting "+briefDesc(_aim,120):""}`;
+  // (!) v150.52 — the aim whole, or cut at a sentence: briefDesc cut it mid-thought and the memory read "no…."
+  const gistOf=tn=>`${tn?tn+" — ":""}my ${it.kind||"feelings"}${_aimOk?", wanting "+clipAtSentence(_aim,180).replace(/[….\s]+$/,""):""}`;
   // PROXY: the ally arrives carrying the holder's cause (face = proxy, cause = holder).
   let actor=holder, onBehalfOf="";
   if(method==="proxy" && plan && plan.params && plan.params.proxyId){
@@ -48854,11 +48859,13 @@ function surfaceIntent(chat,it,roster,nameById){
       // demand they take a side, or use them as leverage against the target.
       const intentC2C=`${actor.name} comes to ${state.user} about ${tName} (who is not present): ${it.aim} — ${it.trigger}${approach}. ${actor.name} wants to recruit, warn, pressure, or use ${state.user} regarding ${tName}.`+carried+fence;
       const summary=`${actor.name}${withWho} comes to ${state.user} about ${tName} — a ${it.kind}`;
+      /* (!) v150.52 — about someone else: the player is not the one accused, so it does not open near certainty (it
+         could end in a "rupture" on the first answer), and its memory says where it went, not "I confronted". */
       return startConfrontation(chat,{
         accuser:actor, intent:intentC2C, summary, gist:gistOf(tName),
         evidence:Math.max(0.5,Math.min(0.95,it.strength)),
-        conviction:Math.max(0.55,Math.min(0.9,it.strength)),
-        accuserNature:actorNature
+        conviction:Math.max(0.5,Math.min(0.75,it.strength)),
+        accuserNature:actorNature, c2c:true, aboutName:tName
       });
     }
   }
@@ -53344,6 +53351,7 @@ function startConfrontation(chat,opts){
     summary:opts.summary||`${accuser.name} confronts ${state.user}`,
     intent:opts.intent||opts.summary||`${accuser.name} has something to settle with ${state.user}`,
     gist:opts.gist||"",   // v148.4 — the topic, for the aftermath memory (see _aftermathGist)
+    c2c:!!opts.c2c, aboutName:opts.aboutName||"",   // v150.52 — about a third party, not the player
     accuserId:accuser.id, accuserName:accuser.name,
     accuserNature:opts.accuserNature||(accuser.personality?String(accuser.personality).slice(0,200):"ordinary; moves at a normal pace"),
     evidence, conviction:startConv, floor, ceiling,
@@ -53393,15 +53401,21 @@ function recordConfrontationAftermath(chat,ev){
   const c=ev.conviction!=null?ev.conviction:0.6;
   if(!ev._outcome)ev._outcome=confrontOutcomeFromConviction(c);
   const _U=chatUserName(chat)||state.user, _about=_aftermathGist(ev);   // v148.4 — this chat's player; the topic, not the instruction
-  const settled = ev._outcome==="defused"
+  const settled = ev.c2c   // v150.52 — about a third party: the player was asked to take a side, not accused
+    ? (ev._outcome==="defused"
+      ? `I went to ${_U} about ${_about}. They heard me out, and I got most of what I came for.`
+      : ev._outcome==="rupture"
+      ? `I went to ${_U} about ${_about}. They would not stand with me on it.`
+      : `I went to ${_U} about ${_about}. I don't know yet where they stand.`)
+    : ev._outcome==="defused"
     ? `I confronted ${_U} about ${_about}. Their answer mostly satisfied me, though a small doubt lingers.`
     : ev._outcome==="rupture"
     ? `I confronted ${_U} about ${_about}. I'm not convinced — if anything I'm more certain now.`
     : `I confronted ${_U} about ${_about}. It's still unsettled in my mind.`;
   const mem={
     id:"m_"+Date.now()+Math.random().toString(36).slice(2,6),
-    content:settled, location:(ev&&ev.placeName)||(chat&&chat.location)||"",   /* v148.6 — where it happened */ emotion:ev._outcome==="rupture"?"angry":"concerned",
-    importance:Math.max(0.55,Math.min(0.9,c)), tags:["confrontation",ev._outcome||"unresolved"].concat(ev._departed?["left"]:[]),
+    content:settled, location:(ev&&ev.placeName)||(chat&&chat.location)||"",   /* v148.6 — where it happened */ emotion:ev._outcome==="rupture"?(ev.c2c?"concerned":"angry"):"concerned",
+    importance:ev.c2c?Math.max(0.45,Math.min(0.65,c)):Math.max(0.55,Math.min(0.9,c)), tags:["confrontation",ev._outcome||"unresolved"].concat(ev._departed?["left"]:[]),
     type:"EXPERIENCE", ownerId:aid, character:ap.name, date:Date.now(), gameDay:(chat&&chat.gameDay)||curGameDay(),
     people:memPeople(ap.name,_U),
     source:"confrontation", confrontOutcome:ev._outcome||"unresolved", residualConviction:c,
@@ -53473,6 +53487,7 @@ function startOverture(chat,opts){
     summary:opts.summary||`${offerer.name} reaches out to ${state.user}`,
     intent:opts.intent||opts.summary||`${offerer.name} wants to grow closer to ${state.user}`,
     gist:opts.gist||"",   // v148.4 — the topic, for the aftermath memory (see _aftermathGist)
+    c2c:!!opts.c2c, aboutName:opts.aboutName||"",   // v150.52 — about a third party, not the player
     accuserId:offerer.id, accuserName:offerer.name,
     accuserNature:opts.accuserNature||(offerer.personality?String(offerer.personality).slice(0,200):"ordinary; opens at a normal pace"),
     evidence, conviction:startConv, floor, ceiling,

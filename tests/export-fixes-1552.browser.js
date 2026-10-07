@@ -42,6 +42,16 @@ const {chromium}=require('playwright');
       const q=String(runCharQuestPursuit); return (/if\(j\.note&&!mems\.some/.test(q)&&!/clipAtSentence\(j\.event/.test(q))?true:"still the event"; }));
   ok("the reconcile's room grows with the fragments (34 → over 4000 tokens, capped at 6000)", await pg.evaluate(()=>/max:Math\.min\(6000,Math\.max\(fnTok\("mem",700\),300\+110\*frag\.length\)\)/.test(String(reconcilePeriodFor))?true:"flat cap"));
 
+  console.log("\n[a confrontation about someone else]");
+  ok("its memory says where they went and what the player did, not 'I confronted', and stays moderate", await pg.evaluate(()=>{
+      const uni=state.universes[0]; const keep=state.personas; state.personas=[{id:"p_be",name:"Berker",universeId:uni.id,look:{}}]; const c=curChat();
+      recordConfrontationAftermath(c,{kind:"confrontation",accuserId:"p_be",conviction:0.95,c2c:true,gist:"Sami — my resentment, wanting to make Sami sit down with us",_outcome:"rupture"});
+      const m=(state.memory||[]).filter(x=>x.ownerId==="p_be").pop()||{}; state.personas=keep;
+      return (/^I went to .+ about Sami — my resentment, wanting to make Sami sit down with us\. They would not stand with me on it\.$/.test(m.content)&&m.importance<=0.65&&m.emotion==="concerned")?true:JSON.stringify(m); }));
+  ok("it opens below near-certainty, and the aim is cut at a sentence, never mid-word", await pg.evaluate(()=>{ const f=String(surfaceIntent);
+      return (/conviction:Math\.max\(0\.5,Math\.min\(0\.75,it\.strength\)\),\s*accuserNature:actorNature, c2c:true/.test(f)&&/clipAtSentence\(_aim,180\)/.test(f)&&!/briefDesc\(_aim,120\)/.test(f))?true:"not wired"; }));
+  ok("the world pulse drops a companion already booked for that day and part of the day", await pg.evaluate(()=>/sameName\(n,comp\.name\)[\s\S]{0,20}if\(busy\)comp=null/.test(String(runGoalPursuit))?true:"not wired"));
+
   console.log("\n[the debug export]");
   ok("120 entries from a log of 200, answers up to 12000 characters", await pg.evaluate(()=>{ const f=String(exportDebug);
       return (/function exportDebug\(limit=120\)/.test(f)&&/slice\(0,12000\)/.test(f)&&DBG_MAX===200)?true:"sizes"; }));

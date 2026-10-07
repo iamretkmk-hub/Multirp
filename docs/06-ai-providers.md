@@ -194,7 +194,7 @@ audio, blob:, http(s) only).
 it with status/result/duration/token estimate. `renderDebug` renders each as an expandable
 row (the payload itself is rendered when the row is opened). A segmented switch picks the view
 (`K.dbgView`, `dbgViewMode`/`setDbgView`): **As sent** is the request body verbatim (JSON for a
-chat payload), **Readable** (v150.62, replaced the old "Capsules" view; a stored `"capsules"`
+chat payload), **Readable** (v150.63, replaced the old "Capsules" view; a stored `"capsules"`
 reads as Readable) is `pvReadable` — one block per message with a bold badge
 ("message N — role (name)"), `#` heading lines bold, and the text coloured by where it came from:
 white = fixed wording (fragment main bodies, options chosen by a code fact, anything of unknown

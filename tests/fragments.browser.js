@@ -123,10 +123,10 @@ const {chromium}=require('playwright');
       const c=curChat(); c.messages.push({mid:"u3",role:"user",content:"x",speaker:state.user}); await emotionEnsure(c,state.personas.find(x=>x.id==="p_b"),"x",{kind:"solo"});
       window.fetch=realF; state.emoOn=true; return window.__n===0 ? true : window.__n+" requests"; }));
 
-  console.log("\n[speaking style by path and by emotion]");
-  ok("the path's own main style replaces the main one; the picked emotion's style is offered, the path's before 'all paths'", await pg.evaluate(()=>{
+  console.log("\n[speech & behaviour: spoken, text, heat (v150.61)]");
+  ok("the path's group gives the main style; the picked emotion's box is offered; a blank box sends nothing", await pg.evaluate(()=>{
       const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
-      p.style="Short, dry."; p.styleBy={heat:"Breathless, broken."}; p.styleEmoBy={all:{Anger:"Clipped, cold."},heat:{Desire:"Slow, low."}};
+      p.speech={spoken:{main:"Short, dry.",emo:{Anger:"Clipped, cold."}},text:{main:"",emo:{}},heat:{main:"Breathless, broken.",emo:{Desire:"Slow, low."}}}; p._speechMigrated="v150.61";
       c.emo={p_b:{emotion:"Anger",intensity:"clear"}};
       const base={chat:c,selfP:p,selfName:"Burcu",selfId:"p_b",targetName:state.user,targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}};
       const solo=buildTailBlocks(base)._ss;
@@ -136,16 +136,16 @@ const {chromium}=require('playwright');
   ok("the style fragment injects the emotion's style only for the emotion picked", await pg.evaluate(()=>{
       const a=fragCompile("solo",ptCondFlags({emotion:"Anger"}),{}), b=fragCompile("solo",ptCondFlags({emotion:""}),{});
       return ((a.match(/\{\{call\/\/style_emotion\}\}/g)||[]).length===1&&!/style_emotion/.test(b)) ? true : "a/b wrong"; }));
-  ok("the character editor shows one path at a time, keeps what was typed across paths, and saves it", await pg.evaluate(()=>{
-      const p=state.personas.find(x=>x.id==="p_b"); editPersona("p_b");
-      const box=()=>document.getElementById('peStyleBoxes');
+  ok("the character editor shows one group at a time, keeps what was typed across groups, and saves it", await pg.evaluate(()=>{
+      editPersona("p_b");
+      const box=()=>document.getElementById('peSpeechBoxes');
       const anger=()=>box().querySelector('.psEmo[data-emo="Anger"]');
-      if(!anger()||anger().value!=="Clipped, cold.") return "all-paths Anger not loaded: "+(anger()&&anger().value);
-      peStyleSwitch("multi"); box().querySelector('.psMain').value="Guarded in company."; anger().value="Icy, polite.";
-      peStyleSwitch("all"); if(anger().value!=="Clipped, cold.") return "switching lost the all-paths text";
-      peStyleSwitch("multi"); if(box().querySelector('.psMain').value!=="Guarded in company.") return "multi main lost";
-      const r=peStyleRead();
-      return (r.styleBy.multi==="Guarded in company."&&r.styleBy.heat==="Breathless, broken."&&r.styleEmoBy.multi.Anger==="Icy, polite."&&r.styleEmoBy.all.Anger==="Clipped, cold.") ? true : JSON.stringify(r); }));
+      if(!anger()||anger().value!=="Clipped, cold.") return "spoken Anger not loaded: "+(anger()&&anger().value);
+      peSpeechSwitch("text"); box().querySelector('.psMain').value="Lowercase, no full stops."; anger().value="One word replies.";
+      peSpeechSwitch("spoken"); if(anger().value!=="Clipped, cold.") return "switching lost the spoken text";
+      peSpeechSwitch("text"); if(box().querySelector('.psMain').value!=="Lowercase, no full stops.") return "text main lost";
+      const r=peSpeechRead();
+      return (r.text.main==="Lowercase, no full stops."&&r.heat.main==="Breathless, broken."&&r.text.emo.Anger==="One word replies."&&r.spoken.emo.Anger==="Clipped, cold.") ? true : JSON.stringify(r); }));
 
   console.log("\n[the fragment editor]");
   ok("the editor lists every fragment and opens one for editing", await pg.evaluate(()=>{

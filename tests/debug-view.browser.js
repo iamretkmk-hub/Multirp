@@ -21,12 +21,12 @@ const {chromium}=require('playwright');
     dbgDone(e,"ok","\"Looks like it.\"");
     show('debug'); renderDebug();
     const card=document.querySelector('#screen-debug .card');
-    // v150.62 — the payload is rendered when the card is opened, so open it the way a tap does
+    // v150.63 — the payload is rendered when the card is opened, so open it the way a tap does
     card.querySelector('[data-arrow]').click();
     const sentText=card.querySelector('[data-payload] pre').innerText;
     const sentLabel=card.querySelector('label').innerText;
     const segOn=[...card.querySelectorAll('[data-dbgview]')].map(x=>({v:x.dataset.dbgview,on:x.className.indexOf('on')>-1,txt:x.textContent.trim()}));
-    // flip to Readable (v150.62 — it replaced the capsule view)
+    // flip to Readable (v150.63 — it replaced the capsule view)
     setDbgView('readable');
     const card2=document.querySelector('#screen-debug .card');
     const stillOpen=!card2.querySelector('[data-body]').classList.contains('hide');

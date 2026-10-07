@@ -1081,7 +1081,8 @@ the same Decisions call. Their answers are stored on `chat.emo[id].asks`, and an
 (`emotion = X` → `{{call//style_emotion}}`). On the character card, *More speaking styles* holds a main
 style per path (`p.styleBy`) and a style per emotion, either for all paths or per path (`p.styleEmoBy`).
 The path's own text wins over "all paths". `render_mode` is now `multi` / `gm` on those paths; it used to
-read `solo` everywhere but text and heat.
+read `solo` everywhere but text and heat. (Since v150.61 the style comes from three speech groups, spoken, text and heat, with no
+"all paths" box and no fallback. See "v150.61 — likes, and speech & behaviour in three groups" below.)
 
 **The editor** (Payloads → Fragments) does the following:
 - Switches the model on and sets the threshold.
@@ -1294,7 +1295,94 @@ privacy heading read "WHO CAN HEAR YOU". Each now says what a text is:
 A saved list gets them once (`FRAG_SHIPPED_ADDS` key `v150.60.text`, old defaults in `FRAG_DEFAULTS_V150_60_OLD`),
 only while each fragment is still its v150.59 default.
 
-## v150.62 — where each part came from (Debug → Readable)
+## v150.61 — likes, and speech & behaviour in three groups
+
+Two things changed on the character card, and the payload follows them.
+
+**Core traits became "Likes, dislikes & interests"** (`p.likes`, editor box `peLikes`). It is six lines: Likes, Dislikes,
+Hobbies & pastimes, Habits, Favourite things, Pet peeves. They go into the identity sheet where `<how_you_behave>` used
+to be:
+- the speaker's own sheet: `<what_you_like>`, worded by `bio_likes_self` (second person);
+- the sheet other engines read about this person (`charBioBlock(p,{self:false})`): the same tag, worded by
+  `bio_likes_other` (third person, by name, "its 'you' means {{char}}").
+
+In the "Who you are" fragment the wording is in the `sheet` option and the data comes in as `bio_likes_raw`
+(`RAW_DATA_KEYS`, keyed on `_yb`). `bio_traits_raw` is no longer filled, and the `<how_you_behave>` wording left the
+fragment. `bio_behave_self` / `bio_behave_other` stay in `BLOCK_TPL_DEFAULTS`, so an older layout that still names
+them keeps its text, but nothing fills them.
+
+**The speaking style became speech & behaviour in three groups** (`p.speech`):
+
+```
+p.speech = { spoken:{ main:"…", emo:{ "<Emotion>":"…" } },   // solo, multi, gamemaster (and a voice call)
+             text:  { main:"…", emo:{…} },                     // the text path
+             heat:  { main:"…", emo:{…} } }                    // heat of the moment
+```
+
+`speechGroupOf(path)` picks the group. In `buildTailBlocks`, the group's main box is `style_body` and the box of the
+emotion the pick found is `style_emotion`. The style fragment and its per-emotion options (`emotion = X`) are
+unchanged. There is no "All paths" box and no fallback: what a box shows is exactly what is sent, and a blank box
+sends nothing. A blank Text box, for example, does not borrow the Spoken one. Bystander sheets (`charBioBlock`
+without `styleTail`) carry the spoken main box as `<speaking_style>`. The voice check, the reply check, the book
+writer and the moan brief read the spoken main box (heat for the moan brief).
+
+**The editor.** The "Speaking style" box and the "by path and by emotion" section are gone. There is one **Speech &
+behaviour** section:
+- a Spoken / Text / Heat switch (`peSpeechSwitch`);
+- the group's main box, labelled with what it is for ("how you speak and what you do, on solo, group and gamemaster
+  replies, whatever you feel");
+- one box per emotion in Settings → Emotions ("… when you mainly feel anger");
+- **Write with AI**.
+
+Switching groups keeps what was typed (`_peSpeechDraft`). Save writes `p.speech`, `p.likes` and `p._speechMigrated`.
+An emotion box whose emotion is no longer in the list is still shown, marked as never sent.
+
+**Migration** (`speechMigrate`, once per character: at load, on import, and on first use for a card made by code that
+still writes the old fields). It is lossless. The old fields (`style`, `styleBy`, `styleEmoBy`, `traits`) are left
+exactly as they were, as the undo copy, and `p._speechMigrated = "v150.61"` is recorded.
+- **Spoken main box:** the solo style (`styleBy.solo`, else `style`). Where a group's or a gamemaster reaction's own
+  style differed, it is added under that as `In a group: …` / `Reacting to something that happened: …`.
+- **Spoken emotion boxes:** the same way. Each box is its path's box, else the all-paths one.
+- **Text and heat:** `text.main` is `styleBy.text`, else `style`; `heat.main` likewise. Each emotion is
+  `styleEmoBy.text|heat[E]`, else `styleEmoBy.all[E]`.
+- **The behaviour lines** (`State: trigger → behavior`) were sent on every path, so they go into all three groups,
+  each line kept as it was, under `### Behaviour`:
+  - a state that is an emotion in the user's list (matched without case) goes into that emotion's box: Angry → Anger,
+    Joyful → Joy, Afraid → Fear, Guilty → Guilt, Ashamed → Shame, Jealous → Jealousy, or the emotion's own name;
+  - Default, Rejected, In conflict, Intimate, a state whose emotion is not in the list, and any unlabelled line go
+    into the main box.
+- `p.likes` starts empty. The old lines were behaviour, not likes.
+
+**Faithfulness.** A migrated character was checked over all five paths and every emotion (and none). Every sentence the
+v150.60 payload sent from its old fields is still sent on that path: the path's style, the emotion's style, and every
+behaviour line. A line of an emotion state is sent when that emotion is picked, because it is in that emotion's box now.
+
+**The writers.**
+- **`x_style_writer`** writes all three groups, each with its main box and every emotion, as
+  `{"spoken":{"main","emotions"},"text":{…},"heat":{…}}`. Every entry covers speech and behaviour: how they talk and
+  what they do, as moves. The instructions are English, under headings and bullets, and each bullet is followed by 1-3
+  short quoted example lines in `{{story_language}}`, as in the user's own styles. Its token room is 12000. An answer in
+  the v150.40 shape (`paths` / `emotions` / `heat_emotions`) is still read, the way the migration reads the old fields,
+  over the card's own main box.
+- **The writer runs** after "Create with AI", for each character a batch or a generated universe makes, for a
+  character filled in during play, and from **Write with AI**. Characters made by a generator carry `_speechGen` until
+  the writer has filled them in. A character with emotion boxes of its own is left alone.
+- **`bioPrompt`, `batchBioPrompt`, `univPrompt`** write `likes` (the six lines) instead of the ten-state profile.
+  Their `style` is the baseline in the same format (a heading, bullets, example lines); it fills each group's main box
+  until the styles writer replaces it. A card that still comes back with `traits` (a user's own prompt) goes through
+  the same mapping as the migration.
+- **`x_card_voice`** (Fix the voice) repairs `likes` and the three main boxes (`spoken_style`, `text_style`,
+  `heat_style`). Quoted example lines are speech and are left as they are.
+- Stored copies of all five prompts are refreshed by `_refreshPipe` only while they still hold the old wording. The
+  v44.4 `bioPrompt` pipe now also needs the old profile's wording, so it does not stand down.
+
+**The fragment list.** A saved list gets the new "Who you are" once (`FRAG_SHIPPED_ADDS` key `v150.61.likes`, old
+default in `FRAG_DEFAULTS_V150_61_OLD`), while it is still its v150.60 default. An edited one keeps everything the user
+wrote, with one change: its `<how_you_behave>` paragraph around `{{call//bio_traits_raw}}` becomes the shipped
+`<what_you_like>` paragraph (`_fragLikesSwap`). `bio_behave_self` left `FRAG_TPL_CARRY`.
+
+Pinned by `tests/speech-groups.browser.js`.
+## v150.63 — where each part came from (Debug → Readable)
 
 `ptBuildMessages` and `epMessages` now build twice. The first pass is the payload that is sent, exactly as before. The
 second, for Debug's Readable view and the Payloads previews only, passes `annotate` to `fragCompile` (a choose-when

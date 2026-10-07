@@ -1,4 +1,4 @@
-/* v150.62 — DEBUG'S READABLE VIEW. "Readable" replaced "Capsules" in the Debug list: a chat payload is one block per
+/* v150.63 — DEBUG'S READABLE VIEW. "Readable" replaced "Capsules" in the Debug list: a chat payload is one block per
    message with a bold badge, headings bold, and its text coloured by where it came from — white the fixed wording,
    green the live data ({{call//…}} values, {{value}} fills, the conversation), red what the decision model chose (an
    option whose ask passed, or whose condition reads a decision-made flag such as the emotion). Checked here:

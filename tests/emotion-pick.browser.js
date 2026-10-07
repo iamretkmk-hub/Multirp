@@ -104,7 +104,11 @@ const {chromium}=require('playwright');
       const realCC=window.chatCompletion;
       window.chatCompletion=async(msgs,model,opts)=>{ const d=(opts&&opts.dbg)||""; if(/^Roleplay reply/.test(d)){ order.push("reply"); return '"Evdeydim."'; } return "{}"; };
       const realF=window.fetch; window.fetch=async(u,o)=>{ if(String(u).indexOf("/api/alpha/decisions")>-1&&JSON.parse(o.body).questions.emotion)order.push("emotion"); return realF(u,o); };
-      try{ await sendMessage({text:"Dün gece neredeydin?"}); }catch(e){ return "threw "+e.message; }
+      /* A pending timer keeps this evaluate's promise reachable while the turn runs: without it the browser could
+         collect the promise mid-turn ("Resulting promise was garbage collected", about one run in six, on every
+         build). A turn that really hangs now fails here, by name, instead of disappearing. */
+      try{ const res=await Promise.race([sendMessage({text:"Dün gece neredeydin?"}).then(()=>"done"),new Promise(r=>setTimeout(()=>r("TIMEOUT"),60000))]);
+           if(res!=="done")return "the turn did not finish in 60s: "+JSON.stringify(order); }catch(e){ return "threw "+e.message; }
       window.chatCompletion=realCC; window.fetch=realF;
       return (order.indexOf("emotion")>=0&&order.indexOf("emotion")<order.indexOf("reply")&&c.emo.p_b&&c.emo.p_b.emotion==="Anger") ? true : JSON.stringify(order); }));
 

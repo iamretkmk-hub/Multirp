@@ -14,7 +14,7 @@ toggles `.screen.active` and the bottom `<nav>` highlights `data-s`.
 | Memory | `#screen-memory` | `renderMemory` | Browse/edit/condense all memories |
 | Diary | `#screen-diary` | `renderDiary`, `openDiaryReader` | Per-character diaries as books with covers |
 | Settings | `#screen-settings` | static HTML + `syncSettingsUI` + several render fns | 8 collapsible `details.sgroup` sections |
-| Debug | `#screen-debug` | `renderDebug`, `pvReadable` | Every AI request/response, newest first, keys redacted. Each payload has two views: **As sent** (the request body verbatim) and **Readable** (v150.62, replaced Capsules: one block per message with a bold badge, `#` headings bold, white fixed wording · green live data · red chosen by the decision model — see docs/06 "The Debug screen"). The Payloads previews use the same renderer. |
+| Debug | `#screen-debug` | `renderDebug`, `pvReadable` | Every AI request/response, newest first, keys redacted. Each payload has two views: **As sent** (the request body verbatim) and **Readable** (v150.63, replaced Capsules: one block per message with a bold badge, `#` headings bold, white fixed wording · green live data · red chosen by the decision model — see docs/06 "The Debug screen"). The Payloads previews use the same renderer. |
 
 Navigation also happens from the chat menu's "Go to" block and various buttons; always via
 `show(name)`.

@@ -369,6 +369,18 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   - The player memory files only threads that are new (`_playerNewOpen`). Re-listing old ones re-dated
     them, so they never aged out.
   - The familiarity reading says "little that X does surprises them".
+- **Fixes from a live export (v150.52):**
+  - `parseJSON` drops a stray closing brace that is followed by another `"key":`. Before, `{"event":…},"note":…`
+    kept only `event`.
+  - A quest or goal step with no memory of its own plants its English `note`. It never plants the narrated
+    `event`, which is in the story language and the third person.
+  - `_memJudgeScene` compares the player's line as the lines are written, so it no longer goes in twice.
+  - `_withPlayerIn(chat, id, period)`: the period engines run after the player has travelled on. Someone the
+    player left behind in that same stretch counts as having been with them. `runCharQuestPursuit` and
+    `runGoalPursuit` skip them, and the quest step runs once per holder per run.
+  - The period reconcile's token room grows with its fragments: `300 + 110 × n`, capped at 6000.
+  - The debug export holds the last 120 entries (from a log of 200), with answers up to 12000 characters.
+  - Pinned by `tests/export-fixes-1552.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

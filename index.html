@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.51</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.52</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -7446,7 +7446,7 @@ function mixedLangDirective(fields){
 
 /* ===== DEBUG LOG ===== captures every payload sent to an AI service ===== */
 let dbgLog=[];           // newest last
-const DBG_MAX=80;        // keep memory bounded
+const DBG_MAX=200;       // keep memory bounded (v150.52: 80 → 200, so an export holds a whole turn and what followed it)
 let _dbgc=0;
 function dbg(label,service,endpoint,payload){
   const entry={id:"dbg_"+(Date.now().toString(36))+"_"+(_dbgc++),
@@ -7918,14 +7918,16 @@ function scrubSecrets(obj){
   return clean(obj);
 }
 // Export the latest debug payloads as a downloadable JSON file.
-function exportDebug(limit=30){
+/* (!) v150.52 — the last 30 entries cut the start of the turn being reported (its emotion, memory and router requests),
+   and 4000 characters cut most answers. It exports the last 120, and results up to 12000 characters. */
+function exportDebug(limit=120){
   if(!dbgLog.length){toast("Nothing to export yet");return;}
   const entries=dbgLog.slice(-limit).map(e=>scrubSecrets({
     label:e.label, service:e.service, endpoint:e.endpoint,
     time:new Date(e.t).toISOString(), status:e.status, ms:e.ms??null,
     payload:e.payload,
     // keep results readable & bounded so the file stays shareable
-    result:(e.result==null?null:String(typeof e.result==="string"?e.result:JSON.stringify(e.result)).slice(0,4000))
+    result:(e.result==null?null:String(typeof e.result==="string"?e.result:JSON.stringify(e.result)).slice(0,12000))
   }));
   const out={
     app:"StoryMind", kind:"debug-export", version:10,
@@ -16392,6 +16394,15 @@ function noteLeftBehind(chat,ids,locId){
   if(!chat.leftBehind||chat.leftBehind._day!==day)chat.leftBehind={_day:day};
   ids.forEach(id=>{ if(id&&id!=="_day")chat.leftBehind[id]={period:per,locId:locId||null}; });
   try{ markChatDirty(chat); }catch(e){}
+}
+/* (!) v150.52 — SPENT THIS STRETCH WITH THE PLAYER. The period engines close a stretch after the player has travelled on,
+   when presentIds is already empty, so a character who was beside the player the whole time was stepped as if they had
+   been elsewhere ("the player is NOT here"; a phone call "from the beach" about what they had just said in person). Who
+   the player left behind in that same stretch was with them. */
+function _withPlayerIn(chat,id,period){
+  try{ if((presentIds(chat)||[]).indexOf(id)>=0)return true;
+    const lb=chat&&chat.leftBehind; if(!lb||lb._day!==(chat.gameDay||1))return false;
+    const e=lb[id]; return !!(e&&(!period||e.period===period)); }catch(e){ return false; }
 }
 /* Did the player walk away from them today (or, with samePeriod, in this part of the day)? */
 function wasLeftBehind(chat,id,samePeriod){
@@ -46573,7 +46584,7 @@ function parseJSON(raw){
      diye seslenir — so memories, judges, suggestions and Scene Writer beats that quoted dialogue were
      silently dropped. Curly quotes are now only repaired where they stand in for JSON's own
      delimiters (next to { [ , : ] }), and flattened wholesale only as a last resort. */
-  const scan=src=>{
+  const scan=(src,_fix=0)=>{
     const a=src.indexOf("{"),b=src.indexOf("[");
     const s=a<0?b:b<0?a:Math.min(a,b);
     if(s<0)return undefined;
@@ -46586,6 +46597,11 @@ function parseJSON(raw){
       else if(ch==="}"||ch==="]"){depth--;if(depth===0){end=i;break;}}
     }
     const body=end>=0?src.slice(s,end+1):src.slice(s);
+    /* (!) v150.52 — A STRAY CLOSING BRACE. {"event":"…"},"note":"…","outcome":…} closed the object after its first
+       key, the rest was thrown away, and only "event" survived. When the closing brace is followed by another
+       "key": the brace is the model's slip: drop it and read on. */
+    if(end>=0&&_fix<3&&/^\s*,\s*"[^"\n]{1,60}"\s*:/.test(src.slice(end+1))){
+      const r2=scan(src.slice(0,end)+src.slice(end+1),_fix+1); if(r2!==undefined&&r2!==null&&typeof r2==="object")return r2; }
     try{return JSON.parse(body);}catch(e){}
     const g=src.match(/[{[][\s\S]*[}\]]/);if(g){try{return JSON.parse(g[0]);}catch(e){}}
     return undefined;
@@ -48160,7 +48176,7 @@ async function runGoalPursuit(chat,day,uni,period){
     // Candidates: active characters, off the current stage, who actually HAVE goals to pursue.
     /* v129.1 — goals read through engineGoals: a cast whose wants live only in the curated list
        (goalsLive) was never considered here, exactly the gap the quest spawn had. */
-    let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!onstage.has(p.id)&&String(engineGoals(p)||"").trim());
+    let pool=(state.personas||[]).filter(p=>p&&p.universeId===uni.id&&isActiveChar(p)&&!onstage.has(p.id)&&!_withPlayerIn(chat,p.id,nowPer)&&String(engineGoals(p)||"").trim());   // v150.52 — nor who spent it with the player
     if(!pool.length)return 0;
     chat.goalActed=chat.goalActed||{};
     /* (!) v144.1 — ASKED IS A DAY'S QUESTION TOO. Only a character who ACTED was recorded, so one who
@@ -48313,8 +48329,10 @@ async function runGoalPursuit(chat,day,uni,period){
         return (n&&String(n).toLowerCase()===p.name.toLowerCase())?p:null; };
       _pushWorldEvent(chat,j.headline,j.event,[p.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
-      if(!mems.some(m=>m&&m.name&&String(m.name).toLowerCase()===p.name.toLowerCase())){
-        mems.unshift({name:p.name,content:clipAtSentence(j.event||"",360),emotion:"determined",importance:0.6});
+      /* (!) v150.52 — no memory of their own came back: the engine's note (English) stands in, never the narrated event,
+         which is in the story language and in the third person; "determined" is not an emotion memories know. */
+      if(j.note&&!mems.some(m=>m&&m.name&&String(m.name).toLowerCase()===p.name.toLowerCase())){
+        mems.unshift({name:p.name,content:clipAtSentence(String(j.note),360),emotion:"neutral",importance:0.5});
       }
       mems.forEach(m=>{ const q=byName(m&&m.name); if(q)_plantWorldMemory(chat,uni,q,m,day,place,mems.map(x=>x&&x.name),nowPer); });
       _applyWorldRel(chat,j.rel,byName);
@@ -52082,9 +52100,11 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
     resolveWorldPositions(chat);
     const pos=chat.worldPositions||{};
     let ran=0, moved=0;
+    const _stepped=new Set();   // v150.52 — one step per holder per run (two pursuits made two calls about the same thing)
     for(const q of list){
       if(ran>=CQ_STEP_PER_RUN)break;
       if(q.lastStepDay===day)continue;
+      if(_stepped.has(q.holderId)||_withPlayerIn(chat,q.holderId,period||chatPeriod(chat)))continue;   // v150.52 — and not one who spent it with the player
       const holder=(state.personas||[]).find(p=>p&&p.id===q.holderId);
       const target=q.solitary?null:(state.personas||[]).find(p=>p&&p.id===q.targetId);
       if(!holder||!isActiveChar(holder)){ continue; }
@@ -52114,7 +52134,7 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
         user:chatUserName(chat)||"the player", world:String(chatWorldSetting(chat)||"").slice(0,700)
       });
       // stamped before the call: an attempt is an attempt, and a second run cannot step it again today
-      q.lastStepDay=day; ran++;
+      q.lastStepDay=day; ran++; _stepped.add(q.holderId);
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[holder.name].concat(target?[target.name]:[]));
@@ -52137,8 +52157,9 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
       // The player always learns what happened — a news-style narration bubble (present:[]).
       _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&target.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
-      if(!mems.some(m=>m&&m.name&&sameName(m.name,holder.name))){
-        mems.unshift({name:holder.name,content:clipAtSentence(j.event||"",360),emotion:"determined",importance:0.6});
+      // (!) v150.52 — as the goal pursuit: the English note stands in, never the narrated event
+      if(j.note&&!mems.some(m=>m&&m.name&&sameName(m.name,holder.name))){
+        mems.unshift({name:holder.name,content:clipAtSentence(String(j.note),360),emotion:"neutral",importance:0.5});
       }
       mems.forEach(m=>{ const who=byName(m&&m.name); if(who)_plantWorldMemory(chat,uni,who,m,day,place,mems.map(x=>x&&x.name),period||""); });   // v147.2 — filed under the stretch it closed, not the clock's
       _applyWorldRel(chat,j.rel,byName);
@@ -54625,7 +54646,9 @@ async function reconcilePeriodFor(p,day,period,chat){
       : "";
     const out=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
       {data:`WHEN: Day ${day}, ${period}.\n\nThese are ${p.name}'s memories from Day ${day}, ${period}, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}${_priorBlock}`}),
-      state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",700),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
+      /* (!) v150.52 — room for the answer grows with what goes in: 34 fragments under a flat 1600 were cut off mid-memory,
+         failed to parse, and the fragments stayed as they were. */
+      state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:Math.min(6000,Math.max(fnTok("mem",700),300+110*frag.length)),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
     const j=parseJSON(out);
     /* (!) v56.1 — THE ANSWER WAS BEING THROWN AWAY FOR ITS WRAPPER. This read j.memories and
        nothing else, so a reconciler prompt that asks for a bare {"content": …} — which is what the
@@ -55791,8 +55814,11 @@ function _memJudgeScene(chat,ownerId,userText){
   const lines=_all.slice(_playerSceneStart(_all)).filter(m=>m.role!=='system'&&!m.sysError&&!m.uiNote&&(!ownerId||!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-8)
     .map(m=>ownerId?memHeardLine(m,p,p.name):`${m.role==='user'?chatUserName(chat):(m.speaker||p.name)}: ${m.content}`).filter(Boolean)
     .map(t=>memPayloadText(t,700));
-  const u=String(userText||"").trim();
-  if(u&&!lines.some(l=>l.indexOf(u.slice(0,60))>=0)) lines.push(memPayloadText(u,700));
+  /* (!) v150.52 — compared as the lines are written (whitespace collapsed, markup gone): the raw text kept its "\n\n",
+     never matched, and the player's last line went in twice. */
+  const _nm=t=>String(t||"").replace(/[*_"“”«»]/g,"").replace(/\s+/g," ").trim().toLowerCase();
+  const u=String(userText||"").trim(), uk=_nm(u).slice(0,50);
+  if(u&&!lines.some(l=>_nm(l).indexOf(uk)>=0)) lines.push(memPayloadText(u,700));
   return lines.join("\n");
 }
 function _memJudgeText(m){

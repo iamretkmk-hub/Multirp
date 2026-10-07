@@ -90,7 +90,7 @@ const {chromium}=require('playwright');
   ok("the next one reads the book so far, someone already met is no longer new, and the app's events are in brackets",
      /THE BOOK SO FAR \(its last pages\):\nPassage 1: the harbour lay still\./.test(W.u1)&&!/## Ayla\nFIRST TIME/.test(W.u1)&&/\[Berk leaves\.\]/.test(W.u1)&&/\[Time passes — it is now Night\.\]/.test(W.u1)&&/It closes this scene/.test(W.u1), W.u1);
   ok("the day's closing passage carries the night's narration", /\[The day ends\.\] The night closes over the town\./.test(W.u3)&&/It closes the day, and the chapter with it\./.test(W.u3), W.u3);
-  ok("an opened chapter writes in the foreground, on the story's model", W.fg===true, JSON.stringify(W.model));
+  ok("an opened chapter writes in the foreground, on the writer's model", W.fg===true, JSON.stringify(W.model));
   ok("a thought reaches the writer marked as material, and the prompt forbids putting it on the page",
      /THOUGHTS ARE MATERIAL, NOT TEXT/.test(W.sys)&&/never copied onto the page: not quoted, not in italics/.test(W.sys)&&/\(unspoken thought: He looks tired\.\)/.test(W.u0)&&!/_He looks tired\._/.test(W.u0), (W.u0||"").slice(-700));
   ok("the book so far is whole passages, newest last; only what does not fit is left out", await pg.evaluate(()=>{

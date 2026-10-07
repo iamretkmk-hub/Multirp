@@ -35,7 +35,7 @@ bubbles, the webtoon / comic-page layouts, Save page, the Video Book's speeches 
   closed or another day is chosen. One queue per chat and book (`_bkJob`), one passage at a time.
 
 ### The writer (`x_book_writer`, Settings › Prompts › Story Book & Video Book)
-One call per run (`bookWriteRun`), on `state.bookModel` (blank → the story's model), `fn:"narrate"`. `{{media}}` is
+One call per run (`bookWriteRun`), on `state.bookModel` (blank → the Gamemaster & Scene Writer model, `state.gmModel`, since v150.39; the story's model only when that is blank too), `fn:"narrate"`. `{{media}}` is
 "picture" or "video clip". The user message (`epDefine("x_book_writer")`):
 - **THE BOOK SO FAR** (`_bkSoFar`, v150.1) — the passages before the run, whole and newest last, as many as fit
   `BOOK_PREV_CHARS` (6000); only the oldest that does not fit is cut, at a paragraph, behind a "…";

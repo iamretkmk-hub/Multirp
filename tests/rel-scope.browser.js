@@ -145,6 +145,20 @@ const {chromium}=require('playwright');
       return (n===1&&p._relSeeded===true&&p.relationships.p_h)?true:JSON.stringify({n,seeded:p._relSeeded}); }));
   ok("a regeneration keeps the player's ticks", await pg.evaluate(()=>/pinned:prev\[id\]\.pinned/.test(String(generateRelationshipsFor))));
 
+  console.log("\n[what kind of tie it is: the tie decides, not the paragraph]");
+  ok("the live export's case: a husband's friend and an acquaintance are not people she answers to, and are not pinned", await pg.evaluate(()=>{
+      const uni=state.universes[0];
+      const mk=(id,name)=>{ let p=state.personas.find(x=>x.id===id); if(!p){ p={id,name,universeId:uni.id,look:{}}; state.personas.push(p); } return p; };
+      const bu=mk("p_bu","Burcu"); mk("p_ha","Hakan A"); mk("p_bk","Berker O"); mk("p_ba","Burak"); mk("p_ay","Ayca");
+      bu.relationships={p_ha:{tie:"husband's oldest friend",relationship:"Hakan is Burak's oldest friend, a gentle dreamer."},
+        p_bk:{tie:"acquaintance from the same circle",relationship:"Berker is married to Özlem; his family's money troubles are known."},
+        p_ba:{tie:"husband",relationship:"Burak is your husband."},
+        p_ay:{tie:"Emre's wife",relationship:"Ayça is away in Istanbul."}};
+      const st=_emoStakeState(curChat(),bu,"__user__");
+      const who=JSON.stringify(st.people_they_answer_to);
+      const pins=["p_ha","p_bk","p_ba","p_ay"].map(id=>relPinned(bu,id));
+      return (who==='["Burak — husband"]'&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
+
   console.log("\n[the setting]");
   ok("a fresh install, and an old \"present\" or \"brief\", read as dynamic", await pg.evaluate(()=>{
       const r=[]; [null,"present","brief","everyone"].forEach(v=>{ if(v==null)localStorage.removeItem(K.relScope); else localStorage.setItem(K.relScope,v); loadState(); r.push(state.relScope); });

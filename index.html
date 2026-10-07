@@ -2404,7 +2404,7 @@
     <div class="bookOpts" id="bookOpts" hidden>
       <label class="bkRow"><span>Write as you play<small>Each time a picture (in the Video Book, a clip) is made, the writer turns everything said, done and thought since the last passage into the prose that leads into it.</small></span><input type="checkbox" id="bookAutoChk" onchange="setBookAuto(this.checked)"></label>
       <div class="bkRow"><span>Passage length</span><div class="bkSeg"><button type="button" data-len="short" onclick="setBookLen('short')">Short</button><button type="button" data-len="medium" onclick="setBookLen('medium')">Medium</button><button type="button" data-len="long" onclick="setBookLen('long')">Long</button></div></div>
-      <label class="bkRow"><span>Writer model<small>Blank: the story's own model, on the story's own API.</small></span><input type="text" id="bookModelIn" autocomplete="off" spellcheck="false" onchange="setBookModel(this.value)"></label>
+      <label class="bkRow"><span>Writer model<small>Blank: the Gamemaster &amp; Scene Writer model, on its own API.</small></span><input type="text" id="bookModelIn" autocomplete="off" spellcheck="false" onchange="setBookModel(this.value)"></label>
       <div class="bkRow"><span>The kept book<small id="bookFileTxt">One book per story. It keeps its own copy of every picture, so it stays whole after the chat's pictures are gone.</small></span><button type="button" class="btn sec small" id="bookFileForget" onclick="bookForgetFile()" hidden>Other file</button></div>
       <div class="bkRow bkBtns"><button type="button" class="btn sec small" onclick="bookWriteDay()"><svg class="ic"><use href="#i-sparkle"/></svg> Write what this day is missing</button><button type="button" class="btn sec small" onclick="bookSaveBook()"><svg class="ic"><use href="#i-download"/></svg> Save the book</button><button type="button" class="btn sec small" id="bookVidBtn" onclick="bookSaveVideo('')"><svg class="ic"><use href="#i-film"/></svg> Save as video</button></div>
     </div>
@@ -2993,7 +2993,7 @@ function provFor(fn){
   return {id,base:P.base,label:P.label,funds:P.funds,key:String(state[P.keyState]||"").trim()};
 }
 /* (!) v150.28 — A BORROWED MODEL TRAVELS WITH ITS OWN PROVIDER. Several agents fall back to another
-   agent's model when their own field is blank — the Story Book writer to the roleplay model, the
+   agent's model when their own field is blank — the Story Book writer to the gamemaster model (v150.39), the
    player's narration to the roleplay model, suggestions to the turn router's. They kept their OWN
    card's provider while doing it, so with Narration on NanoGPT a blank Book model sent the OpenRouter
    roleplay id ("google/gemini-…") to NanoGPT, at the day's close when the chapter is written; and a
@@ -20239,6 +20239,20 @@ const REL_TIE_SEEDS=[
   {kind:"work",    re:/\b(?:colleague|co-?worker|workmate|boss|manager|employee|employer|supervisor|landlord|landlady|tenant|teacher|student|mentor|neighbou?r)\b|patron|müdür|komşu|iş arkadaş/i, v:{familiarity:25,trust:5,respect:5}},
   {kind:"acq",     re:/\bacquaint|tanıdık/i, v:{familiarity:10}}
 ];
+/* (!) v150.39 — WHAT KIND OF TIE THIS IS, FROM THE TIE ITSELF. Matching the tie plus its whole relationship paragraph
+   read "husband's oldest friend" as a spouse and any acquaintance whose paragraph mentions a wife as family (the
+   live export: Hakan and Berker listed among the people Burcu answers to). The tie label decides. Someone else's
+   person ("Emre's wife", "husband's oldest friend") is "via": known through them, never one's own spouse or kin.
+   "X of Y" is classed by X ("friend of the family"). The paragraph is read only when there is no tie label. */
+function relTieKind(tie,relationship){
+  let t=String(tie||"").trim();
+  if(!t){ const r=String(relationship||"").trim(); if(!r)return ""; t=r.split(/[.;,—–-]/)[0]; }
+  // "Emre's wife", "husband's oldest friend": someone ELSE's person — known through them, never one's own spouse or kin
+  if(/^(.*?)['’]s\s+(.+)$/.test(t))return "via";
+  const of=t.match(/^(.+?)\s+of\s+(?:the\s+|my\s+|your\s+|his\s+|her\s+|their\s+)?(.+)$/i);
+  const head=of?of[1]:t;
+  return (REL_TIE_SEEDS.find(r=>r.re.test(" "+head+" "))||{}).kind||"";
+}
 function relTieSeed(fromId,toId){
   if(!fromId||fromId==="__user__")return null;
   const p=(state.personas||[]).find(x=>x&&x.id===fromId); if(!p)return null;
@@ -22414,7 +22428,7 @@ function _emoStakeState(chat,p,targetId){
     Object.keys(rels).forEach(id=>{
       if(id===targetId)return;
       const e=rels[id]||{}, txt=((e.tie||"")+" "+(e.relationship||"")).trim(); if(!txt)return;
-      const k=(REL_TIE_SEEDS.find(t=>t.re.test(txt))||{}).kind;
+      const k=relTieKind(e.tie,e.relationship);   // v150.39 — the tie decides, not the paragraph
       if(k!=="spouse"&&k!=="lover"&&k!=="kin")return;
       const nm=id==="__user__"?(chatUserName(chat)||"the player"):(((state.personas||[]).find(x=>x&&x.id===id)||{}).name||"");
       if(nm)close.push(`${nm} — ${(e.tie||"").trim()||k}`);
@@ -25088,8 +25102,7 @@ function relScopeMode(){ return state.relScope==="everyone"?"everyone":"dynamic"
 function relPinned(persona,id){
   const e=persona&&persona.relationships&&persona.relationships[id]; if(!e)return false;
   if(e.pinned===true)return true; if(e.pinned===false)return false;
-  const t=String(e.tie||"")+" "; const k=(REL_TIE_SEEDS.find(r=>r.re.test(t))||{}).kind;
-  return k==="spouse";
+  return relTieKind(e.tie,e.relationship)==="spouse";
 }
 /* A card whose ties exist only as the old social-graph text (made by the batch generator, or before v150.39) would
    carry nobody now. The first time such a character answers, their relationships are generated from that text in
@@ -29357,7 +29370,7 @@ function fragCodeFacts(chat,selfP,targetId){
   try{ f.has_motive=!!(selfP&&(chat.intents||[]).some(i=>i&&i.holderId===selfP.id&&i.targetId===(targetId||"__user__")&&i.status!=="spent")); }catch(e){ f.has_motive=false; }
   try{ const others=inSceneIds(chat).filter(id=>selfP&&id!==selfP.id&&id!==targetId); f.alone=others.length===0; }catch(e){ f.alone=false; }
   try{ const e=selfP&&targetId?relSheetEntry(selfP,targetId):null; const txt=e?((e.tie||"")+" "+(e.relationship||"")):"";
-    f.target_tie=txt?((REL_TIE_SEEDS.find(t=>t.re.test(txt))||{}).kind||"other"):""; }catch(e){ f.target_tie=""; }
+    f.target_tie=txt.trim()?(relTieKind(e.tie,e.relationship)||"other"):""; }catch(e){ f.target_tie=""; }   // v150.39 — the tie decides
   f.target_kind=(targetId==="__user__"||!targetId)?"player":"character";
   return f;
 }
@@ -43069,7 +43082,9 @@ async function bookWriteRun(chat,kind,run,plan,opts){
   }catch(e){ try{ _alog("book.write.fail","payload: "+String(e&&e.message||e).slice(0,140)); }catch(_){} return null; }
   let text="";
   try{
-    const _bm=agentModel(["narrate",state.bookModel],["rp",state.model]);   // v150.28 — blank Book model: the story's model, on the story's provider
+    /* v150.28 — a borrowed model goes on its own card's provider. (!) v150.39 — blank Book model: the Gamemaster & Scene
+       Writer model (the player asked: the books are authoring, not roleplay); the story's model only when that is blank too. */
+    const _bm=agentModel(["narrate",state.bookModel],["gm",state.gmModel],["rp",state.model]);
     const out=await chatCompletion(msgs,_bm.model,
       {fn:"narrate",temp:fnTemp("narrate",0.8),prov:_bm.prov,max:Math.max(fnTok("narrate",1200),Math.round(words*2.4)+300),foreground:!!opts.foreground,
        dbg:(kind==="video"?"Video Book":"Story Book")+" writer · "+where});
@@ -43354,7 +43369,7 @@ function toggleBookOpts(){ const o=document.getElementById('bookOpts'); if(!o)re
 function _bkSyncOpts(){
   const a=document.getElementById('bookAutoChk'); if(a)a.checked=state.bookAuto!==false;
   document.querySelectorAll('#bookOpts [data-len]').forEach(b=>b.classList.toggle('on',(BOOK_LEN[state.bookLen]?state.bookLen:"medium")===b.dataset.len));
-  const m=document.getElementById('bookModelIn'); if(m&&document.activeElement!==m){ m.value=state.bookModel||""; m.placeholder=state.model||"the story's model"; }
+  const m=document.getElementById('bookModelIn'); if(m&&document.activeElement!==m){ m.value=state.bookModel||""; m.placeholder=state.gmModel||state.model||"the Gamemaster & Scene Writer model"; }
   const f=document.getElementById('bookFileTxt'), c=curChat();
   if(f&&c)_bkFileHandle(c.universeId,_bookMode).then(h=>{
     f.textContent=h&&h.name?`Saved to ${h.name} — each Save, and each new section while this tab has permission, rewrites it with the whole book.`

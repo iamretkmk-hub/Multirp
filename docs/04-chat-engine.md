@@ -256,6 +256,12 @@ is resolved with this reply's flags (render mode, emotion, intensity, tone, ego)
 `{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{endif}}`. A layout
 with no `{{if}}` is unchanged (payload parity holds).
 
+**v150.36 — what the feeling and the choice are made of.** The state also carries `earlier_today` (the
+speaker's own latest memories of today, so a fight this morning colours the emotion now),
+`people_they_answer_to` (spouse, partner, lover, family, read off their own ties whether or not those people
+are here) and `who_else_can_see_or_hear` (or "nobody — they are alone with …"). The id/superego prompt weighs
+the feelings against those stakes.
+
 ## Refusal & empty-reply handling (both reply paths)
 
 - `looksLikeRefusal()` catches canned refusals (CJK "无法…" patterns, English "I can't…", or a

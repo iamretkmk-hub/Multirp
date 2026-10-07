@@ -72,6 +72,15 @@ const {chromium}=require('playwright');
       const out=await emotionEnsure(c,p,"Gel bu gece.",{targetId:"__user__",targetName:"Emre"});
       const f=window.__reqs[0]&&window.__reqs[0].state.toward_the_one_they_answer;
       return (f&&f.toward==="Emre"&&/neighbour/.test(f.who_they_are_to_them)&&f.feelings_right_now&&!/nothing strong/.test(f.feelings_right_now)&&f.lasting_feelings&&!/nothing settled/.test(f.lasting_feelings)&&out.ego==="id_ahead"&&/Emre/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify({f,ego:out&&out.ego}); }));
+  ok("the state carries what happened earlier today, the people they answer to and who can see (v150.36)", await pg.evaluate(async()=>{
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); c.gameDay=4;
+      state.personas=state.personas.filter(x=>x.id!=="p_h"); state.personas.push({id:"p_h",name:"Burak",universeId:state.curUniverse,look:{}});
+      p.relationships=Object.assign({},p.relationships,{p_h:{tie:"husband",relationship:"Married twelve years."}});
+      state.memory=[{id:"t1",ownerId:"p_b",gameDay:4,date:40,content:"Burak and I fought about money this morning.",type:"EXPERIENCE",people:["Burak"]}];
+      c.messages.push({mid:"u4",role:"user",content:"Kal bu gece.",speaker:"Emre"}); window.__reqs=[];
+      await emotionEnsure(c,p,"Kal bu gece.",{targetId:"__user__",targetName:"Emre"});
+      const st=window.__reqs[0]&&window.__reqs[0].state;
+      return (st&&/fought about money/.test(JSON.stringify(st.earlier_today))&&/Burak — husband/.test(JSON.stringify(st.people_they_answer_to))&&/alone with Emre/.test(JSON.stringify(st.who_else_can_see_or_hear))&&/who else can see or hear/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify(st); }));
   ok("a layout's own {{if ego = …}} and {{if emotion = …}} pick their text", await pg.evaluate(()=>{
       const keepOn=state.payloadTplOn, keepT=state.payloadTemplates;
       state.payloadTplOn=true; state.payloadTemplates={solo:"[system]\nBASE\n\n{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{else}}Your conscience holds.{{endif}}\n\n{{if emotion = anger}}You are angry.{{endif}}\n[system end]\n\n{{call//dialogue_history}}\n"};

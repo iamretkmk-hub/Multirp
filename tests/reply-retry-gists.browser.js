@@ -82,6 +82,8 @@ const USER_TEMPLATE=`[system]
     window.__fetches=[]; window.__sleep=ms=>new Promise(r=>setTimeout(r,ms));
     window.__stub={replies:[]};
     window.fetch=async(url,init)=>{
+      // the Decisions requests before a reply (the emotion pick) are not roleplay calls: answered empty, not counted
+      if(String(url).indexOf("/api/alpha/decisions")>-1) return new Response(JSON.stringify({answers:{}}),{status:200,headers:{'content-type':'application/json'}});
       const body=JSON.parse(init.body); window.__fetches.push(body);
       const q=__stub.replies; const txt=q.length>1?q.shift():(q[0]||"");
       return new Response(JSON.stringify({choices:[{message:{content:txt},finish_reason:"stop"}]}),{status:200,headers:{'content-type':'application/json'}});

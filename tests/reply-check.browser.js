@@ -105,8 +105,10 @@ const {chromium}=require('playwright');
       const rp=calls.filter(d=>/^Roleplay reply/.test(d)).length;
       const m=c.messages.filter(x=>x.role==="assistant"&&!x.sysError).pop();
       if(!m) return "no reply posted; calls="+JSON.stringify(calls);
-      return (window.__reqs.length===1&&rp===1&&JSON.stringify(m.replyFlags)==='["refusal"]'&&window.__reqs[0].body.state.reply===m.content) ? true
-        : JSON.stringify({reqs:window.__reqs.length,rp,flags:m.replyFlags,content:m.content}); }));
+      // the turn also sends the emotion pick (its own Decisions request); only the reply check's is counted here
+      const rc=window.__reqs.filter(r=>r.body&&r.body.questions&&r.body.questions.refusal);
+      return (rc.length===1&&rp===1&&JSON.stringify(m.replyFlags)==='["refusal"]'&&rc[0].body.state.reply===m.content) ? true
+        : JSON.stringify({reqs:rc.length,rp,flags:m.replyFlags,content:m.content}); }));
 
   console.log("\n[failures, pauses, switches]");
   for(const mode of ["500","network"]){

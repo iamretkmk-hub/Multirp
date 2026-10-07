@@ -7888,6 +7888,7 @@ function renderDebug(){
         <div class="desc">⏱️ Took <b style="color:${durColor}">${dur||"—"}</b>${e.ms!=null?` (${e.ms} ms)`:""}</div>
         ${e.usage?`<div class="desc">🧮 Billed: <b>${+e.usage.prompt_tokens||0}</b> prompt + <b>${+e.usage.completion_tokens||0}</b> completion tokens</div>`:""}
         ${_dbgMixLine(e.payload)}
+        ${Array.isArray(e.notes)&&e.notes.length?`<div class="desc">🔎 ${e.notes.map(esc).join("<br>🔎 ")}</div>`:""}
         <div class="kvline" style="padding:0">
           <label style="margin:0">${payloadLabel}</label>
           ${capStr?`<span class="seg" style="flex-shrink:0">
@@ -7969,7 +7970,7 @@ function exportDebug(limit=120){
   const entries=dbgLog.slice(-limit).map(e=>scrubSecrets({
     label:e.label, service:e.service, endpoint:e.endpoint,
     time:new Date(e.t).toISOString(), status:e.status, ms:e.ms??null,
-    payload:e.payload,
+    payload:e.payload, notes:e.notes||undefined,   // v150.59 — what a post-check changed (dbgNote)
     // keep results readable & bounded so the file stays shareable
     result:(e.result==null?null:String(typeof e.result==="string"?e.result:JSON.stringify(e.result)).slice(0,12000))
   }));
@@ -16900,7 +16901,7 @@ function resolveWorldPositions(chat,force){
   // momentary scene moves (presence tracker entries/exits, GM summon/send) live on this object
   // and must not be wiped on every read.
   const key=`${day}|${per}`;
-  if(!fresh && c.worldPositions && (c._wpKey===key || (legacy&&c._wpKey===`${day}`))) return c.worldPositions;
+  if(!fresh && c.worldPositions && (c._wpKey===key || (legacy&&c._wpKey===`${day}`))) return _wpOverlay(c,c.worldPositions);
   const pos={};
   const rolled=(c.dayPlacement&&c.dayPlacement.positions)||{};
   (state.personas||[]).filter(p=>p.universeId===c.universeId && isActiveChar(p)).forEach(p=>{
@@ -16911,6 +16912,18 @@ function resolveWorldPositions(chat,force){
     for(const id in c.companionLock){ if(c.companionLock[id])pos[id]=c.locationId; }
   }
   c.worldPositions=pos; c._wpKey=legacy?`${day}`:key;
+  return _wpOverlay(c,pos);
+}
+/* (!) v150.59 — WHO IS WHERE, IN ORDER OF AUTHORITY: the player's scene, then an offstage event of this part of
+   the day (one that resolved, or a due plan whose actor can go — see _stretchClaims), then the schedule. The
+   offstage resolvers ask charAvailability, which reads the same claims, so the map shows people where the
+   narration has them: Burak at Vanadium Cafe for his coffee plan, Özlem in the player's house while she is there. */
+function _wpOverlay(c,pos){
+  try{
+    const claims=_stretchClaims(c);
+    for(const id in claims){ if(claims[id]&&claims[id].locId&&(id in pos))pos[id]=claims[id].locId; }
+    if(c.locationId)_playerSceneIdSet(c).forEach(id=>{ if(id in pos)pos[id]=c.locationId; });
+  }catch(e){}
   return pos;
 }
 function charactersAtLocation(chat,locId){
@@ -35687,6 +35700,8 @@ function _mergeIntoLastPresenceNote(chat,add){
 function charPlaceName(chat,p){
   try{
     if(!p)return "";
+    // v150.59 — an offstage event of this part of the day wins over the rolled schedule (see _wpOverlay)
+    try{ const cl=_stretchClaims(chat)[p.id]; const l=cl&&cl.locId?chatLocById(chat,cl.locId):null; if(l&&l.name)return l.name; }catch(_){}
     const pos=(chat&&chat.worldPositions)||{};
     const wp=pos[p.id];
     if(wp){ const l=chatLocById(chat,wp); if(l&&l.name)return l.name; }   // v146.1 — this chat's places
@@ -48511,6 +48526,182 @@ function _pulseHasDuePlan(chat,p){
     return planCharIds(e).indexOf(p.id)>=0||nameInText(e.who,p.name)||sameName(e.executor,p.name);
   });
 }
+/* ===== v150.59 — WHO CAN BE WHERE: ONE ANSWER FOR THE MAP AND EVERY OFFSTAGE RESOLVER ==================
+   Reported: Özlem was in the player's house (the scene, entries 57-78) when the calendar executor resolved
+   Burak's plan "Özlem'i kahveye tekrar çağır" at Vanadium Cafe and narrated "Özlem geldi". The plan listed
+   only Burak, so nothing checked the person it was about; the map and the resolver each had their own idea
+   of where people were. Now one function answers "where is this person this part of the day, and can an
+   offstage event have them in person?":
+     1. the player's scene wins over everything — whoever is in it (presentIds, a companion the player took
+        along) is with the player and nowhere else;
+     2. then an offstage event of this part of the day — one that already resolved (chat.eventPins) or a due
+        offstage plan whose actor can go (first plan in calendar order claims a person);
+     3. then the schedule (the rolled placement).
+   resolveWorldPositions lays 2 and 3 under 1 for the map, and the resolvers ask charAvailability, which
+   reads the same claims — so the map and the narration cannot disagree. */
+function _playerSceneIdSet(chat){
+  const s=new Set();
+  try{ presentIds(chat).forEach(id=>s.add(id)); }catch(e){}
+  try{ const cl=chat&&chat.companionLock; if(cl)for(const id in cl){ if(cl[id])s.add(id); } }catch(e){}
+  return s;
+}
+// The people an offstage event of THIS part of the day has (pins written when it resolved). They live on the
+// stretch's busy set (chat.pulseBusy), so they turn over with it and a fresh world clears both together.
+function _eventPinsNow(chat){
+  const b=chat?_pulseBusySet(chat):null;
+  return (b&&b.pins&&typeof b.pins==="object")?b.pins:{};
+}
+function _noteEventPins(chat,ids,o){
+  if(!chat)return;
+  const b=_pulseBusySet(chat); if(!b.pins||typeof b.pins!=="object")b.pins={};
+  (ids||[]).filter(Boolean).forEach(id=>{ b.pins[id]={locId:(o&&o.locId)||null,place:String((o&&o.place)||""),
+    title:String((o&&o.title)||"").slice(0,90),eventId:(o&&o.eventId)||null,src:(o&&o.src)||"event"}; });
+  try{ markChatDirty(chat); }catch(e){}
+}
+/* Everyone a calendar plan involves. `listed` are its participants (who/charIds), `exec` the one who acts,
+   `targets` the people its TITLE is about ("Özlem'i kahveye çağır" → Özlem) or its id fields name, and
+   `mentioned` anyone else its reason names. A first name counts only when no one else in the cast shares it. */
+function _castNamedIn(chat,text,skip){
+  const out=[]; const t=String(text||""); if(!t.trim())return out;
+  const cast=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p));
+  const firstCount={}; cast.forEach(p=>{ const f=_nmFold(String(p.name||"").split(/\s+/)[0]); if(f)firstCount[f]=(firstCount[f]||0)+1; });
+  const un=String(chatUserName(chat)||"");
+  cast.forEach(p=>{
+    if(skip&&skip.has(p.id))return;
+    if(un&&sameName(p.name,un))return;
+    const first=String(p.name||"").split(/\s+/)[0];
+    if(nameInText(t,p.name)||(first&&first.length>=3&&firstCount[_nmFold(first)]===1&&nameInText(t,first)))out.push(p);
+  });
+  return out;
+}
+function _calPlanPeople(chat,e,listedIn){
+  const byId=id=>(state.personas||[]).find(p=>p&&p.id===id&&p.universeId===chat.universeId&&isActiveChar(p))||null;
+  const listed=(listedIn||_pulsePersonasByName(chat,e&&e.who)).slice();
+  planCharIds(e).map(byId).filter(Boolean).forEach(p=>{ if(!listed.includes(p))listed.push(p); });
+  const exec=(e&&e.executorId&&byId(e.executorId))||(e&&e.executor?_pulsePersonasByName(chat,e.executor)[0]:null)||listed[0]||null;
+  const skip=new Set(listed.map(p=>p.id));
+  const targets=[];
+  [e&&e.targetId].concat(Array.isArray(e&&e.whoIds)?e.whoIds:[]).map(byId).filter(Boolean)
+    .forEach(p=>{ if(!skip.has(p.id)){ skip.add(p.id); targets.push(p); } });
+  _castNamedIn(chat,e&&e.title,skip).forEach(p=>{ skip.add(p.id); targets.push(p); });
+  const mentioned=_castNamedIn(chat,[e&&e.detail,e&&e.aim].filter(Boolean).join(" \n "),skip);
+  return {listed,exec,targets,mentioned};
+}
+// Who is claimed by an offstage event this part of the day: id → {locId, place, title, eventId, src}.
+function _stretchClaims(chat){
+  const out={};
+  if(!chat)return out;
+  const scene=_playerSceneIdSet(chat);
+  const pins=_eventPinsNow(chat);
+  for(const id in pins){ if(!scene.has(id))out[id]=pins[id]; }
+  try{
+    for(const e of chatCalendar(chat)){
+      if(!e||e.done||!planDueNow(chat,e)||_planIncludesUser(e,chat))continue;
+      const pp=_calPlanPeople(chat,e);
+      if(!pp.exec||scene.has(pp.exec.id)||out[pp.exec.id])continue;   // the one who acts cannot go now: it claims nobody
+      const loc=e.locationId?chatLocById(chat,e.locationId):(e.where?locByName(String(e.where),chatLocations(chat)):null);
+      pp.listed.forEach(p=>{ if(scene.has(p.id)||out[p.id])return;
+        out[p.id]={locId:loc?loc.id:null,place:(loc&&loc.name)||String(e.where||""),title:String(e.title||"").slice(0,90),eventId:e.id||null,src:"plan"}; });
+    }
+  }catch(err){}
+  return out;
+}
+/* Can an offstage event have this person in person right now? `except`: the event asking (its own claim
+   does not count against it). kind: "with_player" | "event" (committed to another event) | "free". */
+function charAvailability(chat,id,opts){
+  const o=opts||{};
+  const p=(state.personas||[]).find(x=>x&&x.id===id)||null;
+  const nm=p?p.name:"";
+  if(!chat||!id)return {ok:false,kind:"unknown",name:nm};
+  const scene=_playerSceneIdSet(chat);
+  if(scene.has(id)){
+    const un=chatUserName(chat)||"the player";
+    const others=presentCast(chat).filter(x=>x&&x.id!==id).map(x=>x.name);
+    return {ok:false,kind:"with_player",name:nm,locId:chat.locationId||null,place:chat.location||((chatLocById(chat,chat.locationId)||{}).name)||"",
+      with:[un].concat(others)};
+  }
+  const cl=(o.claims||_stretchClaims(chat))[id];
+  if(cl&&!(o.except&&cl.eventId&&cl.eventId===o.except))
+    return {ok:false,kind:"event",name:nm,locId:cl.locId||null,place:cl.place||"",title:cl.title||"",eventId:cl.eventId||null};
+  try{ if(!(o.except&&_eventPinsNow(chat)[id])&&_pulseIsBusy(chat,[id]))return {ok:false,kind:"event",name:nm,locId:((chat.worldPositions||{})[id])||null,place:((chatLocById(chat,(chat.worldPositions||{})[id])||{}).name)||"",title:""}; }catch(e){}
+  const at=(chat.worldPositions||{})[id]||null;
+  return {ok:true,kind:"free",name:nm,locId:at,place:at?((chatLocById(chat,at)||{}).name||""):""};
+}
+// The line a resolver reads about somebody who cannot be there in person.
+function _unavailLine(chat,a){
+  if(a.kind==="with_player")
+    return `${a.name} is at ${a.place||"the player's place"} with ${_nameList(a.with||[])} right now. ${a.name} cannot be there in person, cannot arrive, join or be met; at most ${a.name} answers a text or a call.`;
+  return `${a.name} is committed elsewhere this part of the day${a.title?` ("${a.title}"`+(a.place?` at ${a.place})`:")"):(a.place?` (at ${a.place})`:"")}. ${a.name} cannot be there in person; at most ${a.name} answers a text or a call.`;
+}
+// Attach a note to the newest debug entry with this label (what a post-check changed, for the export).
+function dbgNote(label,text){
+  try{ for(let i=dbgLog.length-1;i>=0;i--){ if(dbgLog[i]&&dbgLog[i].label===label){ (dbgLog[i].notes=dbgLog[i].notes||[]).push(String(text).slice(0,600)); return; } } }catch(e){}
+}
+/* THE BLOCK every offstage resolver is handed, and THE CHECK its answer goes through.
+   `people`: [{p, role:"listed"|"target"|"mentioned"}]. Returns {block, free:[persona], unavailable:[{p,a}]}. */
+function _availabilityFor(chat,people,except){
+  const claims=_stretchClaims(chat);
+  const free=[], unavailable=[];
+  const seen=new Set();
+  (people||[]).forEach(x=>{ if(!x||!x.p||seen.has(x.p.id))return; seen.add(x.p.id);
+    const a=charAvailability(chat,x.p.id,{except,claims});
+    if(a.ok)free.push(x.p); else unavailable.push({p:x.p,a,role:x.role}); });
+  const lines=[]
+    .concat(free.map(p=>`- ${p.name}: free — may be there in person.`))
+    .concat(unavailable.map(u=>`- NOT AVAILABLE — ${_unavailLine(chat,u.a)}`));
+  const block=`WHO CAN BE THERE IN PERSON (checked by the engine — absolute):\n${lines.join("\n")}\n`
+    +`Add "present" to your JSON: the names of everyone physically there — only people marked free above. `
+    +`Anyone NOT AVAILABLE is not there: never have them arrive, sit, speak in the room or be met; resolve the plan without them (someone waits, is stood up, or gets a text saying they cannot come). `
+    +`"memories" carries one memory for EVERY name in "present", each from that person's own point of view, and nobody else; "rel" lines come only from people in "present".`;
+  return {block,free,unavailable};
+}
+/* Validate a resolver answer against availability. Returns {ok, present:[persona], memories, rel, notes}.
+   ok:false — it put somebody who cannot be there in "present": the answer is rejected whole. */
+function _offstagePostCheck(chat,j,av,base){
+  const notes=[];
+  const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
+  const unIds=new Set(av.unavailable.map(u=>u.p.id));
+  const freeIds=new Set(av.free.map(p=>p.id));
+  let present=null;
+  if(Array.isArray(j&&j.present)){
+    present=[];
+    for(const n of j.present){ const p=byName(n); if(!p)continue;
+      if(unIds.has(p.id)){ notes.push(`rejected: "present" names ${p.name}, who cannot be there`); return {ok:false,notes}; }
+      if(freeIds.has(p.id)&&!present.includes(p))present.push(p); }
+  }
+  (base||[]).forEach(p=>{ if(p&&freeIds.has(p.id)&&(!present||!present.includes(p))){ if(!present)present=[]; present.push(p); } });
+  present=present||[];
+  const pIds=new Set(present.map(p=>p.id));
+  const memories=(Array.isArray(j&&j.memories)?j.memories:[]).filter(m=>{ const p=byName(m&&m.name);
+    if(p&&pIds.has(p.id))return true;
+    if(p&&unIds.has(p.id))notes.push(`dropped a memory for ${p.name} (not there in person)`);
+    return false; });
+  const rel=(Array.isArray(j&&j.rel)?j.rel:[]).filter(r=>{ const a=byName(r&&r.from);
+    if(a&&pIds.has(a.id))return true;
+    if(a&&unIds.has(a.id))notes.push(`dropped a rel line from ${a.name} (not there in person)`);
+    return false; });
+  return {ok:true,present,memories,rel,notes};
+}
+/* Everyone who was there takes it away: a memory (the model's, or a plain one when it gave none), the
+   day's whereabouts row with the others, and the event's pin for the map. */
+function _offstageLand(chat,uni,o){
+  const names=o.present.map(p=>p.name);
+  if(o.sameDay)try{ noteWhereabouts(chat,o.present.map(p=>p.id),{period:o.period,placeId:o.locId||null,place:o.place,what:String(o.what||"").slice(0,90)}); }catch(_){}
+  if(o.sameStretch){
+    if(chat.worldPositions&&o.locId)o.present.forEach(p=>{ chat.worldPositions[p.id]=o.locId; });
+    _noteEventPins(chat,o.present.map(p=>p.id),{locId:o.locId,place:o.place,title:o.what,eventId:o.eventId,src:o.src});
+    _pulseMarkBusy(chat,o.present.map(p=>p.id));
+  }
+  const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
+  const got=new Set();
+  (o.memories||[]).slice(0,Math.max(4,o.present.length)).forEach(m=>{ const p=byName(m&&m.name);
+    if(!p||got.has(p.id)||!o.present.includes(p))return; got.add(p.id);
+    _plantWorldMemory(chat,uni,p,m,o.day,o.place,names,o.period); });
+  o.present.forEach(p=>{ if(got.has(p.id))return;
+    const others=names.filter(n=>n!==p.name);
+    _plantWorldMemory(chat,uni,p,{content:`I was at ${o.place||"the place we had agreed on"}${others.length?` with ${_nameList(others)}`:""} for "${String(o.what||"").slice(0,90)}".`,
+      emotion:"neutral",importance:0.45},o.day,o.place,names,o.period); });
+}
 // What a character privately wants right now — their live intents, fed to the encounter judge so
 // brewing motives can steer who seeks out whom.
 /* v28.4 — does this character carry a live motive that points at `other`, or at the player? Either
@@ -48540,8 +48731,9 @@ function _pulsePlaces(chat){
 async function runOffstageInteraction(chat,uni){
   resolveWorldPositions(chat);
   const onstage=new Set(presentIds(chat));
+  const _oClaims=_stretchClaims(chat);   // v150.59 — one availability for the map and every resolver
   const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)&&!onstage.has(p.id)
-    &&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p));
+    &&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p)&&charAvailability(chat,p.id,{claims:_oClaims}).ok);
   const pos=chat.worldPositions||{};
   const byLoc={};
   pool.forEach(p=>{ const l=pos[p.id]; if(!l||l===chat.locationId)return; (byLoc[l]=byLoc[l]||[]).push(p); });
@@ -48604,6 +48796,9 @@ async function runOffstageInteraction(chat,uni){
   const _on=new Set(presentIds(chat));
   if(_on.has(best.a.id)||_on.has(best.b.id))return false;
   const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
+  // v150.59 — nor taken by another event while the call ran
+  if(sameStretch&&(!charAvailability(chat,best.a.id).ok||!charAvailability(chat,best.b.id).ok)){
+    dbgNote("World pulse (offstage interaction)","dropped — one of them was claimed by another event meanwhile"); return false; }
   const uniObj=uni||universeById(chat.universeId);
   const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
   // PHYSICAL PLACEMENT — the event pins both characters to where it happened. If the model chose a
@@ -48615,6 +48810,7 @@ async function runOffstageInteraction(chat,uni){
   if(sameStretch){
     if(chat.worldPositions){ chat.worldPositions[best.a.id]=evLocId; chat.worldPositions[best.b.id]=evLocId; }
     _pulseMarkBusy(chat,[best.a.id,best.b.id]);
+    _noteEventPins(chat,[best.a.id,best.b.id],{locId:evLocId,place:evPlace,title:String(j.headline||"").slice(0,90),src:"pulse"});   // v150.59
   }
   // v96.1 — and both of them now know where they spent this part of the day, and with whom.
   if(sameDay)try{ noteWhereabouts(chat,[best.a.id,best.b.id],
@@ -48824,8 +49020,9 @@ async function runWorldRound(chat,uni){
     /* Everyone the world can move: in this universe, active, not in the player's scene, not
        already claimed by an encounter or by a plan that is due right now. The busy set is what
        keeps this and the older single-pair pulse from writing over each other. */
+    const _rClaims=_stretchClaims(chat);   // v150.59 — the same availability the map and the executor use
     const pool=(state.personas||[]).filter(p=>p&&p.universeId===chat.universeId&&isActiveChar(p)
-      &&!onstage.has(p.id)&&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p));
+      &&!onstage.has(p.id)&&!_pulseIsBusy(chat,[p.id])&&!_pulseHasDuePlan(chat,p)&&charAvailability(chat,p.id,{claims:_rClaims}).ok);
     if(pool.length<1){ chat._roundAt=mark; return 0; }
     const pos=chat.worldPositions||{};
     const _locs=chatLocations(chat), _lb=id=>id?_locs.find(l=>l&&l.id===id):null;   // v146.1 — this chat's places
@@ -48908,6 +49105,13 @@ async function runWorldRound(chat,uni){
              String(en.headline||"").slice(0,60)); }catch(_){}
         continue;
       }
+      /* (!) v150.59 — and nobody the round was not given: a name outside the pool is somebody with the player or
+         at another event this part of the day. The entry was written about the group, so it goes whole. */
+      const _outside=named.filter(pp=>!pool.includes(pp)||(sameStretch&&!charAvailability(chat,pp.id).ok));
+      if(_outside.length){
+        try{ dbgNote("The day around you (whole-cast round)",`entry dropped — ${_outside.map(x=>x.name).join(", ")} cannot be there: "${String(en.headline||"").slice(0,60)}"`); }catch(_){}
+        continue;
+      }
       const who=named;
       who.forEach(pp=>placed.add(pp.id));
       const loc=locByName(String(en.place||"").trim(),_locs);
@@ -48916,6 +49120,7 @@ async function runWorldRound(chat,uni){
       if(sameStretch){
         if(chat.worldPositions&&evLocId) who.forEach(pp=>{ chat.worldPositions[pp.id]=evLocId; });
         _pulseMarkBusy(chat,who.map(pp=>pp.id));
+        if(evLocId)_noteEventPins(chat,who.map(pp=>pp.id),{locId:evLocId,place:evPlace,title:String(en.headline||"").slice(0,90),src:"round"});   // v150.59 — the map keeps them there
       }
       if(sameDay)try{ noteWhereabouts(chat,who.map(pp=>pp.id),
         {period:per,placeId:evLocId,place:evPlace,what:String(en.headline||"").slice(0,90)}); }catch(_){}
@@ -48996,6 +49201,14 @@ function _calExecTransient(err){
   const st=+err.status||0; if(st===429||st>=500)return true;
   return (err instanceof Error)&&(err.kind==="timeout"||err.kind==="network"||err.kind==="abort");
 }
+/* v150.59 — the next sensible part of the day for a plan somebody could not make: later today while the day has
+   a later part before the evening, otherwise the next day at the plan's own time (never the night). Numbers only. */
+function _offstageNextSlot(chat,e){
+  const day=chat.gameDay||1, i=chatPeriodIndex(chat);
+  if(i>=0&&i<PERIODS.indexOf("Evening"))return {day,period:PERIODS[i+1]};
+  const own=(e&&PERIODS.includes(e.period)&&e.period!=="Night")?e.period:"Morning";
+  return {day:day+1,period:own};
+}
 async function runCalendarExecutor(chat,uni){
   if(!state.calOn||!chat)return 0;
   return (await withChatLock(chat,"calExec",async()=>{
@@ -49011,10 +49224,32 @@ async function runCalendarExecutor(chat,uni){
   let ran=0, calls=0;
   for(const e of due){
     if(calls>=3)break;
-    const parts=_pulsePersonasByName(chat,e.who);
-    const onstage=new Set(presentIds(chat));
-    if(_pulseIsBusy(chat,parts.map(p=>p.id)))continue;               // claimed this period → wait
-    if(parts.some(p=>onstage.has(p.id)))continue;                    // in the player's scene → the plan waits
+    const listed=_pulsePersonasByName(chat,e.who);
+    /* (!) v150.59 — EVERYONE THE PLAN INVOLVES, AND WHETHER THEY CAN BE THERE. Only the listed participants were
+       checked, so "Özlem'i kahveye tekrar çağır" (listed: Burak) was resolved with Özlem arriving at Vanadium Cafe
+       while she stood in the player's house. The one who acts must be free, or the plan waits (as before). Anybody
+       else it needs — a listed participant, or the person its title is about — who is with the player or committed
+       to another event: the plan moves to the next part of the day once; after that it is resolved without them,
+       and the resolver is told where they really are. */
+    const _pp=_calPlanPeople(chat,e,listed);
+    if(!_pp.exec)continue;
+    const _claims=_stretchClaims(chat);
+    if(!charAvailability(chat,_pp.exec.id,{except:e.id,claims:_claims}).ok)continue;   // the actor is with the player or busy → wait
+    const _req=_pp.listed.filter(p=>p.id!==_pp.exec.id).concat(_pp.targets);
+    const _reqOff=_req.filter(p=>!charAvailability(chat,p.id,{except:e.id,claims:_claims}).ok);
+    if(_reqOff.length&&!(e.postponed>0)){
+      const nx=_offstageNextSlot(chat,e);
+      e.postponed=(e.postponed||0)+1;
+      e.postponedWhy=`${_reqOff.map(p=>p.name).join(", ")} could not be there on day ${chat.gameDay||1} (${chatPeriod(chat)})`;
+      e.day=nx.day; e.period=nx.period; _calFreshSlot(e);
+      try{ dbgDone(dbg("Offstage availability · postponed","local","",{plan:e.title,
+        unavailable:_reqOff.map(p=>{ const a=charAvailability(chat,p.id,{except:e.id,claims:_claims}); return {name:p.name,kind:a.kind,place:a.place}; }),to:nx}),"ok","postponed"); }catch(_){}
+      markChatDirty(chat); persistChats(chat); try{ updateCalendarBadge(); }catch(_){}
+      continue;
+    }
+    const parts=listed.filter(p=>charAvailability(chat,p.id,{except:e.id,claims:_claims}).ok);
+    if(!parts.length)continue;
+    const _av=_availabilityFor(chat,_pp.listed.map(p=>({p,role:"listed"})).concat(_pp.targets.map(p=>({p,role:"target"})),_pp.mentioned.map(p=>({p,role:"mentioned"}))),e.id);
     calls++;
     const day=chat.gameDay||1, per=chatPeriod(chat)||"";
     const closeMissed=()=>{ e.done=true; e.prompted=true; e.outcome="missed"; e.completedDay=day; e.completedPeriod=per; updateCalendarBadge(); };
@@ -49045,38 +49280,43 @@ async function runCalendarExecutor(chat,uni){
          this list; it got the one venue and nothing to check an invention against. */
       places:_pulsePlaces(chat),
       origin,
-      sheets:parts.map(_pulseSheet).join("\n"),ties:ties.join(" | ")||"(none on record)",
+      sheets:parts.concat(_av.free.filter(p=>!parts.includes(p))).map(_pulseSheet).join("\n"),ties:ties.join(" | ")||"(none on record)",
       knows,
       user:chatUserName(chat)||"the player",world:String(chatWorldSetting(chat)||"").slice(0,700)
     });
     try{
       const _prB=promiseContextForNames(chat,parts.map(pp=>pp.name));
-      const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{pursuits:pursuitStatusBlock(parts,chat),promises:_prB||""}),
-        state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (calendar executor)"});
+      const _dbgL="World pulse (calendar executor)";
+      const out=await chatCompletion(epSend("calExec",tpl+"\n\n"+_av.block+"\n\n"+mixedLangDirective(["headline","event"]),{pursuits:pursuitStatusBlock(parts,chat),promises:_prB||""}),
+        state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",1000),frequency_penalty:0,presence_penalty:0,dbg:_dbgL});
       const j=parseJSON(out); if(!j||!j.event){ gaveUp(); continue; }
       if(e.done)continue;                                              // settled some other way meanwhile
-      // Somebody joined the player while the call ran: they are here, not there. The plan waits.
-      const _on=new Set(presentIds(chat));
-      if(parts.some(p=>_on.has(p.id)))continue;
+      /* (!) v150.59 — availability is checked again AFTER the call: somebody who joined the player (or another
+         event) while it ran is there, not here. The actor gone → the plan waits; anyone else → not present.
+         The answer is then checked: "present" naming somebody who cannot be there rejects it (a try, like an
+         unreadable answer); a memory or a rel line for them is dropped. The note lands on the debug entry. */
+      if(!charAvailability(chat,_pp.exec.id,{except:e.id}).ok){ dbgNote(_dbgL,`${_pp.exec.name} became unavailable during the call — the plan waits`); continue; }
+      const _av2=_availabilityFor(chat,_pp.listed.map(p=>({p})).concat(_pp.targets.map(p=>({p})),_pp.mentioned.map(p=>({p}))),e.id);
+      const chk=_offstagePostCheck(chat,j,_av2,[_pp.exec].concat(parts));
+      if(chk.notes.length)dbgNote(_dbgL,"availability post-check: "+chk.notes.join("; "));
+      if(!chk.ok){ gaveUp(); continue; }
+      const present=chk.present;
       const sameDay=(chat.gameDay||1)===day, sameStretch=sameDay&&chatPeriod(chat)===per;
       e.done=true; e.prompted=true; updateCalendarBadge();
-      // v96.1 — a plan that actually ran is a place these people were, together.
-      if(sameDay)try{ noteWhereabouts(chat,parts.map(pp=>pp.id),
-        {period:per,placeId:e.locationId||null,place,what:String(e.title||"").slice(0,90)}); }catch(_){}
       const uniObj=uni||universeById(chat.universeId);
       const byName=n=>_pulsePersonasByName(chat,n)[0]||null;
-      // PHYSICAL PLACEMENT — the participants really went there: pin them to the plan's place for
-      // the rest of the period so the player can travel there and find them, aware of what happened.
+      // PHYSICAL PLACEMENT — the people who were really there: pinned to the plan's place for the rest of the
+      // period (the map shows them there; the player can travel there and find them), each with a memory and
+      // the day's whereabouts row with the others (v150.59 — everyone present, not only the listed participants).
       const evLoc=e.locationId?chatLocById(chat,e.locationId):(e.where?locByName(e.where,chatLocations(chat)):null);
-      if(sameStretch){
-        if(evLoc&&chat.worldPositions){ parts.forEach(p=>{ chat.worldPositions[p.id]=evLoc.id; }); }
-        _pulseMarkBusy(chat,parts.map(p=>p.id));
-      }
       e.result=briefDesc(String(j.event||""),300); e.completedDay=day; e.completedPeriod=per;
-      _pushWorldEvent(chat,j.headline||e.title,j.event,parts.map(pp=>pp.id));
-      (Array.isArray(j.memories)?j.memories:[]).slice(0,4).forEach(m=>{ const p=byName(m&&m.name); if(p&&parts.some(x=>x.id===p.id))_plantWorldMemory(chat,uniObj,p,m,day,(evLoc&&evLoc.name)||place,parts.map(pp=>pp.name),per); });
-      _applyWorldRel(chat,j.rel,byName);
-      _calExecFollowup(chat,j,e,parts,day);
+      if(_av2.unavailable.length)e.absent=_av2.unavailable.map(u=>u.p.name);
+      // the popup and the bubble show the answer as it passed the check — nobody who was with the player is in "present"
+      _pushWorldEvent(chat,j.headline||e.title,j.event,present.map(pp=>pp.id));
+      _offstageLand(chat,uniObj,{present,memories:chk.memories,day,period:per,place:(evLoc&&evLoc.name)||place,locId:evLoc?evLoc.id:null,
+        what:String(e.title||"").slice(0,90),sameDay,sameStretch,eventId:e.id,src:"calExec"});
+      _applyWorldRel(chat,chk.rel,byName);
+      _calExecFollowup(chat,j,e,present,day);
       ran++;
     }catch(err){
       /* (!) v146.1 — a call that never came back (a timeout, the network, a paused provider, Stop) is
@@ -52121,6 +52361,7 @@ async function runBackgroundTasks(chat,day,uni){
     let ran=0; const cap=Math.max(1,Math.min(6,+state.pulseMax||4));
     for(const {e,doer} of todo){
       if(ran>=cap)break;
+      if(charAvailability(chat,doer.id).kind==="with_player")continue;   // v150.59 — with the player: not off doing it
       e._bgResolved=day;
       const success=rollDice("1d6")>=3;   // ~66% succeed, ~33% fail — a real chance to fail
       const sys=fillTpl(up("x_bg_task"),{
@@ -53093,6 +53334,15 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
           sLine({en:`${q.targetName||"They"} is no longer around, and the pursuit came to nothing.`,tr:`${q.targetName||"O"} artık ortalıkta olmadığı için emel askıda kaldı.`,de:`${q.targetName||"Sie"} ist nicht mehr da, und das Vorhaben verlief im Sand.`}));
         continue;
       }
+      /* (!) v150.59 — THE SAME AVAILABILITY AS THE MAP AND THE CALENDAR EXECUTOR. The holder must be free (not
+         at another event this part of the day); the person it runs through, when they are with the player or
+         at another event, cannot be met face to face — the step is told where they are, and what comes back
+         is checked: a memory or a rel line for them is dropped. */
+      if(!charAvailability(chat,holder.id).ok)continue;
+      let _tOff=null;
+      if(target){ const a=charAvailability(chat,target.id); if(!a.ok)_tOff=a;
+        else if(_withPlayerIn(chat,target.id,period||chatPeriod(chat)))_tOff={ok:false,kind:"with_player",name:target.name,place:chat.location||"",with:[chatUserName(chat)||"the player"]}; }
+      const _tBlock=_tOff?`\n\nWHO CAN BE MET IN PERSON (checked by the engine — absolute):\n- NOT AVAILABLE — ${_unavailLine(chat,_tOff)}\nNo move this time is made face to face with ${target.name}: it is a text or a call, something ${holder.name} does alone, or no move at all. Write no memory for ${target.name}.`:"";
       const place=(chatLocById(chat,pos[holder.id])||{}).name||"";   // v146.1 — this chat's world (period engines run in the background)
       const recent=(state.memory||[]).filter(m=>m&&m.ownerId===holder.id&&day-(m.gameDay||0)<=3)
         .slice(-5).map(m=>"- "+memPayloadText(m.content,400)).join("\n")||"- (nothing notable recently)";
@@ -53118,7 +53368,7 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[holder.name].concat(target?[target.name]:[]));
-        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+noWeekdaysRule(day)+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
+        const out=await chatCompletion(epSend("charQuestStep",tpl+_tBlock+"\n\n"+noWeekdaysRule(day)+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (step) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -53130,12 +53380,18 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
         continue;
       }
       q.stalls=0; q.lastMoveDay=day; moved++;
-      const byName=n=>{ const hit=_pulsePersonasByName(chat,n)[0]; if(hit)return hit;
+      const _byAny=n=>{ const hit=_pulsePersonasByName(chat,n)[0]; if(hit)return hit;
         if(sameName(n,holder.name))return holder;
         if(target&&sameName(n,target.name))return target;
         return null; };
+      // v150.59 — only the holder, and the target when they could be met, take anything from the step
+      const byName=n=>{ const x=_byAny(n); if(!x)return null;
+        if(x===holder||x.id===holder.id)return holder;
+        if(target&&x.id===target.id&&!_tOff)return target;
+        try{ dbgNote("Char quest (step) · "+holder.name,`availability post-check: dropped a memory/rel line for ${x.name}`); }catch(_){}
+        return null; };
       // The player always learns what happened — a news-style narration bubble (present:[]).
-      _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&target.id]);
+      _pushWorldEvent(chat,j.headline||q.title,j.event||"",[holder.id,target&&!_tOff&&target.id]);
       const mems=Array.isArray(j.memories)?j.memories.slice(0,4):[];
       // (!) v150.52 — as the goal pursuit: the English note stands in, never the narrated event
       if(j.note&&!mems.some(m=>m&&m.name&&sameName(m.name,holder.name))){

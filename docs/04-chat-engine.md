@@ -242,7 +242,7 @@ transcript* (not the router's stale `addressed`), witness-scoped history, refusa
   yes/no questions about it — `refusal` (the AI declining in a way the regex missed), `player` (it
   writes the player's words, actions, thoughts or decisions) and `character` (out of character for
   the sheet). The state is the character's name, personality and speaking style, the player, the six
-  lines before the reply as the character heard them, and the reply. Each question is one editable
+  lines before the reply as the character heard them (this scene only, v150.32), and the reply. Each question is one editable
   prompt (`x_reply_check_*`, Payloads → Reply check): the question, a `YES:` line and a `NO:` line,
   split into the noul question's instructions and criteria (`_decQuestionFrom`; no YES/NO lines →
   "Yes."/"No."). A probability at or above `replyCheckAt` (default 0.7) is stored on the message

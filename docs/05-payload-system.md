@@ -1279,3 +1279,17 @@ copy of the shipped list, which is saved once (`_fragCarryDefaults`).
 
 The classic layout and the templates are unchanged: every worded piece is still built. Pinned by
 `tests/fragment-wording.browser.js`.
+
+### The text path's own wording (v150.60)
+
+A texting export showed the text payload telling the character to narrate: `last_before` said "Narration in the first
+person… Your body goes in the narration", the language rule listed "dialogue, narration, inner thoughts", and the
+privacy heading read "WHO CAN HEAR YOU". Each now says what a text is:
+- `last_before`: the heading is the main body; three options pick the wording: `spoken` (solo, multi, gamemaster, as
+  before), `texting` (a short message gets a short reply; only what you would type, nothing between asterisks or
+  underscores) and `heat` (speech sized to the moment; the one thought the format names, no narration).
+- `language`: "every message you type" on the text path (`{{if render_mode = text}}`).
+- `privacy`: the heading is "WHO CAN READ THIS" on the text path.
+
+A saved list gets them once (`FRAG_SHIPPED_ADDS` key `v150.60.text`, old defaults in `FRAG_DEFAULTS_V150_60_OLD`),
+only while each fragment is still its v150.59 default.

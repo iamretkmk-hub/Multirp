@@ -35,7 +35,7 @@ const {chromium}=require('playwright');
   ok("the guardrails are a fragment: shared body, text and heat variants, coded options; empty and 'never' rails gone", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="guardrails");
       const ids=f.options.map(o=>o.id).join();
       return (/^# FINAL GUARDRAILS/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!/\{\{if/.test(JSON.stringify(f))&&/typed message/.test(f.byPath.text)&&/Dialogue-dense/.test(f.byPath.heat)
-        &&ids==="oblique_once,noecho,heat_sound,heat_silent"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; }));
+        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);
       return (f.options.length===3&&o("unknown_past").ctx.join()==="memories"&&/not in \{\{char\}\}'s memories/.test(o("unknown_past").ask)&&/Being warm is not agreeing/.test(o("pushed").text)&&/AND IF YOU DO CROSS IT/.test(o("crossed").text)) ? true : JSON.stringify(f.options.map(x=>x.id)); }));

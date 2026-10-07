@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.44</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.45</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -28493,6 +28493,8 @@ function ptSources(blocks,rawFn){
   /* and the same for every section of a converted box, under the block's own name — a section
      whose condition was false this turn is known and empty, not a typo. */
   Object.keys(PT_BOXES).forEach(b=>{ ptBoxSections(b).forEach(n=>{ s[b+"//"+n]=""; }); });
+  if(!("consistency_note" in s))s.consistency_note="";   // v150.45 — a section of the guardrails that is not in the rails box
+  if(!("final_guardrails//consistency_note" in s))s["final_guardrails//consistency_note"]="";
   s.language_rule=""; s["language_rule//full"]="";
   /* v45.1 — the layout headings are fixed prose with no producer, so they are filled straight from
      the fragment table. A heading the user has blanked resolves empty and ptExpand drops its line,
@@ -28949,7 +28951,8 @@ function ptPieceTemplate(id,kind){
     const names=ptBoxSections("final_guardrails");
     const head=ptBoxHead("final_guardrails");
     if(!names.length) return "{{call//final_guardrails//full}}";
-    return (head?head+"\n{{gap}}\n":"")+names.map(n=>"{{call//final_guardrails//"+n+"}}").join("\n{{gap}}\n");
+    return (head?head+"\n{{gap}}\n":"")+names.map(n=>"{{call//final_guardrails//"+n+"}}").join("\n{{gap}}\n")
+      +"\n{{gap}}\n{{call//final_guardrails//consistency_note}}";   // v150.45 — empty except right after a flagged reply
   }
   /* WHO YOU ARE RESPONDING TO. Three possible headings, four possible openings, then the target's
      backstory and appearance — every one of them a real prompt name, listed in the order the block
@@ -30078,7 +30081,7 @@ function epSend(key,systemText,parts,vars){
     // separate and are claimed here, by the block whose box uses them.
     resistance:["resistance_header","resistance_body","resistance_actions","resistance_limits"],
     after_heat:["after_heat_header"],
-    final_guardrails:["rails_header","heat_narr_superego_short","heat_narr_physical_short"],
+    final_guardrails:["rails_header","heat_narr_superego_short","heat_narr_physical_short","consistency_character","consistency_player"],
     spoken_delivery:["voice_delivery","heat_delivery","voice_format_reset"],
     layout:LY_ORDER
   };
@@ -31202,6 +31205,10 @@ Not your opinion of {{target}} — that was settled earlier and still governs wh
   feel_momentary:`{{momentary}}
 This is momentary, and it changes HOW the line comes out, not what the line is about. Under pressure a person gets SHORTER, not more articulate. Do not name it and do not explain it — just talk the way it makes you talk.`,
   feel_momentary_impact:`The most specific thing you have been given about this turn — play exactly this, as behaviour, not as a sentence about it:\n{{impact}}`,
+  /* v150.45 — THE CONSISTENCY NOTE: the reply check flagged this character's last reply (out of character, or writing
+     the player's part); their next reply is told so, once — at the end of the guardrails, closest to generation. */
+  consistency_character:`LAST TIME YOU SLIPPED OUT OF CHARACTER. Your previous reply did not sound like {{self}} — the voice, the attitude or what you knew was someone else's. This reply is {{self}} again: your own voice, your own manner, only what you could know.`,
+  consistency_player:`LAST TIME YOU WROTE {{user}}'S PART. Your previous reply put words, actions, thoughts or decisions in {{user}}'s mouth. Play only {{self}} and the world around you; what {{user}} says, does and decides is theirs alone.`,
   /* (!) v150.38 — drive_header / drive_toward / drive_against / drive_ego / drive_empty went with the drives writer. */
   /* v148.6 — the limits and commitments this character has stated about their own conduct. */
   limits_header:`# WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES
@@ -32414,6 +32421,16 @@ const FRAG_DEFAULTS=[
 "heat"
 ],
 "byPath": {}
+},
+{
+"id": "consistency",
+"name": "Right after a reply that broke character or wrote the player's part",
+"code": "broke_character or spoke_for_player",
+"ask": "",
+"ctx": [],
+"text": "{{call//consistency_note}}",
+"paths": [],
+"byPath": {}
 }
 ]
 },
@@ -33596,7 +33613,10 @@ function buildTailBlocks(opts){
     /* v150.34 — the speaker's emotion, from the emotion pick (empty when there is none yet) */
     ...(()=>{ const e=charEmotion(chat,selfP&&selfP.id); return {emotion:e?e.emotion:"",intensity:e?e.intensity:"",tone:e?e.tone:"",ego:e?(e.ego||""):""}; })(),
     /* v150.37 — the facts fragment conditions test (fragCodeFacts) */
-    ...(()=>{ try{ return fragCodeFacts(chat,selfP,targetId||"__user__"); }catch(e){ return {}; } })()
+    ...(()=>{ try{ return fragCodeFacts(chat,selfP,targetId||"__user__"); }catch(e){ return {}; } })(),
+    /* v150.45 — the reply check flagged this character's latest reply: out of character / wrote the player's part */
+    ...(()=>{ try{ const last=[...((chat&&chat.messages)||[])].reverse().find(m=>m&&m.role==="assistant"&&!m.sysError&&selfP&&m.speakerId===selfP.id);
+      const f=(last&&Array.isArray(last.replyFlags))?last.replyFlags:[]; return {broke_character:f.indexOf("character")>=0,spoke_for_player:f.indexOf("player")>=0}; }catch(e){ return {broke_character:false,spoke_for_player:false}; } })()
   };
   B._railFlags=_railFlags;
   {
@@ -33612,6 +33632,12 @@ function buildTailBlocks(opts){
       const v=ptRenderSection(_raw,n,_flags);
       if(v!=null&&String(v).trim()) B._rails[n]=fillTpl(v,_rmap);
     });
+    /* (!) v150.45 — THE CONSISTENCY NOTE, last in the guardrails: on the whole block (a template calling
+       final_guardrails//full, the classic builder) and as its own section (the generated layout calls it by name;
+       a fragment option calls {{call//consistency_note}}). Only on the reply right after a flagged one. */
+    const _cn=[_railFlags.broke_character?blkTpl("consistency_character"):"",_railFlags.spoke_for_player?blkTpl("consistency_player"):""]
+      .map(t=>String(t||"").trim()).filter(Boolean).map(t=>fillTpl(t,_rmap)).join("\n\n");
+    if(_cn){ B._rails.consistency_note=_cn; B.final_guardrails=(B.final_guardrails?B.final_guardrails+"\n\n":"")+_cn; }
   }
 
   // v24.3 — delivery-tag coaching for the xAI engine: while replies are being voiced through xAI
@@ -57198,6 +57224,7 @@ function ptKnownNames(){
   Object.keys(PT_BOXES).forEach(b=>{
     ptBoxSections(b).forEach(n=>{ k[n]=true; k[b+"//"+n]=true; });
   });
+  k.consistency_note=true; k["final_guardrails//consistency_note"]=true;   // v150.45 — the note after a flagged reply
   return k;
 }
 /* v38.1 — ERASE THE APP'S WORDING. This used to swap {{call//x//full}} for the bare {{call//x}},

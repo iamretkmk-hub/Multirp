@@ -329,6 +329,16 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **The consistency note** (v150.45): a flag is also a correction on that character's *next* reply.
+  When the speaker's latest reply carries `replyFlags.character` or `.player`, `buildTailBlocks` sets
+  `_railFlags.broke_character` / `spoke_for_player` and appends the matching note to the end of the
+  final guardrails — `consistency_character` ("LAST TIME YOU SLIPPED OUT OF CHARACTER…") and/or
+  `consistency_player` ("LAST TIME YOU WROTE {{user}}'S PART…"), both editable block templates. It is
+  reachable as `{{call//final_guardrails//consistency_note}}` (the generated layout calls it), inside
+  `final_guardrails//full`, and as the fragment model's guardrails option `consistency`
+  (`broke_character or spoke_for_player`). It lasts one reply: it reads only the speaker's own latest
+  reply, so once they answer again unflagged it is gone, and another character never carries it.
+  Pinned by `tests/consistency-note.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

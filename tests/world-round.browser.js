@@ -262,7 +262,7 @@ const {chromium}=require('playwright');
       /Everything else you return is an engine record and is plain English/.test(up("goalPursuit")||"") ));
   ok("the call sends the mixed directive, not the all-English one", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
-      return /epSend\("goalPursuit",tpl\+"\\n\\n"\+mixedLangDirective\(\["title"\]\)/.test(src)
+      return /epSend\("goalPursuit",tpl\+"\\n\\n"\+(noWeekdaysRule\(day\)\+"\\n\\n"\+)?mixedLangDirective\(\["title"\]\)/.test(src)   // v150.56 — the weekday rule may sit between
         ? true : "the directive still contradicts the prompt"; })());
 
   console.log("\n[v102.1 — the round is actually reached]");

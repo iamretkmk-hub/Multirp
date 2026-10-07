@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.55</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.56</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -16437,6 +16437,9 @@ function noteLeftBehind(chat,ids,locId){
    when presentIds is already empty, so a character who was beside the player the whole time was stepped as if they had
    been elsewhere ("the player is NOT here"; a phone call "from the beach" about what they had just said in person). Who
    the player left behind in that same stretch was with them. */
+/* (!) v150.56 — THE CALENDAR HAS NO WEEKDAYS. The quest step set a dinner for "Thursday" while the goals and the quest
+   title said "Friday", and neither could be resolved: days are numbers here. Every writer that plans ahead gets this. */
+function noWeekdaysRule(day){ return `The story's calendar counts days by number only: there are no weekdays and no dates. Today is day ${day||1}. Write "day ${(day||1)+2}", "tomorrow" or "in two days" — never "Friday", "next Monday", "at the weekend" or "the 12th".`; }
 function _withPlayerIn(chat,id,period){
   try{ if((presentIds(chat)||[]).indexOf(id)>=0)return true;
     const lb=chat&&chat.leftBehind; if(!lb||lb._day!==(chat.gameDay||1))return false;
@@ -19007,6 +19010,7 @@ async function runFutureTracker(chat){
     if(on.promise){ try{ await runPromisePurge(chat); }catch(e){} }
     const len=_ftConvoLen(chat);
     chat.futureWatch=(Array.isArray(chat.futureWatch)?chat.futureWatch:[]).filter(w=>w&&len-(w.since||0)<=FT_WATCH_TTL);
+    _ftWatchPrune(chat);   // v150.56
     const watch=chat.futureWatch.map(w=>`- ${w.kind.toUpperCase()}: ${w.about}${w.holder?` (${w.holder})`:""}`).join("\n")||"(nothing)";
     /* (!) v147.2 — THE LINE THAT SETTLED IT. A pass that coalesced two turns (a turn landing while the last pass
        was out) stamped everything it filed with the NEWEST reply, so a Retry of that reply took back a meeting
@@ -19092,12 +19096,25 @@ async function runFutureTracker(chat){
       }
       try{ _ftStampChanges(chat,_before,at,_lineMid(it)); }catch(e){}
     }
+    _ftWatchPrune(chat);   // v150.56 — and whatever this pass filed
     markChatDirty(chat);
   }catch(e){ try{ console.warn("[future tracker] bailed:",e&&e.message||e); }catch(_){} }
   finally{
     chat._ftBusy=false;
     if(chat._ftAgain){ chat._ftAgain=false; runFutureTracker(chat).catch(()=>{}); }
   }
+}
+/* (!) v150.56 — "BEING DISCUSSED" AFTER IT WAS AGREED. A plan left the watch list only when the agreed item was worded
+   like it: two tasks for Berker, filed under their own titles, stayed "being discussed" for the rest of the day. Whatever
+   is already on record (or settled) for the same kind and the same thing takes its watch entry off. */
+function _ftWatchPrune(chat){
+  try{ if(!Array.isArray(chat.futureWatch)||!chat.futureWatch.length)return;
+    const uni=universeById(chat.universeId), gd=(uni&&uni.gameData)||{};
+    const rec={meeting:chatCalendar(chat).map(e=>e&&`${e.title||""} ${e.detail||""}`),
+      promise:chatPromises(chat).map(p=>p&&String(p.promise||"")),
+      task:(Array.isArray(gd.charQuests)?gd.charQuests:[]).concat(Array.isArray(gd.quests)?gd.quests:[]).map(q=>q&&`${q.title||""} ${q.desc||""}`)};
+    chat.futureWatch=chat.futureWatch.filter(w=>!(rec[w.kind]||[]).some(t=>t&&(_titleSimilar(w.about,t)||_mostlySame(w.about,t,0.5))));
+  }catch(e){}
 }
 function _ftLastMid(chat){ const ms=(chat&&chat.messages)||[]; for(let i=ms.length-1;i>=0;i--){ const m=ms[i]; if(m&&m.role!=='system'&&!m.sysError&&!m.textMsg)return m.mid||null; } return null; }
 function _ftLog(chat,line){ try{ console.log("[future] "+line); }catch(e){} }
@@ -22766,6 +22783,12 @@ const EGO_LEVELS=[
 /* What the speaker feels toward the one they answer: the feeling right now (fast axes), the lasting one (slow
    axes), the settled view in words and the tie — so the emotion and the id/superego answers weigh the bond,
    not the room. Null when there is nobody to answer. */
+// Most of a's longer words are already in b (case- and accent-folded): a says little that b does not.
+function _mostlySame(a,b,at){
+  const w=t=>{ let x=String(t||""); try{ x=asciiFold(x); }catch(e){} return Array.from(new Set((x.toLowerCase().match(/[\p{L}\p{N}]{5,}/gu)||[]))); };
+  const A=w(a), B=new Set(w(b)); if(A.length<4)return false;
+  return A.filter(x=>B.has(x)).length/A.length>=(at||0.6);
+}
 function _emoFeelState(chat,p,targetId,targetName){
   try{
     if(!targetId)return null;
@@ -22773,11 +22796,14 @@ function _emoFeelState(chat,p,targetId,targetName){
     const tn=targetName||(targetId==="__user__"?(chatUserName(chat)||"the player"):(((state.personas||[]).find(x=>x&&x.id===targetId)||{}).name||"them"));
     const fast=relReadings(o,{self:p.name,target:tn,which:"fast"}), slow=relReadings(o,{self:p.name,target:tn,which:"slow"});
     const tie=relSheetEntry(p,targetId), settled=settledViewOf(o);
-    return {toward:tn,
-      who_they_are_to_them:tie?((tie.tie?tie.tie+" — ":"")+(tie.relationship||"")).trim():"(no tie on record)",
+    const who=tie?((tie.tie?tie.tie+" — ":"")+(tie.relationship||"")).trim():"(no tie on record)";
+    const out={toward:tn, who_they_are_to_them:who,
       feelings_right_now:fast.length?fast.join(" "):"(nothing strong in the moment)",
       lasting_feelings:slow.length?slow.join(" "):"(nothing settled yet)",
       settled_view:settled?String(settled):"(none written yet)"};
+    // (!) v150.56 — the settled view was often the tie paragraph again: sent once, not twice
+    if(settled&&_mostlySame(String(settled),who))delete out.settled_view;
+    return out;
   }catch(e){ return null; }
 }
 /* v150.36 — WHAT ELSE A FEELING AND A CHOICE ARE MADE OF. The emotion of this moment is coloured by what happened
@@ -37397,7 +37423,7 @@ async function rememberTextExchange(chat,p){
   let progress="ongoing",topic="same",summary=arc.summary||"";
   try{
     const out=await chatCompletion(
-      epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange}),
+      epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective(),
              {}),
       mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker (text) · "+p.name});
     const j=parseJSON(out)||{};
@@ -43726,6 +43752,16 @@ function _bkCleanOut(s){
   t=t.replace(/^(?:#{1,4}\s[^\n]*|\*\*[^*\n]{1,80}\*\*|(?:passage|chapter|title)\s*:[^\n]*)\n+/i,"");
   return t.replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
 }
+/* (!) v150.56 — A PASSAGE THAT STOPS MID-SENTENCE. Passages the writer re-read ended "Hallet de gör", "Bak kaç": cut off at
+   the token limit and stored as they were, so the next passage carried on from half a line. A passage that does not end
+   on a sentence end is trimmed back to its last one, when that keeps most of it. */
+function _bkWholeEnd(t){
+  t=String(t||"").replace(/\s+$/,""); if(!t)return t;
+  if(/[.!?…]["'”’»)\]*_]*$/.test(t))return t;
+  const last=t.slice(-1); if((last==="*"||last==="_")&&(t.split(last).length-1)%2===0)return t;   // a closed *action* or _thought_
+  const re=/[.!?…]["'”’»)\]*_]*(?=\s)/g; let m, cut=-1; while((m=re.exec(t)))cut=m.index+m[0].length;
+  return (cut>=t.length*0.6)?t.slice(0,cut):t;
+}
 async function bookWriteRun(chat,kind,run,plan,opts){
   opts=opts||{}; kind=_bkKind(kind);
   if(!chat||!run||!run.lines||!run.lines.length)return null;
@@ -43785,6 +43821,7 @@ async function bookWriteRun(chat,kind,run,plan,opts){
       const t2=_bkCleanOut(again); if(t2&&t2.length>=20)text=t2;
     }
   }catch(e){ try{ _alog("book.write.fail",String((e&&(e.friendly||e.message))||e).slice(0,160)); }catch(_){} return null; }
+  text=_bkWholeEnd(text);   // v150.56 — a passage cut off at the token limit ends on its last whole sentence
   if(!text||text.length<20)return null;
   const B=_bkStore(chat,kind), set=new Set(run.mids);
   Object.keys(B.passages).forEach(id=>{ const q=B.passages[id]; if(id===first||(q&&Array.isArray(q.mids)&&q.mids.some(x=>set.has(x))))delete B.passages[id]; });
@@ -48431,7 +48468,7 @@ async function runGoalPursuit(chat,day,uni,period){
            the reason came back English, and the memory built from the pair was half of each. The
            title genuinely IS player-facing (it is the calendar entry's name and it renders in the
            MEETINGS block), so it belongs in the story language; everything else is a record. */
-        const out=await chatCompletion(epSend("goalPursuit",tpl+"\n\n"+mixedLangDirective(["title"]),{pursuits:pursuitStatusBlock([p],chat),promises:(_prB?`COMMITMENTS INVOLVING ${p.name} (each line says who gave the word and who is owed it — never choose a move that breaks a word ${p.name} gave unless breaking it IS the move, and then say so plainly; a word given TO ${p.name} is one they expect kept):\n${_prB}`:"")}),   // v148.4 — given vs owed
+        const out=await chatCompletion(epSend("goalPursuit",tpl+"\n\n"+noWeekdaysRule(day)+"\n\n"+mixedLangDirective(["title"]),{pursuits:pursuitStatusBlock([p],chat),promises:(_prB?`COMMITMENTS INVOLVING ${p.name} (each line says who gave the word and who is owed it — never choose a move that breaks a word ${p.name} gave unless breaking it IS the move, and then say so plainly; a word given TO ${p.name} is one they expect kept):\n${_prB}`:"")}),   // v148.4 — given vs owed
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"World pulse (goal pursuit) · "+p.name});
         j=parseJSON(out);
         chat.goalAsked[p.id]=day; markChatDirty(chat);   // answered, whatever it said
@@ -48720,6 +48757,12 @@ async function runIntentEngine(chat,day,uni,opts){
       room=Math.max(0,perChar-liveOf(holderId).length);
       let arr=(Array.isArray(j.intents)?j.intents:[]).filter(x=>x&&typeof x.strength==="number")
         .sort((x,y)=>intentWeight(y)-intentWeight(x));
+      /* (!) v150.56 — A KIND THAT CONTRADICTS ITS VALENCE. The former wrote "loyalty" for a hostile motive toward Berker:
+         the valence (which follows the aim) decides what is done with it, so the kind is brought in line before anything
+         reads it — a warm kind on a hostile motive becomes a grievance, a hostile kind on a warm one a reconciliation. */
+      arr.forEach(it=>{ try{ const k=String(it.kind||"").toLowerCase(), v=String(it.valence||"").toLowerCase();
+        if(v==="hostile"&&INTENT_WARM_KINDS.has(k))it.kind="grievance";
+        else if(v==="warm"&&INTENT_HOSTILE_KINDS.has(k))it.kind="reconciliation"; }catch(e){} });
       /* (!) v150.33 — THE STRICT GATE: a proposed NEW motive is kept only if it is a real one. A same-target,
          same-want proposal still feeds the motive already carried (asked like any other: a flicker feeds nothing). */
       { const cand=arr.slice(0,3).filter(it=>it&&it.kind&&it.strength>=0.35&&idByName(it.target)&&idByName(it.target)!==holderId);
@@ -49816,6 +49859,8 @@ function _mapCharState(charId){
 function _mapStateClose(){ const p=document.getElementById('mapStatePop'); if(p)p.remove(); }
 // ---- Manual EDIT of a character's living-engine intent (fix a wrong plan, or hand-author one) ----
 const INTENT_KINDS=["courtship","reconciliation","loyalty","protection","alliance","friendship","grievance","rivalry","resentment","scheme","ambition","desire"];
+const INTENT_WARM_KINDS=new Set(["courtship","reconciliation","loyalty","protection","alliance","friendship","desire"]);   // v150.56
+const INTENT_HOSTILE_KINDS=new Set(["grievance","rivalry","resentment","revenge","vendetta"]);
 const INTENT_STATUSES=["brewing","ready","armed","spent"];
 async function deleteIntent(charId,intentId){
   const chat=curChat(); if(!chat||!Array.isArray(chat.intents))return;
@@ -51842,7 +51887,7 @@ async function _curateGoalsFor(chat,p,day,uid,max){
   ].filter(Boolean).join("\n\n");
   let out;
   try{
-    out=await chatCompletion(epSend("goalsCurator",sys,{data:usr}),
+    out=await chatCompletion(epSend("goalsCurator",sys+"\n\n"+noWeekdaysRule(day),{data:usr}),
       state.memModel,{fn:"mem",temp:fnTemp("mem",0.4),max:fnTok("mem",420),frequency_penalty:0,presence_penalty:0,
       dbg:"Goals curator · "+p.name});
   }catch(e){ return; }
@@ -52112,7 +52157,7 @@ async function runCharQuestSpawn(chat,day,uni,opts){
       });
       let j=null;
       try{
-        const out=await chatCompletion(epSend("charQuestGen",tpl+"\n\n"+engineLangDirective(),{}),
+        const out=await chatCompletion(epSend("charQuestGen",tpl+"\n\n"+noWeekdaysRule(day)+"\n\n"+engineLangDirective(),{}),
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",700),frequency_penalty:0,presence_penalty:0,foreground:!!(opts&&opts.fg),dbg:"Char quest (spawn) · "+p.name});   // v147.2 — fg: "spawn now"
         j=parseJSON(out);
       }catch(err){}
@@ -52339,7 +52384,7 @@ async function runCharQuestPursuit(chat,day,uni,period){   // v144.1 — period:
       let j=null;
       try{
         const _prB=promiseContextForNames(chat,[holder.name].concat(target?[target.name]:[]));
-        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
+        const out=await chatCompletion(epSend("charQuestStep",tpl+"\n\n"+noWeekdaysRule(day)+"\n\n"+mixedLangDirective(["headline","event"]),{promises:_prB||""}),
           state.memModel,{fn:"mem",temp:fnTemp("mem",0.7),max:fnTok("mem",900),frequency_penalty:0,presence_penalty:0,dbg:"Char quest (step) · "+holder.name});
         j=parseJSON(out);
       }catch(err){}
@@ -52473,9 +52518,14 @@ async function reconcileCharQuestsForDay(chat,day,uni,period){
     // v130.1 — tasks a character took on are judged here too, whoever they run through.
     const active=_cqActive(uni).filter(q=>q&&((q.targetId==="__user__"&&q.delivered)||q.source==="task"));
     if(!active.length)return;
+    /* (!) v150.56 — ONLY THE PEOPLE IN THESE PURSUITS. Every memory of the stretch went in, and the judge wrote "Nil spent
+       the midday at the beach with Kerem and Deniz" — that was Aslan Berk at the slides; Nil was at home. A pursuit is judged
+       from its holder's and its target's own memories (and the player's, below). */
+    const _cast=new Set(); active.forEach(q=>{ if(q.holderId)_cast.add(q.holderId); if(q.targetId&&q.targetId!=="__user__")_cast.add(q.targetId); });
     const seen=new Set(); const mems=[];
     for(const m of state.memory){
       if(m.gameDay!==day || m.source==="diary")continue;
+      if(m.ownerId&&!_cast.has(m.ownerId))continue;
       if(period && m.gamePeriod && m.gamePeriod!==period)continue;   // v129.1 — the part of the day that just ended
       if(m.universeId && m.universeId!==uni.id)continue;
       if(!_memOfChat(m,chat))continue;   // v147.2 — this chat's day: another chat's same day is another timeline's
@@ -55256,7 +55306,7 @@ async function _maybeBuildMemoryLocked(chat,q){
 
   let progress="ongoing", topic="same", summary=ev.summary||"";
   try{
-    const out=await chatCompletion(inChatWorld(chat,()=>epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange}),{})),mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker"});
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective(),{})),mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker"});
     const j=parseJSON(out)||{};
     if(j.progress==="finished"||j.progress==="paused"||j.progress==="ongoing")progress=j.progress;
     if(j.topic==="same"||j.topic==="different")topic=j.topic;

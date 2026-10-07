@@ -390,6 +390,23 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
     reads "I went to {player} about {them}…", not "I confronted", with importance 0.65 at most. Its aim is
     clipped at a sentence (`clipAtSentence`), never mid-word.
   - Pinned by `tests/export-fixes-1552.browser.js`.
+- **The smaller items from the two exports (v150.56):**
+  - **Weekdays:** `noWeekdaysRule(day)` is appended to the goal pursuit, the goals curator, the quest step and
+    the quest spawn. The calendar has day numbers only, and one writer said "Thursday" while another said
+    "Friday".
+  - **Story Book:** `_bkWholeEnd` trims a passage cut off at the token limit back to its last whole sentence,
+    when that keeps most of it. A closed `*action*` or `_thought_` counts as an ending.
+  - **Pursuit reconcile:** `reconcileCharQuestsForDay` reads only the memories of the holders and targets of
+    the pursuits it judges, plus the player's. It had credited Nil with another character's afternoon.
+  - **Motives:** a motive's kind is brought in line with its valence before the gate. A warm kind on a hostile
+    motive becomes "grievance", and a hostile kind on a warm one becomes "reconciliation".
+  - **Emotion request:** `_emoFeelState` leaves out `settled_view` when it mostly repeats the tie
+    (`_mostlySame`).
+  - **Arc summaries:** both arc tracker calls (`memEval`) carry `engineLangDirective()`, so their summaries are
+    English engine records.
+  - **Future tracker:** `_ftWatchPrune` takes a "being discussed" entry off the watch list once the same thing
+    is on record, before and after each pass.
+  - Pinned by `tests/leftovers-1556.browser.js`.
 - Separately, `chatCompletion` itself rescues *empty* responses (reasoning models burning the
   budget) with one automatic retry at ≥1600 tokens.
 

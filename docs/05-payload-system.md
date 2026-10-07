@@ -71,7 +71,7 @@ an empty block renders nothing.
 | `world` | The universe's `setting` text. Universal. |
 | `format` | Formatting contract (`*narration*`, `_thoughts_`, `"dialogue"`) **+ the player's story language**. Swapped for the text/heat format in those payloads. |
 | `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, the **maintained** goals & ambitions list, appearance, wardrobe, where they live. See "v30.3 — one maintained want-list" below. |
-| `relationships` | Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. **(!)** Full prose only for the player and whoever is actually present; everyone else collapses to a `Name — tie` list under `rel_elsewhere`. The block keeps *every* tie on purpose (you don't forget your daughter because she isn't in the room) — but a live two-person scene was spending ~1,300 tokens on nine people, ~700 of it paragraphs about seven who could not be spoken to. The tie is what stops a bond being played as a stranger and it survives; the paragraph only earns its place for someone in front of you. A tie-less entry falls back to a trimmed clause of its prose. |
+| `relationships` | **(v150.39: dynamic — see "Dynamic relationships" below; the social-graph note is gone.)** Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. **(!)** Full prose only for the player and whoever is actually present; everyone else collapses to a `Name — tie` list under `rel_elsewhere`. The block keeps *every* tie on purpose (you don't forget your daughter because she isn't in the room) — but a live two-person scene was spending ~1,300 tokens on nine people, ~700 of it paragraphs about seven who could not be spoken to. The tie is what stops a bond being played as a stranger and it survives; the paragraph only earns its place for someone in front of you. A tie-less entry falls back to a trimmed clause of its prose. |
 | `scenario` | The character's scenario, when set. |
 | `others_present` | Who else is within earshot + the "only these people exist" footer. |
 | `response_target` ⚠️ | **The person this turn is aimed at** — player *or* another character — with their backstory and appearance. |
@@ -1091,3 +1091,36 @@ read `solo` everywhere but text and heat.
 
 Save writes `state.fragments` / `sm_fragments`. When the list equals the shipped one, nothing is stored,
 so later shipped improvements still arrive. Pinned by `tests/fragments.browser.js`.
+
+## v150.39 — dynamic relationships; the social graph is gone
+
+The relationships block carries only the people who matter to the line being answered. `relInjectIds`
+returns each person with the reason they are included:
+
+- **player**: the person the story is played with, unless their tie is "stranger".
+- **here**: whoever is in the scene. For a text, whoever shares the texter's place.
+- **pinned**: ties ticked **Always include** in the character editor's "Who they know" list
+  (`relationships[id].pinned`). A husband or wife is pinned unless it is unticked (`relPinned`). The
+  tick survives a relationship regeneration.
+- **mentioned**: someone who is not here but is being talked about. This is either a first name said
+  in the latest lines the character heard (`relNamedInLines`, code), or a "yes" from the reply's
+  Decisions request. That request asks `x_rel_about` once per absent, unpinned tie (at most twelve),
+  next to the emotion pick, with the list of people they know who are not here
+  (`relAboutQuestions` → `chat.emo[id].relAbout`). A yes counts at `REL_ABOUT_AT` (0.6). An answer
+  from another place is not used. At most `REL_ABOUT_MAX` (4) people are added this way, and they are
+  marked `[not here — being talked about]`.
+
+Anyone else stays out of the payload. What play has learned about people (`socialFacts`) rides only
+with the people carried. `B._relInclude` records who was included and why.
+
+**Setting.** Settings → "How much of the relationship sheet each reply carries" has two values:
+`dynamic` (the default) or `everyone`, which sends every tie every reply. Stored `present` / `brief`
+read as `dynamic`.
+
+**The social graph** (`socialGraph`, the author's one-paragraph "who is who to me") is removed from the
+payload, the character editor, the prompt registry (`socialGraphPrompt`, `DEFAULT_SOCIAL_GRAPH`) and the
+generator (`generateSocialGraphFor`). A card whose ties exist only as that text still keeps it, as a
+seed. On that character's first reply, `relSeedMigrate` generates their structured relationships from
+it in the background, once (`p._relSeeded`; a universe reset clears it).
+
+Pinned by `tests/rel-scope.browser.js`, which replaces `social-graph`.

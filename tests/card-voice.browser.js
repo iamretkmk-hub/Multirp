@@ -100,7 +100,7 @@ const {chromium}=require('playwright');
   console.log("\n[every writer that feeds the card states its voice]");
   {
     const FEEDS=["goalsCurator","relPrompt","relShortPrompt","promisePurge",
-                 "promisePrompt","socialGraphPrompt","relGenPrompt","afterHeatPrompt",
+                 "promisePrompt","relGenPrompt","afterHeatPrompt",   // v150.39: socialGraphPrompt is gone
                  "calReconcile","goalPursuit","intentForm","x_outfits_generator",
                  // v79.1 — the quest designer prints desc and ask under YOUR OWN PURSUIT.
                  "charQuestGen"];

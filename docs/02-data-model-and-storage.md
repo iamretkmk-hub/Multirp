@@ -126,7 +126,10 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
                  // override on universe.userSubject, same shape as userLook).
   wardrobe, tags: "a, b",               // tags feed World Rules group matching
   interject,     // pressure points / hooks — read by GM & Scene Writer only
-  socialGraph,   // hand-written ties — never overwritten by anything
+  socialGraph,   // v150.39: no longer shown, edited or sent. Kept only as a seed: a card whose ties exist only
+                 // here gets them generated once on its first reply (relSeedMigrate). Never overwritten.
+  relationships: { [id]: {tie, relationship, pinned?} },  // the structured ties; pinned = "Always include"
+                 // (v150.39; unset = pinned only for a spouse). Kept across a regeneration.
   socialFacts: { [targetId]: {text, day} },  // v30.3: ONE durable fact per person, REWRITTEN in
                  // place by the daily relationship pass. Replaces socialGraphAuto, an append-only
                  // blob that grew a line a day and was cleared by a one-time migration.

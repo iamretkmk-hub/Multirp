@@ -344,15 +344,14 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       return (note&&note.uiNote&&h.indexOf("ask was granted")<0)?true:JSON.stringify({note,h:h.slice(0,200)}); }));
 
   /* ------------------------------------------------------------------------------------------ */
-  console.log("\n[13 — ties once, not twice]");
+  console.log("\n[13 — ties once, not twice (v150.39: the social graph is gone; the block is who matters to this line)]");
   const r13=await pg.evaluate(()=>{
     const c=__setup();
     const B=buildCharPromptBlocks(__P("p_sami"),[__P("p_berk")],{recent:[],diary:[],longterm:[]},null,{chat:c,targetName:"Emre",targetId:"__user__"});
     return String(B.relationships||"");
   });
-  ok("the summary sentence about Berker (who gets a paragraph) is gone", r13.indexOf("Berker is my younger brother")<0 && /leans on Berker's stability/.test(r13), r13);
-  ok("the sentence about the absent wife stays", /Buket is my wife/.test(r13), r13);
-  ok("and so does one about Berker AND someone absent", /Berker and Buket grew up/.test(r13), r13);
+  ok("the social graph never reaches the block; Berker (here) has his paragraph", r13.indexOf("Berker is my younger brother")<0 && !/Buket is my wife/.test(r13) && /leans on Berker's stability/.test(r13), r13);
+  ok("an absent tie nobody is talking about stays out", r13.indexOf("Ozlem")<0, r13);
 
   /* ------------------------------------------------------------------------------------------ */
   console.log("\n[14 — the turn router is told what was an aside]");

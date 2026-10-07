@@ -62,14 +62,15 @@ const {chromium}=require('playwright');
   ok("backstory does", /"backstory":[^\n]*SECOND PERSON/.test(texts.bioPrompt));
   ok("goals does", /"goals":[^\n]*SECOND PERSON/.test(texts.bioPrompt));
   ok("style does", /"style":[^\n]*SECOND PERSON/.test(texts.bioPrompt));
-  ok("traits does, and its worked example is in that voice",
-     /SECOND PERSON throughout/.test(texts.bioPrompt) && /nothing is asked of you/.test(texts.bioPrompt));
+  // v150.61 — "likes" took the place of the ten-state behaviour profile
+  ok("likes does, and its worked example is in that voice",
+     /IN THE SECOND PERSON where it needs a person/.test(texts.bioPrompt) && /you check the locks twice/.test(texts.bioPrompt) && !/"traits":/.test(texts.bioPrompt));
   ok("the batch writer's fields do too",
      /"backstory":[^\n]*SECOND PERSON/.test(texts.batchBioPrompt)
      && /"personality":[^\n]*SECOND PERSON/.test(texts.batchBioPrompt));
   ok("and so do the universe builder's",
      /"backstory":[^\n]*SECOND PERSON/.test(texts.univPrompt)
-     && /"traits":[^\n]*SECOND PERSON/.test(texts.univPrompt));
+     && /"likes":[^\n]*SECOND PERSON/.test(texts.univPrompt));
   // v150.40 — the batch writes structured ties (the social graph is gone); their paragraphs are second person too
   ok("the batch writer's ties are written to the character, not about them",
      /"relationship": "1-2 sentences IN THE SECOND PERSON/.test(texts.batchBioPrompt)
@@ -89,10 +90,11 @@ const {chromium}=require('playwright');
   console.log("\n[a contradiction inside the batch writer, found on the way past]");
   /* Its rules described TEN states while its own JSON schema asked for "Five lines, one per axis"
      in the retired Axis (low|mid|high) form — two different shapes in one prompt. */
-  ok("the schema asks for the same ten states its rules describe",
-     /"traits":[^\n]*TEN/.test(texts.batchBioPrompt)
-     && !/Five \\n-separated lines, one per axis/.test(texts.batchBioPrompt),
-     "still asks for five axes");
+  // v150.61 — the schema and the rules describe the same six "likes" lines (the behaviour profile is gone)
+  ok("the schema asks for the same six lines its rules describe",
+     /"likes":[^\n]*SIX/.test(texts.batchBioPrompt) && /exactly six lines, one per label/.test(texts.batchBioPrompt)
+     && !/Five \\n-separated lines, one per axis/.test(texts.batchBioPrompt) && !/BEHAVIOR PROFILE/.test(texts.batchBioPrompt),
+     "the batch schema and rules disagree");
 
   /* v78.1 — ONE VOICE IN THE REPLY PAYLOAD. Every writer whose output lands in a character's own
      card must say so. The card opens "You are <name>", so anything arriving in it that speaks
@@ -126,7 +128,7 @@ const {chromium}=require('playwright');
   ok("only quoted examples use I/me/my", await pg.evaluate(()=>{
       // Lines that legitimately quote speech, a thought, or a forbidden form.
       const EXEMPT=new Set(["head_format","head_emotion","rp_last_before","head_format_heat",
-        "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other",
+        "voice_delivery","heat_delivery","heat_narr_superego","target_bg","bio_behave_other","bio_likes_other",
         "bio_wardrobe_other","quest_intro","last_line_footer","drive_ego","heat_breaks_voiced",
         "heat_breaks_silent","resistance_body","rails_header",
         "mem_plan_self","mem_plan_with","mem_plan_asked",     // memory text — the memory bank is first person
@@ -167,14 +169,14 @@ const {chromium}=require('playwright');
       return (!/peInstructions/.test(fn) && !/peInterject/.test(fn))
         ? true : "repairCardVoice reads a director-note field"; })());
   ok("a repaired card lands in the editor fields", await pg.evaluate(async()=>{
-      const ids=["pePersonality","peBackstory","peTraits","peGoals","peStyle","peName"];
+      const ids=["pePersonality","peBackstory","peLikes","peGoals","peName"];
       const had={}; ids.forEach(i=>{const el=document.getElementById(i); had[i]=el?el.value:null;});
       const el=id=>document.getElementById(id);
       if(!el("pePersonality")) return "the editor is not in the DOM";
       const hadKey=state.key; state.key=state.key||"test-key";
       el("peName").value="Özlem"; el("pePersonality").value="I am warm the way a crowded kitchen is warm.";
       el("peBackstory").value="I grew up in a lively household and brought that into my marriage to Berker.";
-      el("peTraits").value=""; el("peGoals").value=""; el("peStyle").value="";
+      el("peLikes").value=""; el("peGoals").value=""; peSpeechLoad({});
       const real=window.chatCompletion;
       window.chatCompletion=async()=>JSON.stringify({
         personality:"You are warm the way a crowded kitchen is warm.",
@@ -186,14 +188,24 @@ const {chromium}=require('playwright');
         ? true : JSON.stringify(got); }));
   ok("a field that was empty is left empty", await pg.evaluate(async()=>{
       const el=id=>document.getElementById(id);
-      const had=el("peStyle")?el("peStyle").value:null;
       const hadKey=state.key; state.key=state.key||"test-key";
-      el("peName").value="Özlem"; el("pePersonality").value="I am blunt."; el("peStyle").value="";
+      el("peName").value="Özlem"; el("pePersonality").value="I am blunt."; el("peLikes").value=""; peSpeechLoad({});
       const real=window.chatCompletion;
-      window.chatCompletion=async()=>JSON.stringify({personality:"You are blunt.",style:"You speak in long loops."});
+      window.chatCompletion=async()=>JSON.stringify({personality:"You are blunt.",likes:"Likes: loops.",spoken_style:"You speak in long loops."});
       try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
-      const got=el("peStyle").value; if(had!=null) el("peStyle").value=had; state.key=hadKey;
+      const got=el("peLikes").value+peSpeechRead().spoken.main; state.key=hadKey;
       return got==="" ? true : "an empty field was filled in: "+got; }));
+  // v150.61 — the speech groups' main boxes are repaired too, and land back in their boxes
+  ok("the speech groups' main boxes are sent and come back into their boxes", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("peName").value="Özlem"; el("pePersonality").value=""; el("peLikes").value="";
+      peSpeechLoad({speech:{spoken:{main:"## SPEECH\nI talk fast: \"Hadi!\"",emo:{}},text:{main:"",emo:{}},heat:{main:"",emo:{}}}});
+      const real=window.chatCompletion; let sent="";
+      window.chatCompletion=async(m)=>{ sent=m.map(x=>x.content).join("\n"); return JSON.stringify({spoken_style:"## SPEECH\nYou talk fast: \"Hadi!\""}); };
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const got=peSpeechRead(); state.key=hadKey;
+      return (/## spoken_style\n## SPEECH\nI talk fast/.test(sent)&&!/## text_style/.test(sent)&&got.spoken.main==='## SPEECH\nYou talk fast: "Hadi!"'&&got.text.main==="") ? true : JSON.stringify({sent:sent.slice(-200),got}); }));
   ok("a malformed answer leaves the card untouched", await pg.evaluate(async()=>{
       const el=id=>document.getElementById(id);
       const hadKey=state.key; state.key=state.key||"test-key";
@@ -206,7 +218,7 @@ const {chromium}=require('playwright');
   ok("a want-list that comes back the wrong length is rejected", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function repairCardVoice");
-      const fn=src.slice(i,i+3600);
+      const fn=src.slice(i,i+4400);   // v150.61 — the function grew (likes, the speech boxes)
       return /lines\.length===live\.length/.test(fn) ? true : "the want-list length is not checked"; })());
   /* v80.1 — the pursuits print on the same card and carried the same defect. They live on the
      universe rather than the persona, so they are stashed and committed by the same Save. */

@@ -57,6 +57,11 @@ v150.37. The writer runs:
 - from the speaking-styles section's **Write with AI** (`peStyleWriteAI`). What it writes replaces
   those boxes, and the rest are kept.
 
+**v150.61:** the writer now writes speech & behaviour in three groups (spoken, text, heat), each with a main box and
+one box per emotion, into `p.speech`. The card writers write `likes` instead of the behaviour profile, and a generated
+universe's characters get the writer too. See docs/05-payload-system.md, "v150.61 — likes, and speech & behaviour in
+three groups".
+
 The batch prompt now returns `ties` (`name`, `tie`, `relationship`, `always`) instead of a
 social-graph paragraph. `batchTiesApply` turns them into structured relationships keyed by the new
 ids, resolving names in this order: the batch itself, then the rest of the world, then the player.

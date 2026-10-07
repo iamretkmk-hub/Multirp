@@ -367,11 +367,14 @@ const {chromium}=require('playwright');
       const c=curChat(); const a=state.personas.find(p=>p.id==="p_a");
       a.locations=["l_gym"]; a.schedule={Morning:{l_gym:50},Night:{l_home:50}};
       c.period="Morning"; c.dayPlacement=null; c.worldPositions=null; c._wpKey=null;
+      /* the schedule alone decides here: who is with the player, who was left behind and who travels along all
+         override it, and earlier steps in this file (or their background engines on a slow runner) can leave them set */
+      c.presentIds=[]; c.leftBehind=null; c.companionLock={};
       const m=resolveWorldPositions(c).p_a;
       c.period="Night"; const n=resolveWorldPositions(c).p_a;
       c.period="Night"; c.presentIds=["p_a"]; c.locationId="l_cafe"; c.period="Evening";
       const kept=resolveWorldPositions(c).p_a;                      // with the player: stays with the player
-      return (m==="l_gym"&&n==="l_home"&&kept==="l_cafe") ? true : [m,n,kept].join(" / "); }));
+      return (m==="l_gym"&&n==="l_home"&&kept==="l_cafe") ? true : [m,n,kept].join(" / ")+" | "+JSON.stringify({lb:c.leftBehind,lock:c.companionLock,loc:c.locationId}); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

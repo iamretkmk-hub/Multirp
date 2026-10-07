@@ -1092,6 +1092,59 @@ read `solo` everywhere but text and heat.
 Save writes `state.fragments` / `sm_fragments`. When the list equals the shipped one, nothing is stored,
 so later shipped improvements still arrive. Pinned by `tests/fragments.browser.js`.
 
+## v150.57 — fragments on by default, and no header / intro / footer chains
+
+The fragment model is how replies are built now: `state.fragOn` is on unless `sm_fragon` is `"0"`, and
+its editor is the **Reply fragments** card at the top of Payloads. The part list and the templates are
+folded into **Classic layout**, used only when fragments are switched off. Tests about the classic layout
+or the templates pin it (`state.fragOn=false`); the prompt editor's engine builds from the templates it
+edits, so it switches fragments off too.
+
+About ten shipped fragments were still chains of the old pieces, picked inside code
+(`{{call//target_header}}\n{{call//cont_target_header}}\n…{{call//target_player}}`), so in the editor they
+read like the old format. Each one now holds its own wording: one main box, and *choose when* options for
+the cases code used to pick between.
+
+| Fragment | Main box | Options (code condition) |
+|---|---|---|
+| `target` *Who you are answering* | — | `reply_player` (`not continuing and target_kind = player`), `reply_char` (`… = character`), `carry_on` (`continuing`; heat has its own wording) |
+| `target_sheet` *What you know of them* (new, right after `target`) | backstory, tie, looks, clothes: one paragraph each | `player_card` (`target_kind = character`) |
+| `last_line` | heat: the turns since, then the line | `own_line` (`continuing`), `their_line` (`not continuing and has_line`) |
+| `guidance` | heat: the heat guidance, beat `{{heat_beat}}` of `{{heat_beats}}`, `{{if heat_last_beat}}` | `aimed` / `unaimed` (`has_target`), `carry_on` / `reply` (`continuing` or not, `and has_target and has_line`), `absence` (`absent_called`), `not_yours` (`line_for_other`) |
+| `rumors` | spent, what you have heard, not yours + its list | — |
+| `situation` | — | `leaving`, `arriving`, `brief` (heat only, `has_brief`), `watching` |
+| `brief` | — | `why_here` (`has_brief`) |
+| `delivery` | — | `voiced` (`voicing`; heat has its own), `reset` (`voice_markup and not voicing`), `reset_text` (text) |
+| `promises` | — | `standing` (`has_promises`): the heading, then each list under its label |
+| `threads` | heading, intro (`thread{{if many_threads}}s{{endif}}`), the lines | — |
+| `others`, `style`, `respond_as` | the wording written out (`How you play it:`, `- Respond as {{char}}.`) | `style` keeps its emotion options |
+
+`memories` gets `{{gap}}` between the distant and recent entries, so the heading stays when only the
+recent ones are there.
+
+**The data comes in by a data-only name** (`RAW_DATA_KEYS`: `target_bio_raw`, `target_tie_raw`,
+`target_look_raw`, `target_wearing_raw`, `player_*_raw`, `brief_*_raw`, `last_line_quote_raw`,
+`last_line_since_raw`, `absent_names_raw`, `not_yours_*_raw`, `rumor_*_raw`, `play_notes_raw`,
+`watching_raw`, `promise_*_raw`). Each is keyed on its producer's underscore map beside the worded piece,
+and is in no ORDER list, because `ptPieceTemplate` prints those as calls and the classic template would
+send the data twice. A bare block name is no use here: it rebuilds in raw mode, where the wording is
+silenced, and that loses data. Every data line is its own paragraph, so it drops when it is empty.
+
+**The new flags.** `buildTailBlocks` adds `has_line`, `has_target`, `heat_last_beat`, `absent_called`,
+`line_for_other`, `voice_markup`, `watching`, `has_promises` and `many_threads` (counted over every matched
+thread, not the three shown) to `_railFlags`. `buildCharPromptBlocks` sets `B._headFlags`: `target_kind`
+(decided by the head builder, since a named target with no id is a character, which `fragCodeFacts` cannot
+tell), `leaving`, `arriving`, `has_brief`. `ptBuildMessages` lays the head flags over the tail's, for the
+options and every `{{if}}`. `{{heat_beat}}` and `{{heat_beats}}` are reply values.
+
+**Faithfulness.** On every path and in every case the payload carries the same lines as the v150.56
+fragments did, in the same order; only blank lines move (each optional part is its own paragraph now).
+**Migration.** `FRAG_DEFAULTS_V150_56` keeps the old default of every rewritten id. A saved list is
+rewritten once (`FRAG_SHIPPED_ADDS` key `v150.57.format`): a fragment is replaced only while it is still
+exactly the old default, and `target_sheet` goes in after a replaced `target`. An edited one is the
+user's and stays. Every old piece and producer is still there, because the classic layout uses them.
+Pinned by `tests/fragment-format.browser.js`.
+
 ## v150.39 — dynamic relationships; the social graph is gone
 
 The relationships block carries only the people who matter to the line being answered. `relInjectIds`

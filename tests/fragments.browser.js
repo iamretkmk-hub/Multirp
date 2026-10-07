@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("thirty-nine fragments (v150.48: + the spoken limits), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===39&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("forty fragments (v150.48: + the spoken limits; v150.57: + what you know of them), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===40&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties");
       return /^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(f.text)&&/\{\{call\/\/relationships\}\}$/.test(f.text) ? true : f.text; }));
   ok("heat has the language and 'talk you into it'; others present is not on heat", await pg.evaluate(()=>{ const g=id=>FRAG_DEFAULTS.find(x=>x.id===id);
@@ -144,7 +144,7 @@ const {chromium}=require('playwright');
   console.log("\n[the fragment editor]");
   ok("the editor lists every fragment and opens one for editing", await pg.evaluate(()=>{
       window.uiConfirm=async()=>true; _fragDraft=null; _fragOpen=null; state.fragments=null;
-      const d=document.getElementById('fragDetails'); if(!d) return "no #fragDetails";
+      const d=document.getElementById('fragCard'); if(!d) return "no #fragCard";   // v150.57 — its own card at the top of Payloads
       renderFragEditor(); const host=document.getElementById('fragHost');
       const n=host.querySelectorAll('button[onclick^="fragEdOpen"]').length;
       if(n!==FRAG_DEFAULTS.length) return n+" rows, want "+FRAG_DEFAULTS.length;
@@ -181,7 +181,10 @@ const {chromium}=require('playwright');
       fragToggle(false); return (on&&at&&cl&&state.fragOn===false) ? true : JSON.stringify({on,at,cl}); }));
 
   console.log("\n[settings]");
-  ok("a fresh install has the switch off and the threshold at 0.7", await pg.evaluate(()=>{ localStorage.removeItem(K.fragOn); localStorage.removeItem(K.fragAt); loadState(); return state.fragOn===false&&state.fragAt===0.7; }));
+  // v150.57 — the fragment model is how replies are built: on for a fresh install, off only when switched off ("0")
+  ok("a fresh install has the switch on and the threshold at 0.7; switched off stays off", await pg.evaluate(()=>{ localStorage.removeItem(K.fragOn); localStorage.removeItem(K.fragAt); loadState();
+      const fresh=state.fragOn===true&&state.fragAt===0.7; localStorage.setItem(K.fragOn,"0"); loadState(); const off=state.fragOn===false;
+      localStorage.removeItem(K.fragOn); loadState(); return (fresh&&off)?true:JSON.stringify({fresh,off}); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

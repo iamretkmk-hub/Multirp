@@ -7,6 +7,14 @@
 one. Both speak the OpenAI chat shape; OpenRouter-only fields (`reasoning` object, `provider`
 routing, Gemini `safety_settings`) are sent only to OpenRouter.
 
+**A borrowed model travels with its own provider** (v150.28). An agent whose model field is blank and
+that falls back to another card's model must also use THAT card's provider — otherwise, e.g., a blank
+Book model on a Narration card set to NanoGPT sent the OpenRouter roleplay id to NanoGPT. Pick the model
+with `agentModel([bucket, model], …)` (first model that is set wins; `prov` is that bucket's provider)
+and pass `{fn:<own bucket>, prov:r.prov}`: `fn` still owns creativity, tokens and thinking. Helpers:
+`authoringAgent()` (author → bio → roleplay), `mcAgent()` (router → roleplay). A call with no bucket
+that uses the roleplay model passes `prov:provId("rp")` (day transition, travel narration).
+
 Anatomy of the request body (OpenRouter `/chat/completions`):
 
 - `model`, `messages`, `temperature` (`opts.temp` ?? `state.temp`), `max_tokens`

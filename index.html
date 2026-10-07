@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.27</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.28</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2368,7 +2368,7 @@
     <div class="bookOpts" id="bookOpts" hidden>
       <label class="bkRow"><span>Write as you play<small>Each time a picture (in the Video Book, a clip) is made, the writer turns everything said, done and thought since the last passage into the prose that leads into it.</small></span><input type="checkbox" id="bookAutoChk" onchange="setBookAuto(this.checked)"></label>
       <div class="bkRow"><span>Passage length</span><div class="bkSeg"><button type="button" data-len="short" onclick="setBookLen('short')">Short</button><button type="button" data-len="medium" onclick="setBookLen('medium')">Medium</button><button type="button" data-len="long" onclick="setBookLen('long')">Long</button></div></div>
-      <label class="bkRow"><span>Writer model<small>Blank: the story's own model.</small></span><input type="text" id="bookModelIn" autocomplete="off" spellcheck="false" onchange="setBookModel(this.value)"></label>
+      <label class="bkRow"><span>Writer model<small>Blank: the story's own model, on the story's own API.</small></span><input type="text" id="bookModelIn" autocomplete="off" spellcheck="false" onchange="setBookModel(this.value)"></label>
       <div class="bkRow"><span>The kept book<small id="bookFileTxt">One book per story. It keeps its own copy of every picture, so it stays whole after the chat's pictures are gone.</small></span><button type="button" class="btn sec small" id="bookFileForget" onclick="bookForgetFile()" hidden>Other file</button></div>
       <div class="bkRow bkBtns"><button type="button" class="btn sec small" onclick="bookWriteDay()"><svg class="ic"><use href="#i-sparkle"/></svg> Write what this day is missing</button><button type="button" class="btn sec small" onclick="bookSaveBook()"><svg class="ic"><use href="#i-download"/></svg> Save the book</button><button type="button" class="btn sec small" id="bookVidBtn" onclick="bookSaveVideo('')"><svg class="ic"><use href="#i-film"/></svg> Save as video</button></div>
     </div>
@@ -2952,6 +2952,24 @@ function provFor(fn){
   const id=provId(fn), P=PROVIDERS[id];
   return {id,base:P.base,label:P.label,funds:P.funds,key:String(state[P.keyState]||"").trim()};
 }
+/* (!) v150.28 — A BORROWED MODEL TRAVELS WITH ITS OWN PROVIDER. Several agents fall back to another
+   agent's model when their own field is blank — the Story Book writer to the roleplay model, the
+   player's narration to the roleplay model, suggestions to the turn router's. They kept their OWN
+   card's provider while doing it, so with Narration on NanoGPT a blank Book model sent the OpenRouter
+   roleplay id ("google/gemini-…") to NanoGPT, at the day's close when the chapter is written; and a
+   call with no bucket at all went to OpenRouter whatever the roleplay card said.
+   Pass [bucket, model] pairs in fallback order: the first model that is set wins, and the provider is
+   the one of the card that model came from. Use the result as chatCompletion(msgs, r.model,
+   {fn:<this agent's bucket, for its creativity/tokens/thinking>, prov:r.prov, …}). */
+function agentModel(){
+  for(const pair of arguments){
+    const m=String((pair&&pair[1])||"").trim();
+    if(m)return {model:m,prov:provId(pair[0])};
+  }
+  return {model:"",prov:provId("")};
+}
+// The turn router's model, or the roleplay one when it is blank — each on its own card's provider.
+function mcAgent(){ return agentModel(["mc",state.mcModel],["rp",state.model]); }
 const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model",rewriter:"sm_rewriter",imgProvider:"sm_imgprov",imgModel:"sm_imgmodel",segImgPath:"sm_segimgpath",vidProvider:"sm_vidprov",vidModel:"sm_vidmodel",segVidPath:"sm_segvidpath",
   vidAspect:"sm_vidaspect",vidSeed:"sm_vidseed",vidNegative:"sm_vidneg",vidBitrate:"sm_vidbitrate",vidWatermark:"sm_vidwm",vidLastFrame:"sm_vidlastframe",vidExpand:"sm_videxpand",vidSteps:"sm_vidsteps",vidGuidance:"sm_vidguid",vidShift:"sm_vidshift",vidFps:"sm_vidfps",vidLorasHigh:"sm_vidlorashi",vidLorasLow:"sm_vidloraslo",vidRefs:"sm_vidrefs",
   ttsSpeed:"sm_ttsspeed",lipsyncModel:"sm_lipsyncmodel",autoSpeak:"sm_autospeak",
@@ -15115,11 +15133,12 @@ function up(key,uid){
 // The strong "authoring" model used for the rarely-run, high-leverage generation jobs that shape
 // everything downstream: universe generation, character bio generation, per-universe director notes,
 // and per-universe prompt tuning. Worth spending on — runs a handful of times, not per turn.
-function authoringModel(){
-  return (state.authorModel&&state.authorModel.trim())
-    || (state.bioModel&&state.bioModel.trim())
-    || state.model;
-}
+function authoringModel(){ return authoringAgent().model; }
+/* v150.28 — the author model sits on the Universe-generator card, the bio model on the Character-bio card
+   and the roleplay model on its own; each card picks its own API. Every authoring call goes out on the
+   provider of the card whose model it actually used (authoringProv), not always the generator's. */
+function authoringAgent(){ return agentModel(["unigen",state.authorModel],["bio",state.bioModel],["rp",state.model]); }
+function authoringProv(){ return authoringAgent().prov; }
 // World-setting text for the active story's universe (empty string if none).
 function curWorldSetting(){const u=curUniverseObj();return (u&&u.setting&&u.setting.trim())?subUser(u.setting.trim()):"";}
 // Interject / pressure-point sheet for the present cast — fed to the director engines
@@ -16295,7 +16314,7 @@ async function travelTo(locId,companionIds,opts){
       : `\nNobody else is going — ${state.user} makes this journey alone.`;
     const whyLine=_travelWhy?`\nWhy ${state.user} is going, in ${state.user}'s own words just before leaving (carry it as one brief clause of their own intention — never quote it, and nothing anyone else said): ${_travelWhy}`:"";
     const ctx=`Origin: ${fromName}\nDestination: ${dest.name} — ${dest.description||""}${goingLine}\nWorld: ${curWorldSetting()||""}\nTime now: Day ${chat.gameDay}, ${chatPeriod(chat)}${thereLine}${purposeLine}${meetLine}${whyLine}\nThe first sentence names ${state.user} as its subject.`;
-    narration=await chatCompletion(epSend("travelPrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.model,{foreground:true,dbg:"Travel narration"});   // v147.2 — the player set out: never parked behind a paused provider
+    narration=await chatCompletion(epSend("travelPrompt",sys+"\n\n"+langDirective(),{data:ctx}),state.model,{prov:provId("rp"),foreground:true,dbg:"Travel narration"});   // v147.2 — the player set out: never parked behind a paused provider
   }catch(e){}
   /* (!) v148.6 — the beat names who travels (_nameTheBeat); one that cannot be made to is replaced by the
      localized move note, which does. The travel beat is still the scene boundary either way. */
@@ -20772,7 +20791,7 @@ async function _writePsyche(chat,p,targetId,targetName,sig,x){
        token and (since v66.1) thinking settings, so turning thinking on for the gamemaster did
        nothing here and the card you were adjusting was not the card in play. The bucket follows
        the model. */
-    state.gmModel||state.rewriter,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",400),dbg:"Drives & brakes (id / superego)",
+    agentModel(["gm",state.gmModel],["rewriter",state.rewriter]).model,{fn:"gm",temp:fnTemp("gm",0.7),prov:agentModel(["gm",state.gmModel],["rewriter",state.rewriter]).prov,max:fnTok("gm",400),dbg:"Drives & brakes (id / superego)",
       /* v148.6 — awaited by the reply: foreground (no background queue, no pause) and its own ceiling */
       foreground:!!x.foreground,timeoutMs:x.timeoutMs||(x.foreground?90000:undefined)});
   let j=null; try{ j=JSON.parse(String(out).replace(/^[^{]*/,"").replace(/[^}]*$/,"")); }catch(e){}
@@ -23418,8 +23437,8 @@ async function runWriteAi(){
     const sys=fillTpl(up("x_write_prompt_with_ai"),{json_rule:jsonRule,ph_rule:phRule});
     const usr=`PURPOSE OF THIS PROMPT (what the function does):\n${reg.label} — ${reg.hint||""}\n\nREFERENCE PROMPT (current/default version — match its output format and any JSON schema; improve or replace the rest per the request):\n"""\n${tpl}\n"""\n\nUSER'S REQUEST (what they want this prompt to do):\n${brief}\n\nWrite the new system prompt now.`;
     const out=await chatCompletion(epSend("x_write_prompt_with_ai",sys,{data:usr}),
-      state.bioModel||state.model,
-      {temp:0.6,max:1500,foreground:true,dbg:"Write prompt with AI · "+reg.key}
+      agentModel(["bio",state.bioModel],["rp",state.model]).model,   // v150.28 — on the card the model came from
+      {prov:agentModel(["bio",state.bioModel],["rp",state.model]).prov,temp:0.6,max:1500,foreground:true,dbg:"Write prompt with AI · "+reg.key}
     );
     // Strip surrounding markdown fences if the model added them (multiline-safe).
     let cleaned=(out||"").trim();
@@ -24469,7 +24488,7 @@ async function generateBio(brief,context,opts){
   const user=parts.join("\n\n———\n\n");
   let out;
   try{
-    out=await chatCompletion(epSend("bioPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",800),foreground:true,dbg:"Character bio generator"});
+    out=await chatCompletion(epSend("bioPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),prov:authoringProv(),max:fnTok("unigen",800),foreground:true,dbg:"Character bio generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -24613,7 +24632,7 @@ async function generateRelationshipsFor(persona,forUniverse,guidance,opts){
 
   let out;
   try{
-    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),Object.assign({fn:"unigen",temp:fnTemp("unigen",0.5),max:fnTok("unigen",1100),dbg:"Relationship generator · "+persona.name},o.background?{}:{foreground:true}));
+    out=await chatCompletion(epSend("relGenPrompt",sys,{data:userMsg}),authoringModel(),Object.assign({fn:"unigen",temp:fnTemp("unigen",0.5),prov:authoringProv(),max:fnTok("unigen",1100),dbg:"Relationship generator · "+persona.name},o.background?{}:{foreground:true}));
   }catch(e){ return null; }
   const text=(out||"").trim();
   if(!text)return null;
@@ -25043,7 +25062,7 @@ async function generateSocialGraphFor(persona,forUniverse){
   let out;
   try{
     out=await chatCompletion([{role:"system",content:sys},{role:"user",content:usr}],
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),max:fnTok("unigen",1400),foreground:true,dbg:"Social graph · "+persona.name});   // v150.26 — 420 cut a full cast's map short
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),prov:authoringProv(),max:fnTok("unigen",1400),foreground:true,dbg:"Social graph · "+persona.name});   // v150.26 — 420 cut a full cast's map short
   }catch(e){ return null; }
   const text=String(out||"").trim().replace(/^["'\s]+|["'\s]+$/g,"");
   if(!text)return null;
@@ -25256,7 +25275,7 @@ async function generateUniverse(brief,count){
   const user=`USER BRIEF:\n${brief||"(none — invent a fitting world)"}\n\nNUMBER OF CHARACTERS TO CREATE: ${n}`;
   let out;
   try{
-    out=await chatCompletion(epSend("univPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe generator"});
+    out=await chatCompletion(epSend("univPrompt",sys,{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),prov:authoringProv(),max:fnTok("unigen",3800),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe generator"});
   }catch(e){ return null; }
   const j=parseJSON(out);
   if(!j||typeof j!=="object") return null;
@@ -25297,7 +25316,7 @@ async function generateDirectingNotes(universe,userInstr){
     cast
   });
   try{
-    const out=await chatCompletion(epSend("directorAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",500),foreground:true,dbg:"Director notes · "+universe.name});
+    const out=await chatCompletion(epSend("directorAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),prov:authoringProv(),max:fnTok("unigen",500),foreground:true,dbg:"Director notes · "+universe.name});
     const notes=stripInlineReasoning(String(out||"")).trim();
     if(notes && notes.length>40){ universe.directingNotes=notes; return notes; }
   }catch(e){}
@@ -25420,7 +25439,7 @@ async function generateGenrePack(universe,userInstr){
     cast, user:universe.userName||state.user||"the player", trackers, systems
   });
   try{
-    const out=await chatCompletion(epSend("genrePackAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:(universe.name||"this world")}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",3800),
+    const out=await chatCompletion(epSend("genrePackAuthor",sys,{request:(userInstr&&userInstr.trim())?userInstr.trim():""},{world:(universe.name||"this world")}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),prov:authoringProv(),max:fnTok("unigen",3800),
       frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Genre pack · "+(universe.name||"")});
     const j=parseJSON(out); if(!j)return null;
     const pick=k=>typeof j[k]==="string"?j[k].trim():"";
@@ -25515,7 +25534,7 @@ async function compileWorldRule(text,locList,uniId){
     tags:[...tagSet].join(", ")||"(none yet)"
   });
   try{
-    const out=await chatCompletion(epSend("ruleCompiler",sys,{}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",300),
+    const out=await chatCompletion(epSend("ruleCompiler",sys,{}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),prov:authoringProv(),max:fnTok("unigen",300),
       frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"World-rule compiler"});
     const j=parseJSON(out);
     if(!j){ toast("Compiler returned nothing usable"); return null; }
@@ -25679,7 +25698,7 @@ async function tuneUniversePrompts(universe){
       // so custom tuners still get it and a missing {{focus}} token can never be an issue.
       const sys=fillTpl(up("promptTuner"),{ setting, directing, base:_tunerShieldPH(base) })
         +(t.focus?`\n\nFOR THIS PARTICULAR PROMPT — WHAT TO ADAPT (and nothing else):\n${t.focus}`:"");
-      const out=await chatCompletion(epSend("promptTuner",sys,{},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),
+      const out=await chatCompletion(epSend("promptTuner",sys,{},{world:universe.name}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.4),prov:authoringProv(),
         // long bases (e.g. the char-quest designer) need more output room than the old flat cap
         max:Math.max(fnTok("mem",1400),Math.min(3000,Math.ceil(base.length/2))),
         foreground:true,dbg:"Prompt tuner · "+t.key});
@@ -25805,7 +25824,7 @@ async function generateBatchBios(brief,count,opts){
     // it: a truncated batch is unparseable JSON and silently yields zero cards. We take the LARGER of
     // the configured cap and what the batch actually needs, then bound it so it can't run away.
     const batchTok=Math.min(8000,Math.max(fnTok("mem",0)||0, 1500+count*750));
-    out=await chatCompletion(epSend("batchBioPrompt",sys.replace(/\{\{count\}\}/g,String(count)),{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:batchTok,foreground:true,dbg:"Batch character generator ×"+count});
+    out=await chatCompletion(epSend("batchBioPrompt",sys.replace(/\{\{count\}\}/g,String(count)),{data:user}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),prov:authoringProv(),max:batchTok,foreground:true,dbg:"Batch character generator ×"+count});
   }catch(e){ return []; }
   const j=parseJSON(out);
   const arr=Array.isArray(j)?j:(j&&Array.isArray(j.characters)?j.characters:null);
@@ -25866,7 +25885,7 @@ async function repairCardVoice(){
     const out=await chatCompletion([
       {role:"system",content:up("x_card_voice")},
       {role:"user",content:`THE CHARACTER IS ${name}.\n\n${body}\n\nReturn the JSON.`}
-    ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",1800),foreground:true,dbg:"Card voice repair · "+name});
+    ],authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),prov:authoringProv(),max:fnTok("unigen",1800),foreground:true,dbg:"Card voice repair · "+name});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Repair failed — the card is untouched"); return; }
     let n=0, stubborn=0;
@@ -25984,7 +26003,7 @@ async function generateAppearance(){
     const world=uni?`WORLD: ${uni.name||""}\n${(uni.setting||"").slice(0,800)}`:"";
     const sys=up("x_appearance_generator");
     const instrBlock=(instr&&instr.trim())?("USER'S REQUEST (follow this closely, still valid JSON):\n"+instr.trim()):"";
-    const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",650),foreground:true,dbg:"Appearance generator"});
+    const out=await chatCompletion(epSend("x_appearance_generator",sys,{data:[world,card&&("CHARACTER:\n"+card),instrBlock].filter(Boolean).join("\n\n———\n\n")||"Invent a fitting appearance."}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),prov:authoringProv(),max:fnTok("unigen",650),foreground:true,dbg:"Appearance generator"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Appearance generation failed — try again"); return; }
     const clean=s=>typeof s==="string"?s.trim():"";
@@ -26076,7 +26095,7 @@ async function generateOutfits(all,brief){
       _brief?("WHAT THE PLAYER ASKED FOR — THIS OVERRIDES THE CHARACTER'S OWN TASTE WHERE THEY DISAGREE.\nEvery outfit you write this time obeys it, in every slot, unless a slot physically cannot (you do not put a wool coat in the swimming pool). Follow it exactly — a named colour is that colour, a named fabric is that fabric — and do not widen it into something merely similar:\n"+_brief):""
     ].filter(Boolean).join("\n\n———\n\n");
     const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data:data}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator"});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),prov:authoringProv(),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Outfit generation failed — try again"); return; }
     const clean=x=>typeof x==="string"?x.trim():"";
@@ -26185,7 +26204,7 @@ async function generateUserOutfits(all){
       (want&&want.length)?("ONLY THESE SLOTS ARE MISSING — write exactly these and leave every other key out:\n"+want.map(x=>"- "+x).join("\n")):""
     ].filter(Boolean).join("\n\n———\n\n");
     const out=await chatCompletion(epSend("x_outfits_generator",up("x_outfits_generator"),{data}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator (player)"});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.8),prov:authoringProv(),max:fnTok("unigen",1800),foreground:true,dbg:"Outfit generator (player)"});
     const j=parseJSON(out);
     if(!j||typeof j!=="object"){ toast("Outfit generation failed — try again"); return; }
     const clean=x=>typeof x==="string"?x.trim():"";
@@ -27139,7 +27158,7 @@ async function _migrateLookSplitOnce(){
     for(const p of targets){
       const sys=up("x_look_split");
       try{
-        const out=await chatCompletion(epSend("x_look_split",sys,{look:p.look.raw}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),max:fnTok("unigen",300),dbg:"Look split · "+(p.name||p.id)});
+        const out=await chatCompletion(epSend("x_look_split",sys,{look:p.look.raw}),authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.2),prov:authoringProv(),max:fnTok("unigen",300),dbg:"Look split · "+(p.name||p.id)});
         const j=parseJSON(out);
         if(j&&typeof j==="object"){
           const clean=s=>typeof s==="string"?s.trim():"";
@@ -34853,9 +34872,9 @@ async function narratePlayerTurn(rawText,chat,opts){
     // action cues — this is where the cues come from.)
     +((opts&&opts.verbatim)?"\n\n"+up("narrateVerbatim"):"")
     +"\n\n"+langDirective();
-  const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())?state.playerNarrateModel:state.model;
+  const _am=agentModel(["narrate",state.playerNarrateModel],["rp",state.model]), model=_am.model;   // v150.28 — and the provider it came from
   try{
-    const out=await chatCompletion(epSend("playerNarratePrompt",sys,{knows,recent:recent||"",typed:_tonedTyped}),model,{fn:"narrate",temp:fnTemp("narrate",0.6),max:fnTok("narrate",200),foreground:true,dbg:"Auto-RP player narrator"});
+    const out=await chatCompletion(epSend("playerNarratePrompt",sys,{knows,recent:recent||"",typed:_tonedTyped}),model,{fn:"narrate",temp:fnTemp("narrate",0.6),prov:_am.prov,max:fnTok("narrate",200),foreground:true,dbg:"Auto-RP player narrator"});
     const clean=unquoteWrap(out);
     return clean||rawText;   // fall back to raw text if the model returns nothing
   }catch(e){ return rawText; }   // never block the turn — fall back to what they typed
@@ -35505,7 +35524,7 @@ async function rememberTextExchange(chat,p){
     const out=await chatCompletion(
       epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange}),
              {}),
-      state.mcModel||state.model,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Memory arc tracker (text) · "+p.name});
+      mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker (text) · "+p.name});
     const j=parseJSON(out)||{};
     if(j.progress==="finished"||j.progress==="paused"||j.progress==="ongoing")progress=j.progress;
     if(j.topic==="same"||j.topic==="different")topic=j.topic;
@@ -37631,7 +37650,7 @@ async function fetchSuggestions(chat,mid,fg){   // v147.2 — fg: the player tap
   const my=++_sugSeq; renderAutoBar();
   let opts=[], tones=[], styles=[];
   try{
-    const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())||state.mcModel||state.model;
+    const _am=agentModel(["narrate",state.playerNarrateModel],["mc",state.mcModel],["rp",state.model]), model=_am.model;   // v150.28
     // Built in this chat's world (its player fills {{user}}, its universe answers up()); the call runs after.
     const _msgs=inChatWorld(chat,()=>{
       const _un=chatUserName(chat)||state.user;   // v148.1 — this chat's player
@@ -37654,7 +37673,7 @@ async function fetchSuggestions(chat,mid,fg){   // v147.2 — fg: the player tap
         people:_sugPeopleBlock(chat,md.cast,_un),social,memories,offered,convo,lastmove});
     });
     const out=await chatCompletion(_msgs,
-      model,{fn:"narrate",temp:fnTemp("narrate",0.8),max:Math.max(fnTok("narrate",450),350),foreground:!!fg,dbg:"Suggested replies"});
+      model,{fn:"narrate",temp:fnTemp("narrate",0.8),prov:_am.prov,max:Math.max(fnTok("narrate",450),350),foreground:!!fg,dbg:"Suggested replies"});
     const j=parseJSON(out);
     // v148.4 — an option may be meant for one person here alone ("/whisper <name> …"): see _playerMove
     (j&&Array.isArray(j.options)?j.options:[]).forEach(x=>{
@@ -38356,11 +38375,11 @@ async function smPlayerMove(chat){
   if(!choiceOk)rules.push(fillTpl(up("x_story_no_choice"),{user:state.user}));
   if(_smSceneLines(chat)>=SM_SCENE_WRAP)rules.push(fillTpl(up("x_story_wrap_up"),{user:state.user}));
   const sys=fillTpl(up("x_story_player"),{user:state.user})+"\n\n"+langDirective();
-  const model=(state.playerNarrateModel&&state.playerNarrateModel.trim())||state.model;
+  const _am=agentModel(["narrate",state.playerNarrateModel],["rp",state.model]), model=_am.model;   // v150.28
   const tailMid=(_apTail(chat)||{}).mid;
   const kn=_playerKnows(chat);
   const out=await chatCompletion(epSend("x_story_player",sys,Object.assign({player:_playerProfileBlock(),scene:_autoRpSceneLine(chat)},kn,{convo,rule:rules.join("\n")})),
-    model,{fn:"narrate",temp:fnTemp("narrate",0.7),max:Math.max(fnTok("narrate",300),300),foreground:true,dbg:"Story mode · the player's move"});
+    model,{fn:"narrate",temp:fnTemp("narrate",0.7),prov:_am.prov,max:Math.max(fnTok("narrate",300),300),foreground:true,dbg:"Story mode · the player's move"});
   const j=parseJSON(out)||{};
   if(((_apTail(chat)||{}).mid)!==tailMid)return;   // the player or the world moved meanwhile
   const clean=x=>String(x==null?"":x).replace(/^["“'\s*_]+|["”'\s*_]+$/g,"").trim();
@@ -41819,8 +41838,9 @@ async function bookWriteRun(chat,kind,run,plan,opts){
   }catch(e){ try{ _alog("book.write.fail","payload: "+String(e&&e.message||e).slice(0,140)); }catch(_){} return null; }
   let text="";
   try{
-    const out=await chatCompletion(msgs,(state.bookModel&&String(state.bookModel).trim())||state.model,
-      {fn:"narrate",temp:fnTemp("narrate",0.8),max:Math.max(fnTok("narrate",1200),Math.round(words*2.4)+300),foreground:!!opts.foreground,
+    const _bm=agentModel(["narrate",state.bookModel],["rp",state.model]);   // v150.28 — blank Book model: the story's model, on the story's provider
+    const out=await chatCompletion(msgs,_bm.model,
+      {fn:"narrate",temp:fnTemp("narrate",0.8),prov:_bm.prov,max:Math.max(fnTok("narrate",1200),Math.round(words*2.4)+300),foreground:!!opts.foreground,
        dbg:(kind==="video"?"Video Book":"Story Book")+" writer · "+where});
     text=_bkCleanOut(out);
     /* v150.1 — a thought copied onto the page goes back once with the copied lines named; the second draft is kept
@@ -41829,8 +41849,8 @@ async function bookWriteRun(chat,kind,run,plan,opts){
     if(copied.length){
       try{ _alog("book.write.redo",copied.length+" thought(s) copied word for word — asking again"); }catch(_){}
       const again=await chatCompletion(msgs.concat([{role:"assistant",content:out},{role:"user",content:fillTpl(up("x_book_writer_redo"),{thoughts:copied.map(t=>"- "+t).join("\n")})}]),
-        (state.bookModel&&String(state.bookModel).trim())||state.model,
-        {fn:"narrate",temp:fnTemp("narrate",0.8),max:Math.max(fnTok("narrate",1200),Math.round(words*2.4)+300),foreground:!!opts.foreground,
+        _bm.model,
+        {fn:"narrate",temp:fnTemp("narrate",0.8),prov:_bm.prov,max:Math.max(fnTok("narrate",1200),Math.round(words*2.4)+300),foreground:!!opts.foreground,
          dbg:(kind==="video"?"Video Book":"Story Book")+" writer (thoughts) · "+where}).catch(()=>"");
       const t2=_bkCleanOut(again); if(t2&&t2.length>=20)text=t2;
     }
@@ -44904,7 +44924,7 @@ async function _endDayRun(chat,day,endPeriod){
       const lastMsgs=daySnapshot.filter(m=>m.role!=='system'&&!m.sysError&&!m.dayMarker).slice(-6)
         .map(m=>`${m.role==='user'?chatUserName(chat):lineSpeaker(m,fallbackName)}: ${m.content}`).join("\n");
       const nsys=up("x_day_transition_narration")+"\n\n"+langDirective();
-      const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{temp:0.8,max:160,foreground:true,dbg:"Day transition narration"});   // v147.2 — the player is waiting on it
+      const nout=await chatCompletion(epSend("x_day_transition_narration",nsys,{scene:(lastMsgs||"(a quiet day)")},{day:String(day),next_day:String(day+1)}),state.model,{prov:provId("rp"),temp:0.8,max:160,foreground:true,dbg:"Day transition narration"});   // v147.2 — the player is waiting on it
       if(nout&&nout.trim())narration=unquoteWrap(nout);
     }catch(e){/* keep default */}
   }
@@ -46033,7 +46053,7 @@ async function runSceneCut(chat){
        engines and only one retry: a person staring at "opening…" will not wait three minutes. */
     raw=await chatCompletion(
       epSend("sceneCut",tpl+"\n\n"+mixedLangDirective(["narration","line"]),{}),
-      state.gmModel||state.memModel,{fn:"gm",temp:fnTemp("gm",0.7),max:fnTok("gm",500),
+      agentModel(["gm",state.gmModel],["mem",state.memModel]).model,{fn:"gm",temp:fnTemp("gm",0.7),prov:agentModel(["gm",state.gmModel],["mem",state.memModel]).prov,max:fnTok("gm",500),
       foreground:true,timeoutMs:75000,retries:1,dbg:"Drop me into a scene · "+p.name});
     j=parseJSON(raw);
   }catch(e){
@@ -48057,7 +48077,7 @@ async function generateOriginDoc(u,ovr){
   let out=null;
   try{
     out=await chatCompletion(epSend("originGen",sys+"\n\n"+engineLangDirective(),{request:(ovr.instr&&String(ovr.instr).trim())?String(ovr.instr).trim():""}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.7),prov:authoringProv(),max:fnTok("unigen",2400),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Universe memory (state zero) — "+(u.name||"universe")});
   }catch(e){ _qlog("origin.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const doc=String(out||"").trim();
   if(!doc)return null;
@@ -48219,7 +48239,7 @@ async function generateQuestArc(u,brief){
   let out;
   try{
     out=await chatCompletion(epSend("questGen",sys+"\n\n"+engineLangDirective(),{}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Quest arc — "+brief});   // v147.2 — the Quests screen's Create arc
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),prov:authoringProv(),max:fnTok("unigen",3200),frequency_penalty:0,presence_penalty:0,foreground:true,dbg:"Quest arc — "+brief});   // v147.2 — the Quests screen's Create arc
   }catch(e){ _qlog("arc.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("arc.fail","reply didn't parse as JSON"); return null; }
   /* (!) v144.1 — ARC NAMES ARE KEYS. arcMeta[arc] was overwritten unconditionally, so a designer that
@@ -48505,7 +48525,7 @@ async function generateNextQuest(chat,uni,arc,qo){   // v147.2 — qo.fg: the pl
   let out;
   try{
     out=await chatCompletion(epSend("questNext",sys+"\n\n"+mixedLangDirective(["epilogue"]),{}),
-      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,foreground:!!(qo&&qo.fg),dbg:"Quest next — "+arc});
+      authoringModel(),{fn:"unigen",temp:fnTemp("unigen",0.9),prov:authoringProv(),max:fnTok("unigen",1400),frequency_penalty:0,presence_penalty:0,foreground:!!(qo&&qo.fg),dbg:"Quest next — "+arc});
   }catch(e){ _qlog("next.fail","LLM call failed: "+String(e&&e.friendly||e&&e.message||e)); return null; }
   const j=parseJSON(out); if(!j){ _qlog("next.fail","reply didn't parse as JSON"); return null; }
   /* (!) v147.2 — THE WORLD MOVED DURING THE CALL. "End this arc" pressed while this generation was in
@@ -53036,7 +53056,7 @@ async function _maybeBuildMemoryLocked(chat,q){
 
   let progress="ongoing", topic="same", summary=ev.summary||"";
   try{
-    const out=await chatCompletion(inChatWorld(chat,()=>epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange}),{})),state.mcModel||state.model,{fn:"mc",temp:fnTemp("mc",0.1),max:fnTok("mc",120),dbg:"Memory arc tracker"});
+    const out=await chatCompletion(inChatWorld(chat,()=>epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange}),{})),mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker"});
     const j=parseJSON(out)||{};
     if(j.progress==="finished"||j.progress==="paused"||j.progress==="ongoing")progress=j.progress;
     if(j.topic==="same"||j.topic==="different")topic=j.topic;
@@ -53373,7 +53393,7 @@ async function genQuery(userText,chat,ownerId){
        never translates names or places, so the player's own words still match those. */
     {role:"system",content:up("queryGen")+"\n\n"+blkTpl("query_lang")},
     {role:"user",content:`Recent conversation:\n${recent}\n\n${chatUserName(chat)}'s newest message:\n${userText}`}
-  ],state.mcModel||state.memModel||state.model,{fn:"mc",temp:fnTemp("mc",0.3),max:fnTok("mc",120),dbg:"Memory query generator"});
+  ],agentModel(["mc",state.mcModel],["mem",state.memModel],["rp",state.model]).model,{fn:"mc",temp:fnTemp("mc",0.3),prov:agentModel(["mc",state.mcModel],["mem",state.memModel],["rp",state.model]).prov,max:fnTok("mc",120),dbg:"Memory query generator"});
   return (out||"").replace(/```/g,"").trim();
 }
 /* v147.2 — a keyword line without the given names (whole words, Turkish-aware, with a suffix after an
@@ -57847,8 +57867,8 @@ async function summBuildChapter(st, turns, names){
     const sys=up("x_rolling_recap");
     const usr=`${prior}NEW EXCHANGE to summarize:\n${convo}\n\nRecap of this new exchange:`;
     const out=await chatCompletion([{role:'system',content:sys},{role:'user',content:usr}],
-      state.recapModel||state.memModel||state.callModel||"deepseek/deepseek-v4-flash",
-      {temp:0.3,max:fnTok("mem",260),dbg:"Rolling recap"});
+      agentModel(["mem",state.recapModel],["mem",state.memModel],["call",state.callModel],["mem","deepseek/deepseek-v4-flash"]).model,   // v150.28 — on the card it came from
+      {prov:agentModel(["mem",state.recapModel],["mem",state.memModel],["call",state.callModel],["mem","deepseek/deepseek-v4-flash"]).prov,temp:0.3,max:fnTok("mem",260),dbg:"Rolling recap"});
     const text=(out||'').trim();
     if(text){ st.chapters.push({from:fromIdx,to:toIdx,text}); st.coveredTo=toIdx; if(st.chapters.length>summKeep()) st.chapters.shift(); }
   }catch(e){ }
@@ -58030,7 +58050,7 @@ async function vcFixStt(text){
     const sys=up("x_stt_repair");
     const usr=`KNOWN NAMES in this world (fix garbled words toward these when they fit by sound + context):\n${glossary||'(none)'}\n\nConversation so far:\n${ctx||'(start of conversation)'}\n\nRaw STT transcript of what the user just said:\n"${text}"\n\nCorrected line:`;
     const out=await chatCompletion([{role:'system',content:sys},{role:'user',content:usr}],
-      state.sttFixModel||state.callModel||"deepseek/deepseek-v4-flash",{temp:0.1,max:120,dbg:"Call STT fix"});
+      state.sttFixModel||state.callModel||"deepseek/deepseek-v4-flash",{prov:provId("call"),temp:0.1,max:120,dbg:"Call STT fix"});   // v150.28 — the call card's API
     let fixed=(out||'').trim().replace(/^["'""]|["'""]$/g,'').trim();
     if(!fixed||fixed.length>text.length*2.5) return text;   // sanity: reject runaway output
     return fixed;

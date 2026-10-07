@@ -1406,7 +1406,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.48</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.49</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4150,6 +4150,18 @@ NO: It plays only {{char}} (and the world around them), reacts to what {{user}} 
     def:`Is the reply out of character for {{char}} as their sheet in the state describes them?
 YES: The voice, attitude, manners or knowledge are clearly not {{char}}'s: they sound like a different person, a generic assistant, or know what they could not know.
 NO: It sounds like {{char}}, including {{char}} being surprised, changing their mind, or acting on a strong feeling.`},
+  /* v150.49 — two more, from a live export: a reply that made the same deflection as the one before ("we're not
+     children") and told the player to sit down after he already had. Both feed the consistency note. */
+  x_reply_check_repeat:{label:"Reply check — repeats itself?",json:false,
+    hint:"Asked about every character reply after it is posted. {{char}}'s own earlier lines in this scene are in the state. The question, then a YES: line and a NO: line. Supports {{char}} and {{user}}.",
+    def:`Does the reply repeat what {{char}} already said, did or thought earlier in this scene (their earlier lines are in the state)?
+YES: It makes the same point, the same deflection, excuse or refusal, the same joke or the same thought again, only in other words; or it gives the same gesture or sound twice in one reply (a [sigh] tag and a *sighs*).
+NO: It moves on: a new point, a new reaction or a new action, or a callback that adds something; or you are unsure.`},
+  x_reply_check_continuity:{label:"Reply check — contradicts what happened?",json:false,
+    hint:"Asked about every character reply after it is posted. The lines before the reply, the place and who is there are in the state. The question, then a YES: line and a NO: line. Supports {{char}} and {{user}}.",
+    def:`Does the reply contradict what has already happened in this scene?
+YES: It has someone somewhere they are not, or doing what they already stopped, or asks them to do what they already did (telling someone to sit who already sat, to come closer who is already close); it forgets something said or settled a few lines before; or it gets the place or who is present wrong.
+NO: It fits the lines before it, the place and the people in the state; or you are unsure.`},
   /* v150.31 — TRACKERS IN ONE REQUEST. With the Decisions API on, every tracker due this turn is one typed
      question in a single request instead of one chat call each. A judged tracker ("llm") is a choice between
      moves (none, a little, clearly, sharply — sized to its range); an event tracker ("trigger_then_day") is a
@@ -22803,7 +22815,9 @@ function emotionEditorReset(){ renderEmotionEditor(EMOTIONS_DEFAULT); }
 const REPLY_CHECK_QS=[
   {k:"refusal",prompt:"x_reply_check_refusal",label:"refusal?",what:"the AI refusing rather than playing the turn"},
   {k:"player",prompt:"x_reply_check_player",label:"speaks for you",what:"writing your part"},
-  {k:"character",prompt:"x_reply_check_character",label:"out of character",what:"out of character"}];
+  {k:"character",prompt:"x_reply_check_character",label:"out of character",what:"out of character"},
+  {k:"repeat",prompt:"x_reply_check_repeat",label:"repeats itself",what:"repeating what they already said"},   // v150.49
+  {k:"continuity",prompt:"x_reply_check_continuity",label:"continuity?",what:"contradicting what already happened"}];
 const _replyCheckBreak=_decBreaker("Reply check","Replies are not checked meanwhile.");
 function replyCheckModel(){ return String(state.replyCheckModel||"").trim()||DECISIONS_DEFAULT_MODEL; }
 // An editable prompt → a noul question: the text, then "YES:" and "NO:" lines saying what each answer means.
@@ -22819,8 +22833,16 @@ function _replyCheckState(chat,msg,p){
   // v150.32 — this scene only, as the relevance judge
   const before=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role!=='system'&&!m.sysError&&!m.uiNote&&!m.dayMarker&&(!Array.isArray(m.present)||witnessedBy(m,p)||m.speakerId===p.id)).slice(-6)
     .map(m=>memHeardLine(m,p,p.name)).filter(Boolean).map(t=>memPayloadText(t,700));
+  // v150.49 — for the repeat and continuity questions: their own earlier lines in this scene, and where and who
+  const own=_upto.slice(_playerSceneStart(_upto)).filter(m=>m&&m.role==="assistant"&&!m.sysError&&m.speakerId===p.id&&m.content).slice(-4)
+    .map(m=>memPayloadText(String(m.content),500));
+  let where="";
+  try{ const sub=(typeof curSubId==="function"&&chat.locationId)?subById(chatLocById(chat,chat.locationId),curSubId(chat)):null;
+    const who=[chatUserName(chat)||"the player"].concat((inSceneCast(chat)||[]).map(c=>c.name));
+    where=`${chat.location||"(unknown place)"}${sub&&sub.name?" — "+sub.name:""}; present: ${who.join(", ")}`; }catch(e){}
   return {character:{name:p.name||"",personality:memPayloadText(p.personality||"",600),speaking_style:memPayloadText(p.style||"",400)},
-    player:chatUserName(chat)||"the player",scene_before_the_reply:before.join("\n"),reply:String(msg.content||"")};
+    player:chatUserName(chat)||"the player",where_and_who:where,their_own_earlier_lines_this_scene:own.length?own:["(none)"],
+    scene_before_the_reply:before.join("\n"),reply:String(msg.content||"")};
 }
 async function runReplyCheck(chat,msg,p){
   if(!state.replyCheckOn||!msg||!p||!msg.content||msg.sysError||!_decReady(_replyCheckBreak))return;
@@ -30182,7 +30204,7 @@ function epSend(key,systemText,parts,vars){
     // separate and are claimed here, by the block whose box uses them.
     resistance:["resistance_header","resistance_body","resistance_actions","resistance_limits"],
     after_heat:["after_heat_header"],
-    final_guardrails:["rails_header","heat_narr_superego_short","heat_narr_physical_short","consistency_character","consistency_player"],
+    final_guardrails:["rails_header","heat_narr_superego_short","heat_narr_physical_short","consistency_character","consistency_player","consistency_repeat","consistency_continuity"],
     spoken_delivery:["voice_delivery","heat_delivery","voice_format_reset"],
     layout:LY_ORDER
   };
@@ -30231,7 +30253,7 @@ const X_PROMPT_CARDS=[
   {key:"future_tracker",label:"The future: meetings, tasks, promises",desc:"After every turn, one small call decides whether the latest lines bound the future — a meeting, a task or a promise — and whether it is still being discussed or has been agreed. The answer decides: asking is never enough. Only then does the matching writer run, and a later change updates the entry instead of adding a second one. When a part of the day ends, one more call checks that whole stretch against what was filed in it.",
    keys:["x_future_tracker","x_task_extract","x_future_update","x_future_reconcile"]},
   {key:"reply_check",label:"Reply check (Decisions API)",desc:"After every character reply is posted, one request asks three yes/no questions about it \u2014 is it the AI refusing, does it write your part, is it out of character \u2014 and gets a probability for each. Above the threshold in Settings the reply is marked on its bubble; Retry asks again. Each prompt is the question, a YES: line and a NO: line.",
-   keys:["x_reply_check_refusal","x_reply_check_player","x_reply_check_character"]},
+   keys:["x_reply_check_refusal","x_reply_check_player","x_reply_check_character","x_reply_check_repeat","x_reply_check_continuity"]},
   {key:"strict_gates",label:"Strict gates (Decisions API)",desc:"Before a new promise, task, meeting, character quest, motive or limit is filed, a yes/no question asks whether it is real \u2014 and it is filed only at the strictness in Settings \u2192 Features (0.8 by default). Each prompt is the question, a YES: line and a NO: line.",
    keys:["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent","x_limit_read","x_limit_release"]},
   {key:"emotion_pick",label:"Emotion pick (Decisions API)",desc:"Before each character reply, which emotion from the list in Settings \u2192 Emotions they are feeling, and how strongly (mild / clear / intense). The answer is a condition the reply can be shaped by.",
@@ -31309,6 +31331,8 @@ This is momentary, and it changes HOW the line comes out, not what the line is a
   /* v150.45 — THE CONSISTENCY NOTE: the reply check flagged this character's last reply (out of character, or writing
      the player's part); their next reply is told so, once — at the end of the guardrails, closest to generation. */
   consistency_character:`LAST TIME YOU SLIPPED OUT OF CHARACTER. Your previous reply did not sound like {{self}} — the voice, the attitude or what you knew was someone else's. This reply is {{self}} again: your own voice, your own manner, only what you could know.`,
+  consistency_repeat:`LAST TIME YOU REPEATED YOURSELF. Your previous reply made a point, an excuse or a gesture you had already made in this scene. It has been said: do not say it again in other words. Move on — a new reaction, a new reason, or an action.`,
+  consistency_continuity:`LAST TIME YOU LOST TRACK OF THE SCENE. Your previous reply contradicted what had already happened — where someone was, what they had already done, or what was already settled. Read the last lines again and answer the scene as it actually stands now.`,
   consistency_player:`LAST TIME YOU WROTE {{user}}'S PART. Your previous reply put words, actions, thoughts or decisions in {{user}}'s mouth. Play only {{self}} and the world around you; what {{user}} says, does and decides is theirs alone.`,
   /* (!) v150.38 — drive_header / drive_toward / drive_against / drive_ego / drive_empty went with the drives writer. */
   /* v148.6 — the limits and commitments this character has stated about their own conduct. */
@@ -32541,8 +32565,8 @@ const FRAG_DEFAULTS=[
 },
 {
 "id": "consistency",
-"name": "Right after a reply that broke character or wrote the player's part",
-"code": "broke_character or spoke_for_player",
+"name": "Right after a reply the check flagged (out of character, the player's part, repeated, lost track)",
+"code": "broke_character or spoke_for_player or repeated or lost_track",
 "ask": "",
 "ctx": [],
 "text": "{{call//consistency_note}}",
@@ -33733,7 +33757,8 @@ function buildTailBlocks(opts){
     ...(()=>{ try{ return fragCodeFacts(chat,selfP,targetId||"__user__"); }catch(e){ return {}; } })(),
     /* v150.45 — the reply check flagged this character's latest reply: out of character / wrote the player's part */
     ...(()=>{ try{ const last=[...((chat&&chat.messages)||[])].reverse().find(m=>m&&m.role==="assistant"&&!m.sysError&&selfP&&m.speakerId===selfP.id);
-      const f=(last&&Array.isArray(last.replyFlags))?last.replyFlags:[]; return {broke_character:f.indexOf("character")>=0,spoke_for_player:f.indexOf("player")>=0}; }catch(e){ return {broke_character:false,spoke_for_player:false}; } })()
+      const f=(last&&Array.isArray(last.replyFlags))?last.replyFlags:[]; return {broke_character:f.indexOf("character")>=0,spoke_for_player:f.indexOf("player")>=0,
+        repeated:f.indexOf("repeat")>=0,lost_track:f.indexOf("continuity")>=0}; }catch(e){ return {broke_character:false,spoke_for_player:false,repeated:false,lost_track:false}; } })()
   };
   B._railFlags=_railFlags;
   {
@@ -33752,7 +33777,8 @@ function buildTailBlocks(opts){
     /* (!) v150.45 — THE CONSISTENCY NOTE, last in the guardrails: on the whole block (a template calling
        final_guardrails//full, the classic builder) and as its own section (the generated layout calls it by name;
        a fragment option calls {{call//consistency_note}}). Only on the reply right after a flagged one. */
-    const _cn=[_railFlags.broke_character?blkTpl("consistency_character"):"",_railFlags.spoke_for_player?blkTpl("consistency_player"):""]
+    const _cn=[_railFlags.broke_character?blkTpl("consistency_character"):"",_railFlags.spoke_for_player?blkTpl("consistency_player"):"",
+      _railFlags.repeated?blkTpl("consistency_repeat"):"",_railFlags.lost_track?blkTpl("consistency_continuity"):""]
       .map(t=>String(t||"").trim()).filter(Boolean).map(t=>fillTpl(t,_rmap)).join("\n\n");
     if(_cn){ B._rails.consistency_note=_cn; B.final_guardrails=(B.final_guardrails?B.final_guardrails+"\n\n":"")+_cn; }
   }
@@ -39292,6 +39318,8 @@ function _sugPeopleBlock(chat,cast,un){
       if(rest)bits.push(`To ${un}: ${rest}`);
     }catch(e){}
     try{ const pub=_playerPublicFacts(p); if(pub)bits.push(pub); }catch(e){}
+    /* v150.49 — what they have said about how far this goes: the options were offering the hand she had just pulled away */
+    try{ const ls=limitLines(chat,p.id,false); if(ls.length)bits.push(`What ${p.name} has said out loud about how far this goes (still standing; an option that walks past one of these is pressure on a line they drew, so offer it only as exactly that):\n${ls.join("\n")}`); }catch(e){}
     const card=s=>subUser(String(s||"")).replace(/\{\{(?:char|self)\}\}/g,p.name).replace(/\s*\n\s*/g," ").trim();
     if(card(p.personality))bits.push(`Personality (from their card; "you" there is ${p.name}): ${briefDesc(card(p.personality),700)}`);
     if(card(p.backstory))bits.push(`Background (from their card; "you" there is ${p.name}): ${briefDesc(card(p.backstory),1400)}`);

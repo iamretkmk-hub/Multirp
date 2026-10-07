@@ -174,6 +174,8 @@ const USER_TPL=`[system]
      /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.rep), r5.rep.slice(-2500));
   ok("the resistance block quotes the line she drew", /YOU HAVE ALREADY SAID WHERE YOUR LINE IS[\s\S]*banka kadar/.test(r5.resist), r5.resist);
   ok("{{call//limits//full}} works in a template of its own", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.tplCall), r5.tplCall);
+  ok("(v150.49) the suggested-replies writer is told the line she drew", await pg.evaluate(()=>{ const c=curChat(), D=state.personas.find(x=>x.id==="p_d");
+      const t=_sugPeopleBlock(c,[D],"Emre"); return /has said out loud about how far this goes[\s\S]*banka kadar/.test(t)?true:t; }));
   ok("the fragment model's layout carries it too (v150.48)", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.frag), r5.frag.slice(-1500));
   ok("the drives block is now exactly the limits block, and its piece renders it", r5.drives===r5.limitsBlk&&r5.limitsBlk.length>0&&r5.piece.trim()===r5.limitsBlk.trim(), JSON.stringify({d:r5.drives,p:r5.piece}));
 

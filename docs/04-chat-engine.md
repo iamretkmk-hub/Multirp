@@ -329,6 +329,15 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+- **Repetition and continuity** (v150.49): two more questions in the same request. `repeat`
+  (`x_reply_check_repeat`) asks whether the reply makes a point, deflection, excuse or gesture the character
+  already made in this scene, or the same sound twice. `continuity` (`x_reply_check_continuity`) asks whether
+  it contradicts what already happened (asking someone to sit who already sat, the wrong place or people).
+  The state gains `their_own_earlier_lines_this_scene` (their last four) and `where_and_who` (the place, the
+  area and who is present). The pills read "repeats itself" and "continuity?". The flags are `repeated` and
+  `lost_track`, with notes `consistency_repeat` and `consistency_continuity`, and the fragment option's code
+  covers all four. The suggested-replies writer is also told each present character's spoken limits
+  (`_sugPeopleBlock`), so an option that walks past one is offered only as pressure.
 - **The consistency note** (v150.45): a flag is also a correction on that character's *next* reply.
   When the speaker's latest reply carries `replyFlags.character` or `.player`, `buildTailBlocks` sets
   `_railFlags.broke_character` / `spoke_for_player` and appends the matching note to the end of the

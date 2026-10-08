@@ -826,3 +826,15 @@ that takes its place in the characters' dialogue history."
   byte-identical (`payload-faithful`).
 
 Test: `tests/pose-desc.browser.js`.
+
+## v150.77 — one photo, one row; the photo stays where she is
+
+From a live export (two text photos):
+- **One generation read as two.** `selfieImage` wrote a "Selfie image · name" debug row around the provider call, and
+  every provider writes its own "Image generation (…) · <scene type>" row for the same request. The extra row is gone; the
+  provider's row (prompt and pictures sent) is the record.
+- **A bedroom she was not in.** She was "at Iskenderun", a town with strangers around, and the selfie writer put the photo
+  in "my sunlit room in İskenderun". The writer's WHERE line now says whether the place is a home or a public place
+  (`_selfieExposure`, with the place's exposure), and `x_selfie_writer` says she takes it exactly there — in a public place
+  where she plausibly could (a restroom, a changing room, her car, a quiet corner), never in a home or room she is not in.
+  An unedited stored copy of the prompt follows the shipped one (registry prompts are stored only when they differ).

@@ -54,9 +54,9 @@ const {chromium}=require('playwright');
   ok("the state is the character and this scene", r.reqs[0]&&r.reqs[0].state.character.name==="Burcu"&&/neredeydin/.test(r.reqs[0].state.scene), JSON.stringify(r.reqs[0]&&r.reqs[0].state));
   ok("Anger + intense → tone 'furious', stored on chat.emo", r.out&&r.out.emotion==="Anger"&&r.out.intensity==="intense"&&r.out.tone==="furious"&&r.stored==="furious", JSON.stringify(r.out));
   ok("the same moment is not asked twice", await pg.evaluate(async()=>{ window.__reqs=[]; await emotionEnsure(curChat(),state.personas.find(p=>p.id==="p_b"),"Dün gece neredeydin?"); return window.__reqs.length===0 ? true : "asked again"; }));
-  ok("the previous pick in this scene goes along", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u2",role:"user",content:"Cevap ver.",speaker:"Emre"}); window.__reqs=[];
+  ok("the previous pick in this scene goes along, as history (v150.72: no ego level, it may have moved)", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u2",role:"user",content:"Cevap ver.",speaker:"Emre"}); window.__reqs=[];
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"Cevap ver.");
-      return window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene==="Anger (intense)" ? true : JSON.stringify(window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene); }));
+      return window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene==="Anger (intense) a few lines ago; it may have moved since" ? true : JSON.stringify(window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene); }));
   ok("the pick is a payload condition flag (emotion / intensity / tone)", await pg.evaluate(()=>{
       const f=ptCondFlags({emotion:"Anger",intensity:"intense",tone:"furious"});
       return (ptCondTest("emotion = anger and intensity = intense",f)&&!ptCondTest("emotion = sadness",f)) ? true : "flags do not test"; }).catch(e=>"err "+e.message));

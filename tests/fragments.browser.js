@@ -37,7 +37,9 @@ const {chromium}=require('playwright');
       const ids=f.options.map(o=>o.id).join();
       // v150.59 — the main body is the heading and the rules every path shares; text and heat add only their own rules under it
       return (/^# FINAL GUARDRAILS\n\nNothing you were given/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!f.byPath.solo&&!f.byPath.multi&&!f.byPath.gm&&!/\{\{if/.test(JSON.stringify(f))&&/^This is a typed message/.test(f.byPath.text)&&/^Dialogue-dense/.test(f.byPath.heat)&&!/You are \{\{self\}\} and nobody else/.test(f.byPath.text+f.byPath.heat)
-        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
+        &&ids==="oblique_once,noecho,noecho_text,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"
+        // v150.69 — "do not echo" is two options, chosen by their ticks: spoken when not continuing, text and heat always
+        &&(o=>o.code==="not continuing"&&o.paths.join()==="solo,multi,gm")(f.options[1])&&(o=>o.code===""&&o.paths.join()==="text,heat"&&o.text===f.options[1].text)(f.options[2])&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);
       return (f.options.length===3&&o("unknown_past").ctx.join()==="memories"&&/not in \{\{char\}\}'s memories/.test(o("unknown_past").ask)&&/Being warm is not agreeing/.test(o("pushed").text)&&/AND IF YOU DO CROSS IT/.test(o("crossed").text)) ? true : JSON.stringify(f.options.map(x=>x.id)); }));
@@ -63,7 +65,11 @@ const {chromium}=require('playwright');
   const base=await C("solo",{render_mode:"solo"},{});
   ok("solo, nothing applying: the main bodies, in order, head before the history and tail after", /^\[system\]\nYou are \{\{char\}\}\.\n\n# TASK/.test(base)&&base.indexOf("# THIS IS WHO YOU ARE")<base.indexOf("{{call//dialogue_history}}")&&base.indexOf("# FINAL GUARDRAILS")>base.indexOf("{{call//dialogue_history}}")&&/\[user end\]\n$/.test(base), base.slice(0,300));
   ok("…and no choose-when text: no compass level, no 'what happened just before', no stalled warning, no say-no", !/Right now your|WHAT HAPPENED JUST BEFORE|made this same move|YOU CAN SAY NO/.test(base), base.slice(-400));
-  ok("solo uses its own memory wording", /answer from that time/.test(base));
+  /* v150.70 — the memories fragment is the player's wording, the same on every path, sent when there are memories (has_memories):
+     its "same situation again" rule is there on solo and on text, and nothing of it goes out over empty lists */
+  {const mem=await C("solo",{render_mode:"solo",has_memories:true},{}), memT=await C("text",{render_mode:"text",has_memories:true},{});
+   ok("solo uses its own memory wording — and since v150.70 every path the same one, only when there are memories",
+     /remember how it went last time and let that inform you/.test(mem)&&/remember how it went last time and let that inform you/.test(memT)&&!/# YOUR MEMORIES/.test(base), mem.slice(0,200));}
   const coded=await C("solo",{render_mode:"solo",emotion:"Anger",intensity:"intense",ego:"id_ahead",stalled:true,scene_start:true},{});
   ok("code conditions: emotion's speaking style, intense → show-don't-name, ego id_ahead → its compass line, stalled → the warning, scene start → just before",
      /YOUR EMOTION — YOU SHOW/.test(coded)&&/want is ahead of your conscience/.test(coded)&&/made this same move/.test(coded)&&/WHAT HAPPENED JUST BEFORE THIS/.test(coded)&&(coded.match(/\{\{call\/\/style_emotion\}\}/g)||[]).length===1, coded.slice(0,200));
@@ -121,7 +127,10 @@ const {chromium}=require('playwright');
       const qk=Object.keys(r.questions);
       const need=["emotion","intensity","ego","q_talk_into__ask","q_talk_into__opening","q_say_no__unknown_past","q_say_no__pushed","q_say_no__crossed","q_read_moment__light","q_already_happened__bears","q_motive__bears"];
       const miss=need.filter(k=>qk.indexOf(k)<0);
-      return (!miss.length&&/market on Tuesday/.test(JSON.stringify(r.state.memories))&&Array.isArray(r.state.plans_done)&&Array.isArray(r.state.motives)&&out.asks["q_say_no__unknown_past"]===0.88&&out.emotion==="Joy") ? true : JSON.stringify({miss,keys:Object.keys(r.state)}); }));
+      /* v150.70 — the memories the asks need are in the request once: a memory memories_that_weigh_now already carries (in the
+         reader's format) is not repeated in the asks' latest memories, which then point there */
+      const memAll=JSON.stringify([r.state.memories,r.state.memories_that_weigh_now]);
+      return (!miss.length&&(memAll.match(/market on Tuesday/g)||[]).length===1&&Array.isArray(r.state.memories)&&r.state.memories.length>0&&Array.isArray(r.state.plans_done)&&Array.isArray(r.state.motives)&&out.asks["q_say_no__unknown_past"]===0.88&&out.emotion==="Joy") ? true : JSON.stringify({miss,keys:Object.keys(r.state)}); }));
   ok("the compile reads those stored answers for the reply", await pg.evaluate(()=>{ const c=curChat(), e=charEmotion(c,"p_b");
       const t=fragCompile("solo",ptCondFlags({render_mode:"solo",emotion:e.emotion}),e.asks); return /it has not happened for you/.test(t) ? true : "not injected"; }));
   /* v150.66 — the switch is gone: with the emotion pick off, only an asked option on the path makes a request */

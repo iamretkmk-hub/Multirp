@@ -267,9 +267,11 @@ const {chromium}=require('playwright');
   ok("no shipped fragment repeats the same text in two path boxes; memories, compass and format have no path boxes", await pg.evaluate(()=>{
       const dup=[]; FRAG_DEFAULTS.forEach(f=>{ [f].concat(f.options||[]).forEach(x=>{ const v=Object.values(x.byPath||{}); if(new Set(v).size<v.length)dup.push(f.id+"/"+(x.id||"")); }); });
       const g=id=>FRAG_DEFAULTS.find(x=>x.id===id), none=["memories","compass","format"].filter(id=>Object.keys(g(id).byPath||{}).length);
-      const fo=g("format").options.slice(0,5).map(o=>o.id+":"+o.code).join("|");
-      return (!dup.length&&!none.length&&fo==="spoken:render_mode = solo or render_mode = multi or render_mode = gm|format_rules:format_rules_raw|narration_shape:narr_active|texting:render_mode = text|heat:render_mode = heat"
-        &&/\{\{if render_mode = solo\}\}/.test(g("memories").text)&&/\{\{if render_mode = solo\}\}/.test(g("compass").text))?true:JSON.stringify({dup,none,fo}); }));
+      const fo=g("format").options.slice(0,5).map(o=>o.id+":"+o.code+":"+(o.paths||[]).join()).join("|");   // v150.69 — the paths are the ticks
+      return (!dup.length&&!none.length&&fo==="spoken::solo,multi,gm|format_rules:format_rules_raw:solo,multi,gm|narration_shape:narr_active:solo,multi,gm|texting::text|heat::heat"
+        /* v150.70 — memories is the player's wording, one text for every path (in its "recall" option, no path boxes there either) */
+        &&!Object.keys((g("memories").options.find(o=>o.id==="recall")||{byPath:{x:1}}).byPath||{}).length&&/\{\{call\/\/mem_recent_entries\}\}/.test(g("memories").options[0].text)
+        &&/\{\{if render_mode = solo\}\}/.test(g("compass").text))?true:JSON.stringify({dup,none,fo}); }));
   ok("format: each path gets its own format and no other", await pg.evaluate(()=>{
       const c=k=>{ const fl=ptCondFlags({render_mode:k,voicing:false,heat_narr:"physical"}); return ptResolveConds(fragCompile(k,fl,{}),fl); };
       const s=c("solo"), g=c("gm"), t=c("text"), h=c("heat");

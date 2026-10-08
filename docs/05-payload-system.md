@@ -1077,7 +1077,9 @@ A fragment (`FRAG_DEFAULTS`, 38 shipped, built from the user's own layouts) has:
     (plans and meetings, promises, private motives, pursuits, latest memories);
   - its own text and `byPath`, and optionally a subset of the fragment's paths.
 
-  With both a code condition and an ask, both must hold. An option with neither is never injected.
+  With both a code condition and an ask, both must hold. An option with neither is never injected. (Since v150.69 an option
+  with neither applies on the paths ticked for it, and `render_mode` is no longer a condition: see "v150.69 — paths are
+  ticks, conditions are facts and decisions" at the end.)
 - **mode**: `any` injects every option that applies; `one` injects only the most likely.
 
 **Code decides fixed facts, the decision model decides dynamic ones.** The asks of the path are added to
@@ -1661,3 +1663,77 @@ is an option again, so the editor shows where it goes and when:
 Text and heat keep their own formats, as the classic builder did. The text of the base instruction and the format rules is
 still edited in Settings → Payloads → Other wording; delete the option to stop sending it. A saved list gets each option
 once (`FRAG_SHIPPED_ADDS` keys `v150.67.base`, `v150.67.format_rules`, `v150.67.narr`); an edited fragment keeps its text.
+
+## v150.69 — paths are ticks, conditions are facts and decisions
+
+The report: an option written with the condition `render_mode = solo or render_mode = multi or render_mode = gm` and the same
+paths ticked sent its text twice. And the condition box should never have been choosing paths: the ticks already do.
+
+**Why it came twice.** Not the condition and not "Only on these paths": those two only decide *whether* the option applies,
+and the text was sent once with either or both. The repeat was the path box. "Add text on a path" opens a box whose text is
+**added under** the option's text on that path (`_fragTextFor`, since v150.59) — it does not choose the path. With nothing
+else choosing the path (ticks alone never sent an option with no condition and no question), the natural move was to tick
+the paths under "Add text on a path" and put the text there as well: on each of those paths the payload got the text, a
+blank line, and the same text again. The same happens wherever a path box repeats its main text (a fragment's main body or
+an option's). No migration duplicates an option: every option-adding entry of `FRAG_SHIPPED_ADDS` checks the id (and the
+`consistency_*` ids for the old consistency option), and the v150.59 path-box conversion keeps each path's text exactly once.
+
+**Fixes.**
+- **The guard** (`_fragTextFor`): when a path box's text is the main text, the main text is sent once; when it starts with
+  it (and goes on after a space or a line break), the box is sent as written — the main text once, then the rest. A box that
+  merely begins with the same letters ("Do not" / "Do nothing") is still added under it.
+- **Once per fragment** (`fragCompile`): an option whose text on this path is word for word a part the fragment already sends
+  (its main body, or another option that fired) is not sent again.
+- **Paths are ticks.** An option with no condition and no question applies on the paths ticked for it (before: never sent);
+  with nothing ticked as well it is still never sent, and the editor says so. A question with ticks is asked only there. The
+  trace (Preview, Debug) records it as fired `by: "path"`.
+- **The editor.** The box is **Condition — a fact or a decision (optional)**. Its help lists the decisions made for the
+  reply first (emotion, intensity, tone, ego, and the reply check's broke_character, spoke_for_player, repeated, lost_track),
+  then the facts (continuing, has_line, target_kind, …, every `…_raw`), and no longer lists `render_mode`. When the condition
+  names `render_mode`, a note under it says **"Choose paths with the ticks below"**; when the condition is nothing but the
+  path, the note offers **Move to ticks** (`fragEdMoveToTicks`: the ticks become the paths where it held, the condition is
+  cleared — the same payload), live as it is typed. A fragment whose option still names a path is flagged on its row ("a
+  condition names a path"). The two tick rows read differently: **Only on these paths** — where this option applies — and
+  **Add text on a path:** extra text on that path, added under the text above — it does not choose where it applies. A path
+  box that repeats the text above says it is sent once.
+- `render_mode` stays a flag: `{{if render_mode = …}}` inside a text (memories, compass, language, privacy: a wording
+  variant, not a condition) and an old saved condition keep working.
+
+**The shipped options.** Ten options carried `render_mode`; each now has its paths as ticks and only the real fact as its
+condition (the other options named in the report — `delivery`, `carry_on`, … — were already split by path in v150.59 and
+never named `render_mode`):
+
+| Fragment | Option | Was | Now (condition · ticks) |
+|---|---|---|---|
+| Response format | `spoken` | `render_mode = solo or … multi or … gm` | — · solo, multi, gamemaster |
+| Response format | `texting` / `heat` / `beat_end` | `render_mode = text` / `= heat` / `= heat` | — · text / heat / heat |
+| Scene right now | `live` | `render_mode != text` (no ticks) | — · solo, multi, gamemaster, heat |
+| Scene right now | `live_text` | `render_mode = text` (no ticks) | — · text |
+| Last, before you write | `spoken` / `texting` / `heat` | the same three path conditions | — · solo, multi, gamemaster / text / heat |
+| Final guardrails | `noecho` | `render_mode = text or render_mode = heat or not continuing` | `not continuing` · solo, multi, gamemaster |
+| Final guardrails | `noecho_text` (new) | (part of `noecho`) | — · text, heat |
+
+**Faithfulness.** The v150.67 build and this one were compared on the 59 fragment-wording / payload-faithful situations on
+all five paths plus a heat last beat (297 full payloads) and the compiled layout of every path over a grid of flags (320):
+617 of 617 identical. `tests/fragment-paths.browser.js` keeps a smaller version of it (the v150.67 shape against the shipped
+list: 160 layouts and 30 payloads).
+
+**Migration.** `FRAG_DEFAULTS_V150_67_PATHS` keeps the v150.67 default of `format`, `scene_now`, `last_before` and
+`guardrails`; `FRAG_SHIPPED_ADDS` `v150.69.paths` replaces each only while it is still that default. Then, once,
+`v150.69.paths_conv` goes through every fragment the user HAS edited (and their own fragments): an option whose condition is
+only `render_mode` clauses (`_fragCodeIsPath`) gets the paths where it held as its ticks and the condition cleared
+(`_fragPathsFromCode`, judged by `ptCondTest` itself, so the payload is the same); a mixed condition (an edited guardrails'
+`noecho`) stays as it is and is flagged in the editor; one that held on none of its paths stays too (it was never sent). An
+option of the user's that had ticks but no condition and no question was never sent before and is sent on its ticks now —
+that is the new meaning, and what ticking it said.
+
+Pinned by `tests/fragment-paths.browser.js`.
+
+## v150.70 — memories in the reader's format
+
+"What you remember" is the player's own wording (option `recall`, code `has_memories`: no memory text over empty lists), and the
+memory entries the fragments call (`mem_recent_entries`, `mem_distant_entries`, `mem_latest_entries`) are one line per memory,
+`[when, at place | importance 1–5] what happened. Felt: … Status: …`, oldest to newest, an exact repeat once; "What happened just
+before this" lists oldest first. A saved list gets both while they are the v150.67 default (`v150.68.memories`). The worded blocks
+keep the numbered form for the engine contexts that read them. Details, status and the emotion pick: doc 07, "v150.70 — memories in
+the reply and in the emotion pick".

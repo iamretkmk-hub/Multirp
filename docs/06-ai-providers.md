@@ -112,11 +112,12 @@ is what the code did before v29.1 — rendered the model's monologue as the char
 | Rolling recap (calls) | `recapModel` | → `memModel` |
 | Gossip & offstage intent | `gossipModel` | → `memModel` |
 | Embeddings | `embedModel` | → `openai/text-embedding-3-small` |
-| Memory relevance judge (Decisions API, v150.29) | `memJudgeModel` | → `openai/gpt-6-luna-decisions` |
-| Reply check (Decisions API, v150.30) | `replyCheckModel` | → `openai/gpt-6-luna-decisions` |
-| Trackers in one request (Decisions API, v150.31) | `trackDecModel` | → `openai/gpt-6-luna-decisions` |
-| Strict gates: promise / task / meeting / quest / motive (Decisions API, v150.33) | `gateModel` | → `openai/gpt-6-luna-decisions` |
-| Emotion pick (Decisions API, v150.34) | `emoModel` | → `openai/gpt-6-luna-decisions` |
+| **Every Decisions-API request** (v150.64) | `decModel` (`decisionsModel()`) | → `openai/gpt-6-luna-decisions` |
+| Memory relevance judge (Decisions API, v150.29) | `memJudgeModel` (override) | → `decModel` |
+| Reply check (Decisions API, v150.30) | `replyCheckModel` (override) | → `decModel` |
+| Trackers in one request (Decisions API, v150.31) | `trackDecModel` (override) | → `decModel` |
+| Strict gates: promise / task / meeting / quest / motive (Decisions API, v150.33) | `gateModel` (override) | → `decModel` |
+| Emotion pick and the reply's questions (Decisions API, v150.34) | `emoModel` (override) | → `decModel` |
 | Gamemaster / Scene Writer / judges | `gmModel` | — |
 | Character generator & background tasks | `bioModel` | — |
 | Authoring model (universe gen, director notes, genre packs, prompt tuner) | `authorModel` | — |
@@ -135,6 +136,26 @@ by a key change — so a reply check refused on one scene's content never stops 
 memory relevance judge (doc 07), the reply check (doc 04), trackers in one request (doc 09) and the strict
 gates (doc 08). The path
 is `alpha`, so all parsing lives in `decisionsCall` / `_decYes` and each feature's own reader.
+
+**v150.64 — one Decisions model, and refusals.** Every Decisions request takes its model from
+`decisionsModel()` (`state.decModel`, `sm_decmodel`; blank = `DECISIONS_DEFAULT_MODEL`): image decisions, the turn
+router, the Gamemaster judge, movement, status checks, the proactive text gate, and — through their optional overrides
+(`emotionModel`, `replyCheckModel`, `trackDecModel`, `gateModel`, `memJudgeModel`, each blank = the Decisions model) —
+the emotion pick and the reply's questions, the reply check, trackers, strict gates and the relevance judge. No request
+names `DECISIONS_DEFAULT_MODEL` itself. The six boxes are their own card, **2 · LLM Selection → Decision models**
+(`#decModelsCard`), apart from the embeddings box, which says they take Decisions-API models only.
+When the API answers with an error naming a refused question (`502 'OpenAI refused to answer question "emotion"'`,
+`_decRefusedQ`), `decisionsCall` sends the request once more without that question and with the scene as dialogue only
+(`_decDialogueOnly`: each "Name: line" keeps its quoted words; narration, `*actions*` and `_thoughts_` go; on
+`state.scene` / `state.scene_before_the_reply`, or a string state), so the rest of the bundle arrives. A refusal never
+counts toward the pause (first try or retry). The Debug row carries `e.retry` {refused, firstError, sceneDialogueOnly,
+questionsLeft, result, note}, shown on the card and exported. Pinned by `tests/decision-models.browser.js`.
+
+**v150.64 — the reasoning on the Debug row.** `chatCompletion` keeps a reasoning model's own reasoning on its Debug
+entry (`_dbgReasoning`: `message.reasoning` / `reasoning_content`, else the text and summaries of `reasoning_details`;
+an encrypted block only is counted; at most 20000 characters). The expanded card shows it under "The model's reasoning",
+folded by default; the export carries it. `exportDebug` exports every entry in the log (up to `DBG_MAX`, 200). Pinned by
+`tests/debug-reasoning.browser.js`.
 
 **Model rotation** (`rpRotation`, comma-separated): each roleplay reply uses the next model in
 the list, cycling; index persists (`sm_rprotidx`). Rotation picks only the *primary* model —

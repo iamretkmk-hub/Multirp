@@ -210,6 +210,13 @@ standing — the stakeholder's one raisable rumor vs. talk merely overheard (doc
 - **Goal pursuit** (time-of-day change, once a day per character, `runGoalPursuit`, `goalPursuit`): each offstage character decides
   a NEXT MOVE from personality/goals/motives/memories/standings → lands on the **calendar**
   as a plan (solo or with one other character, never the player) for the executor.
+  **v150.64:** a character with a live private motive (with an aim) and no written goals is asked too
+  (`_hasLiveIntent`), and one with a live motive is asked before one without. The same holds for the character quest
+  designer (`runCharQuestSpawn`). The private motives left the reply's identity sheet (the quiet wants, doc 05): what a
+  character privately wants reaches play through what they do about it — a plan here, a pursuit, an armed move the
+  Gamemaster stages (`armedStagingSummary`, `checkArmedPlans` → `surfaceIntent`) — and the reply sees it only through the
+  plans / threads / brief fragments when it is due, and through the decision-gated "Your private motive" option toward the
+  one being answered. Pinned by `tests/quiet-wants.browser.js`.
 
 ## Character quests (v23.2) & quest arcs
 

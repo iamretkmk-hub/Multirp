@@ -53,8 +53,9 @@ const {chromium}=require('playwright');
   ok("the world pulse drops a companion already booked for that day and part of the day", await pg.evaluate(()=>/sameName\(n,comp\.name\)[\s\S]{0,20}if\(busy\)comp=null/.test(String(runGoalPursuit))?true:"not wired"));
 
   console.log("\n[the debug export]");
-  ok("120 entries from a log of 200, answers up to 12000 characters", await pg.evaluate(()=>{ const f=String(exportDebug);
-      return (/function exportDebug\(limit=120\)/.test(f)&&/slice\(0,12000\)/.test(f)&&DBG_MAX===200)?true:"sizes"; }));
+  // v150.64 — every entry in the log (up to its 200 cap), not the last 120 (tests/debug-reasoning.browser.js exports one)
+  ok("every entry of a log of 200, answers up to 12000 characters", await pg.evaluate(()=>{ const f=String(exportDebug);
+      return (/function exportDebug\(limit=DBG_MAX\)/.test(f)&&/slice\(0,12000\)/.test(f)&&DBG_MAX===200)?true:"sizes"; }));
 
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

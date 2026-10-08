@@ -1394,3 +1394,94 @@ output; `_dedupePayloadSections` and the head/tail section filter compare text w
 message is kept (`pvRemember`, bounded, keyed by the clean text) only when, stripped, it is the sent message; `dbg()`
 attaches it to the entry. Both builders, and `chatCompletion` before every request, run `pvCleanMessages`, so a mark
 cannot reach a provider. The colours and the view itself: docs/06, "The Debug screen".
+
+## v150.64 — feelings back in the reply, answers that belong to one line, and conscience that costs something
+
+From two debug exports: an intimate scene with a married character (Özlem, with the player Emre) where the ego pick said the
+want had won and its compass line reached the payload, but conscience never showed; the feelings never reached the reply;
+two of four emotion requests were refused (`502 'OpenAI refused to answer question "emotion"'`) and the next reply reused the
+line before's asks; the reply check could not see her marriage; and six of her seven lines ended on the same teasing dare.
+
+**The feelings (two new fragments).** No shipped fragment called `feelings` / `feelings_now` since the fragment model became
+the default (v150.57), so the paid momentary read (the fast read's note, "Under the heat, a small wire stays taut…") and the
+lasting view were built and dropped. Worse, `_feelingsReachPayload` read the classic order, which has `feelings`, so the tie
+paragraph of a *character* being answered was dropped from the ties ("their stance is in feelings") and the stance went
+nowhere. Now:
+
+| Fragment | Where | Option (code) | Data names |
+|---|---|---|---|
+| `feelings` *How you feel about them* | head, right after `ties` | `settled` (`has_feelings`): `# WHAT YOU HAVE COME TO FEEL ABOUT …`, the instruction, the lasting view (`{{if feel_desc_raw}}` the written view, `{{else}}` the considered one) | `feel_target_raw`, `feel_desc_raw`, `feel_considered_raw` (`_fe`) |
+| `feelings_now` *What your body is doing this second* | tail, right before `compass` | `now` (`has_feelings_now`): the heading, the live reading and its instruction, the note to play (`{{if feel_impact_raw}}`), the tension clause (`{{if feel_tension = desire / anger / fear}}`) | `feel_target_raw`, `feel_momentary_raw`, `feel_impact_raw` (`_fn`) |
+
+`feelingsBlock` keys the data beside the worded pieces (in no ORDER list; `RAW_DATA_KEYS`) and returns the tension kind;
+`buildCharPromptBlocks` adds `has_feelings`, `buildTailBlocks` `has_feelings_now` and `feel_tension`. **Nothing twice:**
+`_feelingsReachPayload` is fragment-aware (`_fragPathCalls`: a fragment on that path calls the stance's data), so a character
+answered has their stance once (in this fragment) and their tie paragraph not again; the player's tie paragraph is always
+printed, so when the written view says mostly what that paragraph says (`_mostlySame`) the fragment's lasting view is left
+out. The relationship readings the ties carry are the authored ties; nothing else overlaps. The wording is the classic
+pieces', word for word; a piece the user rewrote is carried in (`FRAG_TPL_CARRY` feel_* entries).
+
+**Asks belong to one line.** `emotionEnsure` drops the per-line answers of the record (`asks`, `relAbout`; `_emoDropLineAnswers`)
+the moment a different line is answered — before any early return, so a failed request, a paused feature, or no request at
+all never leaves the line before's asks in place; the emotion and the id/superego answer stay until a new pick replaces them,
+and the record's signature is cleared so the next request for any line is asked afresh. The proactive texter (no line) drops
+them too. `ptBuildMessages` and the reply flags read the record with or without an emotion (`charDecisions`): with the
+emotion pick off, the asks were stored and never used. When the emotion question was refused and dropped, the ego that did
+arrive is this line's. `goalsDone` and the spoken limits are filed when they arrive, not reused. Pinned by
+`tests/decision-models.browser.js`.
+
+**Refusals** retry once without the refused question and with a dialogue-only scene; they never count toward the pause; the
+Debug row says what happened (doc 06).
+
+**The motive ask.** `has_motive` is true when the speaker carries a live motive toward the one answered *and* `intentParts`
+renders one; the motive toward the player now carries its data (`motive_*_raw`, valence: v150.61 gave it a colouring only,
+so a yes injected nothing); a self-serving motive has wording of its own (`{{if motive = self}}`, from `intent_self`, which
+the fragment never had). And in general an option whose code condition reads only facts known before the request (the path,
+`fragCodeFacts`) and is false is not asked (`_fragAskApplies`); one that reads a fact the same request decides (ego, emotion)
+is. Pinned by `tests/fragment-asks.browser.js`.
+
+**Conscience that costs something.**
+- `compass`: `id_winning` — "Right now your want has won over your conscience. It still shows in one small thing — a pause,
+  a look at the door, the clock — and you go on anyway."; `id_ahead` likewise, the cost showing before the next step. For
+  someone not free (`{{if has_partner}}`): "You are not free, and you know it: it still shows in one small thing — a name
+  almost said, the clock, a ring — and you go on anyway." New code facts in `fragCodeFacts`: `has_partner` (a spouse,
+  partner or lover on their own ties, other than the one answered) and `answers_to_spouse` (a spouse) — `_partnerTies`.
+- `talk_into` ask / ask_multi / ask_gm: code `not ego = id_winning` with the ask, which now asks about "something significant
+  they have not already agreed to in this scene". `say_no` crossed: "…is going along with something that crosses a line for
+  them (e.g. being unfaithful), and will feel it afterwards."
+- The ego question's state: `people_they_answer_to` is how they stand, not a bare name (`_answerToLines`: spouse / partner
+  first, the tie, its paragraph, the settled view in this chat, a live motive toward them such as loyalty), and
+  `plans_that_put_them_at_risk` (`_plansAtRisk`: their open plans for today and tomorrow morning, marked when people are due
+  at their own home or it is soon). `x_ego_pick` keeps "Do not lean on conscience by default" and adds that a spouse or
+  partner on record is a real weight even when not here (`_refreshPipe` for a stored old default).
+- The reply check (doc 04) sees the tie, the people they answer to, their likes and the speech & behaviour box of their
+  feeling now; its repeat question counts the same closing move reply after reply.
+
+**Nothing dated in a relationship.** A generated tie read "He is invited to dinner at your house tomorrow evening" after the
+dinner: the relationship generator (`DEFAULT_RELGEN`) and the daily read (`DEFAULT_REL`, its `description`) are told that a
+plan, an invitation or anything tied to a time belongs on the calendar (`_refreshPipe` for stored old defaults), and
+`_relDropDated` drops such a sentence (English, Turkish, German markers) when the generator writes a tie, the daily read writes
+its view or a social fact, or an opinion is fed back to the generator — never text a person typed, and never all of it. A tie
+already stored keeps its text until the next regeneration (or an edit). Pinned by `tests/ego-stakes.browser.js`.
+
+**No quiet wants in the reply.** "What you quietly want" (want1 / want2) made characters steer every line toward a private
+motive. `buildCharPromptBlocks` no longer hands `charBioBlock` the quiet wants (both layouts), and the `bio` fragment's
+`<what_you_quietly_want>` paragraph is gone. The motives drive the background instead: `runGoalPursuit` and
+`runCharQuestSpawn` ask a character with a live motive even with no written goals (`_hasLiveIntent`), and armed motives surface
+as scenes (doc 08). The live goals ("YOUR GOALS") and the decision-gated "Your private motive" option stay. The quiet-want
+pieces (`intent_aim_*`) left `FRAG_TPL_CARRY`. Pinned by `tests/quiet-wants.browser.js`.
+
+**Migration.** `FRAG_DEFAULTS_V150_63_OLD` keeps the v150.63 default of `bio`, `compass`, `talk_into`, `say_no` and `motive`;
+`FRAG_SHIPPED_ADDS` `v150.64.decide` replaces each only while it is still that default. `feelings` (inserted `after` `ties` —
+inserts can now name the fragment to follow) and `feelings_now` (before `compass`) reach a saved list once, a rewritten feel
+piece carried in; someone with no saved list who rewrote one gets a saved copy that holds it (`_fragCarryDefaults`).
+
+**The editor.** "What the question also gets" shows only while the ask box has text (live, the ticks kept in the draft); the
+box is "Ask the decision model (optional)"; "Add text on a path" is folded (`details.fragBp`) until a path box is ticked. The
+flag list names `has_partner`, `answers_to_spouse`, `has_feelings`, `has_feelings_now`, `feel_tension`.
+
+**Faithfulness.** `tests/payload-faithful.browser.js` builds the fragment-wording situations on every path (and eight in
+the classic layout) and checks that every line the v150.63 build sent is still sent — 335 payloads, against
+`tests/fixtures/payload-v150.63.json` (one hash per distinct line, written by the same script against the v150.63 build) —
+except the removed lines it names (the quiet wants and the two old compass lines); and that the feelings arrive once, in
+their places.

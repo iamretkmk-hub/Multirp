@@ -329,6 +329,12 @@ gates. Limits are stored, expire, and reach the reply and the analysers exactly 
   refused model or three failures in a row pause it (`_replyCheckBreak`) without pausing the memory
   judge. Model: `replyCheckModel` → `openai/gpt-6-luna-decisions`. The older `runVoiceCheck` (a chat
   call with a written note, off by default) is unchanged. Pinned by `tests/reply-check.browser.js`.
+  **v150.64:** the state also carries who the character is to the person answered (`tie_to_the_one_answered`), the
+  people they answer to (`people_they_answer_to`: spouse or partner first, with the tie, the settled view and a live
+  motive toward them; `_answerToLines`), their likes, and the speech & behaviour box of the emotion they were picked as
+  feeling (`speech_and_behaviour_for_their_feeling_now`, from `p.speech`, the reply's own group). The repeat question
+  counts the same closing move reply after reply (a dare, a tag question); a stored copy of the old wording is refreshed.
+  The model is the Decisions model unless overridden (doc 06). Pinned by `tests/ego-stakes.browser.js`.
 - **The clock follows the scene** (v150.53, `clockFollowOn`): time used to move only by travel, Story mode or by hand.
   The reply check's request carries `time_moved` (`x_clock_moved`), with `story_clock` in the state. A yes at
   `CLOCK_AT` (0.85) calls `advanceTime(chat, 1)`, which runs the period engines as usual, and adds a short note.

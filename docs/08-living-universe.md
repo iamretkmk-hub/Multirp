@@ -917,3 +917,68 @@ before her text, and her text carries `photo_sent` with her own description. The
 and builder, the emotion pick, the proactive gate, her history) read the photo as "(sent a photo: …)". A failed pick falls
 back to the chat model; a failed picture leaves a notice and no photo note. Optional automatic download of her photos.
 Details: doc 10, "v150.74 — asking for a photo by text". Test: `tests/selfie-request.browser.js`.
+
+## v150.78 — arrivals wait for a reason
+
+Reported: "Everyone emerges all of a sudden." In the export, Buket's overture toward Emre resolved, and one turn
+later Sami (her husband) let himself into Emre's house ("Bahçe kapısının kilidi tık etti…") while Buket sat on
+Emre's lap. Sami's event resolved, and one turn later Nil walked into the living room. Both were armed plans whose
+gate had opened (`checkArmedPlans` → `surfaceIntent` → `startOverture` → `_kickEventOpening` → `runSceneWriter`).
+Nothing spaced the events out, and nothing asked whether that person could plausibly come to that place at that
+moment.
+
+- **The privacy lock now holds at home.** `sceneIsPrivateMoment`'s "alone together somewhere private" check passed
+  a sub-area id string to `locGossipChance`, which expects a location, so it always answered 0.3. It now reads the
+  player's place and area through `areaGossipChance(loc, subId)` (a home is 0), and the one character must be in the
+  player's area. `intimacyReads` also knows more Turkish: lips on lips ("dudaklarım dudaklarında"), a kiss on the
+  lips, legs apart astride, a lap (kucağıma / kucağına al-, oturt-, yerleş-, bastır-; weak), "üzerime otur-", a hand
+  on or holding the hips, nails into the shoulders, more forms of öp-, and a slap on the hip or bottom. A slap there
+  no longer makes the violence context. A child on a lap, a hand kiss and a slap in a fight still read as ordinary.
+- **The gap.** `resolveActiveEvent` now stamps `chat.lastEventEndTurn` and `chat.lastEventEnd`
+  `{turn, day, period, place, kind}` (counted with `_gmTurnCount`), and marks the event `resolved`. For
+  `EVENT_GAP_TURNS` (6) real turns after that, `eventGapHold(chat)` keeps an armed plan from surfacing, a quest
+  holder from approaching and the Gamemaster from staging a beat. The Gamemaster checks the gap before its cadence
+  stamps the window, so a window it could not use is not spent. Its own cadence (`gmEvery`) still applies on top.
+  A surfacing that brings someone in from elsewhere records `chat.lastArrival`. A second arrival at the same place in
+  the same part of the day then waits until `EVENT_GAP_TURNS` turns have passed (`eventGapHold(chat, {arrival:true})`).
+  Someone already in earshot may still act, and the Gamemaster's judge is not offered the arrival kind. Its author is
+  told "NOBODY ARRIVES NOW" (an editable fragment, `gm_arrival_lock`, beside `gm_private_lock`).
+- **The arrival gate.** When the one who would act (the holder, or the proxy) is not in the player's earshot,
+  `checkArmedPlans` asks one Decisions yes/no first (`arrivalGateDecision`, prompt `x_arrival_gate`, Debug row
+  "Arrival gate (Decisions) · <name>"), and hands `postTurn` a promise of the answer. The state carries:
+  - the time;
+  - the place: its kind, whose home it is, and whether they live there, are expected, or would have to ring or knock;
+  - where they are now (`resolveWorldPositions` / `charAvailability`, or the area of this place they are in);
+  - what they are due to do today (the calendar);
+  - who is with the player, and their tie to each person and to the player;
+  - the room's last six lines;
+  - what they would come for (the aim and the method).
+
+  The question's NO line carries the rules: nobody walks into someone else's home uninvited, someone at work,
+  elsewhere or due elsewhere soon does not appear, and nobody bursts in on an intimate or private scene. The answers:
+  - **Yes** at `arrivalGateAt()` (0.6): the plan surfaces.
+  - **No:** the plan stays armed. It is not counted as a surfacing miss; it adds to `it.arrivalRefusals`. Three noes
+    set `it.arrivalHold` to the current day and part of the day, and the plan waits for the next part of the day.
+  - **No answer** (the request failed, the gate is paused, the question was refused, or no usable probability came
+    back), or the player moved on meanwhile: nothing surfaces this turn, and nothing is counted.
+
+  Someone already in earshot is not asked (`_kickEventOpening` has them say it). The gate can be switched off in
+  Settings → Gamemaster → "Arrivals need a reason" (`arrivalGateOn`, `arrivalGateAt`). With it off, or with no
+  OpenRouter key to ask, plans surface as before.
+- **At someone else's home a visitor rings.** The scene writer's shipped prompt gains
+  `SCENE_WRITER_HOME_RULE_V150_78` in Rule Zero: a visitor rings or knocks and is let in, or is seen at the gate or
+  the door, and only someone who lives there walks in by themselves. A stored copy is upgraded only while it is
+  exactly the v150.77 default (compared after trim). An edited copy is left alone.
+- **Resolved means resolved ("Turn 4 of 3").** Entry 116 (turn 3 of 3) took 20 s. The next player line arrived while
+  it was out, and that turn's `postTurn` started a second `runSceneWriter` on the same, still unresolved event. The
+  second run counted turn 4 and wrote another beat after the first had resolved it. Now:
+  - a scene writer already writing for an event is not started again (`_swInFlight`);
+  - an event already at `turn >= maxTurns` is closed (its aftermath recorded) with no further beat;
+  - a resolved event is never advanced;
+  - a beat that comes back after its event was closed is dropped.
+- **The writer narrates; it does not speak for anyone.** `stripNarrationDialogue` removes "…", “…”, „…“ and «…»
+  spans from the scene writer's narration and tidies the punctuation left behind. A single quoted word with no
+  sentence mark ("Kapalı" on a sign) stays. Single quotes are never touched (Emre'ye).
+
+Pinned by `tests/arrival-gate.browser.js`. `qc-living-world`, `qc2-living-world` and `quiet-wants` switch the gate
+off in their setups: they test the surfacing bookkeeping itself, with the holder away.

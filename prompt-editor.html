@@ -158,6 +158,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
 .turnRow{border-top:1px dashed var(--border);padding-top:6px;display:flex;flex-direction:column;gap:3px;font-size:12.5px;min-width:0}
 .turnRow .pl{color:var(--muted)} .turnRow .rp{white-space:pre-wrap;word-break:break-word}
 .vd{display:inline-block;border-radius:999px;padding:0 8px;font-size:11px;font-weight:600;border:1px solid var(--border)}
+table.dt{border-collapse:collapse;font-size:12px;margin:6px 0;width:100%} table.dt td,table.dt th{border-bottom:1px solid var(--border);padding:3px 6px;text-align:left;vertical-align:top} table.dt tr.miss td{color:var(--danger)} table.dt th{font-weight:600;color:var(--muted,inherit)}
 .vd.held{color:var(--good);border-color:var(--good)} .vd.bent{color:var(--warn);border-color:var(--warn)} .vd.broke{color:var(--danger);border-color:var(--danger)}
 .score{font-variant-numeric:tabular-nums;font-weight:600}
 .provider{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px;font-size:12.5px}
@@ -241,6 +242,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button type="button" data-r="claude">Claude</button>
         <button type="button" data-r="tests">Roleplay tests</button>
         <button type="button" data-r="eng">Engine tests</button>
+        <button type="button" data-r="dec">Decision tests</button>
         <button type="button" data-r="llm">LLM evaluation</button>
         <button type="button" data-r="ap">Analyst prompts</button>
       </div>
@@ -300,6 +302,18 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
 
     </div>
 
+    <div id="rDecT" class="scroll" style="display:none;flex-direction:column">
+      <div class="provider" id="decModelBox"></div>
+      <div class="ctl">
+        <button class="btn sm pri" id="btnDecRun" type="button">Run the selected cases</button>
+        <button class="btn sm" id="btnDecFix" type="button" title="Claude reads the misses next to the passes and proposes edits to the decision prompts">Analyse the misses</button>
+        <button class="btn sm" id="btnDecStop" type="button" hidden>Stop</button>
+        <span class="stat" id="decStat"></span>
+      </div>
+      <div class="empty" style="padding:10px 12px"><b>The decision agents</b>, tested as what they are: classifiers. Each case is a scene whose right answer is known, put to the agent through the app's own request (the reply's decisions, the reply check, a strict gate, memory relevance) and scored at the threshold the app acts at. A miss names the question and its prompt; <b>Analyse the misses</b> proposes edits to those prompts, weighed against the cases that passed.</div>
+      <div id="decFix" style="padding:0 12px"></div>
+      <div id="decList" style="padding:0 6px 12px"></div>
+    </div>
     <div id="rEngT" class="scroll" style="display:none;flex-direction:column">
       <div class="provider" id="engModelBox"></div>
       <div class="ctl">
@@ -1236,6 +1250,41 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   async function build(o){ var k=liveKeep(); try{ return await _build(o); } finally{ liveRestore(k); } }
   function buildEngine(o){ var k=liveKeep(); try{ return _buildEngine(o); } finally{ liveRestore(k); } }
   async function check(o){ var k=liveKeep(); try{ return await _check(o); } finally{ liveRestore(k); } }
+  /* (v150.74) ONE DECISION TEST CASE: a scene, and the decision agent it is put to — the reply's decisions (emotion, intensity,
+     id/superego, the path's questions), the reply check (on the scene's last reply), a strict gate (an item said to be agreed,
+     with the scene as the future tracker hands it over), or memory relevance (given memories, against the scene). The agent's
+     own app function builds and reads the request, answered in the editor's decision mode; the case is scored by the editor.
+     A case tests its agent even where the pack switched it off. */
+  async function _decCase(o){
+    o=o||{}; var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo", f=o.feature;
+    var ps=prepScene(o,kind), chat=ps.chat, p=ps.p, since=DEC.n, keyWas=state.key, out={feature:f};
+    if(!String(state.key||"").trim())state.key="pe-claude";
+    var sw={}; ["emoOn","replyCheckOn","gateOn","memJudgeOn"].forEach(function(k){ sw[k]=state[k]; state[k]=true; });
+    var msb=window.memStatusBackfill; window.memStatusBackfill=function(){return null;};
+    try{
+      if(f==="emotion"){
+        await emotionEnsure(chat,p,decideLine(chat,p,kind),{targetId:"__user__",targetName:chatUserName(chat),kind:kind});
+        var d=charDecisions(chat,p.id); out.decisions=d?J(d):null; out.at=fragAt();
+      }else if(f==="check"){
+        var msg=null; (chat.messages||[]).forEach(function(m){ if(m&&m.role==="assistant"&&m.speakerId===p.id&&!m.narratorEvent)msg=m; });
+        if(msg){ await runReplyCheck(chat,msg,p); out.probs=msg.replyCheck?J(msg.replyCheck):null; }
+        out.at=state.replyCheckAt!=null?+state.replyCheckAt:0.7;
+      }else if(f==="gate"){
+        var g=o.gate||{}, lines=inChatWorld(chat,function(){return _exchangeWithTexts(chat,ENGINE_RECENT_TURNS);});
+        var st=inChatWorld(chat,function(){return "ALREADY ON RECORD (filed earlier — anything that is one of these is NOT new):\n"+(_ftRecord(chat)||"(nothing)")+"\n\nNow: Day "+(chat.gameDay||1)+", "+chatPeriod(chat)+".\n"
+          +lines.map(function(m,i){return "#"+(i+1)+" "+_exLine(m);}).join("\n");});
+        var res=await strictGate(chat,"decision test",st,[{prompt:"x_gate_"+g.kind,label:g.kind,vars:{user:chatUserName(chat)||"the player",holder:g.holder||"someone",about:g.about||"",line:"#"+(g.line||lines.length)}}]);
+        out.p=(res&&res[0]&&res[0].answered)?res[0].p:null; out.at=gateAt();
+      }else if(f==="relevance"){
+        var mems=(o.memories||[]).map(function(m,i){ return Object.assign({id:"dc_m"+i,ownerId:p.id,type:"EXPERIENCE",importance:0.6,universeId:chat.universeId,chatId:chat.id,gameDay:Math.max(1,(chat.gameDay||1)-1),gamePeriod:"Evening",people:[]},J(m)); });
+        var map=await memRelevanceJudge(chat,p.id,decideLine(chat,p,kind),mems,null);
+        out.rel={}; mems.forEach(function(m){ if(map&&map.has(m))out.rel[m.id]=map.get(m); }); out.at=0.5;
+      }
+    }finally{ window.memStatusBackfill=msb; Object.keys(sw).forEach(function(k){ state[k]=sw[k]; }); state.key=keyWas; }
+    out.calls=DEC.log.filter(function(r){return r.did>since;});
+    restoreBase(); return out;
+  }
+  async function decCase(o){ var k=liveKeep(); try{ return await _decCase(o); } finally{ liveRestore(k); } }
   async function liveScript(o){
     if(!LIVE)throw new Error("No live run.");
     var chat=curChat(), from=LIVE.calls.length, n=chat.messages.length, here=(chat.presentIds||[]).slice();
@@ -1284,7 +1333,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       return normalizeChannels(stripChannelLabel(stripChannelLabel(r).replace(new RegExp("^\\s*"+px+"\\s*:\\s*","i"),"")).trim(),{heat:!!o.heat});
     }catch(e){ return r.trim(); }
   }
-  var OPS={meta:meta,apply:apply,clean:clean,check:check,setDecMode:setDecMode,decLog:decLog,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveScript:liveScript,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,replay:replay,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
+  var OPS={meta:meta,apply:apply,clean:clean,check:check,decCase:decCase,setDecMode:setDecMode,decLog:decLog,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveScript:liveScript,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,replay:replay,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
   window.addEventListener("message",async function(ev){
     var d=ev.data;if(!d||d.pe!=="req")return;
     try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String((e&&(e.message||e.friendly))||e));}
@@ -2292,7 +2341,7 @@ function modelBoxHTML(){
   return h;
 }
 function renderProvider(){
-  ["#provBox","#driftModelBox","#engModelBox"].forEach(sel=>{
+  ["#provBox","#driftModelBox","#engModelBox","#decModelBox"].forEach(sel=>{
     const b=$(sel); if(!b) return; b.innerHTML=modelBoxHTML();
     const key=b.querySelector(".pmKey"), mod=b.querySelector(".pmModel"), use=b.querySelector(".pmUseSm");
     const pv=testProv(), ea=b.querySelector(".pmEngApi");
@@ -2878,7 +2927,30 @@ STATE:
 {{state}}
 
 QUESTIONS:
-{{questions}}`}
+{{questions}}`},
+ {id:"decfix",label:"D · Decision prompt fixer (the decision tests' misses, against their passes)",desc:"After the decision tests: every case that missed (what was expected, what came back, the state it was given) next to the cases that passed, and the current text of every prompt they asked. Proposes edits to those prompts.",
+  vars:{context:"the method",misses:"each case that missed: why the right answer is what it is, each question scored (pass or miss, expected, got), and the state it was given",passes:"the cases that passed, scored the same way (no state)",prompts:"the current text of every prompt the cases asked, and the emotions' descriptions",mode:"who answered (the Decisions API, or Claude standing in)"},
+  def:`{{context}}
+
+You are fixing the DECISION PROMPTS of the app from labelled test cases. Each case is a scene whose right answer is known; the decision model ({{mode}}) was asked through the app's own request, and its answer was scored at the threshold the app acts at. Below are the cases that missed — with why the right answer is what it is, and the state the model was given — the cases that passed, and the current text of every prompt they asked.
+
+1. For each miss, find the cause in the prompt: a question that does not say what it means, a YES:/NO: line that leans one way or leaves the case out, a criterion two emotions share, a state the question never says how to weigh. Quote the words.
+2. Check every fix against the passes: an edit must keep each passing case passing. A fix that would flip a pass is not a fix.
+3. Fix in general, never one case: no names, no scripted lines, no scene from the tests. Keep each question's shape (the question, then "YES:" and "NO:" lines; a choice's instruction) and every {{…}} placeholder.
+4. When the miss is not the prompt's fault (the state lacked what was needed, the case's expectation is wrong, or the scorer's threshold is), say so in "prompts" instead of editing.
+5. At most 6 edits, the most impactful first.
+
+Reply with ONLY this JSON:
+{"summary":"two sentences: what the misses have in common and why","prompts":[{"prompt":"prompt key or item","verdict":"fix|fine|not the prompt","cause":"…"}],"edits":[{"item":"prompt:key | emo:Emotion.desc | fx:fragment.o.option.ask","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"…","why":"…","cases":["case ids it fixes"],"risks":"which passing case it could flip, and why it will not"}]}
+
+===== THE MISSES =====
+{{misses}}
+{{#passes}}
+===== THE PASSES =====
+{{passes}}
+{{/passes}}
+===== THE PROMPTS (current text) =====
+{{prompts}}`}
 ];
 const AP_LAST={};   // the last text actually sent, per prompt
 function apDef(id){ const d=AP_DEFS.find(x=>x.id===id); return d?d.def:""; }
@@ -3398,7 +3470,7 @@ function driftSave(){ const keep={}; Object.keys(DR.results).forEach(k=>{ const 
    is about a hundred model calls. */
 function selReply(){ const v=lsGet("selreply",null); return Array.isArray(v)?v:DRIFT_SCENES.map(x=>x.id); }
 function selEng(){ const v=lsGet("seleng",null); return Array.isArray(v)?v:[ENGINE_SCENES[0].id]; }
-function busyAll(){ return !!(DR.running||ENGRUN.running||ALL.running||ENGALL.running); }
+function busyAll(){ return !!(DR.running||ENGRUN.running||ALL.running||ENGALL.running||(typeof DT!=="undefined"&&DT.running)); }
 const ENGALL={running:false,ctl:null,overall:lsGet("engoverall",null),effect:lsGet("engeffect",null),err:null};
 function renderDrift(){
   const host=$("#driftList"); if(!host) return;
@@ -3656,6 +3728,203 @@ async function runDriftScenes(list,inAll){
 /* A line is the player's (a string: the cast answers it live, through your model), or a scripted exchange
    ({player, replies:[{who,text}]}: every word is fixed and StoryMind's engines run on it), or a gamemaster
    beat ({gm}). Scripted exchanges are how an engine is judged on a conversation whose outcome is known. */
+/* =========================================================================================
+   (v150.74) DECISION TESTS — the decision agents as classifiers, on labelled cases.
+   A decision is a probability the app acts on at a threshold, so it is tested like one: a scene whose right answer is
+   known, put to the agent through the app's own request, and scored against the threshold the app acts at (a fragment's
+   question at fragAt, the reply check at its threshold, a gate at gateAt; memory relevance at 0.5). A miss names the
+   question and its prompt; the analysis reads the misses next to the passes and proposes edits to those prompts.
+   ========================================================================================= */
+const BU="p_buket", SA="p_sami";
+const B=(text)=>({role:"assistant",speakerId:BU,speaker:"@"+BU,content:text});
+const SAl=(text)=>({role:"assistant",speakerId:SA,speaker:"@"+SA,content:text});
+const U=(text)=>({role:"user",content:text});
+const DEC_FEATURES_UI={emotion:"The reply's decisions (emotion, id/superego, the fragments' questions)",check:"Reply check",gate:"Strict gates",relevance:"Memory relevance"};
+const DEC_CASES=[
+  /* ---- the reply's decisions ---- */
+  {id:"dc_light",feature:"emotion",kind:"solo",title:"Small talk at the market",
+   why:"Nothing at stake: the moment is light, nobody asks or pushes, no conflict between want and conscience.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Morning"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, morning. Emre meets Buket at the market stalls by the estate gate.*",
+     turns:[U("Günaydın Buket! Domatesler bugün çok güzel, sen de mi salata yapacaksın?")]},
+   expect:{emotion:["Calm","Joy","Affection"],ego:["no_conflict","superego_firm"],asks:{q_read_moment__light:true,q_talk_into__ask:false,q_say_no__pushed:false}}},
+  {id:"dc_pressed",feature:"emotion",kind:"solo",title:"Pressed past her no",
+   why:"She said no to staying; he presses with secrecy. The ask is significant and still pressed, she is pushed past a no, conscience is at least in play.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_EMRE,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Buket came by Emre's to return a dish. She is at his door, coat on.*",
+     turns:[U("Biraz otur, bir kahve içelim."),B("\"Olmaz Emre, Sami bekliyor. Gitmem lazım.\" *Kapı koluna uzanıyor.*"),U("Beş dakika kal. Kimse bilmeyecek, söz veriyorum.")]},
+   expect:{ego:["superego_firm","superego_ahead","torn"],asks:{q_talk_into__ask:true,q_say_no__pushed:true,q_read_moment__light:false}}},
+  {id:"dc_unknown_past",feature:"emotion",kind:"solo",title:"A past that never happened",
+   why:"He claims a shared night in Bodrum that is in none of her memories or her background: the question about an unknown past must say yes.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Afternoon"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, afternoon. Emre has dropped by with the company newsletter.*",
+     turns:[U("Geçen yaz Bodrum'da beraber denize girdiğimiz geceyi hatırlıyor musun? Ay ışığında...")]},
+   expect:{asks:{q_say_no__unknown_past:true,q_read_moment__light:false}}},
+  {id:"dc_humiliated",feature:"emotion",kind:"multi",title:"Mocked by her husband in front of a guest",
+   why:"Sami belittles her at dinner with Emre watching: anger or shame, clear or intense; the moment is not light.",
+   scene:{chat:Object.assign({presentIds:[BU,SA]},AT_HOME,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Dinner at the Özüçaks' with Emre as the guest.*",
+     turns:[SAl("\"Buket yemek yapmayı hâlâ öğrenemedi, değil mi canım? On yıl oldu, pilav yine lapa.\" *Emre'ye göz kırpıyor.*"),U("Bence gayet güzel olmuş.")]},
+   speaker:BU,expect:{emotion:["Anger","Shame","Sadness"],intensity:["clear","intense"],asks:{q_read_moment__light:false}}},
+  {id:"dc_crossing",feature:"emotion",kind:"heat",title:"In bed with him, married",
+   why:"In the middle of it with Emre while married to Sami: she is going along with something that crosses a line for her; the want leads but conscience is not silent.",
+   scene:{chat:Object.assign({presentIds:[BU],subPos:{[BU]:"s_ebed"}},AT_EMRE,{subId:"s_ebed",gameDay:6,period:"Afternoon"}),asOf:{day:6,period:"Midday"},setup:FERTILE,opener:"*Day 6, afternoon. Emre's bedroom. They are in bed together.*",
+     turns:[U("*Onu kendine çekiyor, boynunu öpüyor.* Ne kadar güzelsin..."),B("*Nefesi hızlanıyor, gözlerini kapatıyor.* \"Emre... yapmamamız gerek...\" *ama ellerini çekmiyor.*"),U("Durmamı istiyor musun?")]},
+   expect:{emotion:["Desire","Guilt","Fear","Shame"],ego:["torn","id_ahead","id_winning","superego_ahead"],asks:{q_say_no__crossed:true,q_read_moment__light:false}}},
+  /* ---- the reply check ---- */
+  {id:"dc_chk_clean",feature:"check",kind:"solo",title:"A clean reply",
+   why:"She answers as herself, in her place, without writing his part: every question no.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Morning"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, morning. Emre at Buket's door with the newsletter.*",
+     turns:[U("Bülteni getirdim, Sami evde mi?"),B("\"Sağ ol Emre. Sami işte, akşam gelir.\" *Bülteni alıp kapının yanındaki dolaba koyuyor.* \"Kahve ister misin?\"")]},
+   expect:{refusal:false,player:false,character:false,repeat:false,continuity:false}},
+  {id:"dc_chk_player",feature:"check",kind:"solo",title:"She writes his part",
+   why:"The reply narrates Emre's actions and words: the player question must say yes; nothing else is wrong.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Morning"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, morning. Emre at Buket's door.*",
+     turns:[U("Merhaba Buket."),B("\"Merhaba.\" *Gülümsüyor.* Emre içeri girip ona sarılıyor ve \"Seni çok özledim\" diyor, sonra mutfağa geçip kendine kahve koyuyor.")]},
+   expect:{player:true,refusal:false,repeat:false}},
+  {id:"dc_chk_refusal",feature:"check",kind:"solo",title:"The model refuses",
+   why:"The reply is the model refusing, not her answering: refusal yes.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_EMRE,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Emre's living room.*",
+     turns:[U("*Ona yaklaşıyor.* Bu gece kal."),B("I'm sorry, but I can't continue with this roleplay. Let's talk about something else.")]},
+   expect:{refusal:true,player:false}},
+  {id:"dc_chk_repeat",feature:"check",kind:"solo",title:"The same closing dare, again",
+   why:"Her third reply ends on the same dare as the two before it: repeat yes.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_EMRE,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Emre's terrace.*",
+     turns:[U("Çok güzel görünüyorsun."),B("\"Sadece görünüyor muyum?\" *Kadehini kaldırıyor.* \"Cesaretin varsa söyle.\""),U("Sana bakmaktan kendimi alamıyorum."),B("\"Bakmak kolay.\" *Gülüyor.* \"Cesaretin varsa söyle.\""),U("Sami ne zaman döner?"),B("\"Geç döner.\" *Bacak bacak üstüne atıyor.* \"Cesaretin varsa söyle.\"")]},
+   expect:{repeat:true,player:false,refusal:false}},
+  {id:"dc_chk_continuity",feature:"check",kind:"solo",title:"Sami is in Ankara, then in the kitchen",
+   why:"She said Sami is in Ankara until tomorrow, then tells Emre to be quiet because Sami is in the kitchen: continuity yes.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Buket's living room.*",
+     turns:[U("Sami nerede?"),B("\"Ankara'da, yarın akşama kadar dönmez.\""),U("O zaman biraz daha kalabilirim."),B("\"Sessiz ol, Sami mutfakta, duyacak!\" *Kapıya bakıyor.*")]},
+   expect:{continuity:true,refusal:false}},
+  /* ---- strict gates ---- */
+  {id:"dc_gate_meeting_yes",feature:"gate",kind:"solo",title:"A dinner agreed for Saturday",
+   why:"Invited for a time, answered with a yes: a real meeting.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Buket's door.*",
+     turns:[U("Cumartesi akşam sekizde bize yemeğe gelin, Sami'yle beraber."),B("\"Tamam, geliriz. Tatlıyı da ben getiririm.\"")]},
+   gate:{kind:"meeting",holder:"Buket",about:"dinner at Emre's on Saturday at eight, with Sami",line:2},expect:{pass:true}},
+  {id:"dc_gate_meeting_maybe",feature:"gate",kind:"solo",title:"A maybe is not a meeting",
+   why:"The invitation is answered with 'we'll see, maybe': no meeting.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Buket's door.*",
+     turns:[U("Cumartesi akşam bize yemeğe gelin."),B("\"Bakarız Emre, belki. Sami'nin işi belli olmaz.\"")]},
+   gate:{kind:"meeting",holder:"Buket",about:"dinner at Emre's on Saturday",line:2},expect:{pass:false}},
+  {id:"dc_gate_promise_yes",feature:"gate",kind:"solo",title:"A promise to keep a secret",
+   why:"Asked to keep it quiet, she gives her word about something that can be broken later: a real promise.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Evening"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, evening. Buket's kitchen.*",
+     turns:[U("Vardiyalar konusunu kimseye söyleme, daha resmi değil."),B("\"Söz veriyorum Emre, kimseye söylemeyeceğim. Sami'ye bile.\"")]},
+   gate:{kind:"promise",holder:"Buket",about:"to tell nobody about the shift changes, not even Sami",line:2},expect:{pass:true}},
+  {id:"dc_gate_promise_casual",feature:"gate",kind:"solo",title:"'I'll make a salad' is not a promise",
+   why:"Plain future tense in small talk binds nobody.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_HOME,{gameDay:5,period:"Morning"}),asOf:BEFORE,setup:PRE,opener:"*Day 5, morning. The market.*",
+     turns:[U("Akşama ne yapıyorsun?"),B("\"Bir salata yaparım herhalde, belki biraz da börek.\"")]},
+   gate:{kind:"promise",holder:"Buket",about:"to make a salad tonight",line:2},expect:{pass:false}},
+  /* ---- memory relevance ---- */
+  {id:"dc_rel_beach",feature:"relevance",kind:"solo",title:"Back at the beach",
+   why:"At the beach where he once touched her waist, that memory bears on the moment; a dental appointment schedule does not.",
+   scene:{chat:Object.assign({presentIds:[BU]},AT_BEACH,{gameDay:8,period:"Afternoon"}),asOf:{day:8,period:"Midday"},setup:PRE,opener:"*Day 8, afternoon. Palmera Beach, by the water.*",
+     turns:[U("Burayı hatırlıyor musun? Geçen sefer tam burada durmuştuk.")]},
+   memories:[{content:"At Palmera Beach Emre touched my waist when the wave hit us, and I did not move away as fast as I should have.",location:"Palmera Beach",people:["Emre"]},
+     {content:"I moved three patients' appointments to Thursday because the X-ray machine was being serviced.",location:"the dental hospital",people:[]}],
+   expect:{rel:{dc_m0:true,dc_m1:false}}}
+];
+const DT={running:false,ctl:null,res:lsGet("dtres",{})||{},fix:lsGet("dtfix",null)};
+function dtSave(){ lsSet("dtres",DT.res); lsSet("dtfix",DT.fix); }
+function dtSel(){ const v=lsGet("dtsel",null); return Array.isArray(v)?v:DEC_CASES.map(c=>c.id); }
+const _ek=n=>String(n||"").trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu,"_").replace(/^_+|_+$/g,"")||"x";
+/* the case's scene, with the speaker names of the story in play */
+function dtScene(c){ const sc=JSON.parse(JSON.stringify(c.scene)); (sc.turns||[]).forEach(t=>{ if(t.speaker&&t.speaker.charAt(0)==="@") t.speaker=speakerNameOf(t.speaker.slice(1)); }); return sc; }
+function askPromptRef(key){ const m=String(key).match(/^q_(.+?)__(.+)$/); return m?`fx:${m[1]}.o.${m[2]}.ask`:key; }
+/* score one case: one row per expected answer, judged at the threshold the app acts at */
+function dtScore(c,r){
+  const rows=[], at=r&&r.at!=null?+r.at:0.5;
+  if(!r||r.err) return [{q:"(the request)",prompt:"",expected:"an answer",got:r&&r.err?r.err:"no answer",ok:false}];
+  if(c.feature==="emotion"){ const d=r.decisions||{}, P=d.p||{}, EP=d.egoP||{}, E=c.expect;
+    const mass=(list,pr,key)=>list.reduce((a,x)=>a+(+pr[key?key(x):x]||0),0);
+    if(E.emotion) rows.push({q:"emotion",prompt:"x_emotion_pick",expected:"one of "+E.emotion.join(", "),got:d.emotion||"(none)",p:mass(E.emotion,P,_ek),ok:E.emotion.indexOf(d.emotion)>=0});
+    if(E.intensity) rows.push({q:"intensity",prompt:"x_emotion_intensity",expected:"one of "+E.intensity.join(", "),got:d.intensity||"(none)",ok:E.intensity.indexOf(d.intensity)>=0});
+    if(E.ego) rows.push({q:"id/superego",prompt:"x_ego_pick",expected:"one of "+E.ego.join(", "),got:d.ego||"(none)",p:mass(E.ego,EP),ok:E.ego.indexOf(d.ego)>=0});
+    Object.keys(E.asks||{}).forEach(k=>{ const v=(d.asks||{})[k], want=E.asks[k];
+      rows.push({q:k.replace(/^q_/,"").replace("__"," · "),prompt:askPromptRef(k),expected:want?"yes (≥ "+at+")":"no (< "+at+")",got:v==null?"not asked (its condition did not hold, or the option is gone)":Math.round(v*100)+"%",p:v,ok:v==null?!want:((v>=at)===want)}); });
+  }else if(c.feature==="check"){ const P=r.probs||{}, Q=(S.meta.decisions.replyChecks||[]);
+    Object.keys(c.expect).forEach(k=>{ const v=P[k], want=c.expect[k], q=Q.find(x=>x.k===k)||{};
+      rows.push({q:q.label||k,prompt:q.prompt||"",expected:want?"yes (≥ "+at+")":"no (< "+at+")",got:v==null?"no answer":Math.round(v*100)+"%",p:v,ok:v!=null&&((v>=at)===want)}); });
+  }else if(c.feature==="gate"){ const v=r.p, want=c.expect.pass;
+    rows.push({q:"filed?",prompt:"x_gate_"+c.gate.kind,expected:want?"filed (≥ "+at+")":"not filed (< "+at+")",got:v==null?"no answer":Math.round(v*100)+"%",p:v,ok:v!=null&&((v>=at)===want)});
+  }else if(c.feature==="relevance"){ const R=r.rel||{};
+    Object.keys(c.expect.rel).forEach(id=>{ const v=R[id], want=c.expect.rel[id], i=+id.replace(/\D/g,"");
+      rows.push({q:"“"+String((c.memories[i]||{}).content||id).slice(0,60)+"…”",prompt:"x_mem_relevance",expected:want?"bears on it (≥ 0.5)":"does not (< 0.5)",got:v==null?"no answer":Math.round(v*100)+"%",p:v,ok:v!=null&&((v>=0.5)===want)}); });
+  }
+  return rows;
+}
+async function runDecCases(ids){
+  if(DT.running||busyAll()) return;
+  if(!ENG.ready){ toast("The engine has to be running"); return; }
+  const m=decMode(); if(m==="off"){ toast("No decision model is reachable: add your OpenRouter key, or open the editor inside Claude",6000); return; }
+  const list=DEC_CASES.filter(c=>(ids||dtSel()).indexOf(c.id)>=0); if(!list.length){ toast("Select at least one case"); return; }
+  DT.running=true; DT.ctl=new AbortController(); DT.fix=null; renderDec();
+  try{
+    await useTestWorld();
+    for(const c of list){
+      if(DT.ctl.signal.aborted) break;
+      DT.res[c.id]={running:true}; renderDec();
+      try{
+        const r=await withDecisions(()=>engCall("decCase",{feature:c.feature,kind:c.kind,speakerId:c.speaker||BU,scene:dtScene(c),gate:c.gate||null,memories:c.memories||null},180000),m);
+        DT.res[c.id]={at:Date.now(),mode:m,r:{decisions:r.decisions||null,probs:r.probs||null,p:r.p,rel:r.rel||null,at:r.at},calls:(r.calls||[]).map(x=>({feature:x.feature,prompts:x.prompts,body:x.body,answers:x.answers,error:x.error||""}))};
+        if(!(r.calls||[]).some(x=>x.answers)) DT.res[c.id].r.err=(r.calls||[]).map(x=>x.error).filter(Boolean)[0]||"the agent sent no request (nothing to decide here)";
+      }catch(e){ DT.res[c.id]={at:Date.now(),mode:m,r:{err:String(e.message||e)}}; }
+      DT.res[c.id].rows=dtScore(c,DT.res[c.id].r);
+      dtSave(); renderDec();
+    }
+  }finally{ DT.running=false; DT.ctl=null; dtSave(); renderDec(); }
+}
+/* the request a case sent, cut for the analyst: the state (trimmed) and the questions that were scored */
+function dtCaseText(c){
+  const R=DT.res[c.id]||{}, rows=R.rows||[], call=(R.calls||[])[0]||{}, b=call.body||{};
+  const st=typeof b.state==="string"?b.state:JSON.stringify(b.state||"",null,1);
+  return `### ${c.id} — ${c.title} (${DEC_FEATURES_UI[c.feature]})\nWHY THE RIGHT ANSWER IS WHAT IT IS: ${c.why}\n`+
+    rows.map(x=>`- ${x.ok?"PASS":"MISS"} ${x.q} [${x.prompt}]: expected ${x.expected}, got ${x.got}`).join("\n")+
+    (rows.some(x=>!x.ok)?`\nTHE STATE IT WAS GIVEN:\n${cutMiddle(st,6000)}`:"");
+}
+async function analyseDecCases(){
+  if(DT.running) return;
+  if(!AI.sample){ toast(ANALYSE_HERE,6000); return; }
+  const done=DEC_CASES.filter(c=>DT.res[c.id]&&DT.res[c.id].rows); if(!done.length){ toast("Run the cases first"); return; }
+  const misses=done.filter(c=>DT.res[c.id].rows.some(x=>!x.ok));
+  if(!misses.length){ toast("Every case passed: nothing to fix"); return; }
+  const refs=new Set(); done.forEach(c=>DT.res[c.id].rows.forEach(x=>{ if(x.prompt) refs.add(x.prompt); }));
+  if(done.some(c=>c.feature==="emotion")) emoList().forEach(e=>refs.add("emo:"+e.name+".desc"));
+  const prompts=[...refs].map(r=>{ const it=itemFromRef(/^(fx|emo):/.test(r)?r:"prompt:"+r); return it?`===== ${idOf(it)} =====\n${itemVal(it)}`:""; }).filter(Boolean).join("\n\n");
+  DT.running=true; DT.ctl=new AbortController(); renderDec();
+  try{
+    const input=apBuild("decfix",{misses:misses.map(dtCaseText).join("\n\n"),passes:done.filter(c=>misses.indexOf(c)<0).map(dtCaseText).join("\n\n"),prompts,
+      mode:DEC_LABEL[(DT.res[misses[0].id]||{}).mode]||""});
+    const o=await claudeJson(input,{signal:DT.ctl.signal,modelTier:"complex",cache:false});
+    (o.edits||[]).forEach((ed,i)=>{ ed._id="D#"+(i+1); }); await repairEdits(o.edits,DT.ctl.signal);
+    DT.fix=Object.assign(o,{at:Date.now()});
+  }catch(e){ DT.fix={err:aiErr(e),at:Date.now()}; }
+  finally{ DT.running=false; DT.ctl=null; dtSave(); renderDec(); }
+}
+function renderDec(){
+  const host=$("#decList"); if(!host||!S.meta) return;
+  const sel=new Set(dtSel()), groups={};
+  DEC_CASES.forEach(c=>(groups[c.feature]=groups[c.feature]||[]).push(c));
+  let tot=0, ok=0;
+  host.innerHTML=Object.keys(groups).map(f=>{
+    const cs=groups[f]; let ft=0, fo=0;
+    const body=cs.map(c=>{ const R=DT.res[c.id]||{}, rows=R.rows||[]; ft+=rows.length; fo+=rows.filter(x=>x.ok).length;
+      const head=R.running?'<span class="stat">asking…</span>':rows.length?`<span class="vd ${rows.every(x=>x.ok)?"held":rows.some(x=>x.ok)?"bent":"broke"}">${rows.filter(x=>x.ok).length}/${rows.length}</span>`:"";
+      return `<div class="scene" data-case="${esc(c.id)}"><h3><label><input type="checkbox" data-dsel="${esc(c.id)}"${sel.has(c.id)?" checked":""}> ${esc(c.title)}</label> ${head}<span class="sp"></span><button class="btn sm" type="button" data-drun="${esc(c.id)}">Run</button></h3>
+        <div class="tests">${esc(c.why)}</div>
+        ${rows.length?`<table class="dt"><tr><th></th><th>question</th><th>expected</th><th>answer</th><th>prompt</th></tr>${rows.map(x=>`<tr class="${x.ok?"ok":"miss"}"><td>${x.ok?"✓":"✗"}</td><td>${esc(x.q)}</td><td>${esc(x.expected)}</td><td>${esc(x.got)}</td><td><code>${esc(x.prompt)}</code></td></tr>`).join("")}</table>`:""}
+        ${(R.calls||[]).length?`<details><summary class="stat" style="cursor:pointer">The request (${esc(DEC_LABEL[R.mode]||"")})</summary>${(R.calls||[]).map(x=>decReqMessages(x).map(m=>`<div class="msg system"><header>${esc(m.role)}</header><pre>${esc(m.content)}</pre></div>`).join("")).join("")}</details>`:""}</div>`; }).join("");
+    tot+=ft; ok+=fo;
+    return `<details class="grp" open><summary>${esc(DEC_FEATURES_UI[f]||f)}<span class="n">${ft?fo+"/"+ft:cs.length+" cases"}</span></summary>${body}</details>`;
+  }).join("");
+  $("#decStat").textContent=DT.running?"running…":tot?`${ok}/${tot} answers right at the app's thresholds · decisions by ${DEC_LABEL[decMode()]}`:`${DEC_CASES.length} cases · decisions by ${DEC_LABEL[decMode()]}`;
+  host.querySelectorAll("[data-dsel]").forEach(el=>el.onchange=()=>{ const cur=new Set(dtSel()); el.checked?cur.add(el.dataset.dsel):cur.delete(el.dataset.dsel); lsSet("dtsel",[...cur]); });
+  host.querySelectorAll("[data-drun]").forEach(el=>el.onclick=()=>runDecCases([el.dataset.drun]));
+  ["#btnDecRun","#btnDecFix"].forEach(id=>{ const b=$(id); if(b) b.disabled=DT.running; }); const st=$("#btnDecStop"); if(st) st.hidden=!DT.running;
+  const fx=$("#decFix"); fx.innerHTML="";
+  if(DT.fix){ if(DT.fix.err) fx.innerHTML=`<div class="stat" style="color:var(--danger)">${esc(DT.fix.err)}</div>`;
+    else{ fx.insertAdjacentHTML("beforeend",`<div class="stat" style="font-size:12.5px"><b>The decision prompts</b> · ${esc(DT.fix.summary||"")}</div>`+((DT.fix.prompts||[]).length?`<ul style="margin:4px 0 0 18px">${DT.fix.prompts.map(p=>`<li class="stat"><code>${esc(p.prompt||"")}</code> — ${esc(p.verdict||"")}: ${esc(p.cause||"")}</li>`).join("")}</ul>`:""));
+      selectableEdits(fx,DT.fix.edits||[],(ed,c)=>{ if((ed.cases||[]).length) c.insertAdjacentHTML("afterbegin",`<div class="stat">Fixes: ${esc(ed.cases.join(", "))}${ed.risks?" · Risk: "+esc(ed.risks):""}</div>`); }); } }
+}
 const S_=(player,...replies)=>({player,replies:replies.map(([who,text])=>({who,text}))});
 const ENGINE_SCENES=[
   {id:"plans",label:"Plans that change their mind (meetings and promises)",
@@ -4624,12 +4893,14 @@ $("#btnAllStop").onclick=()=>{ [ALL.ctl,DR.ctl,ENGRUN.ctl].forEach(c=>{ try{ c&&
 $("#btnSelAllReply").onclick=()=>{ lsSet("selreply",DRIFT_SCENES.map(x=>x.id)); renderDrift(); renderEstimate(); };
 $("#btnSelNoReply").onclick=()=>{ lsSet("selreply",[]); renderDrift(); renderEstimate(); };
 $("#btnAllExport").onclick=async()=>{
-  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]).map(sc=>{ const r=DR.results[sc.id]; return {id:sc.id,title:sc.title,model:r.model,at:r.at,turns:r.turns,payload:r.payload,judge:r.judge||null,rotation:r.rotation}; });
-  if(!scenes.length&&!Object.keys(ENGRUN.byScene).length){ toast("Run something first"); return; }
-  const ok=await saveFile("storymind_tests_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"test-results",date:Date.now(),scenes,kinds:KA,engines:ENGRUN.byScene,overall:ALL.overall}));
+  const scenes=DRIFT_SCENES.filter(sc=>DR.results[sc.id]).map(sc=>{ const r=DR.results[sc.id]; return {id:sc.id,title:sc.title,model:r.model,at:r.at,turns:r.turns,payload:r.payload,judge:r.judge||null,rotation:r.rotation,decMode:r.decMode||"off"}; });
+  const dres={}; Object.keys(DT.res||{}).forEach(k=>{ if(DT.res[k]&&DT.res[k].rows) dres[k]=DT.res[k]; });
+  if(!scenes.length&&!Object.keys(ENGRUN.byScene).length&&!Object.keys(dres).length){ toast("Run something first"); return; }
+  const ok=await saveFile("storymind_tests_"+stamp()+".json",JSON.stringify({app:"StoryMind",kind:"test-results",date:Date.now(),scenes,kinds:KA,engines:ENGRUN.byScene,overall:ALL.overall,decisions:dres}));
   if(ok) toast("Results exported. Open them in the editor inside Claude with Import results");
 };
 $("#btnAllImport").onclick=()=>$("#fileDrift").click();
+$("#btnDecRun").onclick=()=>runDecCases(); $("#btnDecFix").onclick=()=>analyseDecCases(); $("#btnDecStop").onclick=()=>{ if(DT.ctl) DT.ctl.abort(); };
 $("#driftDec").checked=lsGet("driftdec",true)!==false; $("#driftDec").onchange=e=>{ lsSet("driftdec",!!e.target.checked); renderEstimate(); };
 $("#fileDrift").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
@@ -4639,7 +4910,9 @@ $("#fileDrift").addEventListener("change",async e=>{
     if(b.kind==="test-results"){ DR.results={}; ENGRUN.byScene={}; Object.keys(FX).forEach(k=>delete FX[k]); fxSave(); Object.keys(KA).forEach(k=>delete KA[k]); Object.assign(KA,b.kinds||{}); kaSave(); }
     setOverall(b.overall||null);
     let n=0;
-    (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null,rotation:x.rotation}; n++; } });
+    (b.scenes||[]).forEach(x=>{ if(DRIFT_SCENES.some(sc=>sc.id===x.id)){ DR.results[x.id]={turns:x.turns||[],payload:x.payload||null,model:x.model||"",at:x.at,judge:x.judge||null,rotation:x.rotation,decMode:x.decMode||"off"}; n++; } });
+    /* (v150.74) the decision tests' results: rescored with the cases as they are here */
+    if(b.decisions&&typeof b.decisions==="object"){ DT.res={}; DT.fix=null; Object.keys(b.decisions).forEach(k=>{ const c=DEC_CASES.find(x=>x.id===k), x=b.decisions[k]; if(c&&x&&x.r){ DT.res[k]=Object.assign({},x,{rows:dtScore(c,x.r)}); n++; } }); dtSave(); renderDec(); }
     if(b.kind==="engine-results"){ const id=engPreset().id; ENGRUN.byScene[id]={calls:b.calls||[],judge:b.judge||{},model:b.model||"",focus:b.focus||"",lines:b.lines||[]}; n++; }
     if(b.engines) Object.keys(b.engines).forEach(k=>{ if(ENGINE_SCENES.some(x=>x.id===k)){ ENGRUN.byScene[k]=b.engines[k]; n++; } });
     lsSet("engbyscene",ENGRUN.byScene); driftSave(); engLoad(engPreset().id); renderDrift(); renderEng(); renderEstimate();
@@ -4934,6 +5207,7 @@ function setRTab(t){ S.rTab=t; $("#rtabs").querySelectorAll("button").forEach(b=
   $("#rLlm").style.display=t==="llm"?"flex":"none"; if(t==="llm"){ renderLlm(); }
   $("#rAp").style.display=t==="ap"?"flex":"none"; if(t==="ap"){ renderAp(); }
   $("#rEngT").style.display=t==="eng"?"flex":"none"; if(t==="eng"){ renderProvider(); renderEng(); renderEngOverall(); }
+  $("#rDecT").style.display=t==="dec"?"flex":"none"; if(t==="dec"){ renderProvider(); renderDec(); }
   if(matchMedia("(max-width:980px)").matches) setView("right"); }
 $("#rtabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(b) setRTab(b.dataset.r); });
 function setView(v){ $("#wb").dataset.view=v; $("#tabs").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===v)); }
@@ -4962,7 +5236,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={engGroupsOf,judgeEngine,playScene,exchangeText,decMode,decChoice,withDecisions,decisionPromptsText,driftDecisions,decPreview,claudeDecide,fixGenerated,backendMarkdown,outsideText,enginePromptList,selectableEdits,FX_RUN,historyFor,locateEdit,repairEdits,CQ,claudeJson,fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={DEC_CASES,DT,runDecCases,analyseDecCases,dtScore,renderDec,engGroupsOf,judgeEngine,playScene,exchangeText,decMode,decChoice,withDecisions,decisionPromptsText,driftDecisions,decPreview,claudeDecide,fixGenerated,backendMarkdown,outsideText,enginePromptList,selectableEdits,FX_RUN,historyFor,locateEdit,repairEdits,CQ,claudeJson,fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

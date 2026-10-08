@@ -168,6 +168,30 @@ const ROOT=path.resolve(__dirname,'..');
     ok("a decision agent's judge is told it is one, and gets every prompt it read", jd.ok&&/This is a DECISION AGENT/.test(jt)&&/----- prompt:x_emotion_pick -----/.test(jt)&&/----- prompt:x_ego_pick -----/.test(jt), JSON.stringify(jd)+" "+jt.slice(0,200));
     CL.answer=null;
 
+    console.log("\n[G — decision tests: labelled cases, scored at the app's thresholds]");
+    const sc0=await pg.evaluate(()=>{ const C=__PE.DEC_CASES, by=id=>C.find(c=>c.id===id);
+      const em=__PE.dtScore(by("dc_pressed"),{at:0.7,decisions:{emotion:"Fear",intensity:"clear",ego:"torn",egoP:{torn:0.6,superego_ahead:0.2},asks:{q_talk_into__ask:0.82,q_say_no__pushed:0.4}}});
+      const ck=__PE.dtScore(by("dc_chk_player"),{at:0.7,probs:{player:0.91,refusal:0.02,repeat:0.75}});
+      const gt=__PE.dtScore(by("dc_gate_meeting_maybe"),{at:0.8,p:0.79});
+      const rl=__PE.dtScore(by("dc_rel_beach"),{at:0.5,rel:{dc_m0:0.8}});
+      return {em,ck,gt,rl,features:[...new Set(C.map(c=>c.feature))].join(),n:C.length}; });
+    ok("the cases cover the reply's decisions, the reply check, strict gates and memory relevance", sc0.features==="emotion,check,gate,relevance"&&sc0.n>=15, sc0.features+" "+sc0.n);
+    ok("a yes/no is right only on the right side of the app's threshold (0.82 asked: yes; 0.4: no where yes was due)", sc0.em.find(r=>/talk_into/.test(r.q)).ok===true&&sc0.em.find(r=>/pushed/.test(r.q)).ok===false&&sc0.em.find(r=>/read_moment/.test(r.q)).ok===true&&/not asked/.test(sc0.em.find(r=>/read_moment/.test(r.q)).got), JSON.stringify(sc0.em));
+    ok("a choice is right when it is one of the allowed answers, with its probability mass", sc0.em.find(r=>r.q==="id/superego").ok===true&&Math.abs(sc0.em.find(r=>r.q==="id/superego").p-0.8)<1e-9, JSON.stringify(sc0.em.find(r=>r.q==="id/superego")));
+    ok("each miss names the prompt that asked (a fragment's question by its field, a reply check by its key)", sc0.em.find(r=>/pushed/.test(r.q)).prompt==="fx:say_no.o.pushed.ask"&&sc0.ck.find(r=>r.q==="repeats itself").prompt==="x_reply_check_repeat"&&sc0.ck.find(r=>r.q==="repeats itself").ok===false, JSON.stringify(sc0.ck));
+    ok("a gate at 0.79 with the threshold at 0.8 is not filed (right for a maybe); a missing answer is a miss", sc0.gt[0].ok===true&&sc0.rl.length===2&&sc0.rl[1].ok===false, JSON.stringify({gt:sc0.gt,rl:sc0.rl}));
+    CL.calls.length=0;
+    const run=await pg.evaluate(async()=>{ lsSet("decmode","claude"); await __PE.runDecCases(__PE.DEC_CASES.map(c=>c.id));
+      const R=__PE.DT.res; return __PE.DEC_CASES.map(c=>({id:c.id,rows:(R[c.id].rows||[]).length,err:(R[c.id].r||{}).err||"",feat:((R[c.id].calls||[])[0]||{}).feature||"",q:Object.keys((((R[c.id].calls||[])[0]||{}).body||{}).questions||{}).length})); });
+    ok("every case reaches its agent through the app's own request and is scored", run.every(r=>r.rows>=1&&!r.err&&r.q>=1), JSON.stringify(run.filter(r=>!(r.rows>=1&&!r.err&&r.q>=1))));
+    ok("each case went to its own feature's request", run.filter(r=>/^dc_chk/.test(r.id)).every(r=>r.feat==="Reply check")&&run.filter(r=>/^dc_gate/.test(r.id)).every(r=>r.feat==="Strict gates")&&run.find(r=>r.id==="dc_rel_beach").feat==="Memory relevance judge"&&run.find(r=>r.id==="dc_light").feat==="Emotion pick", JSON.stringify(run.map(r=>r.id+":"+r.feat)));
+    CL.calls.length=0; CL.answer=t=>/You are fixing the DECISION PROMPTS/.test(t)?JSON.stringify({summary:"PE-DECFIX",prompts:[{prompt:"x_reply_check_repeat",verdict:"fix",cause:"c"}],edits:[]}):null;
+    const an=await pg.evaluate(async()=>{ await __PE.analyseDecCases(); return {fix:__PE.DT.fix,html:document.querySelector("#decFix").textContent}; });
+    const dt=CL.calls.find(t=>/You are fixing the DECISION PROMPTS/.test(t))||"";
+    ok("the analysis reads the misses with their state, the passes, and every prompt the cases asked", /===== THE MISSES =====/.test(dt)&&/THE STATE IT WAS GIVEN/.test(dt)&&/===== prompt:x_ego_pick =====/.test(dt)&&/===== emo:/.test(dt)&&/fx:say_no\.o\.pushed\.ask/.test(dt), dt.slice(0,300));
+    ok("and its verdict shows in the tab", an.fix&&an.fix.summary==="PE-DECFIX"&&/PE-DECFIX/.test(an.html), JSON.stringify(an.fix).slice(0,200));
+    CL.answer=null;
+
     ok("no page errors", errs.length===0, errs.join(" | "));
   }catch(e){ fail++; console.log("  FAIL  (threw) "+(e&&e.stack||e)); }
   console.log(`\n${pass} passed, ${fail} failed`);

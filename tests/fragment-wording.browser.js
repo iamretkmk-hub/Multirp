@@ -267,8 +267,8 @@ const {chromium}=require('playwright');
   ok("no shipped fragment repeats the same text in two path boxes; memories, compass and format have no path boxes", await pg.evaluate(()=>{
       const dup=[]; FRAG_DEFAULTS.forEach(f=>{ [f].concat(f.options||[]).forEach(x=>{ const v=Object.values(x.byPath||{}); if(new Set(v).size<v.length)dup.push(f.id+"/"+(x.id||"")); }); });
       const g=id=>FRAG_DEFAULTS.find(x=>x.id===id), none=["memories","compass","format"].filter(id=>Object.keys(g(id).byPath||{}).length);
-      const fo=g("format").options.slice(0,3).map(o=>o.id+":"+o.code).join("|");
-      return (!dup.length&&!none.length&&fo==="spoken:render_mode = solo or render_mode = multi or render_mode = gm|texting:render_mode = text|heat:render_mode = heat"
+      const fo=g("format").options.slice(0,5).map(o=>o.id+":"+o.code).join("|");
+      return (!dup.length&&!none.length&&fo==="spoken:render_mode = solo or render_mode = multi or render_mode = gm|format_rules:format_rules_raw|narration_shape:narr_active|texting:render_mode = text|heat:render_mode = heat"
         &&/\{\{if render_mode = solo\}\}/.test(g("memories").text)&&/\{\{if render_mode = solo\}\}/.test(g("compass").text))?true:JSON.stringify({dup,none,fo}); }));
   ok("format: each path gets its own format and no other", await pg.evaluate(()=>{
       const c=k=>{ const fl=ptCondFlags({render_mode:k,voicing:false,heat_narr:"physical"}); return ptResolveConds(fragCompile(k,fl,{}),fl); };
@@ -333,6 +333,26 @@ const {chromium}=require('playwright');
       const r={lb:(g("last_before").options||[]).map(o=>o.id).join(), pv:/WHO CAN READ THIS/.test(g("privacy").text), lang:/- MINE\.$/.test(g("language").text)&&!/every message you type/.test(g("language").text)};
       state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       return (r.lb==="spoken,texting,heat"&&r.pv&&r.lang)?true:JSON.stringify(r); }));
+
+  // v150.67 — the Settings base instruction and format rules, and the narration shape, are fragment options again
+  console.log("\n[the base instruction and the format rules]");
+  ok("the base instruction goes out on every path; the format rules on solo, multi and gamemaster only", await pg.evaluate(()=>{
+      const keepB=state.baseInstruction; state.baseInstruction="PE-BASE-LINE {{char}} plays it straight.";
+      // the "fmt" situation sets the format rules ("Write in first person. Keep it short, {{char}}.")
+      const r={}; ["solo","multi","gm","text","heat"].forEach(k=>{ const t=__build(k,{s:["fmt"]}); r[k]=(/PE-BASE-LINE Ayla plays it straight\./.test(t)?"B":"")+(/Write in first person\. Keep it short, Ayla\./.test(t)?"F":""); });
+      state.baseInstruction=keepB;
+      return JSON.stringify(r)==='{"solo":"BF","multi":"BF","gm":"BF","text":"B","heat":"B"}'?true:JSON.stringify(r); }));
+  ok("narration mode adds its output shape on the spoken paths only", await pg.evaluate(()=>{
+      const s=__build("solo",{s:["narr"]}), t=__build("text",{s:["narr"]}), off=__build("solo",{});
+      return (/NARRATION MODE — STRICT OUTPUT SHAPE/.test(s)&&!/NARRATION MODE/.test(t)&&!/NARRATION MODE/.test(off))?true:"narr shape misplaced"; }));
+  ok("a saved list gets the three options once (edited fragments keep their text)", await pg.evaluate(()=>{
+      const L0=FRAG_DEFAULTS.map(f=>{ const c=JSON.parse(JSON.stringify(f)); if(c.id==="task"||c.id==="format")c.options=(c.options||[]).filter(o=>["base","format_rules","narration_shape"].indexOf(o.id)<0); return c; });
+      L0.find(f=>f.id==="task").text+="\n\nMINE.";
+      state.fragments=L0; store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).filter(k=>!/^v150\.67/.test(k)).join(",")); _fragMigratedFor=null;
+      const L=fragList(), t=L.find(f=>f.id==="task"), f=L.find(f=>f.id==="format");
+      const r={mine:/MINE\.$/.test(t.text),base:(t.options||[]).some(o=>o.id==="base"),fr:(f.options||[]).some(o=>o.id==="format_rules"),nr:(f.options||[]).some(o=>o.id==="narration_shape")};
+      state.fragments=null; _fragMigratedFor=null; store.setRaw(K.fragments,""); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
+      return (r.mine&&r.base&&r.fr&&r.nr)?true:JSON.stringify(r); }));
 
   console.log("\n[the editor]");
   ok("ticking a path opens an EMPTY box, labelled as added under the main body", await pg.evaluate(()=>{

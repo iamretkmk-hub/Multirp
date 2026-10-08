@@ -1645,3 +1645,19 @@ the Other-wording piece of the same name.
 
 Pinned by `tests/fragments-only.browser.js`; the tests that only pinned the classic layout or the reply templates are
 deleted or rewritten (tests/README.md, "Removed in v150.66").
+
+## v150.67 — the base instruction and the format rules are fragment options
+
+No shipped fragment had sent the Settings **base instruction** (`baseInstruction`) or **format rules** (`formatRules`) since
+the fragments became the reply builder (v150.57), and the voice-narration output shape (`narr_shape`) went with them. Each
+is an option again, so the editor shows where it goes and when:
+
+| Fragment | Option | Condition | Paths | Data |
+|---|---|---|---|---|
+| Task | `base` *Your base instruction* | `base_instruction_raw` (it has text) | all | `base_instruction_raw` (`B._bi`, placeholders filled) |
+| Response format | `format_rules` *Your format rules* | `format_rules_raw` | solo, multi, gamemaster | `format_rules_raw` (`B._fm`, the language section stripped as before) |
+| Response format | `narration_shape` *Narration mode* | `narr_active` (a voice-narrated session) | solo, multi, gamemaster | the shape is written in the option |
+
+Text and heat keep their own formats, as the classic builder did. The text of the base instruction and the format rules is
+still edited in Settings → Payloads → Other wording; delete the option to stop sending it. A saved list gets each option
+once (`FRAG_SHIPPED_ADDS` keys `v150.67.base`, `v150.67.format_rules`, `v150.67.narr`); an edited fragment keeps its text.

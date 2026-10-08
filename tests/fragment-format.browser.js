@@ -127,7 +127,10 @@ const {chromium}=require('playwright');
        of the payload to v150.56, so those three are compared at their v150.59 wording */
     /* v150.65 — and the ties and "What you know of them" at their v150.64 wording: the one answered moving into their own
        section (with their whole entry) is on purpose, and is checked in tests/relationship-sheet.browser.js */
-    const at59=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_64_OLD[f.id]||FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
+    /* v150.67 — the base instruction, the format rules and the narration shape are options again: they bring in the
+       user's own Settings text, which no fragment sent since v150.57, so this comparison leaves them out */
+    const _no67=f=>{ if(f.id==="task"||f.id==="format")f.options=(f.options||[]).filter(o=>["base","format_rules","narration_shape"].indexOf(o.id)<0); return f; };
+    const at59=FRAG_DEFAULTS.map(f=>_no67(JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_64_OLD[f.id]||FRAG_DEFAULTS_V150_60_OLD[f.id]||f))));
     __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,at59); out.n++;
       if(a!==b)out.raw++;
       if(norm(a)!==norm(b)){ const A=norm(a).split("\n"), B=norm(b).split("\n"); let i=0; while(i<A.length&&A[i]===B[i])i++;
@@ -192,8 +195,11 @@ const {chromium}=require('playwright');
   ok("a text reply continuing its own message carries on, on the text channel", /YOU SPOKE LAST/.test(P.textCont)&&/THIS WAS YOUR LAST LINE/.test(P.textCont));
   const heads=await pg.evaluate(()=>{
     const bad=[];
+    /* v150.67 — the user's own Settings format rules may stack their headings ("# FORMATTING RULES …" then "# STRUCTURE"):
+       their text is theirs, so its lines are not judged here */
+    const own=new Set((_stripLangSection(up("formatRules")||"")+"\n"+(up("baseInstruction")||"")).split("\n").map(l=>l.trim()).filter(Boolean));
     __cases.forEach(([k,n,o])=>{ const t=__build(k,o,null);
-      const L=t.split("\n").filter(l=>l.trim()&&l.trim()!=="(history)");
+      const L=t.split("\n").filter(l=>l.trim()&&l.trim()!=="(history)"&&!own.has(l.trim()));
       L.forEach((l,i)=>{ const m=l.match(/^(#{1,3}) /); if(!m)return; const nx=L[i+1];
         const nm=nx&&nx.match(/^(#{1,3}) /);
         if(!nx||(nm&&nm[1].length<=m[1].length))bad.push(k+"_"+n+": «"+l.slice(0,70)+"» then «"+String(nx||"(end)").slice(0,50)+"»"); }); });

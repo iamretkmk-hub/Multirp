@@ -49,7 +49,9 @@ const {chromium}=require('playwright');
   });
 
   console.log("\n[no quiet want in the reply]");
-  const Q=await pg.evaluate(()=>{ const c=__setup(), p=state.personas[0]; const r={};
+  // v150.79 — a live goal rides in a reply when the scene touches it: here the shop comes up in the last lines (and in the text thread)
+  const Q=await pg.evaluate(()=>{ const c=__setup(), p=state.personas[0]; const r={}; c.messages.push({mid:"a2",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"The shop can wait."'},
+      {mid:"t1",role:"user",content:"How is the shop?",textMsg:true,textWith:"p_a",present:[]});
     ["solo","multi","gm","text","heat"].forEach(k=>{ if(k==="heat")c._heatBeat={n:1,total:3}; const t=__payload(c,p,"p_b","Berk",k); delete c._heatBeat;
       r[k]=!/what_you_quietly_want|Privately, you are working toward|asked out by Emre/.test(t)&&/Open the shop before winter/.test(t); });
     return r; });

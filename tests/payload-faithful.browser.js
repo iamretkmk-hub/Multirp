@@ -22,6 +22,10 @@
    v150.72 — the compass's id_winning / id_ahead lines and the heat guidance gain "your words stay your own" on purpose: each
    payload is also built with the v150.71 "Your inner compass" and "Guidance" (FRAG_DEFAULTS_V150_71_OLD), and the lines that
    differ are allowed in both comparisons and checked to be exactly those (see "[v150.72: only the words change]").
+   v150.79 — a reply carries a live goal or a story thread only when the scene touches it. Each payload is also built with that
+   switched off (state.pursuitRelevantOn=false: what the build before sent); the lines that go are allowed in both comparisons
+   and checked to be exactly the story threads and the one live goal ("Get the shop keys") no line of these scenes touches —
+   "Avoid Berk's debt" stays, Berk being here (see "v150.79: the only lines that go…").
    Run: node tests/payload-faithful.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
@@ -260,6 +264,15 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const all74={gone:new Set(),added:new Set()};
   const diff74=async(k,nm,text)=>{ if(k!=="text") return {gone:[],added:[]}; const old=linesOf(await buildOld74(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
     const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all74.gone.add(l)); d.added.forEach(l=>all74.added.add(l)); return d; };
+  /* v150.79 — a reply carries a live goal or a story thread only when its scene touches it (its people here or named in the
+     last lines, a key word of it in them, or why the character came): the same situation built with that switched off
+     (state.pursuitRelevantOn=false, the build before v150.79) against the build now. Only goal and story-thread lines may
+     differ, and only by going (checked below): a scene that does not touch a pursuit now leaves it out, on purpose. */
+  const buildOld78=async(kind,name)=>pg.evaluate(([k,n])=>{ state.pursuitRelevantOn=false;
+    try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ state.pursuitRelevantOn=true; } },[kind,name]);
+  const all78={gone:new Set(),added:new Set()};
+  const diff78=async(k,nm,text)=>{ const old=linesOf(await buildOld78(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all78.gone.add(l)); d.added.forEach(l=>all78.added.add(l)); return d; };
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
   const rm65=(l,classic,n)=>removed65(l,classic,TGT[n][0],TGT[n][1]);
@@ -293,11 +306,16 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     const gone=new Set((await diff68(k,nm,text)).gone.map(h));   // v150.70 — the v150.67 memory lines (checked below)
     (await diff72(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.72 — the v150.71 compass / guidance lines (checked below)
     (await diff74(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.75 — the text path's outfit line (checked below)
+    (await diff78(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.79 — goals and threads the scene does not touch (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
   ok("in "+n+" payloads (every path × "+SITS.length+" situations — every fragment payload of the fixture), every line v150.63 sent is still sent (but v150.70's memory lines)", n===keys.length&&n>=290&&lost.length===0, lost.slice(0,10).join("\n        "));
   ok("v150.75: the only lines a text payload drops for the outfit are its outfit lines, and none is added", [...all74.gone].every(l=>/wearing|wardrobe|have on|has on|dress/i.test(l))&&all74.added.size===0, JSON.stringify({gone:[...all74.gone].slice(0,4),added:[...all74.added].slice(0,4)}));
+  {const G78=[...all78.gone], QL=/^(?:# STORY THREADS YOU ARE PART OF|You are named in the current story threads? below|- The missing ledger: |- The second debt: |Latest: Day 2: The clerk)/;
+   ok("v150.79: the only lines that go for an untouched pursuit are the story threads and the live goal no scene line touches ("+G78.length+"), and none is added",
+     G78.length>0&&G78.every(l=>QL.test(l)||l==="- Get the shop keys")&&G78.indexOf("- Get the shop keys")>=0&&!G78.some(l=>/Avoid Berk's debt/.test(l))&&all78.added.size===0,
+     JSON.stringify({gone:G78.slice(0,10),added:[...all78.added].slice(0,4)}));}
   ok("the only lines left out of the comparison are the removed ones ("+removedSeen+" of them: the quiet wants and the two old compass lines)", removedSeen>0);
   {let r5=0; Object.keys(F.removed65||{}).forEach(k=>{ r5+=F.removed65[k]; });
    ok("and v150.65's ("+r5+": what was found out, and the one answered's sheet line and old one-line entry)", r5>0&&F.removed65["solo|learned"]===3&&F.removed65["solo|player"]===1&&F.removed65["multi|char"]===2, JSON.stringify(F.removed65).slice(0,300));}
@@ -321,6 +339,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      const d68=await diff68(k,nm,text), gone68=new Set(d68.gone.map(h)), added68=new Set(d68.added);   // v150.70 — the memories
      { const d72=await diff72(k,nm,text); d72.gone.forEach(l=>gone68.add(h(l))); d72.added.forEach(l=>added68.add(l)); }   // v150.72 — the words
      { const d74=await diff74(k,nm,text); d74.gone.forEach(l=>gone68.add(h(l))); d74.added.forEach(l=>added68.add(l)); }   // v150.75 — no outfit in a text
+     { const d78=await diff78(k,nm,text); d78.gone.forEach(l=>gone68.add(h(l))); d78.added.forEach(l=>added68.add(l)); }   // v150.79 — only what the scene touches
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }

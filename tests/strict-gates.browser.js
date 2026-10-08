@@ -112,7 +112,8 @@ const {chromium}=require('playwright');
       window.__out={"Char quest (spawn)":quest}; window.__p=q=>prob; window.__reqs=[];
       await runCharQuestSpawn(c,3,uni,{period:"Midday"});
       const filed=(uni.gameData.charQuests||[]).filter(q=>q&&q.holderId==="p_b").map(q=>q.title);
-      return {filed,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
+      return {filed,reqs:window.__reqs.filter(r=>r.questions&&r.questions.g0).length,   // v150.79 — gate requests; a pursuit that passes is then weighed in a request of its own (tests/pursuit-weight)
+             q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
     },[prob,quest]);
   const q1=await cq(0.2), q2=await cq(0.9);
   ok("a pursuit the gate refuses (20%) is not filed", q1.reqs===1&&q1.filed.length===0, JSON.stringify(q1));
@@ -127,7 +128,8 @@ const {chromium}=require('playwright');
       window.__out={"Intent form":JSON.stringify({intents:[{kind:"grievance",valence:"hostile",target:"Emre",trigger:"he laughed at her",aim:"make him apologise in front of Nil",strength:0.6,priority:"medium"}],revise:[]})};
       window.__p=q=>prob; window.__reqs=[];
       await runIntentEngine(c,3,state.curUniverse,{tick:false,period:"Evening"});
-      return {n:(c.intents||[]).length,reqs:window.__reqs.length,q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
+      return {n:(c.intents||[]).length,reqs:window.__reqs.filter(r=>r.questions&&r.questions.g0).length,   // v150.79 — gate requests (see above)
+             q:window.__reqs[0]&&Object.values(window.__reqs[0].questions)[0],st:window.__reqs[0]&&window.__reqs[0].state};
     },prob);
   const i1=await iv(0.3), i2=await iv(0.92);
   ok("a motive the gate refuses (30%) is not filed", i1.reqs===1&&i1.n===0, JSON.stringify(i1));

@@ -40,6 +40,7 @@ const {chromium}=require('playwright');
     state.personas=[mk("p_a","Ayla","",["make Berk pay for what he said"]),mk("p_b","Berk","win the harbour contract",null),mk("p_c","Ceren","find her brother",null)];
     state.user="Emre"; state.key="k"; state.mem=true; state.charQuestsOn=true; state.pulseOn=true; state.goalPursuitOn=true;
     state.intentOn=true; state.calOn=false; state.promiseOn=false; state.gmOn=false; state.travelTime=0;
+    state.pursuitWeightOn=false;   // v150.79 — the weight check has its own test (pursuit-weight); here the spread limit alone decides, with no request in flight
     const c=curChat(); c.universeId=uni.id; c.gameDay=1; c.period="Morning"; c.timeOfDay="Morning";
     c.locationId="l_home"; c.location="Home"; c.presentIds=[]; c.intents=[]; c.messages=[]; c.goalActed={}; c._intentSwingAsked={};
     c.goalAsked={}; c._dayEndDoneFor=null; c._trackersTickedFor=null;   // v144.1 — a day is ended once per chat; each case starts fresh

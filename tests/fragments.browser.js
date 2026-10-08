@@ -37,7 +37,9 @@ const {chromium}=require('playwright');
       const ids=f.options.map(o=>o.id).join();
       // v150.59 — the main body is the heading and the rules every path shares; text and heat add only their own rules under it
       return (/^# FINAL GUARDRAILS\n\nNothing you were given/.test(f.text)&&/You are \{\{self\}\} and nobody else/.test(f.text)&&!f.byPath.solo&&!f.byPath.multi&&!f.byPath.gm&&!/\{\{if/.test(JSON.stringify(f))&&/^This is a typed message/.test(f.byPath.text)&&/^Dialogue-dense/.test(f.byPath.heat)&&!/You are \{\{self\}\} and nobody else/.test(f.byPath.text+f.byPath.heat)
-        &&ids==="oblique_once,noecho,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
+        &&ids==="oblique_once,noecho,noecho_text,heat_sound,heat_silent,consistency_character,consistency_player,consistency_repeat,consistency_continuity"
+        // v150.69 — "do not echo" is two options, chosen by their ticks: spoken when not continuing, text and heat always
+        &&(o=>o.code==="not continuing"&&o.paths.join()==="solo,multi,gm")(f.options[1])&&(o=>o.code===""&&o.paths.join()==="text,heat"&&o.text===f.options[1].text)(f.options[2])&&!/rail_single_solo|\[\[/.test(JSON.stringify(f))) ? true : ids; })); // v150.45 — consistency: the note after a reply the check flagged
   ok("say no: three options, each asking about its own situation; the past one asks for the memories", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="say_no");
       const o=id=>f.options.find(x=>x.id===id);
       return (f.options.length===3&&o("unknown_past").ctx.join()==="memories"&&/not in \{\{char\}\}'s memories/.test(o("unknown_past").ask)&&/Being warm is not agreeing/.test(o("pushed").text)&&/AND IF YOU DO CROSS IT/.test(o("crossed").text)) ? true : JSON.stringify(f.options.map(x=>x.id)); }));

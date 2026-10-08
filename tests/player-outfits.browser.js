@@ -138,20 +138,18 @@ const {chromium}=require('playwright');
       const u=state.universes[0]; const keep=u.userOutfits; u.userOutfits={};
       const B=buildCharPromptBlocks(state.personas.find(x=>x.id==="po_a"),[],{recent:[],diary:[],longterm:[]},"Emre",{chat:curChat(),targetName:"Emre",targetId:"__user__"});
       u.userOutfits=keep; return !/their_clothes|Wearing right now/.test(String(B.response_target)); }));
-  ok("the default template calls both fragments", await pg.evaluate(()=>
+  /* v150.66 — a reply is its fragments: "What you know of them" brings the clothes in by their data names */
+  ok("the shipped fragments call both", await pg.evaluate(()=>
       RT_ORDER.includes("target_wearing")&&PL_ORDER.includes("player_wearing")
-      &&/\{\{call\/\/player_wearing\}\}/.test(ptPieceTemplate("player"))&&/\{\{call\/\/target_wearing\}\}/.test(ptPieceTemplate("response_target"))));
+      &&/\{\{call\/\/player_wearing_raw\}\}/.test(JSON.stringify(FRAG_DEFAULTS))&&/\{\{call\/\/target_wearing_raw\}\}/.test(JSON.stringify(FRAG_DEFAULTS))));
 
-  ok("and it reaches the assembled reply, on the template path and the classic one", await pg.evaluate(()=>{
+  ok("and it reaches the assembled reply", await pg.evaluate(()=>{
       const c=curChat(); const p=state.personas.find(x=>x.id==="po_a");
       const inj={recent:[],diary:[],longterm:[]};
       const hb=buildCharPromptBlocks(p,[],inj,"Emre",{chat:c,targetName:"Emre",targetId:"__user__"});
       const tb=buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",multi:true,injected:inj});
-      const was=state.payloadTplOn; state.payloadTplOn=true;
-      let tpl=""; try{ const m=ptBuildMessages("multi",Object.assign({},hb,tb),[],{chat:c,npc:p,targetName:"Emre"}); tpl=(m||[]).map(x=>x.content).join("\n"); }
-      finally{ state.payloadTplOn=was; }
-      const cl=buildPayload("multi",hb,tb); const classic=[cl.head,cl.tail].join("\n");
-      return (/navy bomber/.test(tpl)&&/navy bomber/.test(classic)) ? true : JSON.stringify({tpl:/navy bomber/.test(tpl),classic:/navy bomber/.test(classic)}); }));
+      const m=ptBuildMessages("multi",Object.assign({},hb,tb),[],{chat:c,npc:p,targetName:"Emre"}); const tpl=(m||[]).map(x=>x.content).join("\n");
+      return /navy bomber/.test(tpl) ? true : tpl.slice(0,400); }));
 
   console.log("\n[the universe editor]");
   ok("the player's section shows the table, home rows included", await pg.evaluate(()=>{

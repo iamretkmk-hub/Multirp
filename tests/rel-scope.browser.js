@@ -32,7 +32,9 @@ const {chromium}=require('playwright');
         return p; };
       const hakan=mk("p_h","Hakan");
       mk("p_e","Emre2"); mk("p_d","Duygu"); mk("p_n","Nil"); mk("p_b","Berker");
-      Object.assign(state,{user:"Emre",key:"sk-test",relScope:"dynamic",emoOn:true,limitsOn:false,fragOn:false});
+      Object.assign(state,{user:"Emre",key:"sk-test",relScope:"dynamic",emoOn:true,limitsOn:false,
+        fragments:JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}))});   // v150.66 — no asked fragment option (the fragments can no longer be switched off), so only what this test asks goes
+      store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       try{ _emoBreak.until=0; _emoBreak.fails=0; }catch(e){}
       hakan.socialGraph="Duygu is my wife. Nil is my daughter. Emre is my oldest friend. Berker is my brother in exhaustion.";
       hakan.relationships={

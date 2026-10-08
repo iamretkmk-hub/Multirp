@@ -4,7 +4,6 @@ const {chromium}=require('playwright');
   const pg=await b.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+(x?"\n        "+String(x).slice(0,500):""));} };
@@ -37,28 +36,19 @@ const {chromium}=require('playwright');
     const withCue=mk();
 
     const hist=[{role:"user",content:"I sat down."}];
-    const was=state.payloadTplOn; state.payloadTplOn=true;
-    const tplWith=ptBuildMessages("multi",withCue,hist,{chat,npc:p,targetName:state.user},mk);
-    // classic for comparison
-    const pl=buildPayload("multi",
-      buildCharPromptBlocks(p,[],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
-      buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,targetId:"__user__",multi:true,injected}));
-    const classic=[]; if(pl.head)classic.push({role:"system",content:pl.head});
-    classic.push(...hist); if(pl.tail)classic.push({role:"system",content:pl.tail});
+    const tplWith=ptBuildMessages("multi",withCue,hist,{chat,npc:p,targetName:state.user},mk);   // v150.66 — the reply fragments
 
     // ---- and with NO cue (the ordinary turn) : does it log phantom warnings? ----
     chat.watchingNow=null;
     const before=dbgLog.length;
     const tplNo=ptBuildMessages("multi",mk(),hist,{chat,npc:p,targetName:state.user},mk);
     const newEntries=dbgLog.slice(before).map(e=>({label:e.label,payload:e.payload}));
-    state.payloadTplOn=was;
 
     return {cueCount:cues.length, cueSorted:cues[0].t<cues[1].t, gateOff, gateOn,
       blockPresent:!!withCue.watching_now, blockText:withCue.watching_now||"",
       inTemplate:(tplWith||[]).map(m=>m.content).join("\n"),
-      sameAsClassic:JSON.stringify(classic)===JSON.stringify(tplWith),
       noCueText:(tplNo||[]).map(m=>m.content).join("\n"),
-      phantom:newEntries.filter(e=>/do not exist/i.test(e.label||"")),
+      phantom:newEntries.filter(e=>/do not exist|did not resolve/i.test(e.label||"")),
       hasRunWatch:typeof runWatchTurn==="function", hasFire:typeof fireVidCue==="function",
       mcArgs:runMultiCharTurn.length};
   });
@@ -75,8 +65,7 @@ const {chromium}=require('playwright');
   ok("block is built", R.blockPresent);
   ok("block says it is happening now", /IN FRONT OF YOU RIGHT NOW/i.test(R.blockText), R.blockText.slice(0,120));
   ok("the description is in it", R.blockText.indexOf("glass slips")>-1);
-  ok("it reaches the payload WITH templates on", R.inTemplate.indexOf("glass slips")>-1);
-  ok("template payload === classic payload", R.sameAsClassic);
+  ok("it reaches the reply payload (the fragments)", R.inTemplate.indexOf("glass slips")>-1);
 
   console.log("\n[4] the auto-response wiring");
   ok("runWatchTurn exists", R.hasRunWatch);

@@ -80,7 +80,7 @@ const {chromium}=require('playwright');
       state.personas.push({id:"p_box",name:"Ayse",universeId:uni.id,instructions:"Guarded.",
         personality:"Wry.",backstory:"Left at 19.",style:"Short.",goals:"Find it.",look:{}});
     const chat=curChat(); chat.presentIds=["p_box"]; state.user="Kemal";
-    show('settings'); try{ renderPayloadList(); renderPayloadTemplates(); }catch(e){}
+    show('settings'); try{ renderPayloadList(); }catch(e){}
   });
   await pg.waitForTimeout(400);
   const call=await pg.evaluate(()=>{
@@ -137,29 +137,22 @@ const {chromium}=require('playwright');
             block:names.indexOf("final_guardrails")>=0,
             flatUnknown:secs.filter(n=>!known[n]),
             blockUnknown:secs.filter(n=>!known["final_guardrails//"+n]),
-            tplUnknown:ptScan(ptDefaultTemplate("solo"),ptKnownNames()).unknownCall};
+            /* v150.66 — a reply is its fragments: every call in every shipped fragment must be a known name */
+            tplUnknown:(()=>{ const u=new Set(), vals=Object.assign(ptVars({}),{heat_beat:"",heat_beats:""});
+              FRAG_DEFAULTS.forEach(f=>{ const T=[f.text].concat(Object.values(f.byPath||{}));
+                (f.options||[]).forEach(o=>{ T.push(o.text); Object.values(o.byPath||{}).forEach(t=>T.push(t)); });
+                T.forEach(t=>ptScan(String(t||"").replace(PT_COMMENT,"").replace(PT_IF_ANY,""),known,vals).unknownCall.forEach(x=>u.add(x))); });
+              return [...u]; })()};
   });
   ok("no folded rule is listed as a piece of its own", cat.rails.length===0, cat.rails.join(", "));
   ok("and no section is listed under its block either", cat.sectionRows.length===0, cat.sectionRows.join(", "));
   ok("the block itself is still a row", cat.block===true);
   ok("every section stays callable by its flat name", cat.flatUnknown.length===0, cat.flatUnknown.join(", "));
   ok("and by block//section", cat.blockUnknown.length===0, cat.blockUnknown.join(", "));
-  ok("so the shipped template validates clean", cat.tplUnknown.length===0, cat.tplUnknown.join(", "));
+  ok("so the shipped fragments validate clean", cat.tplUnknown.length===0, cat.tplUnknown.join(", "));
 
-  console.log("\n[the editor]");
-  const ed=await pg.evaluate(()=>{
-    ptEditPiece("final_guardrails");
-    const ta=document.querySelector('textarea[data-btpl="rails_header"]');
-    const host=document.getElementById('ptFrag_final_guardrails');
-    const idx=host?host.textContent:"";
-    const style=ta?String(ta.getAttribute("style")||""):"";
-    ptEditPiece("final_guardrails");
-    return {open:!!ta, tall:/min-height/.test(style), idx:idx.indexOf("rail_noecho")>=0,
-            form:idx.indexOf("{{call//final_guardrails//name}}")>=0};
-  });
-  ok("the block opens one tall box, not a slot", ed.open && ed.tall, JSON.stringify(ed));
-  ok("with the section names printed above it", ed.idx===true);
-  ok("and the call form spelled out", ed.form===true);
+  /* (v150.66 — "[the editor]", the guardrails box opened tall from the reply piece list, is gone: the reply piece list went with
+     the reply templates, and the guardrails' wording is the "Final guardrails" fragment. See tests/README.md.) */
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

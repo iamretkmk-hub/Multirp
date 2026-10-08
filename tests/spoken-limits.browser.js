@@ -4,65 +4,11 @@
    further) are now questions in the request asked before the character's next reply, beside their emotion:
    one choice per new line of theirs (none, or a limit / commitment for the scene, the day, or until changed), one
    yes/no per limit on record (taken back?), both at the strict gates' certainty. Stored, surfaced and checked as
-   before. Pinned through the user's own template, the real send path, and a stubbed Decisions endpoint.
+   before. Pinned through the reply fragments (v150.66: the only reply builder; it was the user's own template), the real
+   send path, and a stubbed Decisions endpoint.
    Run: node tests/spoken-limits.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-/* The user's reply template, verbatim (tail part is what matters: drives//full, resistance//full). */
-const USER_TPL=`[system]
-{{call//rp_task}}
-
-{{call//rp_language}}
-
-{{call//rp_format}}
-
-{{call//head_universe}}
-{{call//world}}
-
-{{call//your_bio//full}}
-
-{{call//relationships//full}}
-
-{{call//head_standing//full}}
-{{call//scenario//full}}
-{{call//others_present//full}}
-{{call//response_target//full}}
-{{call//player//full}}
-{{call//after_heat//full}}
-
-{{call//head_speak}}
-{{call//speaking_style//full}}
-
-{{call//head_history}}
-[system end]
-
-{{call//dialogue_history}}
-
-[user]
-{{call//head_where_now}}
-{{call//scene_now//full}}
-{{call//situation//full}}
-{{call//privacy//full}}
-{{call//drives//full}}
-
-{{call//watching_now//full}}
-
-{{call//last_line//full}}
-
-{{call//already_said//full}}
-
-{{call//response_guidance//full}}
-
-{{call//resistance//full}}
-
-{{call//spoken_delivery//full}}
-
-{{call//final_guardrails//full}}
-
-{{call//rp_last_before}}
-
-{{call//head_respond_as}}
-[user end]`;
 (async()=>{
   const b=await chromium.launch({executablePath:BIN});
   const pg=await b.newPage({viewport:{width:412,height:915}});
@@ -73,7 +19,7 @@ const USER_TPL=`[system]
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x===undefined?c:x).slice(0,900));} };
 
-  await pg.evaluate((TPL)=>{
+  await pg.evaluate(()=>{
     window.__calls=[]; window.__decs=[];
     window.__stub={reply:'"Tamam."', dec:null, mode:"ok"};
     window.chatCompletion=async(messages,model,opts)=>{
@@ -113,9 +59,9 @@ const USER_TPL=`[system]
         gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,relOn:false,trackOn:false,calOn:false,
         promiseOn:false,gossipOn:false,intentOn:false,pulseOn:false,roundOn:false,charQuestsOn:false,goalPursuitOn:false,textsOn:false,
         autoImg:false,imgMode:"off",streamReveal:false,storyLang:"en",voiceCheckOn:false,presenceOff:true,
-        emoOn:true,limitsOn:true,gateAt:0.8,replyCheckOn:false,memJudgeOn:false,trackDecOn:false,fragOn:false});
+        emoOn:true,limitsOn:true,gateAt:0.8,replyCheckOn:false,memJudgeOn:false,trackDecOn:false});
       try{ _emoBreak.until=0; _emoBreak.fails=0; }catch(e){}
-      ["solo","multi","gm"].forEach(k=>ptSetTemplate(k,TPL)); state.payloadTplOn=true;
+      state.fragments=null;
       state.memory=[]; state.gossip=[]; uni.gameData={};
       const c=curChat();
       Object.assign(c,{universeId:uni.id,presentIds:["p_d"],subPos:{p_d:"s_bench"},subId:"s_bench",
@@ -129,7 +75,7 @@ const USER_TPL=`[system]
       if(!_presentPlaying&&!_presentQueue.length) { await new Promise(r=>setTimeout(r,120)); if(!_presentPlaying&&!_presentQueue.length) return true; } } return false; };
     window.__turn=async(text)=>{ const n0=__calls.length, d0=__decs.length; await sendMessage({text}); await __settle(); return {calls:__calls.slice(n0),decs:__decs.slice(d0)}; };
     window.__rep=cs=>cs.filter(c=>/^Roleplay reply( · |$)/.test(c.dbg));
-  },USER_TPL);
+  });
 
   console.log("\n[1 — no drives writer]");
   const r1=await pg.evaluate(async()=>{ __setup(); const t=await __turn('"Hey Duygu, how is life?"');
@@ -152,12 +98,10 @@ const USER_TPL=`[system]
     const lim=(c.spokenLimits.p_d||[])[0]||null;
     const D=state.personas.find(x=>x.id==="p_d");
     const B=buildTailBlocks({chat:c,selfP:D,selfId:"p_d",selfName:"Duygu",targetName:"Emre",targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
-    ptSetTemplate("solo","[user]\n{{call//limits//full}}\n[user end]");
-    const pm=ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[];
-    ptSetTemplate("solo","[user]\n"+ptPieceTemplate("drives","solo")+"\n[user end]");
-    const piece=((ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[])[0]||{}).content||"";
-    ptSetTemplate("solo",""); const _fo=state.fragOn; state.fragOn=true;   // v150.48 — and under the fragment model
-    const frag=(ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[]).map(m=>m.content).join("\n"); state.fragOn=_fo;
+    const one=t=>[{id:"x",name:"X",seg:"tail",paths:["solo"],text:t,options:[]}];   // a fragment of its own (v150.66: it was a template)
+    const pm=ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre",fragments:one("{{call//limits//full}}")},()=>B)||[];
+    const piece=((ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre",fragments:one("{{call//drives//full}}")},()=>B)||[])[0]||{}).content||"";
+    const frag=(ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[]).map(m=>m.content).join("\n");   // v150.48 — the shipped fragments
     return {req:req&&{qk:Object.keys(req.questions),crit:Object.keys(req.questions.limit_L1.criteria),state:req.state,emo:!!req.questions.emotion,ins:req.questions.limit_L1.instructions},
       rep:p.length?p[0].t:"",lim,saidMid:said&&said.mid,read:(c.spokenLimitsRead||{}).p_d||null,
       limitsBlk:String(B.limits||""),drives:String(B.drives||""),resist:String(B.resistance||""),tplCall:pm.map(m=>m.content).join("\n"),piece,frag};
@@ -170,14 +114,14 @@ const USER_TPL=`[system]
      !!r5.lim&&r5.lim.kind==="limit"&&r5.lim.saidMid===r5.saidMid&&r5.lim.expires==="scene"&&r5.lim.day===2&&/Midday/i.test(r5.lim.period)&&/Lakeside Trail/.test(r5.lim.place)&&/banka kadar/.test(r5.lim.text)&&!/Çayımı/.test(r5.lim.text),
      JSON.stringify(r5.lim));
   ok("the read pointer moves past that line", r5.read===r5.saidMid, r5.read+" vs "+r5.saidMid);
-  ok("the SAME turn's reply shows it (the user's template, unedited, through its drives call)",
+  ok("the SAME turn's reply shows it (the reply fragments: the limits fragment)",
      /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.rep), r5.rep.slice(-2500));
   ok("the resistance block quotes the line she drew", /YOU HAVE ALREADY SAID WHERE YOUR LINE IS[\s\S]*banka kadar/.test(r5.resist), r5.resist);
-  ok("{{call//limits//full}} works in a template of its own", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.tplCall), r5.tplCall);
+  ok("{{call//limits//full}} works in a fragment of its own", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.tplCall), r5.tplCall);
   ok("(v150.49) the suggested-replies writer is told the line she drew", await pg.evaluate(()=>{ const c=curChat(), D=state.personas.find(x=>x.id==="p_d");
       const t=_sugPeopleBlock(c,[D],"Emre"); return /has said out loud about how far this goes[\s\S]*banka kadar/.test(t)?true:t; }));
-  ok("the fragment model's layout carries it too (v150.48)", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.frag), r5.frag.slice(-1500));
-  ok("the drives block is now exactly the limits block, and its piece renders it", r5.drives===r5.limitsBlk&&r5.limitsBlk.length>0&&r5.piece.trim()===r5.limitsBlk.trim(), JSON.stringify({d:r5.drives,p:r5.piece}));
+  ok("the shipped fragments carry it (v150.48)", /WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r5.frag), r5.frag.slice(-1500));
+  ok("the drives block is now exactly the limits block, and calling it in a fragment renders it", r5.drives===r5.limitsBlk&&r5.limitsBlk.length>0&&r5.piece.trim()===r5.limitsBlk.trim(), JSON.stringify({d:r5.drives,p:r5.piece}));
 
   const r6=await pg.evaluate(async()=>{
     const c=curChat();
@@ -221,13 +165,20 @@ const USER_TPL=`[system]
     __stub.dec=b=>b.questions.limit_L1?{limit_L1:__lim("limit_scene",0.9)}:{}; await __turn('"Still ok?"');
     out.retried=(c.spokenLimits.p_d||[]).length;
     c=__setup(); state.limitsOn=false; state.emoOn=false; __stub.reply='"Not past the gate."'; await __turn('"Walk?"');
-    __stub.reply='"Tamam."'; const t3=await __turn('"Ok."'); out.offDecs=t3.decs.length; state.limitsOn=true; state.emoOn=true;
+    __stub.reply='"Tamam."'; const t3=await __turn('"Ok."');
+    /* v150.66 — the reply fragments' asked options still go (there is no switch to turn the fragments off): no limit and no
+       emotion question; and with no asked option on the path, no request at all */
+    out.offLimitQ=t3.decs.filter(d=>Object.keys(d.questions||{}).some(k=>/^limit_|^emotion$/.test(k))).length;
+    state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}));
+    __stub.reply='"Peki."'; const t4=await __turn('"Sure?"'); out.offDecs=t4.decs.length; state.fragments=null;
+    state.limitsOn=true; state.emoOn=true;
     return out;
   });
   ok("below the gate's certainty nothing is filed, and the line is not read again", r8.unsure===0&&r8.readUnsure===true, JSON.stringify(r8));
   ok("one already on record goes in the state, and 'none' files nothing new", r8.dupe===1&&/not tonight/i.test(r8.dupeState), JSON.stringify(r8));
   ok("a failed request files nothing and leaves the line to be read next time", r8.failN===0&&r8.failRead===null&&r8.retried===1, JSON.stringify(r8));
-  ok("switched off (and the emotion pick off): no Decisions request at all", r8.offDecs===0, JSON.stringify(r8));
+  ok("switched off (and the emotion pick off): no limit question is asked", r8.offLimitQ===0, JSON.stringify(r8));
+  ok("…and with no asked fragment option on the path, no Decisions request at all", r8.offDecs===0, JSON.stringify(r8));
 
   console.log("\n[4 — released and expired]");
   const r7=await pg.evaluate(async()=>{

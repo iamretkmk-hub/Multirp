@@ -32,7 +32,7 @@ const {chromium}=require('playwright');
         {id:"p_b",name:"Berk",universeId:uni.id,personality:"Berk is loud.",look:{hair:"black hair"},style:"Loud."},
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
-      state.payloadTplOn=false; state.fragOn=true; state.fragments=frags||null; state.autoSpeak=false; state.narrMode=false; state.gossip=[];
+      state.payloadTplOn=false; state.fragments=frags||null; state.autoSpeak=false; state.narrMode=false; state.gossip=[];
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));   // these lists are what the test means: no migration
       const c=curChat(); ["_heatBeat","activeEvent","watchingNow"].forEach(k=>{ delete c[k]; });
       Object.assign(c,{universeId:uni.id,presentIds:["p_a","p_b"],emo:{},promises:[],wearing:{},

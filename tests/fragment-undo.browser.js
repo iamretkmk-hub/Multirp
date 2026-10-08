@@ -4,6 +4,8 @@
    hand-written sections, with no undo anywhere in the app. This checks that every reset — bulk and
    single — photographs the rewritten set first, that the undo puts them back, and that a fragment
    rewritten AFTER the reset survives the undo (the snapshot must never become a second deletion).
+   v150.66 — the pieces with an editor are the Other wording (the wording the app writes outside the reply fragments); the
+   reset and its undo live in that card.
    Run: node tests/fragment-undo.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -20,7 +22,7 @@ const {chromium}=require('playwright');
   // the in-app confirm in the bulk reset must not stop the test
   await pg.evaluate(()=>{ window.uiConfirm=async()=>true; window.__toasts=[]; const t=window.toast; window.toast=m=>{window.__toasts.push(String(m)); try{t&&t(m);}catch(e){}}; });
 
-  const keys=await pg.evaluate(()=>Object.keys(BLOCK_TPL_DEFAULTS).slice(0,3));
+  const keys=await pg.evaluate(()=>_otherWordingKeys().slice(0,3));
   const MINE="MY OWN WORDING — ";
 
   const r=await pg.evaluate(async([keys,MINE])=>{
@@ -76,12 +78,12 @@ const {chromium}=require('playwright');
     const out={};
     state.blockTpls={}; store.set(K.blockTpls,state.blockTpls); store.setRaw(K.blockTplsUndo,"");
     show('settings');
-    renderPayloadTemplates();
-    out.noUndoBtn=(document.getElementById('payloadTplList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")<0;
-    const k=Object.keys(BLOCK_TPL_DEFAULTS)[0];
+    renderOtherWording();
+    out.noUndoBtn=(document.getElementById('otherWordingList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")<0;
+    const k=_otherWordingKeys()[0];
     state.blockTpls[k]="x-custom"; store.set(K.blockTpls,state.blockTpls);
     await plqTplResetMany();
-    out.undoBtn=(document.getElementById('payloadTplList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")>=0;
+    out.undoBtn=(document.getElementById('otherWordingList')||{innerHTML:""}).innerHTML.indexOf("plqTplUndoReset")>=0;
     return out;
   });
   ok("no undo button with nothing to put back", ui.noUndoBtn===true);

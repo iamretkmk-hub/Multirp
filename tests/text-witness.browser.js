@@ -54,7 +54,7 @@ NO: It is still open: only talked about, promised, half done or not touched in t
           goalsLive:{lines:["Get Emre to actually make that call to Ayça about Asran's school","Keep the beach day light"],day:4}},
         {id:"p_h",name:"Hakan Akbaba",universeId:uni.id,personality:"x",style:"x",goals:"x",look:{}}];
       Object.assign(state,{user:"Emre Tokmak",key:"sk-test",emoOn:true,emoModel:"",emotions:null,gateAt:0.8,goalCheckOn:true,memJudgeOn:true,
-        replyCheckOn:false,trackDecOn:false,gateOn:false,fragOn:false,mem:true,intentOn:true,calOn:false,promiseOn:false,charQuestsOn:false});
+        replyCheckOn:false,trackDecOn:false,gateOn:false,mem:true,intentOn:true,calOn:false,promiseOn:false,charQuestsOn:false});
       try{ _emoBreak.until=0; _emoBreak.fails=0; _memJudgeBreak.until=0; _memJudgeBreak.fails=0; }catch(e){}
       const c=curChat();
       Object.assign(c,{universeId:uni.id,presentIds:[],emo:{},gameDay:4,period:"Afternoon",timeOfDay:"Afternoon",locationId:"l_home",location:"Emre's House",
@@ -201,17 +201,16 @@ NO: It is still open: only talked about, promised, half done or not touched in t
   ok("and the step is told memories are English, first person", M.rule===true, "");
 
   console.log("\n[a motive toward the player]");
-  const I=await pg.evaluate(()=>{ const c=__setup(); state.fragOn=true;
+  const I=await pg.evaluate(()=>{ const c=__setup();
     c.intents=[{id:"i1",holderId:"p_d",targetId:"__user__",targetName:"Emre Tokmak",status:"active",valence:"warm",kind:"alliance",aim:"to have him come to your table next week"}];
     const a=intentParts(c,"p_d","__user__","Emre Tokmak");
     const B=buildTailBlocks({chat:c,selfP:state.personas[0],selfId:"p_d",selfName:"Duygu Akbaba",targetName:"Emre Tokmak",targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}});
     const bio=intentParts(c,"p_d");
-    state.fragOn=false; const off=intentParts(c,"p_d","__user__","Emre Tokmak");
-    return {col:a.coloring,key:a.coloringKey,pi:B._pi&&B._pi.intent_warm,bioWant:bio.quietWant,off:off.coloring,offWant:off.quietWant}; });
+    return {col:a.coloring,key:a.coloringKey,pi:B._pi&&B._pi.intent_warm,bioWant:bio.quietWant}; });
   ok("toward the one they answer, the player, it becomes this beat's colouring (intent_warm)", I.key==="intent_warm"&&/to have him come to your table next week/.test(I.col)&&/Emre Tokmak/.test(I.col), JSON.stringify(I));
   ok("so the fragment ask's {{call//intent_warm}} has something to inject", /to have him come to your table/.test(I.pi||""), JSON.stringify(I));
   ok("the standing aim still rides in the bio (its call names no addressee)", /to have him come to your table/.test(I.bioWant||""), JSON.stringify(I));
-  ok("with the fragment model off, nothing changes: no colouring, the aim stays a standing want", !I.off&&/to have him come/.test(I.offWant||""), JSON.stringify(I));
+  // (v150.66 — "with the fragment model off, nothing changes" is gone with the switch: the fragments are the only reply builder)
 
   console.log("\n[a stripped delivery tag leaves no space inside the quote]");
   ok("stripDeliveryTags trims inside the quotation marks", await pg.evaluate(()=>{

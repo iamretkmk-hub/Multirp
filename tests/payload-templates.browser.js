@@ -1,3 +1,10 @@
+/* ENGINE PAYLOAD TEMPLATES, and the reply path a turn is built for.
+   v150.66 — the five reply payload templates are gone (a reply is built from its fragments only); what this file kept is
+   what still stands: the engine templates (their own switch, the shared library, the warnings, the classic engine payload
+   when they are off), the heat kind a beat resolves to (now: the heat path's fragments run), and the preview building the
+   kind it says it is. The reply-template checks (generated defaults, the template editor, its validation, "erase the app's
+   wording") are deleted — see tests/README.md.
+   Run: node tests/payload-templates.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
   const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
@@ -7,96 +14,14 @@ const {chromium}=require('playwright');
   pg.on('pageerror',e=>errs.push('PAGEERROR: '+e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
   await pg.waitForTimeout(2500);
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
 
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+(x?"\n        "+String(x).slice(0,400):""));} };
 
   console.log("\n[boot]");
   ok("no page errors on load", errs.length===0, errs.join(" | "));
-  ok("template engine loaded", await pg.evaluate(()=>typeof ptBuildMessages==="function"));
-  ok("templates ON by default", await pg.evaluate(()=>state.payloadTplOn===true));
-
-  console.log("\n[defaults]");
-  const d=await pg.evaluate(()=>ptDefaultTemplate("solo"));
-  ok("solo default has [system]", d.includes("[system]"), d.slice(0,120));
-  ok("solo default calls history", d.includes("{{call//dialogue_history}}"));
-  ok("text default carries timing note", await pg.evaluate(()=>{
-      const t=ptDefaultTemplate("text");
-      return t.includes("{{call//text_timing_days}}")&&t.includes("{{call//text_timing_yesterday}}"); }));
-  ok("all 5 kinds generate", await pg.evaluate(()=>PT_KINDS.every(k=>ptDefaultTemplate(k).length>50)));
-
-  /* v38.0 — BYTE PARITY MOVED TO tests/parity-live.browser.js, and it had to.
-     This checked the template against buildPayload using STAND-IN block values ("# TASK\nBe her."),
-     which worked while every call was {{call//x//full}} and the template contributed no words of
-     its own. It cannot work now: a piece whose heading lives in the template takes that heading
-     from the real shipped fragment, so against a stand-in value the two sides legitimately differ
-     — the template says "# TASK\nYou are {{char}}…", the stand-in says "# TASK\nBe her.".
-     parity-live runs the same comparison with REAL blocks from a real scene, across all five
-     payload kinds, and also asserts the template path did not quietly fall back. What is worth
-     keeping here is the weaker but still useful property: with stand-in blocks, nothing the
-     producer supplied goes missing on the way through the template. */
-  console.log("\n[no data is lost on the way through a template]");
-  const carried=await pg.evaluate(()=>{
-    const head={task:"# TASK\nBe her.",world:"# WORLD\nA city.",your_bio:"# YOU\nAyse.",rumors:""};
-    /* v38.1 — response_target, response_guidance and drives are called by FRAGMENT now. Handed
-       over as whole strings with no fragment map (exactly what an older payload or a hand-built
-       block set looks like) they must still arrive, once, in the right place. */
-    const tail={scene_now:"# SCENE\nEvening.",response_guidance:"# GUIDE\nAnswer.",trackers:"",
-      drives:blkTpl("drive_header")+"\n\nShe wants it.\n\n"+blkTpl("drive_ego")};
-    head.response_target="# TARGET\nKemal.";
-    const hist=[{role:"user",content:"hi"},{role:"assistant",content:"hey"}];
-    const was=state.payloadTplOn; state.payloadTplOn=true;
-    const t=ptBuildMessages("solo",Object.assign({},head,tail),hist,{});
-    state.payloadTplOn=was;
-    const all=(t||[]).map(m=>m.content||"").join("\n");
-    return {got:!!t, all,
-      missing:["Be her.","A city.","Ayse.","Evening.","Answer.","Kemal.","She wants it."].filter(x=>all.indexOf(x)<0),
-      // and the prose the template prints itself must not also come back in with the rescued block
-      doubled:(all.split("WHAT YOU ARE CAUGHT BETWEEN").length-1)>1
-        ||(all.split("Do not narrate this weighing").length-1)>1,
-      order:(t||[]).map(m=>m.role).join(",")};
-  });
-  ok("the template path produced messages", carried.got===true);
-  ok("a block handed over without its fragment map is not sent twice", carried.doubled===false,
-     "the template's own prose came back in with the rescued block");
-  ok("every block the producer supplied is in there", carried.missing.length===0,
-     "missing: "+carried.missing.join(", "));
-  ok("the transcript still sits between the two system messages",
-     carried.order==="system,user,assistant,system", carried.order);
-
-  console.log("\n[settings UI]");
-  await pg.evaluate(()=>{ show('settings'); });
-  await pg.waitForTimeout(400);
-  await pg.evaluate(()=>{ renderPayloadList(); });
-  await pg.waitForTimeout(400);
-  ok("template card rendered", await pg.evaluate(()=>!!document.getElementById('payloadTplList') && document.getElementById('payloadTplList').innerHTML.length>500));
-  ok("toggle present", await pg.evaluate(()=>!!document.getElementById('payloadTplOn')));
-  ok("5 template editors", await pg.evaluate(()=>document.querySelectorAll('[data-pttpl]').length===5));
-  ok("catalog lists pieces", await pg.evaluate(()=>document.getElementById('payloadTplList').innerHTML.includes("{{call//recent_memories}}")));
-  ok("i / used-by buttons on block rows", await pg.evaluate(()=>{
-      const det=document.querySelector('details[data-plq="solo"]'); det.open=true;
-      renderPayloadEditor('solo');
-      return document.getElementById('plqBody_solo').innerHTML.includes("ptShowUsedBy");
-    }));
-
-  console.log("\n[validation warns, never silent]");
-  const v=await pg.evaluate(()=>{
-    ptSetTemplate("solo","[system]\n{{call//task}}\n{{call//nope_wrong}}\n{{bogus_value}}\n[system end]\n");
-    renderPayloadTemplates(); ptValidate("solo");
-    return document.getElementById('ptWarn_solo').innerHTML;
-  });
-  ok("unknown piece flagged", v.includes("nope_wrong"), v.slice(0,200));
-  ok("unknown value flagged", v.includes("bogus_value"));
-  ok("missing history flagged", v.toLowerCase().includes("dialogue_history"));
-  const v2=await pg.evaluate(()=>{ ptSetTemplate("solo",null); ptValidate("solo"); return document.getElementById('ptWarn_solo').innerHTML; });
-  ok("clean template says so", v2.includes("exists"), v2.slice(0,160));
-
-  console.log("\n[toggle persists]");
-  await pg.evaluate(()=>ptToggle(true));
-  ok("toggle writes state+storage", await pg.evaluate(()=>state.payloadTplOn===true && store.get(K.payloadTplOn,false)===true));
-  await pg.evaluate(()=>ptToggle(false));
-
+  ok("the reply builder and the engine template engine loaded", await pg.evaluate(()=>typeof ptBuildMessages==="function"&&typeof epMessages==="function"));
+  ok("engine templates ON by default", await pg.evaluate(()=>state.payloadTplOn===true));
 
   console.log("\n[engine templates]");
   ok("engines registered", await pg.evaluate(()=>Object.keys(ENGINE_PARTS).length>=60));
@@ -134,38 +59,14 @@ const {chromium}=require('playwright');
       return m.length===2&&m[0].content==="SYS"&&m[1].content==="D"; }));
 
 
-  console.log("\n[bare vs full pieces]");
-  ok("bare and //full are both valid names", await pg.evaluate(()=>{
-      const k=ptKnownNames(); return k["trackers"]&&k["trackers//full"]; }));
-  /* v38.1 — the shipped template calls nothing as //full any more: every piece is either named
-     fragments or a bare call with its heading written out above it as ordinary prose. */
-  ok("the shipped template calls nothing as a //full lump",
-     await pg.evaluate(()=>!ptDefaultTemplate("solo").includes("//full}}")));
-  ok("erase strips the app's prose and keeps every call", await pg.evaluate(()=>{
-      ptSetTemplate("solo",null);
-      const before=ptTemplate("solo");
-      ptStripHeaders("solo");
-      const after=ptTemplate("solo"); ptSetTemplate("solo",null);
-      const calls=t=>(t.match(/\{\{call\/\/[a-zA-Z0-9_]+(?:\/\/full)?\}\}/g)||[]).join("|");
-      if(calls(before)!==calls(after)) return "a call was lost";
-      if(after.length>=before.length) return "nothing was stripped";
-      if(!/\[system\]/.test(after)) return "the role markers went too";
-      if(/# TASK/.test(after)) return "the app's headings are still there";
-      return true; }));
-  ok("reset puts the app's wording back", await pg.evaluate(()=>{
-      ptSetTemplate("solo",null); ptStripHeaders("solo"); ptResetTpl("solo");
-      const t=ptTemplate("solo"); ptSetTemplate("solo",null);
-      return /# TASK/.test(t) && t.indexOf("{{call//dialogue_history}}")>-1; }));
-
   /* (!) v41.6 — HEAT BEAT 1 MUST BE A HEAT PAYLOAD WHEN ONE CHARACTER IS PRESENT. heatBeginTurn()
      claims the player-facing reply as beat 1 and sets chat._heatBeat, documented as "what switches
      the payload to the heat layout". The multi path asked _heatBeat?"heat":"multi"; the solo path
      asked for "solo" BY NAME and never switched — so a hand-written heat template was ignored and
      the solo one ran, and with heatN=1 (where beat 1 is the whole run) heat never used its own
      template at all.
-     (!) Why it stayed invisible: with the SHIPPED templates every kind produces the same text, so
-     nothing looked wrong until someone wrote a heat template of their own. Hence two markers here
-     rather than a comparison of defaults. */
+     v150.66 — the reply is its fragments, so the markers are a fragment's per-path text: the heat path's, and the solo
+     path's. */
   console.log("\n[heat beat 1, with one character present]");
   const hk=await pg.evaluate(()=>{
     const uni=state.universes[0];
@@ -174,10 +75,10 @@ const {chromium}=require('playwright');
         backstory:"x",style:"x",goals:"x",look:{}});
     const p=state.personas.find(x=>x.id==="p_k"); const chat=curChat();
     chat.presentIds=["p_k"]; state.user="Kemal";
-    const wasOn=state.payloadTplOn, wasTpl=Object.assign({},state.payloadTemplates||{});
-    state.payloadTplOn=true;
-    ptSetTemplate("solo","SOLO-TEMPLATE-MARKER\n{{call//dialogue_history}}");
-    ptSetTemplate("heat","HEAT-TEMPLATE-MARKER\n{{call//dialogue_history}}");
+    const wasF=state.fragments;
+    state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).concat([{id:"zz_mark",name:"Marker",seg:"head",paths:FRAG_PATHS.slice(),text:"",
+      byPath:{solo:"SOLO-TEMPLATE-MARKER",heat:"HEAT-TEMPLATE-MARKER"},options:[]}]);
+    store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
     const inj={recent:[],diary:[],longterm:[]};
     const build=()=>{
       const hb=buildCharPromptBlocks(p,[],inj,state.user,{chat,targetName:state.user,targetId:"__user__"});
@@ -189,16 +90,16 @@ const {chromium}=require('playwright');
     };
     chat._heatBeat={total:"1",n:"1",narrN:"1"};  const heat=build();
     delete chat._heatBeat;                        const solo=build();
-    state.payloadTplOn=wasOn; state.payloadTemplates=wasTpl; store.set(K.payloadTemplates,wasTpl);
+    state.fragments=wasF;
     return {heat,solo};
   });
   ok("a heat beat resolves to the heat kind", hk.heat.kind==="heat", hk.heat.kind);
   ok("and an ordinary turn still resolves to solo", hk.solo.kind==="solo", hk.solo.kind);
-  ok("the hand-written HEAT template is the one that runs",
+  ok("the heat path's fragment text is the one that runs",
      /HEAT-TEMPLATE-MARKER/.test(hk.heat.text), hk.heat.text.slice(0,90));
-  ok("and the solo template does not leak into it",
+  ok("and the solo path's does not leak into it",
      !/SOLO-TEMPLATE-MARKER/.test(hk.heat.text), hk.heat.text.slice(0,90));
-  ok("an ordinary turn still gets the solo template",
+  ok("an ordinary turn still gets the solo path's",
      /SOLO-TEMPLATE-MARKER/.test(hk.solo.text) && !/HEAT-TEMPLATE-MARKER/.test(hk.solo.text),
      hk.solo.text.slice(0,90));
   /* One function decides this for both reply paths, so they cannot drift apart again. */

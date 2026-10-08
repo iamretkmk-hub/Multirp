@@ -26,7 +26,7 @@ const {chromium}=require('playwright');
       const uni=state.universes[0];
       state.personas=[{id:"p_a",name:"Ayla",universeId:uni.id,personality:"Proud and quick to bristle",look:{},style:"s"},
                       {id:"p_b",name:"Berk",universeId:uni.id,personality:"x",look:{},style:"s"}];
-      state.user="Emre"; state.payloadTplOn=false; state.fragOn=true; state.fragments=null; state.fragAt=0.7;
+      state.user="Emre"; state.payloadTplOn=false; state.fragments=null; state.fragAt=0.7;
       const c=curChat(); Object.assign(c,{universeId:uni.id,presentIds:["p_a","p_b"],
         // the emotion pick (a decision) and one answered ask: the say-no "past she does not have" option
         emo:{p_a:{emotion:"Anger",intensity:"intense",tone:"furious",ego:"id_ahead",asks:{"q_say_no__unknown_past":0.9}}},
@@ -196,14 +196,17 @@ const {chromium}=require('playwright');
   console.log("\n[the Payloads preview reads the same]");
   const P=await pg.evaluate(()=>{
     __setup();
-    let host=document.getElementById('ptPrev_solo'), made=false;
-    if(!host){ host=document.createElement('div'); host.id="ptPrev_solo"; document.body.appendChild(host); made=true; }
-    ptPreview("solo");
+    /* v150.66 — the Payloads preview is the Reply fragments card's "Preview the payload" (fragPreview) */
+    let box=document.getElementById('fragPvHost'), made=false;
+    if(!box){ box=document.createElement('div'); box.id="fragPvHost"; document.body.appendChild(box); made=true; }
+    curChat().messages.forEach(m=>{ m.present=["p_a","p_b"]; });   // heard by both, so the preview's real history has the lines
+    _fragDraft=null; renderFragPreviewBox(); fragPreview("solo");
+    const host=document.getElementById('fragPvOut');
     const r={view:!!host.querySelector('.pvView'),legend:!!host.querySelector('.pvLegend'),red:host.querySelectorAll('pre .pvr').length,
       green:host.querySelectorAll('pre .pvd').length,bold:host.querySelectorAll('.pvBadge b').length,mk:/[\uE000-\uE003]/.test(host.textContent)};
-    if(made)host.remove(); else host.innerHTML=""; return r;
+    if(made)box.remove(); else host.innerHTML=""; return r;
   });
-  ok("ptPreview uses the same renderer, with colours", P.view&&P.legend&&P.red>0&&P.green>0&&P.bold>=3&&!P.mk, JSON.stringify(P));
+  ok("the fragment preview uses the same renderer, with colours", P.view&&P.legend&&P.red>0&&P.green>0&&P.bold>=3&&!P.mk, JSON.stringify(P));
   ok("engine preview too", await pg.evaluate(()=>{ const k=Object.keys(ENGINE_PARTS)[0]; let host=document.getElementById("epPrev_"+k), made=false;
       if(!host){ host=document.createElement('div'); host.id="epPrev_"+k; document.body.appendChild(host); made=true; }
       state.payloadTplOn=false; epPreview(k); const r=!!host.querySelector('.pvView .pvLegend')&&!/[\uE000-\uE003]/.test(host.textContent), html=host.innerHTML.slice(0,300);

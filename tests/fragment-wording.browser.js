@@ -34,7 +34,7 @@ const {chromium}=require('playwright');
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"},
         {id:"p_d",name:"Deniz",universeId:uni.id,personality:"Deniz is quiet.",look:{},style:"y"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
-      state.payloadTplOn=false; state.fragOn=true; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
+      state.payloadTplOn=false; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
       state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};

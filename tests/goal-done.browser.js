@@ -25,7 +25,9 @@ const {chromium}=require('playwright');
         goalsLive:{lines:["Get Emre to actually make that call to Ayça","Keep the beach day light"],day:4}}];
       const c=curChat(); Object.assign(c,{universeId:uni.id,presentIds:["p_d"],emo:{},gameDay:4,
         messages:[{mid:"u1",role:"user",content:'"Hallettim o işi, aradım Ayça\'yı."',speaker:"Emre"}]});
-      Object.assign(state,{user:"Emre",key:"sk-test",emoOn:true,emoModel:"",emotions:null,gateAt:0.8,goalCheckOn:true,memJudgeOn:false,replyCheckOn:false,trackDecOn:false,gateOn:false,fragOn:false});
+      Object.assign(state,{user:"Emre",key:"sk-test",emoOn:true,emoModel:"",emotions:null,gateAt:0.8,goalCheckOn:true,memJudgeOn:false,replyCheckOn:false,trackDecOn:false,gateOn:false,
+        fragments:JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}))});   // v150.66 — no asked fragment option (the fragments can no longer be switched off), so only what this test asks goes
+      store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       try{ _emoBreak.until=0; _emoBreak.fails=0; }catch(e){}
       window.__reqs=[]; window.__ans={}; return c; };
   });

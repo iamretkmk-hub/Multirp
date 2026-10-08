@@ -35,7 +35,7 @@ const {chromium}=require('playwright');
     window.__OLD=OLD;
     const uni=state.universes[0];
     state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall.";
-    state.payloadTplOn=false; state.fragOn=true; state.fragments=null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false;
+    state.payloadTplOn=false; state.fragments=null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false;
     state.trackOn=false; state.memory=[]; state.relOn=false; state.intentOn=false; state.promiseOn=false; state.gossip=[]; state.emotions=null;
     store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(",")); state.blockTpls={};
     window.__base=(persona)=>{

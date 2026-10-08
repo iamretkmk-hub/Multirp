@@ -39,7 +39,7 @@ const {chromium}=require('playwright');
                         p_s:{tie:"brother-in-law",relationship:"Sami is Berker's brother."}}},
         {id:"p_h",name:"Berker",universeId:uni.id,personality:"Steady.",relationships:{p_o:{tie:"wife",relationship:"Özlem is your wife."}}},
         {id:"p_s",name:"Sami",universeId:uni.id,personality:"Chaotic."}];
-      state.user="Emre"; state.fragOn=true; state.fragments=null; state.relOn=true; state.intentOn=true; state.memory=[];
+      state.user="Emre"; state.fragments=null; state.relOn=true; state.intentOn=true; state.memory=[];
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       const c=curChat();
       Object.assign(c,{universeId:uni.id,presentIds:["p_o"],emo:{},calendar:[],intents:[],rel:{},gameDay:4,period:"Afternoon",

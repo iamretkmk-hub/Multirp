@@ -25,7 +25,7 @@ const {chromium}=require('playwright');
       const uni=state.universes[0];
       state.personas=[{id:"p_a",name:"Ayla",universeId:uni.id,personality:"Sharp.",relationships:{p_b:{tie:"older brother",relationship:"Berk raised her."},__user__:{tie:"neighbour",relationship:"Emre lives across the hall."}}},
         {id:"p_b",name:"Berk",universeId:uni.id,personality:"Loud."}];
-      state.user="Emre"; state.key="sk-test"; state.fragOn=true; state.fragments=null; state.emoOn=true; state.intentOn=true; state.relOn=false; state.memory=[];
+      state.user="Emre"; state.key="sk-test"; state.fragments=null; state.emoOn=true; state.intentOn=true; state.relOn=false; state.memory=[];
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(",")); _emoBreak.until=0; _emoBreak.fails=0;
       const c=curChat();
       Object.assign(c,{universeId:uni.id,presentIds:["p_a","p_b"],emo:{},calendar:[],intents:[],rel:{},gameDay:3,period:"Evening",

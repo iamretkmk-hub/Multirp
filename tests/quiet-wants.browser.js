@@ -32,6 +32,7 @@ const {chromium}=require('playwright');
          relationships:{__user__:{tie:"neighbour",relationship:"Emre lives across the hall."},p_b:{tie:"older brother",relationship:"Berk raised her."}}},
         {id:"p_b",name:"Berk",universeId:uni.id,personality:"Loud, restless.",relationships:{p_a:{tie:"younger sister",relationship:"Ayla is your sister."}}}];
       state.user="Emre"; state.key="sk-test"; state.fragments=null; state.intentOn=true; state.mem=true; state.memory=[]; state.relOn=false;
+      state.arrivalGateOn=false;   // v150.78 — surfacing itself is tested here; the arrival gate has its own test (arrival-gate)
       state.pulseOn=true; state.goalPursuitOn=true; state.charQuestsOn=true; state.gateOn=false; state.sceneOn=true; state.confrontOn=true;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       uni.gameData=uni.gameData||{}; uni.gameData.charQuests=[]; uni.cqAsked={};

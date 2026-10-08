@@ -47,6 +47,7 @@ const {chromium}=require('playwright');
     state.personas=[mk("p_a","Ayla"),mk("p_b","Berk"),mk("p_c","Ceren",{latent:true}),mk("p_d","Deniz",{removed:true}),
                     mk("p_e","Ercan"),mk("p_n","Canan")];
     state.user="Emre"; state.key="k"; state.mem=true; state.intentOn=true; state.sceneOn=true; state.confrontOn=true;
+    state.arrivalGateOn=false;   // v150.78 — these cases are about surfacing itself; the arrival gate has its own test (arrival-gate)
     state.gossipOn=true; state.calOn=true; state.pulseOn=false; state.roundOn=true; state.charQuestsOn=false;
     state.goalPursuitOn=false; state.relOn=false; state.condenseOn=false; state.trackOn=false; state.heatOn=false;
     state.gmOn=false; state.promiseOn=false; state.travelTime=0; state.gossipDecay=0.2;

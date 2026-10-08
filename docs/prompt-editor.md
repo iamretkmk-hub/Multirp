@@ -8,7 +8,7 @@ A separate page, next to `index.html`, for rewriting StoryMind's prompts away fr
 2. Open `prompt-editor.html` and use **Open prompt export** to load that file. A full backup works too:
    the prompts are lifted out of its `localStorage` copy.
 3. Edit. Every field of every reply fragment (v150.66: a reply is built from its fragments only), the other wording,
-   the decision agents' prompts and the emotion list (v150.74), every other registry prompt, every `eng:` engine layout and
+   the decision agents' prompts and the emotion list (v150.75), every other registry prompt, every `eng:` engine layout and
    the model/switch settings are in the list on the left.
    The dot beside each item tells you its state: violet means your version differs from the shipped
    default, and pink means you edited it in this session.
@@ -34,8 +34,8 @@ localStorage or IndexedDB), and gives it:
 - an in-memory `localStorage`/`sessionStorage` and a small in-memory IndexedDB (the shim in `#shimSrc`);
 - no network of its own (`fetch` is relayed to the editor, which lets through only OpenRouter and NanoGPT while a test runs;
   XHR and WebSocket throw), `chatCompletion` answering `"{}"` outside a test;
-- (v150.74) every Decisions-API request (`decisionsCall`) handed to the editor's handler, which records it and answers it by
-  the decision mode: off, Claude standing in, or the real API (see "v150.74 — the decision agents" below);
+- (v150.75) every Decisions-API request (`decisionsCall`) handed to the editor's handler, which records it and answers it by
+  the decision mode: off, Claude standing in, or the real API (see "v150.75 — the decision agents" below);
 - a bridge (`#bridgeSrc`) that applies the editor's working pack to `state` live and builds payloads
   through the same calls the reply paths make: `buildSystemPromptBlocks` / `buildCharPromptBlocks`,
   `buildTailBlocks`, `castHistory` + `tagLastForTarget`, `ptBuildMessages`; `buildTextPayload` for the
@@ -50,7 +50,7 @@ The defaults it compares against are read from the running engine (`PROMPT_REGIS
 
 Memory retrieval is replaced by the speaker's own memories (newest six fresh, newest four condensed),
 because the real retrieval costs a model call. (v150.38: the drives writer is gone; the drives block is
-the character's spoken limits, so it is empty unless the story data carries `spokenLimits` — or, since v150.74, a scene's
+the character's spoken limits, so it is empty unless the story data carries `spokenLimits` — or, since v150.75, a scene's
 decisions filed one.)
 
 **Story data: your story.** **Use my own story…** reads a full backup (best), a roleplay export or a
@@ -693,14 +693,14 @@ them and nothing else of the reply:
 
 Pinned by `tests/prompt-editor.browser.js` ("4b — the reply fragments are the items").
 
-## v150.74 — the decision agents
+## v150.75 — the decision agents
 
 Beside the language models the app asks a **Decisions model** (OpenRouter's Decisions API, docs/06): a state and typed
 questions, answered with probabilities. Before every reply it takes the emotion, its intensity and the id/superego level, and
 answers every question the path's fragments ask (and reads spoken limits, who is being talked about, goals done); after the
 reply, the reply check; during play the strict gates, status checks, trackers, memory relevance and status, the turn router,
 movement, the Gamemaster's judge, the proactive text gate and the picture decisions. These requests are not chat completions,
-so until v150.74 the sandbox answered none of them: every option that needs a decision stayed out, the reply check never
+so until v150.75 the sandbox answered none of them: every option that needs a decision stayed out, the reply check never
 marked a reply, and the editor built and tested payloads the phone never builds. The editor now covers them end to end.
 
 **In the sandbox.** The bridge replaces `decisionsCall` with its own handler. Each request is recorded — its feature (the

@@ -84,7 +84,7 @@ const ROOT=path.resolve(__dirname,'..');
     const noClaude=await pg.evaluate(async()=>{ try{ await aiAsk("x",{}); return "answered"; }catch(e){ return e.code; } });
     ok("without the Claude app there is no analyst at all (OpenRouter never analyses)", noClaude==="no_claude", noClaude);
     await installClaude(pg);
-    /* v150.74 — this file pins the payload and analysis plumbing with decisions off; the decision agents have their own file
+    /* v150.75 — this file pins the payload and analysis plumbing with decisions off; the decision agents have their own file
        (tests/prompt-editor-decisions.browser.js) */
     await pg.evaluate(()=>{ lsSet("decmode","off"); lsSet("driftdec",false); });
 

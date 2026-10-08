@@ -78,8 +78,13 @@ hidden (a repeated design point: "previously hidden — now selectable"):
    Auto-RP narrator, rewriter, multi-character director, memory engines, GM/judges, character
    generator, authoring model, image/video router, voice calls) with per-function temp/token
    overrides (`fnCfg` via `renderOvrFields`). Sampling sliders apply to roleplay replies only.
-3. **Payloads** — the payload editor (doc 05): placeholder guide, reply payloads (reorderable),
-   engine payloads (in-place prompt editing).
+3. **Payloads** — the payload editor (doc 05): the placeholder guide; **Reply fragments** (the only way a reply is
+   built since v150.66: the fragment editor, **Preview the payload** with a Solo / Multi / Gamemaster / Text / Heat path
+   selector that builds the open story's payload from the unsaved draft in the readable coloured view and lists the
+   fragments and options that fired, and the data a fragment can call); **Other wording** (the pieces written outside the
+   fragments, and your base instruction and format rules); **Engine payload templates** (with their own switch, "Use my
+   engine templates"); **Engine payloads** (in-place prompt editing). The classic part list, the reply templates and the
+   A/B panel are gone (v150.66).
 4. **Image Settings** — provider segment, image model rules list (`renderRules`), smart routing
    toggle, fal.ai card, auto-illustration + style + aspect, special-purpose models.
 5. **Video Settings** — Animate/Extend model cards, video rules, length/resolution/sound.

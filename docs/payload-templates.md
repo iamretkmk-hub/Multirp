@@ -1,5 +1,9 @@
 # Payload templates — the hand-written set
 
+> **Historical (before v150.66).** The five reply payload templates are gone: a reply is built from the reply fragments
+> only (docs/05, "v150.66 — fragments are the only reply builder"). These files are kept as a record of the layouts the
+> fragments were built from; pasting them anywhere does nothing now.
+
 All five reply payload templates, written by hand in
 **Settings › Payloads › Write my own payload structure**. Kept here so they survive a
 device wipe, a storage reset, or a mis-tapped "Reset fragments" — `state.payloadTemplates`

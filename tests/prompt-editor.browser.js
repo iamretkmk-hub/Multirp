@@ -84,6 +84,9 @@ const ROOT=path.resolve(__dirname,'..');
     const noClaude=await pg.evaluate(async()=>{ try{ await aiAsk("x",{}); return "answered"; }catch(e){ return e.code; } });
     ok("without the Claude app there is no analyst at all (OpenRouter never analyses)", noClaude==="no_claude", noClaude);
     await installClaude(pg);
+    /* v150.75 — this file pins the payload and analysis plumbing with decisions off; the decision agents have their own file
+       (tests/prompt-editor-decisions.browser.js) */
+    await pg.evaluate(()=>{ lsSet("decmode","off"); lsSet("driftdec",false); });
 
     console.log("\n[0 — no bundled prompts or story: the editor starts from your draft, and your file stays after a reload]");
     const start=JSON.parse(fs.readFileSync(path.join(ROOT,'tests','fixtures','latest-prompts.json'),'utf8'));
@@ -426,7 +429,7 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.click('#rtabs button[data-r="tests"]');
     OR.peak=0; OR.delay=body=>/You are JUDGING one test scene|You are RE-EVALUATING/.test(JSON.stringify(body.messages||[]))?400:0;
     const est=await pg.evaluate(()=>document.querySelector("#allEstimate").textContent);
-    ok("the estimate counts the replies of every speaker", /2 scenes \(12 replies\)/.test(est), est);
+    ok("the estimate counts the replies of every speaker", /2 scenes \(12 replies[,)]/.test(est), est);
     await pg.evaluate(()=>__PE.runEverything());
     const all=await pg.evaluate(()=>({tn:__PE.DR.results.text_night,dn:__PE.DR.results.dinner,overall:__PE.ALL.overall,engRan:Object.keys(__PE.ENGRUN.byScene).length,
       box:(document.querySelector("#overallBox")||{}).textContent||""}));
@@ -447,7 +450,7 @@ const ROOT=path.resolve(__dirname,'..');
        &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- fx:task.text: /.test(ft)&&/===== fx:task.text =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
     const fxLater=fx11[fx11.length-1]||"", fxFirst=fx11[0]||"";
     ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 fx:task.text/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*fx:task.text/.test(fxLater), fxLater.slice(0,200));
-    ok("the judges label where each problem comes from (wording, generated, story, code), and the section fixer sorts causes and knows the engine prompts", /WHERE A PROBLEM COMES FROM/.test(sc11[0]||"")&&/"source":"wording\|generated\|story\|code"/.test(sc11[0]||"")&&/SORT EVERY CAUSE BY WHERE IT COMES FROM/.test(fxLater)&&/THE APP'S ENGINE PROMPTS/.test(fxLater)&&/memBuild — /.test(fxLater), (sc11[0]||"").slice(0,100));
+    ok("the judges label where each problem comes from (wording, generated, story, code, decision), and the section fixer sorts causes and knows the engine prompts", /WHERE A PROBLEM COMES FROM/.test(sc11[0]||"")&&/"source":"wording\|generated\|story\|code\|decision"/.test(sc11[0]||"")&&/SORT EVERY CAUSE BY WHERE IT COMES FROM/.test(fxLater)&&/THE APP'S ENGINE PROMPTS/.test(fxLater)&&/memBuild — /.test(fxLater), (sc11[0]||"").slice(0,100));
     ok("the reconciler reads each section's generated, story and backend findings", /GENERATED CONTENT \(another engine's prompt\):\n- PE-GEN-KEY/.test(ft)&&/STORY DATA:\n- Buket · bio: PE-STORY-BIO/.test(ft)&&/BACKEND \(code\):\n- \[privacy\] PE-BACK-PRIV/.test(ft), ft.slice(ft.indexOf("EVERY SECTION'S PROPOSALS"),ft.indexOf("EVERY SECTION'S PROPOSALS")+600));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
     const secApply=await pg.evaluate(()=>!!document.querySelector("#kind_text .chg"));
@@ -734,7 +737,7 @@ const ROOT=path.resolve(__dirname,'..');
       return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/name\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
-    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,genfix,editrepair,discuss,compare,standin", apx.ids.join());
+    ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in, decide, decfix)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,genfix,editrepair,discuss,compare,standin,decide,decfix", apx.ids.join());
     ok("templates fill their data and flags, and leave the app's own {{…}} markers alone", apx.ctxKeeps&&apx.noApplied&&apx.applied&&!apx.left&&apx.keepsMarkers, JSON.stringify(apx));
     await pg.click('#rtabs button[data-r="ap"]');
     await pg.evaluate(()=>{ const ta=document.querySelector('#apList [data-ap="kind"] textarea'); ta.value=ta.value.replace("You are RE-EVALUATING the scene reports","PE-AP-EDIT You are RE-EVALUATING the scene reports"); ta.dispatchEvent(new Event("input")); });

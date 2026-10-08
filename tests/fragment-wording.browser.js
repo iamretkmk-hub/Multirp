@@ -34,7 +34,7 @@ const {chromium}=require('playwright');
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"},
         {id:"p_d",name:"Deniz",universeId:uni.id,personality:"Deniz is quiet.",look:{},style:"y"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
-      state.payloadTplOn=false; state.fragOn=true; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
+      state.payloadTplOn=false; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
       state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};
@@ -190,7 +190,7 @@ const {chromium}=require('playwright');
     return {n,filled,names:names.size,bad:[...bad]}; });
   ok("in "+D.n+" situations, every one of the "+D.names+" names the shipped fragments call brings in data only", D.n>=250&&D.filled>2000&&D.bad.length===0, D.bad.slice(0,8).join("\n        "));
   ok("no shipped fragment calls a worded piece any more: only *_raw data, the authored text, lists and memories", await pg.evaluate(()=>{
-      const data=new Set(["scenario","others_list","mem_distant_entries","mem_recent_entries","mem_latest_entries","style_body","style_emotion","whereabouts_lines","rumor_carrier_list","calendar_done","quest_lines","after_heat"]);
+      const data=new Set(["scenario","others_list","mem_distant_entries","mem_recent_entries","mem_latest_entries","style_body","style_emotion","whereabouts_lines","rumor_carrier_list","calendar_done","quest_lines","after_heat","text_timing"]);   // v150.66 — the text timing note is its own Other-wording piece
       const bad=[]; FRAG_DEFAULTS.forEach(f=>JSON.stringify(f).replace(/\{\{call\/\/([a-zA-Z0-9_]+(?:\/\/[a-zA-Z0-9_]+)?)\}\}/g,(m,k)=>{ if(!/_raw$/.test(k)&&!data.has(k))bad.push(f.id+": "+k); }));
       const raw=new Set(); FRAG_DEFAULTS.forEach(f=>JSON.stringify(f).replace(/\{\{call\/\/([a-z0-9_]+_raw)\}\}/g,(m,k)=>raw.add(k)));
       const unknown=[...raw].filter(k=>RAW_DATA_KEYS.indexOf(k)<0), known=ptKnownNames(), unlisted=RAW_DATA_KEYS.filter(k=>!known[k]);

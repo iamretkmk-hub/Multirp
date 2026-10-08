@@ -4,7 +4,8 @@
      1  the engine boots in the sandbox and every reply kind builds a real payload
      2  the sandbox cannot touch the real app's storage
      3  an opened prompt export reads clean (nothing counted as edited until you edit)
-     4  an edit to a piece reaches the built payload
+     4  an edit to a reply fragment reaches the built payload (v150.66: a reply is its fragments; the five reply layouts
+        and the reply-only pieces left the editor, the fragments' fields are its items)
      5  the downloaded file is accepted by StoryMind's own importPromptsFile, and carries the edit
      6  a reset prompt is written out in full (the app's import keeps any key a file leaves out)
      7  Test & review: the reviewer's edit is applied by find/replace to the right item
@@ -94,38 +95,32 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
     await installClaude(pg);
     const s0=await pg.evaluate(async()=>{ const S=__PE.S; const p=await __PE.engCall('build',{kind:'solo'});
-      return {file:S.fileName,date:S.orig&&S.orig.date,solo:__PE.itemVal(__PE.findItem("tpl:solo")),unk:p.unknownCalls,unkV:p.unknownVars,
+      return {file:S.fileName,date:S.orig&&S.orig.date,task:__PE.itemVal(__PE.findItem("fx:task.text")),taskOrig:__PE.origVal(__PE.findItem("fx:task.text")),unk:p.unknownCalls,unkV:p.unknownVars,
         edited:__PE.ITEMS().filter(it=>__PE.itemStatus(it).edited).length,modal:(document.querySelector("#modalHost")||{}).textContent||""}; });
     ok("after a reload the opened file is still the one in the editor, with no prompt to switch back", s0.file==="My export"&&s0.date===start.date&&!/bundled/i.test(s0.modal)&&bundledAsks.length===0, JSON.stringify({file:s0.file,date:s0.date,asks:bundledAsks}));
-    ok("its solo layout is the one in the editor", s0.solo===JSON.parse(start.settings.payloadTemplates).solo);
+    ok("its reply fragments are the ones in the editor (the file's list, or the shipped one)", !!s0.task&&s0.task===s0.taskOrig, JSON.stringify({task:String(s0.task).slice(0,80)}));
     ok("and it builds with every name known", s0.unk.length===0&&s0.unkV.length===0, JSON.stringify(s0));
     ok("nothing counts as edited", s0.edited===0, s0.edited);
-    console.log("\n[0b — every piece of the layouts has something to show]");
-    const rich=await pg.evaluate(async()=>{
-      const body=__PE.itemVal(__PE.findItem("frag:resistance_body")).replace(/\{\{[^}]*\}\}/g,"").trim().split("\n")[0].slice(0,40);
-      const o={body};
-      for(const k of ["solo","multi","gm","text","heat"]){ const p=await __PE.engCall('build',{kind:k});
-        o[k]={resist:p.messages.some(m=>m.content.indexOf(body)>=0),empties:p.empties}; }
-      const on=await __PE.engCall('build',{kind:'solo',turn:{arriving:true,video:true,voice:true,afterHeat:true}});
-      o.on=on.empties;
+    console.log("\n[0b — the This turn switches bring in what only happens on some turns]");
+    const rich=await pg.evaluate(async()=>{ const o={};
+      for(const k of ["solo","multi","gm","text","heat"]){ const p=await __PE.engCall('build',{kind:k}); o[k]={n:p.messages.length,empties:p.empties,fired:(p.fired||[]).length}; }
+      o.on=(await __PE.engCall('build',{kind:'solo',turn:{arriving:true,video:true,voice:true,afterHeat:true}})).empties;
       return o; });
-    ["solo","multi","gm","text"].forEach(k=>ok("v150.13 — the resistance block is in the "+k+" payload", rich[k].resist===true, JSON.stringify(rich[k])));
-    ok("heat beats still leave it out", rich.heat.resist===false);
-    const allowed=/^(others_present|player|after_heat|situation|watching_now|spoken_delivery|private_intent)(\/\/full)?$/;
-    ["solo","multi","gm","text","heat"].forEach(k=>ok("only turn-dependent blocks are empty in "+k, rich[k].empties.every(e=>allowed.test(e)), rich[k].empties.join(" ")));
-    ok("the This turn switches bring in arrival, video, voice and after heat",
-       ["situation","watching_now","spoken_delivery","after_heat"].every(b=>!rich.on.some(e=>e.split("//")[0]===b)), rich.on.join(" "));
+    ["solo","multi","gm","text","heat"].forEach(k=>ok("the "+k+" path builds from its fragments, and says which sent something", rich[k].n>=2&&rich[k].fired>=10, JSON.stringify(rich[k])));
+    const filled=rich.solo.empties.filter(x=>rich.on.indexOf(x)<0);
+    ok("a video playing and the after-heat decision fill data that is empty without them (each empty call is listed)",
+       ["watching_raw","after_heat"].every(x=>filled.indexOf(x)>=0), JSON.stringify({filled,on:rich.on.slice(0,12)}));
 
     /* a draft with an edit: a reload keeps it, with no file put over it and nothing to choose */
-    await pg.evaluate(()=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); });
+    await pg.evaluate(()=>{ const it=__PE.findItem("fx:task.text"); __PE.setVal(it,__PE.itemVal(it)+" DRAFT-EDIT"); });
     await pg.reload();                                                   // straight away: the draft is written as the page goes
     await pg.waitForFunction(()=>window.__PE&&window.__PE.ENG.ready&&window.__PE.S.preview&&window.__PE.S.preview.messages,null,{timeout:90000});
     await installClaude(pg); await pg.waitForTimeout(500);
-    const kept=await pg.evaluate(()=>({modal:!!document.querySelector(".modal"),file:__PE.S.fileName,draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header")))}));
+    const kept=await pg.evaluate(()=>({modal:!!document.querySelector(".modal"),file:__PE.S.fileName,draft:/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("fx:task.text")))}));
     ok("a draft with edits is kept on reload, even when the page closes at once, and no other file is offered", !kept.modal&&kept.file==="My export"&&kept.draft&&bundledAsks.length===0, JSON.stringify(kept));
     /* back to the file as opened, for the steps below */
     await pg.evaluate(s=>{ __PE.openPack(JSON.parse(s),"My export"); },JSON.stringify(start));
-    ok("opening a file again replaces the draft with that file", await pg.evaluate(d=>__PE.S.orig.date===d&&!/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),start.date));
+    ok("opening a file again replaces the draft with that file", await pg.evaluate(d=>__PE.S.orig.date===d&&!/DRAFT-EDIT/.test(__PE.itemVal(__PE.findItem("fx:task.text"))),start.date));
 
     console.log("\n[1 — the engine runs and builds every reply kind]");
     const kinds=await pg.evaluate(async()=>{ const o={}; for(const k of __PE.S.meta.kinds){ try{ const p=await __PE.engCall('build',{kind:k});
@@ -150,15 +145,43 @@ const ROOT=path.resolve(__dirname,'..');
     ok("nothing reads as edited straight after opening", st.edited.length===0, JSON.stringify(st.edited));
     ok("the file's own versions read as changed from default", st.custom>50, st.custom);
     const solo=await pg.evaluate(async()=>(await __PE.engCall('build',{kind:'solo'})).messages[0].content);
-    ok("the pack's layout is the one being built", /YOUR NATIVE LANGUAGE/.test(solo), solo.slice(0,300));
+    ok("the reply is built from the fragments, not from the pack's old reply layout", !/YOUR NATIVE LANGUAGE/.test(solo)&&/# TASK/.test(solo), solo.slice(0,300));
 
     console.log("\n[4 — an edit reaches the payload]");
     const MARK="PE-TEST-MARKER: never repeat his question back to him.";
-    await pg.evaluate(m=>{ const it=__PE.findItem("frag:style_header"); __PE.setVal(it,__PE.itemVal(it)+"\n"+m); },MARK);
+    await pg.evaluate(m=>{ const it=__PE.findItem("fx:task.text"); __PE.setVal(it,__PE.itemVal(it)+"\n"+m); },MARK);
     await pg.waitForTimeout(900);
     const after=await pg.evaluate(async()=>(await __PE.engCall('build',{kind:'solo'})).messages.map(m=>m.content).join("\n"));
     ok("the edited piece is in the built payload", after.indexOf(MARK)>=0, after.slice(0,200));
-    ok("and it is counted as edited", await pg.evaluate(()=>__PE.itemStatus(__PE.findItem("frag:style_header")).edited));
+    ok("and it is counted as edited", await pg.evaluate(()=>__PE.itemStatus(__PE.findItem("fx:task.text")).edited));
+
+    /* v150.66 — the reply fragments are the editor's reply items: each field an item, the previews built from them on the path
+       picked, and the export carrying the list */
+    console.log("\n[4b — the reply fragments are the items; the preview builds the path you pick]");
+    const fx4=await pg.evaluate(async()=>{ const P=__PE, I=P.ITEMS();
+      const r={layouts:I.filter(it=>it.type==="tpl"&&it.key.indexOf("eng:")<0).map(it=>it.key),
+        replyPieces:I.filter(it=>it.type==="frag"&&["style_header","rails_header","task","bio_header"].indexOf(it.key)>=0).map(it=>it.key),
+        other:!!P.findItem("frag:whisper_to_you"),main:!!P.findItem("fx:guardrails.text"),bp:!!P.findItem("fx:guardrails.bp.text"),
+        code:/line_for_other/.test(P.itemVal(P.findItem("fx:guidance.o.not_yours.code"))),
+        ask:!!P.findItem("fx:talk_into.o.ask.ask")&&P.itemVal(P.findItem("fx:talk_into.o.ask.ask")).length>20,
+        kinds:P.S.meta.kinds.join(",")};
+      const it=P.findItem("fx:guardrails.bp.text"); P.setVal(it,P.itemVal(it)+"\nPE-TEXT-PATH-ONLY");
+      await new Promise(res=>setTimeout(res,900));
+      const txt=(await P.engCall('build',{kind:'text'})).messages.map(m=>m.content).join("\n"), solo=(await P.engCall('build',{kind:'solo'})).messages.map(m=>m.content).join("\n");
+      r.onText=/PE-TEXT-PATH-ONLY/.test(txt); r.notSolo=!/PE-TEXT-PATH-ONLY/.test(solo);
+      select(it); r.previewPath=document.querySelector("#plKind").value;
+      const ex=P.buildExport(); r.exported=/PE-TEXT-PATH-ONLY/.test(ex.settings.fragments||"")&&!!ex.settings.fragAdds;
+      P.setVal(it,P.origVal(it)); await new Promise(res=>setTimeout(res,600));
+      r.back=!P.itemStatus(it).edited;
+      select(P.findItem("fx:task.text")); document.querySelector("#plKind").value="solo"; P.refreshPreview();   // back to where the steps below start
+      await new Promise(res=>setTimeout(res,900));
+      return r; });
+    ok("no reply layouts and no reply-only pieces are listed; the other wording is", fx4.layouts.length===0&&fx4.replyPieces.length===0&&fx4.other, JSON.stringify(fx4));
+    ok("each fragment's main body, path box, and an option's code condition and question are items", fx4.main&&fx4.bp&&fx4.code&&fx4.ask, JSON.stringify(fx4));
+    ok("the preview's paths are the five reply paths", fx4.kinds==="solo,multi,gm,text,heat", fx4.kinds);
+    ok("an edit to the Text path's box reaches the text payload and not the solo one; opening it previews the Text path", fx4.onText&&fx4.notSolo&&fx4.previewPath==="text", JSON.stringify(fx4));
+    ok("the download carries the fragment list (and the shipped changes it holds)", fx4.exported&&fx4.back, JSON.stringify(fx4));
+    ok("the engine no longer turns the fragments off", !/state\.fragOn\s*=\s*false/.test(fs.readFileSync(path.join(ROOT,'prompt-editor.html'),'utf8')));
 
     console.log("\n[5 — the downloaded file imports into StoryMind]");
     await pg.evaluate(()=>{ const it=__PE.findItem("prompt:gmJudge"); __PE.setVal(it,__PE.itemDef(it)); });
@@ -172,12 +195,12 @@ const ROOT=path.resolve(__dirname,'..');
       const warned=[]; const cw=console.warn; console.warn=(...a)=>{ warned.push(a.join(" ")); cw.apply(console,a); };
       const r=await importPromptsFile(ex,{});
       console.warn=cw;
-      const bt=JSON.parse(localStorage.getItem(K.blockTpls)||"{}");
-      return {r,skipped:warned.filter(w=>/ignored/.test(w)),hasMark:String(bt.style_header||"").indexOf(MARK)>=0,
+      const fr=JSON.parse(localStorage.getItem(K.fragments)||"[]");
+      return {r,skipped:warned.filter(w=>/ignored/.test(w)),hasMark:String((fr.find(f=>f.id==="task")||{}).text||"").indexOf(MARK)>=0,
         gm:localStorage.getItem(K.gmJudge)===PROMPT_BY_KEY.gmJudge.def()};
     },{ex,MARK});
     ok("importPromptsFile accepts it with nothing skipped", imp.r===true&&imp.skipped.length===0, JSON.stringify(imp));
-    ok("the edited piece arrives in the app", imp.hasMark);
+    ok("the edited fragment arrives in the app", imp.hasMark);
     console.log("\n[6 — a prompt reset to default is written out]");
     ok("gmJudge, reset in the editor, overwrites the phone's copy with the default", imp.gm);
     await app.close();
@@ -187,7 +210,7 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const last=String((body.messages||[]).slice(-1)[0].content||"");
       return /Reply with ONLY this JSON/.test(last)
         ? JSON.stringify({verdict:"Too long, and it repeated his question.",problems:[{issue:"echo",evidence:"Dört bin mi?"}],
-            edits:[{item:"frag:style_header",find:"PE-TEST-MARKER",replace:"PE-REVIEWED",why:"clearer"}]})
+            edits:[{item:"fx:task.text",find:"PE-TEST-MARKER",replace:"PE-REVIEWED",why:"clearer"}]})
         : '"Dört bin mi? Abi otur bir çay iç önce."'; };
     await pg.evaluate(()=>{ localStorage.setItem("pe_v1_orkey",JSON.stringify("sk-or-test")); localStorage.setItem("pe_v1_testmodel",JSON.stringify("deepseek/deepseek-v4-pro")); });
     await pg.evaluate(()=>{ document.querySelector("#btnRebuild").click(); });
@@ -196,7 +219,7 @@ const ROOT=path.resolve(__dirname,'..');
     await pg.click("#btnTestReview");
     await pg.waitForSelector('.chg [data-a="apply"]:not([disabled])',{timeout:20000});
     await pg.click('.chg [data-a="apply"]');
-    const rv=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("frag:style_header")));
+    const rv=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("fx:task.text")));
     ok("the reviewer's edit is applied to the named piece", /PE-REVIEWED/.test(rv)&&!/PE-TEST-MARKER/.test(rv), rv.slice(-120));
     const gen=OR.calls.find(c=>c.body.model==="deepseek/deepseek-v4-pro"), rev=OR.calls.find(c=>/^anthropic\//.test(c.body.model||""));
     ok("the reply came from the model under test, through StoryMind's own request", !!gen&&gen.auth==="Bearer sk-or-test"
@@ -383,16 +406,18 @@ const ROOT=path.resolve(__dirname,'..');
 
     console.log("\n[11 — one roleplay run, then one complete analysis that may move pieces]");
     OR.calls=[];
-    const soloTpl=await pg.evaluate(()=>__PE.itemVal(__PE.findItem("tpl:solo")));
+    /* v150.66 — a move inside one fragment's text (the reply layouts it moved lines in are gone) */
+    const MV=await pg.evaluate(()=>{ const v=__PE.itemVal(__PE.findItem("fx:guardrails.text")); const L=v.split("\n").map(l=>l.trim()).filter(l=>l.length>20); return {v,a:L[L.length-1],b:L[0]}; });
+    const soloTpl=MV.v;
     OR.answer=body=>{ const all=JSON.stringify(body.messages||[]), first=String(((body.messages||[])[0]||{}).content||"");
-      if(/You are the FIXER for ONE test section/.test(first)) return JSON.stringify({summary:"PE-SEC-SUMMARY",keep:["PE-SEC-KEEP"],edits:[{item:"frag:style_header",kind:"rewrite",find:"PE-REVIEWED",replace:"PE-SEC-FIX",why:"w",shared:"everywhere",helps:["turkish"]}],
+      if(/You are the FIXER for ONE test section/.test(first)) return JSON.stringify({summary:"PE-SEC-SUMMARY",keep:["PE-SEC-KEEP"],edits:[{item:"fx:task.text",kind:"rewrite",find:"PE-REVIEWED",replace:"PE-SEC-FIX",why:"w",shared:"everywhere",helps:["turkish"]}],
         generated:[{block:"outfit",prompt:"PE-GEN-KEY",problem:"PE-GEN-COAT a coat on the beach",evidence:"palto",fix:"dress for the place"}],story:[{who:"Buket",field:"bio",problem:"PE-STORY-BIO",change:"c"}],backend:[{area:"privacy",problem:"PE-BACK-PRIV",change:"filter it",impact:"i"}]});
       if(/The roleplay tests found a problem in content that an ENGINE wrote/.test(first)){ const c=first, at=c.indexOf("===== THE PROMPT (current text) ====="), f=at<0?"":(c.slice(at).split("\n").slice(1).find(l=>l.trim().length>=30)||"").trim().slice(0,40);
         return JSON.stringify({summary:"PE-GENFIX",edits:[{kind:"rewrite",find:f,replace:f+" PE-GEN-FIXED",why:"w"}],backend:[{area:"input",problem:"PE-GEN-BACK",change:"c"}]}); }
       if(/COMPLETE ANALYSIS of a test run/.test(first)) return JSON.stringify({score:6,summary:"s",criteria:{memory:4},patterns:[{criterion:"memory",pattern:"the past is buried",scenes:["Loyal to what happened"],cause:"x"}],
         structure:["The trackers sit far from the reply"],
-        edits:[{item:"tpl:solo",kind:"move",find:"{{call//trackers//full}}",before:"{{call//drives//full}}",cause:"buried",why:"nearer the reply",helps:["self"],risks:"none"},
-               {item:"frag:style_header",kind:"rewrite",cause:"c",find:"PE-REVIEWED",replace:"PE-ALL-FIX",why:"w",helps:["turkish","meaning"],risks:"none"}],
+        edits:[{item:"fx:guardrails.text",kind:"move",find:MV.a,before:MV.b,cause:"buried",why:"nearer the reply",helps:["self"],risks:"none"},
+               {item:"fx:task.text",kind:"rewrite",cause:"c",find:"PE-REVIEWED",replace:"PE-ALL-FIX",why:"w",helps:["turkish","meaning"],risks:"none"}],
         generated:[{prompt:"GENKEY",block:"outfit",problem:"PE-GEN-COAT a coat on the beach",evidence:"palto",fix:"dress for the place",sections:["Text messages"]}],story:[{who:"Buket",field:"bio",problem:"PE-STORY-BIO",change:"c"}],backend:[{area:"privacy",problem:"PE-BACK-PRIV",change:"filter it",impact:"i",priority:"high"}]});
       if(SCENE_RX.test(first)) return SCENE(first);
       if(KIND_RX.test(first)) return KIND(first);
@@ -418,10 +443,10 @@ const ROOT=path.resolve(__dirname,'..');
     const fxT=fx11.find(x=>/## SECTION: Text messages/.test(x))||"", fxM=fx11.find(x=>/## SECTION: Several characters/.test(x))||"";
     ok("each section has its own fixer: its report with the reasoning, its payload once, its pieces, no dialogue", !!fxT&&!!fxM&&[fxT,fxM].every(x=>(x.match(/===== THE PAYLOAD \(as sent/g)||[]).length===1&&/===== SYSTEM =====/.test(x)&&/THE JUDGE'S REASONING: PE-SCENE-REASONING/.test(x)&&/THE SECTION'S REASONING|THE KIND'S REASONING: PE-KIND-REASONING/.test(x)&&/===== THE PIECES IN THIS PAYLOAD/.test(x)&&/(SHARED with: |this section only)/.test(x)&&!/^TURN \d+$/m.test(x))
        &&/### SCENE text_night/.test(fxT)&&!/### SCENE dinner/.test(fxT), (fxT||"none").slice(0,200)+" | "+fx11.length);
-    ok("the reconciler gets every section's proposals and where each piece is used, but no payload and no dialogue", !!fin&&/===== EVERY SECTION'S PROPOSALS/.test(ft)&&/S:text#1 frag:style_header/.test(ft)&&/S:multi#1/.test(ft)&&/PE-SEC-KEEP/.test(ft)
-       &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- frag:style_header: /.test(ft)&&/===== frag:style_header =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
+    ok("the reconciler gets every section's proposals and where each piece is used, but no payload and no dialogue", !!fin&&/===== EVERY SECTION'S PROPOSALS/.test(ft)&&/S:text#1 fx:task.text/.test(ft)&&/S:multi#1/.test(ft)&&/PE-SEC-KEEP/.test(ft)
+       &&/===== WHERE EACH TOUCHED PIECE APPEARS =====\n- fx:task.text: /.test(ft)&&/===== fx:task.text =====/.test(ft)&&!/MESSAGE 1 · SYSTEM/.test(ft)&&!/^TURN \d+$/m.test(ft)&&/THE RUBRIC ACROSS THIS RUN/.test(ft)&&/- memory \(Memory\): 4/.test(ft)&&/"decisions"/.test(ft), ft.slice(0,300));
     const fxLater=fx11[fx11.length-1]||"", fxFirst=fx11[0]||"";
-    ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 frag:style_header/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*frag:style_header/.test(fxLater), fxLater.slice(0,200));
+    ok("each fixer knows what was changed before it: the edits already applied, and what the fixers before it in this run proposed", fx11.length>=2&&!/WHAT THE FIXERS BEFORE YOU IN THIS RUN/.test(fxFirst)&&/WHAT THE FIXERS BEFORE YOU IN THIS RUN PROPOSED[\s\S]*S:[a-z_]+#1 fx:task.text/.test(fxLater)&&/WHAT HAS BEEN CHANGED BEFORE[\s\S]*fx:task.text/.test(fxLater), fxLater.slice(0,200));
     ok("the judges label where each problem comes from (wording, generated, story, code), and the section fixer sorts causes and knows the engine prompts", /WHERE A PROBLEM COMES FROM/.test(sc11[0]||"")&&/"source":"wording\|generated\|story\|code"/.test(sc11[0]||"")&&/SORT EVERY CAUSE BY WHERE IT COMES FROM/.test(fxLater)&&/THE APP'S ENGINE PROMPTS/.test(fxLater)&&/memBuild — /.test(fxLater), (sc11[0]||"").slice(0,100));
     ok("the reconciler reads each section's generated, story and backend findings", /GENERATED CONTENT \(another engine's prompt\):\n- PE-GEN-KEY/.test(ft)&&/STORY DATA:\n- Buket · bio: PE-STORY-BIO/.test(ft)&&/BACKEND \(code\):\n- \[privacy\] PE-BACK-PRIV/.test(ft), ft.slice(ft.indexOf("EVERY SECTION'S PROPOSALS"),ft.indexOf("EVERY SECTION'S PROPOSALS")+600));
     const sec11=await pg.evaluate(()=>(document.querySelector("#kind_text")||{}).textContent||"");
@@ -447,22 +472,22 @@ const ROOT=path.resolve(__dirname,'..');
     ok("a generated-content problem is sent to the engine prompt that wrote it, and its edits can be applied there", out11.fixed&&out11.applyReady&&/PE-GEN-COAT/.test(gct)&&new RegExp('prompt is "'+out11.key+'"').test(gct), JSON.stringify(out11));
     ok("the backend and story list downloads as one file, with the engine fixer's backend notes too", out11.md, JSON.stringify(out11));
     ok("its verdict shows the rubric, the structure notes and the edits", /Complete analysis/.test(all.box)&&/Memory/.test(all.box)&&/The trackers sit far from the reply/.test(all.box)&&/Moves/.test(all.box), all.box.slice(0,400));
-    const mv=await pg.evaluate(()=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent,v:__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").filter(l=>/trackers|drives/.test(l))};
-      b.click(); const v=__PE.itemVal(__PE.findItem("tpl:solo")).split("\n").map(l=>l.trim()); const i=v.indexOf("{{call//trackers//full}}"), j=v.indexOf("{{call//drives//full}}");
-      return {ok:true,i,j,label:b.textContent,undo:!c.querySelector('[data-a="undo"]').hidden}; });
+    const mv=await pg.evaluate(MV=>{ const cards=[...document.querySelectorAll('#overallBox .chg')]; const c=cards.find(x=>/Moves/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return {ok:false,c:!!c,t:b&&b.textContent};
+      b.click(); const v=__PE.itemVal(__PE.findItem("fx:guardrails.text")).split("\n").map(l=>l.trim()); const i=v.indexOf(MV.a), j=v.indexOf(MV.b);
+      return {ok:true,i,j,label:b.textContent,undo:!c.querySelector('[data-a="undo"]').hidden}; },MV);
     ok("a move edit takes the line out and puts it right before the named one", mv.ok&&mv.i===mv.j-1&&mv.label==="Applied"&&mv.undo, JSON.stringify(mv));
-    const mvu=await pg.evaluate(soloTpl=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/Moves/.test(x.textContent)); c.querySelector('[data-a="undo"]').click(); return __PE.itemVal(__PE.findItem("tpl:solo"))===soloTpl; },soloTpl);
-    ok("…and Undo puts the layout back exactly", mvu);
+    const mvu=await pg.evaluate(soloTpl=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/Moves/.test(x.textContent)); c.querySelector('[data-a="undo"]').click(); return __PE.itemVal(__PE.findItem("fx:guardrails.text"))===soloTpl; },soloTpl);
+    ok("…and Undo puts the fragment's text back exactly", mvu);
     const as11=await pg.evaluate(()=>{ const box=document.querySelector("#overallBox"), cards=[...box.querySelectorAll(".chg")];
       const mv=cards.find(c=>/Moves/.test(c.textContent)), rw=cards.find(c=>/PE-ALL-FIX/.test(c.textContent));
       mv.querySelector("[data-pick]").checked=false; rw.querySelector("[data-pick]").checked=true; mv.querySelector("[data-pick]").dispatchEvent(new Event("change"));
-      const before=__PE.itemVal(__PE.findItem("tpl:solo")); [...box.querySelectorAll("[data-sapply]")].pop().click();
-      const r={fix:/PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("frag:style_header"))),moveUntouched:__PE.itemVal(__PE.findItem("tpl:solo"))===before};
+      const before=__PE.itemVal(__PE.findItem("fx:guardrails.text")); [...box.querySelectorAll("[data-sapply]")].pop().click();
+      const r={fix:/PE-ALL-FIX/.test(__PE.itemVal(__PE.findItem("fx:task.text"))),moveUntouched:__PE.itemVal(__PE.findItem("fx:guardrails.text"))===before};
       const u=rw.querySelector('[data-a="undo"]'); if(u&&!u.hidden) u.click(); return r; });
     ok("Apply selected applies the ticked edits only", as11.fix&&as11.moveUntouched, JSON.stringify(as11));
     ok("a rewrite edit applies once, and survives the list being rebuilt", await pg.evaluate(()=>{ const c=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)); const b=c&&c.querySelector('[data-a="apply"]'); if(!b||b.disabled) return false; b.click();
       __PE.renderEstimate(); const b2=[...document.querySelectorAll('#overallBox .chg')].find(x=>/PE-ALL-FIX/.test(x.textContent)).querySelector('[data-a="apply"]');
-      return b2.textContent==="Applied"&&b2.disabled&&(__PE.itemVal(__PE.findItem("frag:style_header")).match(/PE-ALL-FIX/g)||[]).length===1; }));
+      return b2.textContent==="Applied"&&b2.disabled&&(__PE.itemVal(__PE.findItem("fx:task.text")).match(/PE-ALL-FIX/g)||[]).length===1; }));
     OR.calls=[];
     await pg.evaluate(()=>__PE.analyseEverything());
     const fin2=OR.calls.find(c=>c.claude&&/COMPLETE ANALYSIS of a test run/.test(c.body.messages[0].content)), ft2=fin2?fin2.body.messages[0].content:"";
@@ -510,21 +535,21 @@ const ROOT=path.resolve(__dirname,'..');
     OR.answer=body=>{ const t=String(((body.messages||[])[0]||{}).content||"");
       if(/You are discussing the fixes for the roleplay prompts/.test(t)){
         if(/Second question/.test(t)) return "PE-CHAT-SECOND It is applied; nothing more to change.";
-        const at=t.indexOf("frag:style_header — <<<"), f=at<0?"":t.slice(at+23).split("\n")[0].trim().slice(0,30);
-        return "PE-CHAT-ANSWER Edit 2 is broader than it needs to be; here is a narrower one.\n```edits\n"+JSON.stringify([{item:"frag:style_header",kind:"rewrite",find:f,replace:f+" PE-CHAT-FIX",cause:"c",why:"narrower"}])+"\n```"; }
+        const mk="fx:task.text — TEMPLATE:\n<<<\n", at=t.indexOf(mk), f=at<0?"":t.slice(at+mk.length).split("\n")[0].trim().slice(0,30);
+        return "PE-CHAT-ANSWER Edit 2 is broader than it needs to be; here is a narrower one.\n```edits\n"+JSON.stringify([{item:"fx:task.text",kind:"rewrite",find:f,replace:f+" PE-CHAT-FIX",cause:"c",why:"narrower"}])+"\n```"; }
       return /JSON/i.test(t)?"{}":'"Tamam."'; };
     const dc=await pg.evaluate(async()=>{ const P=__PE;
-      P.ALL.overall=P.ALL.overall||{score:6,summary:"s",edits:[]}; P.ALL.overall.edits=[{item:"frag:style_header",kind:"rewrite",find:"zz-not-there",replace:"PE-ZZ-NEW",why:"w"}]; renderOverall();
+      P.ALL.overall=P.ALL.overall||{score:6,summary:"s",edits:[]}; P.ALL.overall.edits=[{item:"fx:task.text",kind:"rewrite",find:"zz-not-there",replace:"PE-ZZ-NEW",why:"w"}]; renderOverall();
       const panel=!!document.querySelector('#overallBox [data-disc="rp"] textarea');
       await P.discussSend("rp","Make edit 2 smaller, please.");
       const box=document.querySelector('#overallBox [data-disc="rp"]'), txt=box.textContent, card=box.querySelector(".chg [data-a=apply]");
       const shownBlock=/```edits|PE-CHAT-FIX",/.test([...box.querySelectorAll(".bub")].map(b=>b.textContent).join(" "));
-      card&&card.click(); const applied=/PE-CHAT-FIX/.test(P.itemVal(P.findItem("frag:style_header")));
+      card&&card.click(); const applied=/PE-CHAT-FIX/.test(P.itemVal(P.findItem("fx:task.text")));
       await P.discussSend("rp","Second question: is it in?");
       return {panel,answer:/PE-CHAT-ANSWER/.test(txt),card:!!card,shownBlock,applied,n:P.DISC.rp.length,second:/PE-CHAT-SECOND/.test(document.querySelector('#overallBox [data-disc="rp"]').textContent)}; });
     const dcalls=OR.calls.filter(c=>c.claude&&/You are discussing the fixes/.test(c.body.messages[0].content)).map(c=>c.body.messages[0].content);
     ok("a conversation sits under the complete analysis", dc.panel&&dc.answer, JSON.stringify(dc));
-    ok("Claude is given the analysis with each edit's state, the reports, the payloads, the layouts and the catalogue, not the dialogues", dcalls.length===2&&/PROPOSED EDITS:\n1\. \[missing\] frag:style_header/.test(dcalls[0])&&/===== tpl:solo =====/.test(dcalls[0])&&/frag:style_header — /.test(dcalls[0])&&/===== THE REPORTS, ONE PER PAYLOAD KIND/.test(dcalls[0])&&/===== PAYLOAD: /.test(dcalls[0])&&!/^TURN \d+$/m.test(dcalls[0])&&/Make edit 2 smaller/.test(dcalls[0]), (dcalls[0]||"").slice(0,300));
+    ok("Claude is given the analysis with each edit's state, the reports, the payloads, the fragments of each path and the catalogue, not the dialogues", dcalls.length===2&&/PROPOSED EDITS:\n1\. \[missing\] fx:task.text/.test(dcalls[0])&&/===== THE FRAGMENTS OF THE SOLO PATH =====/.test(dcalls[0])&&/fx:task.text — /.test(dcalls[0])&&/===== THE REPORTS, ONE PER PAYLOAD KIND/.test(dcalls[0])&&/===== PAYLOAD: /.test(dcalls[0])&&!/^TURN \d+$/m.test(dcalls[0])&&/Make edit 2 smaller/.test(dcalls[0]), (dcalls[0]||"").slice(0,300));
     ok("an edit Claude proposes in the chat becomes an edit card, and applies", dc.card&&!dc.shownBlock&&dc.applied, JSON.stringify(dc));
     ok("the next message carries the conversation so far and sees what was just applied", /PE-CHAT-ANSWER/.test(dcalls[1]||"")&&/EDITS APPLIED SO FAR[\s\S]*PE-CHAT-FIX/.test(dcalls[1]||"")&&dc.second&&dc.n===4, (dcalls[1]||"").slice(0,200));
     const dcl=await pg.evaluate(()=>{ __PE.ALL.overall=null; renderOverall(); setOverall({score:5,summary:"new",edits:[]}); return __PE.DISC.rp.length; });
@@ -534,19 +559,19 @@ const ROOT=path.resolve(__dirname,'..');
     OR.calls=[];
     OR.answer=body=>{ const t=String(((body.messages||[])[0]||{}).content||"");
       if(/You are checking WHAT THE LAST CHANGES DID/.test(t)){ const mm=t.match(/^\+ (.*PE-NEW-OPENING.*)$/m), line=mm?mm[1].trim().slice(0,30):"";
-        return JSON.stringify({summary:"PE-EFFECT-SUMMARY the new wording helped memory but hurt Turkish",edits:[{edit:"frag:style_header: the new opening",effect:"mixed",evidence:"memory 4→7, turkish 6→5"}],
+        return JSON.stringify({summary:"PE-EFFECT-SUMMARY the new wording helped memory but hurt Turkish",edits:[{edit:"fx:task.text: the new opening",effect:"mixed",evidence:"memory 4→7, turkish 6→5"}],
           criteria:[{criterion:"memory",before:4,after:7,why:"w"},{criterion:"turkish",before:6,after:5,why:"w"}],regressions:["PE-EFFECT-REGRESSION Turkish got stiffer"],keep:["the memory line"],
-          revert:[{item:"frag:style_header",kind:"rewrite",find:line,replace:"PE-REVERTED",why:"stiff"}],next:"look at the register"}); }
+          revert:[{item:"fx:task.text",kind:"rewrite",find:line,replace:"PE-REVERTED",why:"stiff"}],next:"look at the register"}); }
       if(/COMPLETE ANALYSIS of a test run/.test(t)) return JSON.stringify({score:6,summary:"PE-FIXER-2",criteria:{},patterns:[],structure:[],edits:[]});
       return /JSON/i.test(t)?"{}":'"Tamam."'; };
     const ef=await pg.evaluate(async()=>{ const P=__PE;
       lsSet("runsnaps",[]); await P.writeFixesAlone();                      // run 1: a snapshot, nothing to compare with
       const first=P.snaps().length, noEffect=!P.ALL.effect;
       /* the author applies an edit, and the scenes are played again: a later run with the new wording in its payload */
-      const it=P.findItem("frag:style_header"), old=P.itemVal(it), line=old.split("\n").find(l=>l.trim().length>20).trim();
+      const it=P.findItem("fx:task.text"), old=P.itemVal(it), line=old.split("\n").find(l=>l.trim().length>20).trim();
       P.setVal(it,old.replace(line,"PE-NEW-OPENING "+line)); /* the edit is AFTER run 1's snapshot (effectInput takes edits with t > prev.at): in the same millisecond as the snapshot
          it would not count as "in between" (a CI-only failure) */
-      APPLIED["pe-eff"]={t:Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).at||0)+1),item:"frag:style_header",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
+      APPLIED["pe-eff"]={t:Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).at||0)+1),item:"fx:task.text",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
       /* the later run is LATER than run 1's snapshot: on a fast machine Date.now() here can be the very millisecond the
          snapshot took as its id, and an equal id is not "earlier", so nothing would be compared (a CI-only failure) */
       const _later=Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).id||0)+1);
@@ -577,12 +602,12 @@ const ROOT=path.resolve(__dirname,'..');
     ok("one Claude request at a time, a rate limit waits and retries, a cut-off answer is asked again shorter", q.peak===1&&q.ok&&q.n===5&&q.shorter, JSON.stringify(q));
 
     console.log("\n[11g — an edit whose words are not found is repaired, or explained with a button to fix it]");
-    const rp=await pg.evaluate(async()=>{ const P=__PE, it=P.findItem("frag:style_header"), v=P.itemVal(it), line=v.split("\n").find(l=>l.trim().split(/\s+/).length>=6).trim();
+    const rp=await pg.evaluate(async()=>{ const P=__PE, it=P.findItem("fx:task.text"), v=P.itemVal(it), line=v.split("\n").find(l=>l.trim().split(/\s+/).length>=6).trim();
       const words=line.split(/\s+/), spaced=words.slice(0,6).join("   ");                       // spacing differs
-      const e1={item:"frag:style_header",kind:"rewrite",find:spaced,replace:"PE-RP1",why:"w"};
-      const other=P.ITEMS().find(x=>x.type==="frag"&&x.key!=="style_header"&&P.itemVal(x).trim().split("\n")[0].trim().length>30), oline=P.itemVal(other).trim().split("\n")[0].trim().slice(0,30);
-      const e2={item:"frag:style_header",kind:"rewrite",find:oline,replace:"PE-RP2",why:"w"};       // the wrong piece named
-      const e3={item:"frag:style_header",kind:"rewrite",find:"Buket Özüçak "+words.slice(0,4).join(" ")+" PE-FILLED",replace:"PE-RP3",why:"w"};   // filled story data
+      const e1={item:"fx:task.text",kind:"rewrite",find:spaced,replace:"PE-RP1",why:"w"};
+      const other=P.ITEMS().find(x=>x.type==="frag"&&P.itemVal(x).trim().split("\n")[0].trim().length>30), oline=P.itemVal(other).trim().split("\n")[0].trim().slice(0,30);
+      const e2={item:"fx:task.text",kind:"rewrite",find:oline,replace:"PE-RP2",why:"w"};       // the wrong piece named
+      const e3={item:"fx:task.text",kind:"rewrite",find:"Buket Özüçak "+words.slice(0,4).join(" ")+" PE-FILLED",replace:"PE-RP3",why:"w"};   // filled story data
       const r1=P.locateEdit(e1), r2=P.locateEdit(e2), r3=P.locateEdit(e3);
       const host=document.createElement("div"); document.body.appendChild(host); const c3=editCard(e3); host.appendChild(c3);
       const note=(c3.querySelector(".missNote")||{}).textContent||"", fixBtn=c3.querySelector('[data-a="repair"]'), applyTxt=c3.querySelector('[data-a="apply"]').textContent;
@@ -591,10 +616,10 @@ const ROOT=path.resolve(__dirname,'..');
       fixBtn.click(); for(let i=0;i<30&&!/Repaired/.test(host.textContent);i++) await new Promise(r=>setTimeout(r,100));
       AI.sample.json=orig;
       const after=host.querySelector('[data-a="apply"]'), res={r1,find1:e1.find===words.slice(0,6).join(" ")||P.itemVal(it).indexOf(e1.find)>=0,r2,item2:e2.item,r3,applyTxt,note:/copied from the filled payload/.test(note),fixVisible:!fixBtn.hidden,
-        sent:/CURRENT TEXT OF frag:style_header/.test(sent)&&/PE-FILLED/.test(sent),repaired:/Repaired \(copied again\)/.test(host.textContent),ready:after&&!after.disabled&&after.textContent==="Apply"};
+        sent:/CURRENT TEXT OF fx:task.text/.test(sent)&&/PE-FILLED/.test(sent),repaired:/Repaired \(copied again\)/.test(host.textContent),ready:after&&!after.disabled&&after.textContent==="Apply"};
       host.remove(); return res; });
     ok("loose spacing is matched to the piece's exact words", rp.r1==="fixed"&&rp.find1, JSON.stringify(rp));
-    ok("words that sit in another piece re-target the edit to that piece", rp.r2==="fixed"&&rp.item2!=="frag:style_header", JSON.stringify(rp));
+    ok("words that sit in another piece re-target the edit to that piece", rp.r2==="fixed"&&rp.item2!=="fx:task.text", JSON.stringify(rp));
     ok("words that are nowhere say why, with Fix this edit", rp.r3==="missing"&&rp.applyTxt==="Text not found"&&rp.note&&rp.fixVisible, JSON.stringify(rp));
     ok("Fix this edit shows Claude the piece's current text, and the repaired edit can be applied", rp.sent&&rp.repaired&&rp.ready, JSON.stringify(rp));
 
@@ -604,8 +629,8 @@ const ROOT=path.resolve(__dirname,'..');
       P.DRIFT_SCENES.forEach(sc=>{ const sp=(sc.speakers||[sc.speaker]);
         P.DR.results[sc.id]={at:Date.now(),model:"m",payload:null,turns:sc.lines.map(l=>({user:typeof l==="string"?l:l.gm,gm:typeof l!=="string",reply:long,replies:sp.map(id=>({id,name:id,text:long}))})),
           judge:{score:5,summary:"s",criteria:{turkish:{score:5,note:"n",evidence:"e"}},turns:sc.lines.map(()=>({verdict:"weak",note:"n"})),findings:[{criterion:"turkish",turn:1,problem:"p",evidence:"e",cause:"c"}]}}; });
-      const huge=P.apBuild("fixer",{section:"S",report:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),layout:"===== tpl:solo =====\n"+P.itemVal({type:"tpl",key:"solo"}),catalogue:P.overallInput().catalogue,payload:"ğ".repeat(60000)});
-      const rawBytes=P.apBytes("Şöyle düşünüyorum ğüşıöç. ".repeat(9000))+P.apBytes("ğ".repeat(60000)), hugeOk=P.apBytes(huge)<=P.AP_CAP&&/Reply with ONLY this JSON/.test(huge)&&/===== tpl:solo =====/.test(huge)&&/cut here to fit/.test(huge);
+      const huge=P.apBuild("fixer",{section:"S",report:"Şöyle düşünüyorum ğüşıöç. ".repeat(9000),layout:P.overallInput().layouts,catalogue:P.overallInput().catalogue,payload:"ğ".repeat(60000)});
+      const rawBytes=P.apBytes("Şöyle düşünüyorum ğüşıöç. ".repeat(9000))+P.apBytes("ğ".repeat(60000)), hugeOk=P.apBytes(huge)<=P.AP_CAP&&/Reply with ONLY this JSON/.test(huge)&&/===== THE FRAGMENTS OF THE SOLO PATH =====/.test(huge)&&/cut here to fit/.test(huge);
       lsSet("runsnaps",[]);   // no earlier run: the first call is the fixer's
       let sent=null, calls=0; const orig=AI.sample.json, fixIns=[];
       AI.sample.json=async(input)=>{ if(/You are the FIXER for ONE test section/.test(input)){ fixIns.push(input); return {summary:"s",edits:[]}; }
@@ -618,7 +643,7 @@ const ROOT=path.resolve(__dirname,'..');
       AI.sample.json=orig;
       const eng=P.apBuild("engfinal",{reports:"ş".repeat(150000),proposals:"ğ".repeat(150000),applied:""});
       const secs=P.KINDS.filter(kd=>P.KA[kd.k]&&P.KA[kd.k].at);
-      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&secs.every(kd=>first.indexOf("## "+kd.label+" (tpl:")>=0),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
+      const res={rawBytes,hugeOk,bytes:Math.max(P.apBytes(first),...fixIns.map(x=>P.apBytes(x))),cap:P.AP_CAP,titles:secs.length>=1&&secs.every(kd=>first.indexOf("## "+kd.label+" (the ")>=0),json:/Reply with ONLY this JSON/.test(first),solo:/===== EVERY SECTION'S PROPOSALS/.test(first),
         failBox:/The complete analysis failed/.test(failBox)&&/256 KB/.test(failBox)&&!!btn,fixed:/PE-FIXED/.test(okBox),calls,engBytes:P.apBytes(eng),engJson:/Reply with ONLY this JSON/.test(eng)&&/cut here to fit/.test(eng)};
       P.DR.results=JSON.parse(keep); P.ALL.overall=keepO; return res; });
     ok("a section fixer whose data is far over the limit is cut to fit, keeping the instructions, the layout and the reply format", fit.rawBytes>fit.cap&&fit.hugeOk, JSON.stringify({raw:fit.rawBytes,cap:fit.cap,ok:fit.hugeOk}));
@@ -706,7 +731,7 @@ const ROOT=path.resolve(__dirname,'..');
       const base={context:"CTX",kind:"k",criteria:"C",reports:"S",payload_scene:"T",payload:"PL",rotation:""};
       const sc=P.apFill(P.apText("kind"),Object.assign({},base,{applied:""})), sc2=P.apFill(P.apText("kind"),Object.assign({},base,{applied:"- frag:x: «a» → «b»"}));
       const rv=P.apFill(P.apText("review"),{context:"CTX",payload:"PL",reply:"R",catalogue:"C"});
-      return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/piece\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
+      return {ids:P.AP_DEFS.map(d=>d.id),ctxKeeps:/\{\{call\/\/name\}\}/.test(P.apText("context"))&&/\{\{name\}\} values/.test(P.apText("context")),
         noApplied:!/CHANGES APPLIED SINCE/.test(sc),applied:/CHANGES APPLIED SINCE THESE SCENES WERE PLAYED/.test(sc2)&&/frag:x/.test(sc2),left:/\{\{[#^\/]/.test(sc+sc2)||/\{\{(reports|payload|criteria|kind)\}\}/.test(sc+sc2),
         keepsMarkers:/Keep \{\{…\}\} and \[\[…\]\] markers intact/.test(rv)}; });
     ok("every prompt sent to Claude is listed (method, ask, review, scene, payload kind, engine, fixer, before → after, engine analysis, discuss, compare, stand-in)", apx.ids.join()==="context,ask,review,scene,kind,engine,fixer,overseer,effect,engscene,engfixer,engfinal,engeffect,genfix,editrepair,discuss,compare,standin", apx.ids.join());
@@ -728,12 +753,12 @@ const ROOT=path.resolve(__dirname,'..');
     ok("scenes are played and analysed in the order the Tests tab numbers them", ord16.first==="Daily life"&&(ord16.dom.length===0||ord16.dom.join()===ord16.arr.join()), JSON.stringify({first:ord16.arr.slice(0,3),dom:ord16.dom.slice(0,3)}));
     OR.calls=[];
     const ap16=await pg.evaluate(async()=>{ const P=__PE, sc=P.DRIFT_SCENES.find(x=>x.id==="memory_truth"), r=P.DR.results[sc.id];
-      const it=P.findItem("frag:style_header"), v=P.itemVal(it), old=v.slice(0,40);
+      const it=P.findItem("fx:task.text"), v=P.itemVal(it), old=v.slice(0,40);
       P.setVal(it,"PE-NEW-WORDING "+v.slice(40));
-      const k="frag:style_header\u0001"+old+"\u0001PE-NEW-WORDING ";
-      APPLIED[k]={at:0,t:Date.now(),item:"frag:style_header",find:old,replace:"PE-NEW-WORDING "}; lsSet("applied",APPLIED);
+      const k="fx:task.text\u0001"+old+"\u0001PE-NEW-WORDING ";
+      APPLIED[k]={at:0,t:Date.now(),item:"fx:task.text",find:old,replace:"PE-NEW-WORDING "}; lsSet("applied",APPLIED);
       r.at=Date.now()-60000; r.judge=null; await P.analyseKinds(["solo_memory"]);
-      const stale={item:"frag:style_header",kind:"rewrite",find:old,replace:"x",why:"w"};
+      const stale={item:"fx:task.text",kind:"rewrite",find:old,replace:"PE-STALE-REPLACEMENT",why:"w"};
       return {state:editState(stale,it)}; });
     const sin16=OR.calls.find(c=>c.claude&&KIND_RX.test(c.body.messages[0].content));
     const st16=sin16?sin16.body.messages[0].content:"";

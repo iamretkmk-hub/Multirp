@@ -16,8 +16,9 @@
    was sent by v150.64 except inside the one answered's <what_they_are_to_you>. Written by
        SM_FAITH_WRITE=64 SM_FAITH_INDEX=<v150.64 index.html> node tests/payload-faithful.browser.js
    (Also v150.65: the "classic layout" builds were fragment builds, because the situation setup switched fragments back on;
-   it now builds them from the classic templates (window.__classic: templates on, fragments off), and both fixtures were
-   written that way.)
+   it built them from the classic templates, and both fixtures were written that way.)
+   v150.66 — the fixtures' "classic:" payloads are no longer compared: the classic layout and the reply templates are gone, a
+   reply is its fragments. Every fragment payload of both fixtures still is.
    Run: node tests/payload-faithful.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
@@ -70,7 +71,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"},
         {id:"p_d",name:"Deniz",universeId:uni.id,personality:"Deniz is quiet.",look:{},style:"y"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
-      state.payloadTplOn=!!window.__classic; state.fragOn=!window.__classic; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
+      state.payloadTplOn=false; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
       state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};
@@ -220,9 +221,8 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   await boot();
   const SITS=await pg.evaluate(()=>__SIT.map(x=>x[0]));
   const KINDS=["solo","multi","gm","text","heat"];
-  const build=async(kind,name,classic)=>pg.evaluate(([k,n,cl])=>{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1];
-      window.__classic=!!cl; try{ return __build(k,o); } finally{ window.__classic=false; state.fragOn=true; } },[kind,name,!!classic]);
-  const CLASSIC=["player","rich","intent_warm","intent_away","wants2","live_goals","relon","all"];
+  const build=async(kind,name)=>pg.evaluate(([k,n])=>{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); },[kind,name]);
+  const fragKeys=P=>Object.keys(P).filter(key=>key.indexOf("classic:")!==0);   // v150.66 — the classic layout is gone
 
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
@@ -232,7 +232,6 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     const out={version:"v150.64",note:"per payload: all = one FNV-1a hash per distinct line (whitespace collapsed); drop = those removed65 in tests/payload-faithful.browser.js leaves out",payloads:{}};
     const put=(key,L,classic,n)=>{ out.payloads[key]={all:L.map(h),drop:L.filter(l=>rm65(l,classic,n)).map(h)}; };
     for(const k of KINDS)for(const n of SITS)put(k+"|"+n,linesOf(await build(k,n)),false,n);
-    for(const k of KINDS)for(const n of CLASSIC)put("classic:"+k+"|"+n,linesOf(await build(k,n,true)),true,n);
     fs.writeFileSync(FIX64,JSON.stringify(out));
     console.log("wrote "+FIX64+" — "+Object.keys(out.payloads).length+" payloads");
     await b.close(); process.exit(0);
@@ -242,8 +241,6 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     for(const k of KINDS)for(const n of SITS){ const L=linesOf(await build(k,n)); out.payloads[k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))&&!rm65(l,false,n)).map(h);
       const rm=L.filter(l=>REMOVED.some(r=>r.test(l))).length; if(rm)out.removed[k+"|"+n]=rm;
       const r5=L.filter(l=>rm65(l,false,n)).length; if(r5)out.removed65[k+"|"+n]=r5; }
-    for(const k of KINDS)for(const n of CLASSIC){ const L=linesOf(await build(k,n,true)); out.payloads["classic:"+k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))&&!rm65(l,true,n)).map(h);
-      const r5=L.filter(l=>rm65(l,true,n)).length; if(r5)out.removed65["classic:"+k+"|"+n]=r5; }
     fs.writeFileSync(FIX,JSON.stringify(out));
     console.log("wrote "+FIX+" — "+Object.keys(out.payloads).length+" payloads");
     await b.close(); process.exit(0);
@@ -252,14 +249,15 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   console.log("\n[everything sent before is still sent]");
   const F=JSON.parse(fs.readFileSync(FIX,"utf8"));
   let n=0, lost=[], removedSeen=0;
-  for(const key of Object.keys(F.payloads)){
-    const classic=key.indexOf("classic:")===0, [k,nm]=key.replace(/^classic:/,"").split("|");
+  const keys=fragKeys(F.payloads);
+  for(const key of keys){
+    const [k,nm]=key.split("|");
     if(SITS.indexOf(nm)<0){ lost.push(key+": situation missing"); continue; }
-    const have=new Set(linesOf(await build(k,nm,classic)).map(h)); n++;
+    const have=new Set(linesOf(await build(k,nm)).map(h)); n++;
     F.payloads[key].forEach(x=>{ if(!have.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
-  ok("in "+n+" payloads (every path × "+SITS.length+" situations, and the classic layout in "+CLASSIC.length+"), every line v150.63 sent is still sent", n>=300&&lost.length===0, lost.slice(0,10).join("\n        "));
+  ok("in "+n+" payloads (every path × "+SITS.length+" situations — every fragment payload of the fixture), every line v150.63 sent is still sent", n===keys.length&&n>=290&&lost.length===0, lost.slice(0,10).join("\n        "));
   ok("the only lines left out of the comparison are the removed ones ("+removedSeen+" of them: the quiet wants and the two old compass lines)", removedSeen>0);
   {let r5=0; Object.keys(F.removed65||{}).forEach(k=>{ r5+=F.removed65[k]; });
    ok("and v150.65's ("+r5+": what was found out, and the one answered's sheet line and old one-line entry)", r5>0&&F.removed65["solo|learned"]===3&&F.removed65["solo|player"]===1&&F.removed65["multi|char"]===2, JSON.stringify(F.removed65).slice(0,300));}
@@ -270,26 +268,26 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
    await pg.close(); pg=await (await b.newContext({viewport:{width:412,height:915}})).newPage(); pg.on('pageerror',e=>errs.push(e.message));
    await boot();
    let n64=0, lost64=[], extra=[], dropped=0;
-   for(const key of Object.keys(G.payloads)){
-     const classic=key.indexOf("classic:")===0, [k,nm]=key.replace(/^classic:/,"").split("|");
+   const keys64=fragKeys(G.payloads);
+   for(const key of keys64){
+     const [k,nm]=key.split("|");
      if(SITS.indexOf(nm)<0){ lost64.push(key+": situation missing"); continue; }
-     const text=await build(k,nm,classic), L=linesOf(text), have=new Set(L.map(h)); n64++;
+     const text=await build(k,nm), L=linesOf(text), have=new Set(L.map(h)); n64++;
      const was=new Set(G.payloads[key].all), drop=new Set(G.payloads[key].drop); dropped+=drop.size;
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
-     const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m&&!classic)linesOf(m[0]).forEach(l=>block.add(l)); }
+     const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
      L.forEach(l=>{ if(!was.has(h(l))&&!block.has(l))extra.push(key+" new line: "+l.slice(0,120)); });
    }
-   ok("in "+n64+" payloads, every line v150.64 sent is still sent, except what was found out and the one answered's sheet line and old entry line ("+dropped+")", n64>=300&&lost64.length===0&&dropped>0, lost64.slice(0,10).join("\n        "));
+   ok("in "+n64+" payloads, every line v150.64 sent is still sent, except what was found out and the one answered's sheet line and old entry line ("+dropped+")", n64===keys64.length&&n64>=290&&lost64.length===0&&dropped>0, lost64.slice(0,10).join("\n        "));
    ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you>", extra.length===0, extra.slice(0,10).join("\n        "));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};
     ["solo","multi","gm","text","heat"].forEach(k=>["wants2","live_goals","intent_away","all"].forEach(n=>{ const t=__build(k,(__SIT.find(x=>x[0]===n)||[0,{}])[1]);
       if(/what_you_quietly_want|Privately, you are set on|Privately, you want something out of|Privately, you are working toward/.test(t))r[k+"|"+n]=true; }));
-    window.__classic=true; const cl=__build("solo",(__SIT.find(x=>x[0]==="wants2")||[0,{}])[1]); window.__classic=false; state.fragOn=true;
-    return {left:Object.keys(r),classic:/what_you_quietly_want/.test(cl)}; });
-  ok("no quiet want reaches any reply, on any path, fragments or the classic layout", R.left.length===0&&!R.classic, JSON.stringify(R));
+    return {left:Object.keys(r)}; });
+  ok("no quiet want reaches any reply, on any path", R.left.length===0, JSON.stringify(R));
 
   console.log("\n[what v150.64 adds: the feelings, once]");
   const G=await pg.evaluate(()=>{ const g=(k,o)=>__build(k,o||{});

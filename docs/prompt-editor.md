@@ -7,8 +7,8 @@ A separate page, next to `index.html`, for rewriting StoryMind's prompts away fr
 1. In StoryMind: **Settings › Backup › Export prompts**. That gives `storymind_prompts_….json`.
 2. Open `prompt-editor.html` and use **Open prompt export** to load that file. A full backup works too:
    the prompts are lifted out of its `localStorage` copy.
-3. Edit. Every registry prompt, every reply piece (`BLOCK_TPL_DEFAULTS`), every payload layout (the five
-   reply kinds and every `eng:` engine layout) and the model/switch settings are in the list on the left.
+3. Edit. Every field of every reply fragment (v150.66: a reply is built from its fragments only), the other wording,
+   every registry prompt, every `eng:` engine layout and the model/switch settings are in the list on the left.
    The dot beside each item tells you its state: violet means your version differs from the shipped
    default, and pink means you edited it in this session.
 4. **Download for StoryMind** writes a file of the same shape. In StoryMind: **Settings › Backup › Import
@@ -37,9 +37,12 @@ localStorage or IndexedDB), and gives it:
   `buildTailBlocks`, `castHistory` + `tagLastForTarget`, `ptBuildMessages`; `buildTextPayload` for the
   text kind; `epMessages` for engines.
 
-So a new block, fragment or layout in `index.html` shows up in the editor with no change to the editor.
+So a new block, fragment or layout in `index.html` shows up in the editor with no change to the editor. (v150.66 — a reply is
+always the compiled fragments; the bridge no longer switches them off, and it applies the working fragment list to
+`state.fragments`, marking every shipped change as already in it so the app's one-time upgrades do not re-insert a fragment
+the list left out.)
 The defaults it compares against are read from the running engine (`PROMPT_REGISTRY[].def()`,
-`BLOCK_TPL_DEFAULTS`, `ptDefaultTemplate`, `epDefaultTemplate`).
+`BLOCK_TPL_DEFAULTS`, `FRAG_DEFAULTS`, `epDefaultTemplate`).
 
 Memory retrieval is replaced by the speaker's own memories (newest six fresh, newest four condensed),
 because the real retrieval costs a model call. (v150.38: the drives writer is gone; the drives block is
@@ -110,7 +113,9 @@ Some pieces stay empty by design:
 
 **This turn** switches bring in the blocks that depend on the moment: *arriving* (`situation`), *video
 playing* (`watching_now`), *voiced aloud* (`spoken_delivery`) and *after heat* (`after_heat`). The preview
-lists every block of the layout that came back empty, with the condition that brings it in. Alternative
+lists every data call of the path's fragments that came back empty (its paragraph was dropped), with the condition that
+brings a block in where it is known, and the fragments that sent something with the options that fired (and the asked
+options with their stored answer, or none — the editor asks nothing). Alternative
 wordings that only one of a set can fill (heat or not, text or spoken) are counted separately.
 
 Engine payloads show their own call-site data as `‹labels›`, because only the call site can produce it.
@@ -122,6 +127,9 @@ The shared library pieces (`scene`, `exchange`, `memories`…) are filled from t
   has. So every prompt that was in the opened file, or that was touched, is written out **in full**,
   including one reset to the default. Otherwise "reset" would silently not reach the phone.
 - An empty prompt means "the default" (that is how `up()` reads it), and the editor treats it the same way.
+- `fragments` (v150.66) is written whole, as a JSON string, when the file carried it or a fragment was edited here; `""`
+  when the list is the shipped one. `fragAdds` goes with it (every shipped change), so the phone does not re-insert a
+  fragment the list left out.
 - `blockTpls` and `payloadTemplates` are written whole, as JSON strings. A piece equal to its default is
   dropped from the object, the same "keep lean" rule the app's own editor uses. The exception is a layout
   heading (`LY_ORDER`), whose blank value means "remove this heading".
@@ -153,7 +161,8 @@ each scene, so it can also be handed to Claude in a conversation.
 - **Ask Claude** sends the open item (its text, its purpose and the shipped default) and optionally the
   full payload. A reply with a ```` ```prompt ```` block gets **See the change** / **Use this version**.
 - **Test & review this payload**: your model answers the built payload, then Claude reviews the reply
-  against it and returns find/replace edits on named items (`frag:` / `prompt:` / `tpl:`). Each edit
+  against it and returns find/replace edits on named items (`fx:` a reply fragment's field / `frag:` other wording /
+  `prompt:` / `tpl:eng:…`). Each edit
   applies only if its `find` text is still present.
 
 **NanoGPT.** Model under test can be your model on OpenRouter, your model on **NanoGPT**, or Claude standing
@@ -262,14 +271,14 @@ Every analysis carries one method, in `CONTEXT`:
 4. **Tight.** No emphasis inflation, no restated rules, every `{{…}}` and `[[…]]` kept intact.
 
 **Edit kinds.** An edit is `remove`, `rewrite`, `move` or `add`, with its `cause`:
-- A **move** (`find` = the whole line to move in a layout `tpl:<kind>`, `before` = the line it goes right
+- A **move** (`find` = the whole line to move in one item — a fragment field since v150.66 — `before` = the line it goes right
   before) takes that line out and puts it back in its new place (`moveResult`). The card reads
   "Moves … to just before …".
 - An `add` is marked in amber.
 
 **Applying edits.** Applied edits are remembered per browser (`APPLIED`, keyed on item + find + replace,
 plus the anchor for a move). A rebuilt card still reads **Applied** and cannot be applied twice.
-**Undo** puts the old text back. For a move, Undo restores the layout exactly.
+**Undo** puts the old text back. For a move, Undo restores the item's text exactly.
 
 ## Roleplay tests: six sections, probes, a fixer per section and a reconciler
 
@@ -653,3 +662,28 @@ make a pack the defaults, give the file to Claude in this repository: the regist
 for upgrading stored copies.
 
 Test: `tests/prompt-editor.browser.js`.
+
+## v150.66 — the reply fragments are the items
+
+A reply is built from its fragments only (docs/05, "v150.66 — fragments are the only reply builder"), so the editor edits
+them and nothing else of the reply:
+
+- **Gone from the list:** the five reply payload layouts (`tpl:solo` … `tpl:heat`) and the reply-only pieces (every
+  `BLOCK_TPL_DEFAULTS` piece a reply block claims). A file's overrides of those pieces are kept and written back unchanged
+  (the app's migrations may still carry them into fragments).
+- **Reply fragments** (the first group, one heading per fragment): each fragment's **main body** (`fx:<id>.text`), each
+  **path box** it has (`fx:<id>.bp.<path>`), and for each choose-when option its **text**, **code condition** and
+  **question** (`fx:<id>.o.<option>.text|code|ask`) and its own path boxes (`fx:<id>.o.<option>.bp.<path>`). The working
+  list is `S.fx` (null = the file's list, or the shipped one: `S.meta.fragDefaults`); "your version" compares with the shipped
+  fragment, "edited here" with the file's. A field is linted by StoryMind's own name check (unknown calls and values).
+- **Other wording:** the pieces the app writes outside the fragments (`REPLY_EXTRA_TPLS`: how long a text sat, how long ago,
+  a plan made, a meeting that fell through, asides, met in person), and the base instruction and format rules (no shipped
+  fragment sends them; a fragment can, by `{{call//task//full}}` and `{{call//format}}`).
+- **Previews:** the path selector is the five reply paths (Solo, Multi, Gamemaster, Text, Heat); a reply preview is the
+  compiled fragments of that path (`ptBuildMessages`, reporting what fired). Opening a fragment field previews a path it is
+  on (its own path for a path box).
+- **The analysts** (review, section fixers, reconciler, discussion) read each path's fragments (`pathFragmentsText`) where
+  they read the layouts, and their catalogues list the fragment fields; edits name `fx:` items.
+- **Export:** the list goes out as `fragments` (with `fragAdds`), and StoryMind's import accepts it (`PROMPT_PACK_KEYS`).
+
+Pinned by `tests/prompt-editor.browser.js` ("4b — the reply fragments are the items").

@@ -77,25 +77,26 @@ const {chromium}=require('playwright');
       return ["user","self","target"].every(x=>t.indexOf(x)>-1); }));
 
   console.log("\n[it shows up in the real editor]");
-  ok("the warning renders under the base-instruction box", await pg.evaluate(async()=>{
-      state.baseInstruction="You are {{npc.name}}.";
+  /* v150.66 — the base instruction's box was in the reply part list, which is gone; an engine prompt's box shows it */
+  ok("the warning renders under an engine prompt's box", await pg.evaluate(async()=>{
+      const keep=state.gmJudge; state.gmJudge="You are {{npc.name}}.";
       show('settings'); renderPayloadList();
-      // the block bodies only exist once a payload accordion is opened
-      Object.keys(PAYLOAD_DEFS).forEach(k=>{ try{ renderPayloadEditor(k); }catch(e){} });
-      const ta=[...document.querySelectorAll('textarea[data-pkey="baseInstruction"]')][0];
+      const card=ENGINE_PAYLOAD_DEFS.find(c=>(c.blocks||[]).some(b=>b.promptKey==="gmJudge"));
+      renderEnginePayloadEditor(card.key);
+      const ta=[...document.querySelectorAll('textarea[data-pkey="gmJudge"]')][0];
+      state.gmJudge=keep;
       if(!ta) return "no textarea rendered";
       const host=ta.nextElementSibling;
-      const has=!!(host&&host.classList.contains("plqWarnHost")&&host.innerHTML.indexOf("npc.name")>-1);
-      state.baseInstruction=DEFAULT_BASE_INSTRUCTION;
-      return has; }));
+      return !!(host&&host.classList.contains("plqWarnHost")&&host.innerHTML.indexOf("npc.name")>-1); }));
   ok("and clears the moment it is corrected", await pg.evaluate(()=>{
-      const ta=[...document.querySelectorAll('textarea[data-pkey="baseInstruction"]')][0];
+      const ta=[...document.querySelectorAll('textarea[data-pkey="gmJudge"]')][0];
       if(!ta) return "no textarea";
+      const keep=state.gmJudge, ok1=promptPlaceholders("gmJudge")[0];
       ta.value="You are {{npc.name}}."; plqInput(ta);
       const dirty=ta.nextElementSibling.innerHTML.indexOf("npc.name")>-1;
-      ta.value="You are {{char}}."; plqInput(ta);
+      ta.value="Judge it."+(ok1?" {{"+ok1+"}}":""); plqInput(ta);
       const clean=ta.nextElementSibling.innerHTML==="";
-      ta.value=DEFAULT_BASE_INSTRUCTION; plqInput(ta);
+      ta.value=keep; plqInput(ta);
       return dirty && clean; }));
 
   /* v41.2 — A CONVERTED BOX'S OWN GRAMMAR IS NOT A FAILED PLACEHOLDER. FINAL GUARDRAILS opened
@@ -105,17 +106,11 @@ const {chromium}=require('playwright');
      anything is sent. The scanner has to know the difference — without silencing the real warning
      for an ORDINARY fragment, which never sees ptRenderBox at all. */
   console.log("\n[box grammar vs. a failed placeholder]");
-  await pg.evaluate(()=>{ show('settings'); try{renderPayloadList();renderPayloadTemplates();}catch(e){} });
-  ok("a converted block's box opens with no warning", await pg.evaluate(()=>{
-      ptEditPiece("final_guardrails");
-      const ta=document.querySelector('textarea[data-btpl="rails_header"]');
-      const atRender=ta?ta.nextElementSibling.innerHTML:"(box did not open)";
-      if(ta) _phWarnPaint(ta);                       // the path that fires as you type
-      const live=ta?ta.nextElementSibling.innerHTML:"(box did not open)";
-      ptEditPiece("final_guardrails");
-      if(atRender!=="") return "on open: "+atRender.replace(/<[^>]+>/g,"").slice(0,200);
-      if(live!=="") return "on edit: "+live.replace(/<[^>]+>/g,"").slice(0,200);
-      return true; }));
+  /* v150.66 — the guardrails box no longer opens in the app (the reply piece list is gone; the wording is the "Final
+     guardrails" fragment), so the scanner the box used is checked on its text directly */
+  ok("a converted block's box raises no warning", await pg.evaluate(()=>{
+      const w=_phWarnHtml(blkTpl("rails_header"),tplPlaceholders("rails_header"),true);
+      return w===""?true:w.replace(/<[^>]+>/g,"").slice(0,200); }));
   ok("and offers only real placeholders, not {{comment}} or {{endif}}", await pg.evaluate(()=>{
       const f=tplPlaceholders("rails_header");
       const junk=f.filter(t=>/^(if\s|else$|endif$|comment$|endcomment$)/i.test(t));

@@ -4,7 +4,6 @@ const {chromium}=require('playwright');
   const pg=await b.newPage(); const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2300);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(700);
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+(x?"\n        "+String(x).slice(0,300):""));} };
@@ -22,10 +21,9 @@ const {chromium}=require('playwright');
       buildCharPromptBlocks(p,[],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
       buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,targetId:"__user__",multi:false,injected}));
     const hist=[{role:"user",content:"hi"}];
-    const run=t=>{ const was=state.payloadTplOn; state.payloadTplOn=true;
-      ptSetTemplate("solo","[system]\n"+t+"\n[system end]\n{{call//dialogue_history}}\n");
-      const m=ptBuildMessages("solo",mk(),hist,{chat,npc:p,targetName:state.user},mk);
-      ptSetTemplate("solo",null); state.payloadTplOn=was;
+    /* v150.66 — a reply is its fragments: the calls are written in a fragment (they were written in a reply template) */
+    const run=t=>{
+      const m=ptBuildMessages("solo",mk(),hist,{chat,npc:p,targetName:state.user,fragments:[{id:"x",name:"X",seg:"head",paths:["solo"],text:t,options:[]}]},mk);
       return (m&&m[0]||{}).content||""; };
 
     const bareFmt=run("{{call//format}}");
@@ -33,21 +31,13 @@ const {chromium}=require('playwright');
     const langOnly=run("{{call//language_rule}}");
     const mine=run("# STRUCTURE\nMy own rules only.\n\n{{call//language_rule}}");
 
-    // parity: default template must be unchanged
-    const pl=buildPayload("solo",
-      buildCharPromptBlocks(p,[],injected,state.user,{chat,targetName:state.user,targetId:"__user__"}),
-      buildTailBlocks({chat,selfP:p,selfId:p.id,selfName:p.name,targetName:state.user,targetId:"__user__",multi:false,injected}));
-    const classic=[]; if(pl.head)classic.push({role:"system",content:pl.head});
-    classic.push(...hist); if(pl.tail)classic.push({role:"system",content:pl.tail});
-    const was=state.payloadTplOn; state.payloadTplOn=true;
+    // the reply as it is sent: the shipped fragments
     const dflt=ptBuildMessages("solo",mk(),hist,{chat,npc:p,targetName:state.user},mk);
-    state.payloadTplOn=was;
 
     // no internal keys leaked
     const leaked=(dflt||[]).map(m=>m.content).join("\n").indexOf("_format_rules")>-1;
     const known=ptKnownNames();
     return {bareFmt,fullFmt,langOnly,mine,leaked,
-      same:JSON.stringify(classic)===JSON.stringify(dflt),
       knownLang:!!known["language_rule"], inCatalog:ptCatalog().some(c=>c.name==="language_rule")};
   });
 
@@ -64,7 +54,6 @@ const {chromium}=require('playwright');
   ok("app's format rules NOT dragged in", R.mine.indexOf("FORMATTING RULES")===-1, R.mine.slice(0,200));
 
   console.log("\n[nothing else moved]");
-  ok("default template still byte-identical", R.same);
   ok("no internal _keys leak into a payload", !R.leaked);
   ok("editor knows the name", R.knownLang&&R.inCatalog);
   console.log("\n[the directive does not contradict itself]");

@@ -1,6 +1,6 @@
 /* v150.65 — ONE RELATIONSHIP SHEET.
    1. "What you have found out about them since" (persona.socialFacts beside the sheet) is gone from every reply payload: the
-      five fragment paths, the classic block and the classic templates; an edited ties fragment that still calls
+      five fragment paths and the worded block (v150.66: the classic templates are gone); an edited ties fragment that still calls
       rel_learned_raw gets nothing there, with no error and no unknown name.
    2. What a character learns goes into that person's entry: the daily relationship read returns "relationship" (the whole
       entry, second person, the foundation kept, nothing tied to a time — the prompt says so), the parser stores what it is
@@ -10,7 +10,7 @@
       entry comes back; nothing writes socialFacts.
    4. The one answered carries their whole entry in "What you know of them" (tie and relationship text, the updated one) and
       is not in the ties — a player target and a character target, switching with the target, each speaker its own. A layout
-      that does not carry it (classic, or an edited fragment) keeps them in the ties.
+      that does not carry it (an edited fragment; the worded block the proactive texter reads) keeps them in the ties.
    5. A regeneration folds what was learned in and keeps it undoable; the character editor shows the text and undoes the last
       update. 6. The fragment migration (v150.65.rel).
    Run: node tests/relationship-sheet.browser.js */
@@ -38,7 +38,7 @@ const path=require('path');
          relationships:{p_a:{tie:"little sister",relationship:"You raised Ayla after your father left."},__user__:{tie:"drinking friend",relationship:"Emre owes you a round."}}},
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall.";
-      state.payloadTplOn=false; state.fragOn=true; state.fragments=null; state.blockTpls={}; state.relScope="dynamic";
+      state.payloadTplOn=false; state.fragments=null; state.blockTpls={}; state.relScope="dynamic";
       state.autoSpeak=false; state.narrMode=false; state.gossip=[]; state.trackOn=false; state.memory=[]; state.relOn=false; state.key="sk-test";
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       const c=curChat(); ["_heatBeat","activeEvent","watchingNow","dayLog","spokenLimits","dayPlacement"].forEach(k=>{ delete c[k]; });
@@ -72,7 +72,6 @@ const path=require('path');
     const r={};
     ["solo","multi","gm","text","heat"].forEach(k=>{ r[k]=__pay(k).text; });
     r.classicBlock=__pay("solo").classic;
-    state.fragOn=false; state.payloadTplOn=true; r.classicTpl=__pay("solo").text; state.fragOn=true; state.payloadTplOn=false;
     // an edited ties fragment that still has the old paragraph
     const L=JSON.parse(JSON.stringify(FRAG_DEFAULTS)); const t=L.find(f=>f.id==="ties");
     t.options[0].text=FRAG_DEFAULTS_V150_64_OLD.ties.options[0].text.replace("# WHO THESE PEOPLE ARE TO YOU","# MY PEOPLE")+"\n\nTHINGS YOU LEARNED ABOUT THESE PEOPLE:\n{{call//rel_learned_raw}}";
@@ -87,7 +86,8 @@ const path=require('path');
   const FOUND=/found out about them|stopped answering the phone|invited to your table|lent you a ladder|THINGS YOU LEARNED/;
   ok("no fragment path carries what was found out (solo, multi, gm, text, heat)", ["solo","multi","gm","text","heat"].every(k=>!FOUND.test(L[k])&&/# WHO THESE PEOPLE ARE TO YOU/.test(L[k])),
     ["solo","multi","gm","text","heat"].filter(k=>FOUND.test(L[k])).join(",")||"no ties at all");
-  ok("nor the classic block, nor the classic templates", !FOUND.test(L.classicBlock)&&/Berk raised you/.test(L.classicBlock)&&!FOUND.test(L.classicTpl)&&/Berk raised you/.test(L.classicTpl), L.classicBlock);
+  // v150.66 — the classic templates are gone; the worded block stays (the proactive texter's context reads it)
+  ok("nor the worded relationships block", !FOUND.test(L.classicBlock)&&/Berk raised you/.test(L.classicBlock), L.classicBlock);
   ok("an edited ties fragment that still calls rel_learned_raw: that paragraph drops, the rest is sent, no unknown name", !FOUND.test(L.edited)&&/# MY PEOPLE/.test(L.edited)&&/Berk raised you/.test(L.edited)
     &&L.editedVal===""&&L.editedUnknown.indexOf("rel_learned_raw")<0, JSON.stringify({u:L.editedUnknown,v:L.editedVal})+"\n"+__tiesOf(L.edited));
   function __tiesOf(t){ const a=t.indexOf("# MY PEOPLE"); return a<0?t.slice(0,600):t.slice(a,a+600); }
@@ -206,7 +206,7 @@ const path=require('path');
     const ch=__pay("multi",{tId:"p_b",tName:"Berk"}).text; r.char={ties:__ties(ch),entry:__entry(ch),all:ch};
     const back=__pay("solo").text; r.back={ties:__ties(back),entry:__entry(back)};
     const bk=__pay("multi",{speaker:"p_b",tId:"p_a",tName:"Ayla"}).text; r.berk={ties:__ties(bk),entry:__entry(bk)};
-    state.fragOn=false; state.payloadTplOn=true; const cl=__pay("solo"); r.classic={text:cl.text,block:cl.classic}; state.fragOn=true; state.payloadTplOn=false;
+    const cl=__pay("solo"); r.classic={block:cl.classic};   // v150.66 — the worded block only (the classic layout is gone)
     // an edited "What you know of them" with no target_rel_raw: the one answered stays in the ties
     const L=JSON.parse(JSON.stringify(FRAG_DEFAULTS)); const ts=L.find(f=>f.id==="target_sheet"); ts.text="<their_backstory>{{call//target_bio_raw}}</their_backstory>";
     state.fragments=L; _fragMigratedFor=L; const ed=__pay("solo").text; r.edited={ties:__ties(ed),entry:__entry(ed)}; state.fragments=null; _fragMigratedFor=null;
@@ -227,7 +227,7 @@ const path=require('path');
   ok("the target changes back: the next reply follows (Emre with his entry, Berk back in the ties)", T.back.entry===PLAYER_ENTRY&&/• \[Berk — my older brother\]/.test(T.back.ties)&&!/• \[Emre/.test(T.back.ties), T.back.ties);
   ok("another speaker answering someone else uses their own sheet and their own target", /What Ayla is to you, in your own words: little sister\.\nYou raised Ayla after your father left\./.test(T.berk.entry)
     &&!/• \[Ayla/.test(T.berk.ties)&&/• \[Emre — drinking friend\]/.test(T.berk.ties), T.berk.ties+"\n"+T.berk.entry);
-  ok("the classic layout is as it was: the one answered stays in the ties", /• \[Emre — neighbour\]/.test(T.classic.block)&&/• \[Emre — neighbour\]/.test(T.classic.text)&&!/iyiyim[\s\S]*iyiyim/.test(T.classic.text), T.classic.block);
+  ok("the worded relationships block (the proactive texter's context) is as it was: the one answered stays in it", /• \[Emre — neighbour\]/.test(T.classic.block), T.classic.block);
   ok("an edited \"What you know of them\" that does not carry the entry: the one answered stays in the ties (nothing lost)", /• \[Emre — neighbour\]\n  Emre lives across the hall/.test(T.edited.ties)&&T.edited.entry==="", T.edited.ties);
   ok("a stranger player: nothing, as before; once play has written into the entry, it is sent with them", T.stranger.entry===""&&!/Emre/.test(T.stranger.ties)
     &&T.strangerLearned.entry==="<what_they_are_to_you>You have never met. He held the door for you at the bakery.\nThat, and what Emre shows and says in front of you, is what you have of Emre — what goes on inside Emre is not yours to know.</what_they_are_to_you>"

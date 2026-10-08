@@ -8,7 +8,8 @@
    Pinned:
      1  (v150.38: the drives writer is gone — the id / superego pick in the reply's Decisions request weighs them)
      2  the after-heat reckoning (the player's own engine layout) receives the settled view, the live charge and the motive
-     3  with the calls gone from the reply layout, none of the three is in the reply — and the drives passages are
+     3  with the feelings fragments taken out of the reply (v150.66: a reply is its fragments; it was the calls taken out of
+        the player's reply layouts), none of the three is in the reply
    Run: node tests/feelings-to-engines.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
@@ -35,10 +36,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     window.chatCompletion=async(messages,model,opts)=>{ window.__calls.push({dbg:(opts&&opts.dbg)||"",t:messages.map(m=>m.content).join("\n")});
       return /After it is over/.test((opts&&opts.dbg)||"")?"It happened and you will not pretend it did not. You will not let it happen again in this flat."
         :JSON.stringify({toward:"PULL_MARKER tell him a date",against:"BRAKE_MARKER Buket is right there"}); };
-    /* the player's own TEMPLATES are what this pins, so the fragment model (on by default since v150.57) is off: since v150.64
-       the shipped fragments carry the feelings again ("How you feel about them", "What your body is doing"), and a player who
-       does not want them deletes those fragments, as they took the calls out of these templates */
-    state.payloadTemplates=tpls; state.payloadTplOn=true; state.fragOn=false;
+    /* the player's own ENGINE templates (the after-heat reckoning reads its layout from them). The reply is built from the
+       fragments only (v150.66): since v150.64 the shipped ones carry the feelings ("How you feel about them", "What your body
+       is doing"), so a player who does not want them deletes those two fragments, as they took the calls out of their reply
+       templates before */
+    state.payloadTemplates=tpls; state.payloadTplOn=true;
+    state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(f=>f.id!=="feelings"&&f.id!=="feelings_now");
+    store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
     const uni=state.universes[0];
     uni.locations=[{id:"l_f",name:"The flat",type:"home",description:"f",residents:[],sublocations:[{id:"s_l",name:"Living room"}]}];
     const mk=(id,name,x)=>Object.assign({id,name,universeId:uni.id,instructions:"",personality:"You are "+name+".",backstory:"b",style:"s",goals:"",look:{raw:name+" is tall"},relationships:{}},x||{});
@@ -73,7 +77,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   ok("the live charge, with the playable note", /PLAYABLE_SAMI_MARKER/.test(ah), ah.slice(0,1600));
   ok("the private motive toward him", /MOTIVE_SAMI_MARKER/.test(ah), ah.slice(0,2400));
 
-  console.log("\n[3 — the reply does not carry the raw feelings]");
+  console.log("\n[3 — the reply, without the feelings fragments, does not carry the raw feelings]");
   const r=await pg.evaluate(()=>{
     const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
     c.messages=c.messages.filter(m=>m.mid==="u1");

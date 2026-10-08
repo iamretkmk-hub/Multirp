@@ -1,6 +1,6 @@
 /* v150.45 — THE CONSISTENCY NOTE. The reply check (v150.30) marks a reply that is out of character or writes the
    player's part, but nothing told the character. Their NEXT reply now carries a one-time note at the end of the
-   guardrails — on the whole block, as its own section in the generated layout, and as a fragment option — and only
+   guardrails — on the whole block, as its own section (callable from a fragment), and as a fragment option — and only
    that one reply: the note goes once a newer reply of theirs exists.  Run: node tests/consistency-note.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -17,7 +17,7 @@ const {chromium}=require('playwright');
     window.__setup=(flags,who)=>{
       const uni=state.universes[0];
       state.personas=[{id:"p_a",name:"Ayla",universeId:uni.id,personality:"x",look:{},style:"s"},{id:"p_b",name:"Berk",universeId:uni.id,personality:"x",look:{},style:"s"}];
-      state.user="Emre"; state.payloadTplOn=false; state.fragOn=false;
+      state.user="Emre";
       const c=curChat(); Object.assign(c,{universeId:uni.id,presentIds:["p_a","p_b"],emo:{},
         messages:[{mid:"u1",role:"user",content:'"Hi."'},{mid:"a1",role:"assistant",speaker:"Ayla",speakerId:"p_a",content:'"Hello."',replyFlags:flags||[]},
           {mid:"b1",role:"assistant",speaker:"Berk",speakerId:"p_b",content:'"Hey."'},{mid:"u2",role:"user",content:'"So?"'}]});
@@ -40,17 +40,16 @@ const {chromium}=require('playwright');
       const B=__tail(); return !/LAST TIME YOU/.test(B.final_guardrails)?true:"still there"; }));
 
   console.log("\n[every way a payload is built]");
-  ok("the generated layout calls it by section, and the template payload equals the classic one", await pg.evaluate(()=>{ __setup(["player"]);
+  /* v150.66 — a reply is built from the fragments only (the generated layout and the classic builder are gone) */
+  ok("the reply payload (the fragments) carries the player's note", await pg.evaluate(()=>{ __setup(["player"]);
       const p=state.personas[0], c=curChat();
-      const tpl=ptDefaultTemplate("solo"); if(!/\{\{call\/\/final_guardrails\/\/consistency_note\}\}/.test(tpl))return "not in the layout";
       const hb=buildCharPromptBlocks(p,[state.personas[1]],{recent:[],diary:[],longterm:[]},"Emre",{chat:c,targetName:"Emre",targetId:"__user__"});
       const tb=__tail(); const B=Object.assign({},hb,tb);
-      const cl=buildPayload("solo",B,{}); state.payloadTplOn=true; const m=ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B); state.payloadTplOn=false;
-      const t=(m||[]).map(x=>x.content).join("\n");
-      return (/WROTE Emre'S PART/.test(cl.tail||"")&&/WROTE Emre'S PART/.test(t))?true:JSON.stringify({cl:/PART/.test(cl.tail||""),t:/PART/.test(t)}); }));
-  ok("a layout calling final_guardrails//full gets it", await pg.evaluate(()=>{ __setup(["character"]); const p=state.personas[0], c=curChat(); const B=__tail();
-      state.payloadTplOn=true; ptSetTemplate("solo","[user]\n{{call//final_guardrails//full}}\n[user end]"); const m=ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B);
-      ptSetTemplate("solo",""); state.payloadTplOn=false; return /SLIPPED OUT OF CHARACTER/.test((m||[]).map(x=>x.content).join("\n"))?true:"missing"; }));
+      const t=ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre"},()=>B).map(x=>x.content).join("\n");
+      return /WROTE Emre'S PART/.test(t)?true:t.slice(-600); }));
+  ok("a fragment calling final_guardrails//full gets it", await pg.evaluate(()=>{ __setup(["character"]); const p=state.personas[0], c=curChat(); const B=__tail();
+      const m=ptBuildMessages("solo",B,[],{chat:c,npc:p,targetName:"Emre",fragments:[{id:"g",name:"G",seg:"tail",paths:["solo"],text:"{{call//final_guardrails//full}}",options:[]}]},()=>B);
+      return /SLIPPED OUT OF CHARACTER/.test((m||[]).map(x=>x.content).join("\n"))?true:"missing"; }));
   // v150.59 — one choose-when option per flag, each holding its own wording
   ok("the fragment model's guardrails carry it as a choose-when option", await pg.evaluate(()=>{
       const on=fragCompile("solo",ptCondFlags({broke_character:true}),{}), off=fragCompile("solo",ptCondFlags({broke_character:false,spoke_for_player:false}),{});

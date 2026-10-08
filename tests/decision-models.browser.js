@@ -33,7 +33,7 @@ const fs=require('fs'), path=require('path');
       state.personas=[{id:"p_o",name:"Özlem",universeId:uni.id,personality:"Cheerful.",goals:"Keep Berker out of it.",goalsLive:{lines:["Keep Berker out of it"],day:1},
         relationships:{p_h:{tie:"husband",relationship:"Berker is your husband."},__user__:{tie:"friend",relationship:"Emre is a friend."}}},
         {id:"p_h",name:"Berker",universeId:uni.id,personality:"Steady."}];
-      state.user="Emre"; state.key="sk-test"; state.fragOn=true; state.fragments=null; state.emoOn=true; state.relOn=false; state.memory=[]; state.limitsOn=true;
+      state.user="Emre"; state.key="sk-test"; state.fragments=null; state.emoOn=true; state.relOn=false; state.memory=[]; state.limitsOn=true;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       [_emoBreak,_replyCheckBreak,_gateBreak].forEach(br=>{ br.until=0; br.fails=0; });
       const c=curChat();

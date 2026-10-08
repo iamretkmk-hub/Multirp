@@ -92,30 +92,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
      const r=await exp("{{call//head_respond_as}}",{});
      return /Respond as/.test(r)?true:JSON.stringify(r); })());
 
-  console.log("\n[the authored layouts]");
-  ok("one exists for every payload kind", await pg.evaluate(()=>{
-      const miss=PT_KINDS.filter(k=>!ptHasPreset(k)); return miss.length?miss.join(", "):true; }));
-  ok("none of them calls a name that does not exist", await pg.evaluate(()=>{
-      const bad=PT_KINDS.map(k=>{const sc=ptScan(ptPreset(k),ptKnownNames());
-        return (sc.unknownCall.length||sc.unknownVar.length)?k+":"+sc.unknownCall.concat(sc.unknownVar).join("/"):null;
-      }).filter(Boolean); return bad.length?bad.join(", "):true; }));
-  ok("every one calls already_said — the anti-repeat block", await pg.evaluate(()=>{
-      const miss=PT_KINDS.filter(k=>ptPreset(k).indexOf("{{call//already_said")<0);
+  /* v150.66 — the authored reply layouts (PT_PRESETS) and the generated default are gone with the reply templates: a reply is
+     its fragments. What they guaranteed for every path is checked on the fragments. */
+  console.log("\n[every path's fragments]");
+  ok("every path carries what you already said — the anti-repeat block — and the line you are answering", await pg.evaluate(()=>{
+      const on=(id,k)=>FRAG_DEFAULTS.some(f=>f.id===id&&(f.paths||[]).indexOf(k)>=0);
+      const miss=FRAG_PATHS.filter(k=>!on("already_said",k)||!on("last_line",k));
       return miss.length?miss.join(", "):true; }));
-  ok("every one calls the line you are answering", await pg.evaluate(()=>{
-      const miss=PT_KINDS.filter(k=>ptPreset(k).indexOf("{{call//last_line")<0);
-      return miss.length?miss.join(", "):true; }));
-  ok("restoring one saves it, and reset still gives the generated default", await pg.evaluate(()=>{
-      const was=ptTemplates().solo;
-      ptRestorePreset("solo");
-      const a=ptTemplate("solo")===ptPreset("solo");
-      ptSetTemplate("solo",null);
-      const b=ptTemplate("solo")===ptDefaultTemplate("solo");
-      if(was==null) ptSetTemplate("solo",null); else ptSetTemplate("solo",was);
-      return (a&&b)?true:("restored="+a+" reset="+b); }));
-  ok("the generated default is still byte-identical to buildPayload", await pg.evaluate(()=>{
-      // the safety net the authored layouts must not have disturbed
-      return ptDefaultTemplate("solo").indexOf("{{call//dialogue_history}}")>-1; }));
 
   console.log("\n[the check runs on what is SENT, not only on what shipped]");
   ok("the real slip from a live payload is caught", await pg.evaluate(()=>{

@@ -31,9 +31,11 @@ const {chromium}=require('playwright');
   ok("every registry prompt has a non-empty default", await pg.evaluate(()=>{
       const bad=PROMPT_REGISTRY.filter(r=>!(r.def&&String(r.def()||"").trim())).map(r=>r.key);
       return bad.length?("empty default: "+bad.join(", ")):true; }));
+  /* v150.66 — the base instruction and the format rules had their box in the reply part list, which is gone: it is under
+     Other wording now (a fragment can call them) */
   ok("every registry prompt has a box to open", await pg.evaluate(()=>{
-      const covered=new Set(["baseInstruction","formatRules"]);
-      Object.values(PAYLOAD_DEFS).forEach(d=>Object.values(d.blocks).forEach(b=>{if(b&&b.promptKey)covered.add(b.promptKey);}));
+      show('settings'); renderPayloadList();
+      const covered=new Set(["baseInstruction","formatRules"].filter(k=>!!document.querySelector('#otherWordingList textarea[data-pkey="'+k+'"]')));
       ENGINE_PAYLOAD_DEFS.forEach(d=>d.blocks.forEach(b=>{if(b.promptKey)covered.add(b.promptKey);}));
       const bad=PROMPT_REGISTRY.filter(r=>!covered.has(r.key)).map(r=>r.key);
       return bad.length?("no card: "+bad.join(", ")):true; }));

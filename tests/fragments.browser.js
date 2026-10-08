@@ -7,11 +7,11 @@
        (emotion, intensity, ego, stalled, voicing…), when the decision model's answer to its question is at
        or above the threshold, and only when both hold for an option with both; mode "one" keeps the most
        likely; an option limited to some paths stays off the others;
-     • a reply payload built with the switch on is the compiled fragments with {{call//…}} data filled and
-       no placeholder left; off, the layout is the user's template as before;
+     • a reply payload is the compiled fragments with {{call//…}} data filled and no placeholder left (v150.66: always —
+       the on/off switch and the templates it fell back to are gone);
      • the per-reply Decisions request carries every question of the path, with the information each asks
        for (the memories for "a past she does not have"), and stores the answers the compile reads;
-     • settings: the switch defaults off, the threshold round-trips.
+     • settings: the threshold round-trips; an old stored switch-off ("0") switches nothing off.
    Run: node tests/fragments.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("forty-three fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said; v150.64: + how you feel about them, + what your body is doing), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===43&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("forty-four fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said; v150.64: + how you feel about them, + what your body is doing; v150.66: + how long the text sat), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===44&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   // v150.59 — the heading, the intro and the data in one box: the "Your ties" option, injected when there are ties (has_ties)
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties"), o=(f.options||[]).find(x=>x.id==="ties");
       return (o&&o.code==="has_ties"&&/^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(o.text)&&/\{\{call\/\/rel_sheet_raw\}\}/.test(o.text)) ? true : JSON.stringify(f); }));
@@ -87,32 +87,36 @@ const {chromium}=require('playwright');
   ok("solo continuing: no echo rule; not continuing: it is there", !/Do not echo/.test(await C("solo",{render_mode:"solo",continuing:true},{}))&&/Do not echo/.test(await C("solo",{render_mode:"solo",continuing:false},{})));
 
   console.log("\n[a reply payload]");
-  ok("switch on: the reply's messages are the compiled fragments, data filled, no placeholder left", await pg.evaluate(()=>{
+  ok("the reply's messages are the compiled fragments, data filled, no placeholder left", await pg.evaluate(()=>{
       const uni=state.universes[0]; state.personas=state.personas.filter(p=>p.id!=="p_b");
       state.personas.push({id:"p_b",name:"Burcu",universeId:uni.id,instructions:"x",personality:"Sharp.",backstory:"x",style:"Short, dry.",goals:"x",look:{}});
       const c=curChat(); c.presentIds=["p_b"]; c.universeId=uni.id; state.curUniverse=uni.id; c.messages=[{mid:"u1",role:"user",content:"Selam.",speaker:state.user}];
-      state.fragOn=true;
       const p=state.personas.find(x=>x.id==="p_b");
       const tb=buildTailBlocks({chat:c,selfP:p,selfName:"Burcu",selfId:"p_b",targetName:state.user,targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}});
       const msgs=ptBuildMessages("solo",tb,[],{chat:c,npc:p,targetName:state.user});
-      state.fragOn=false;
       const all=JSON.stringify(msgs||[]);
       return (msgs&&msgs.length>=2&&/FINAL GUARDRAILS/.test(all)&&/You are Burcu and nobody else/.test(all)&&!/\{\{(call|user|self|char)/.test(all)) ? true : all.slice(0,600); }));
-  ok("switch off: the layout is the template as before", await pg.evaluate(()=>{ state.fragOn=false; return fragOnFor("solo")===false&&ptTemplate("solo")===ptTemplate("solo"); }));
+  ok("there is no switch: every reply path is a fragment path, and a stored reply layout is not read", await pg.evaluate(()=>{
+      const keep=state.payloadTemplates; state.payloadTemplates={solo:"[system]\nOLD-LAYOUT\n[system end]\n{{call//dialogue_history}}"}; state.payloadTplOn=true;
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
+      const tb=buildTailBlocks({chat:c,selfP:p,selfName:"Burcu",selfId:"p_b",targetName:state.user,targetId:"__user__",injected:{recent:[],diary:[],longterm:[]}});
+      const all=JSON.stringify(ptBuildMessages("solo",tb,[],{chat:c,npc:p,targetName:state.user}));
+      state.payloadTemplates=keep;
+      return (["solo","multi","gm","text","heat"].every(k=>fragOnFor(k))&&typeof fragToggle==="undefined"&&/FINAL GUARDRAILS/.test(all)&&!/OLD-LAYOUT/.test(all)) ? true : all.slice(0,300); }));
 
   console.log("\n[the per-reply request]");
-  ok("with the switch on, the request carries the path's questions and the information they ask for", await pg.evaluate(async()=>{
+  ok("the request carries the path's questions and the information they ask for", await pg.evaluate(async()=>{
       window.__reqs=[]; const realF=window.fetch;
       window.fetch=async(u,o)=>{ if(String(u).indexOf("/api/alpha/decisions")>-1){ const body=JSON.parse(o.body); window.__reqs.push(body);
           const answers={}; Object.keys(body.questions).forEach(k=>{ answers[k]=k==="emotion"?{type:"choice",choice:"joy"}:k==="intensity"?{type:"choice",choice:"mild"}:k==="ego"?{type:"choice",choice:"no_conflict"}:{type:"noul",noul:k==="q_say_no__unknown_past"?0.88:0.1}; });
           return new Response(JSON.stringify({answers}),{status:200}); } return realF(u,o); };
-      const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); state.key="sk-test"; state.fragOn=true; state.emoOn=true; c.emo={};
+      const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); state.key="sk-test"; state.emoOn=true; c.emo={};
       // v150.64 — the motive question is asked only when a motive toward the one answered can be injected: Burcu carries one
       c.intents=[{id:"i_m",holderId:"p_b",holderName:"Burcu",targetId:"__user__",targetName:state.user,valence:"warm",kind:"crush",aim:"to be asked out",status:"brewing",strength:0.6}];
       state.memory=[{id:"m1",ownerId:"p_b",content:"We went to the market on Tuesday.",gameDay:1}];
       c.messages.push({mid:"u2",role:"user",content:"Remember our trip to Paris?",speaker:state.user});
       const out=await emotionEnsure(c,p,"Remember our trip to Paris?",{targetId:"__user__",kind:"solo"});
-      window.fetch=realF; state.fragOn=false;
+      window.fetch=realF;
       const r=window.__reqs[0]; if(!r) return "no request";
       const qk=Object.keys(r.questions);
       const need=["emotion","intensity","ego","q_talk_into__ask","q_talk_into__opening","q_say_no__unknown_past","q_say_no__pushed","q_say_no__crossed","q_read_moment__light","q_already_happened__bears","q_motive__bears"];
@@ -120,10 +124,13 @@ const {chromium}=require('playwright');
       return (!miss.length&&/market on Tuesday/.test(JSON.stringify(r.state.memories))&&Array.isArray(r.state.plans_done)&&Array.isArray(r.state.motives)&&out.asks["q_say_no__unknown_past"]===0.88&&out.emotion==="Joy") ? true : JSON.stringify({miss,keys:Object.keys(r.state)}); }));
   ok("the compile reads those stored answers for the reply", await pg.evaluate(()=>{ const c=curChat(), e=charEmotion(c,"p_b");
       const t=fragCompile("solo",ptCondFlags({render_mode:"solo",emotion:e.emotion}),e.asks); return /it has not happened for you/.test(t) ? true : "not injected"; }));
-  ok("switch off and emotion off: no request at all", await pg.evaluate(async()=>{ state.fragOn=false; state.emoOn=false; window.__n=0; const realF=window.fetch;
+  /* v150.66 — the switch is gone: with the emotion pick off, only an asked option on the path makes a request */
+  ok("emotion off and no asked option on the path: no request at all", await pg.evaluate(async()=>{ state.emoOn=false; window.__n=0; const realF=window.fetch;
+      const keep=state.fragments; state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}));
       window.fetch=async(u,o)=>{ if(String(u).indexOf("decisions")>-1)window.__n++; return realF(u,o); };
-      const c=curChat(); c.messages.push({mid:"u3",role:"user",content:"x",speaker:state.user}); await emotionEnsure(c,state.personas.find(x=>x.id==="p_b"),"x",{kind:"solo"});
-      window.fetch=realF; state.emoOn=true; return window.__n===0 ? true : window.__n+" requests"; }));
+      const c=curChat(); c.messages.push({mid:"u3",role:"user",content:"x",speaker:state.user});
+      try{ await emotionEnsure(c,state.personas.find(x=>x.id==="p_b"),"x",{kind:"solo"}); } finally{ window.fetch=realF; state.emoOn=true; state.fragments=keep; }
+      return window.__n===0 ? true : window.__n+" requests"; }));
 
   console.log("\n[speech & behaviour: spoken, text, heat (v150.61)]");
   ok("the path's group gives the main style; the picked emotion's box is offered; a blank box sends nothing", await pg.evaluate(()=>{
@@ -182,17 +189,17 @@ const {chromium}=require('playwright');
   ok("reset puts the shipped fragments back, and saving that clears the stored copy", await pg.evaluate(async()=>{
       await fragEdReset(); fragEdSave();
       return (state.fragments===null&&(localStorage.getItem(K.fragments)||"")===""&&fragList()===FRAG_DEFAULTS) ? true : "stored: "+String(localStorage.getItem(K.fragments)).slice(0,60); }));
-  ok("the switch and the threshold are saved", await pg.evaluate(()=>{
-      fragToggle(true); const on=localStorage.getItem(K.fragOn)==="1"&&document.getElementById('fragOnSw').checked;
+  ok("the threshold is saved, and there is no on/off switch in the card", await pg.evaluate(()=>{
+      const sw=!document.getElementById('fragOnSw');
       fragAtSet("0.85"); const at=state.fragAt===0.85&&localStorage.getItem(K.fragAt)==="0.85";
       fragAtSet("3"); const cl=state.fragAt===0.99;
-      fragToggle(false); return (on&&at&&cl&&state.fragOn===false) ? true : JSON.stringify({on,at,cl}); }));
+      fragAtSet("0.7"); return (sw&&at&&cl) ? true : JSON.stringify({sw,at,cl}); }));
 
   console.log("\n[settings]");
-  // v150.57 — the fragment model is how replies are built: on for a fresh install, off only when switched off ("0")
-  ok("a fresh install has the switch on and the threshold at 0.7; switched off stays off", await pg.evaluate(()=>{ localStorage.removeItem(K.fragOn); localStorage.removeItem(K.fragAt); loadState();
-      const fresh=state.fragOn===true&&state.fragAt===0.7; localStorage.setItem(K.fragOn,"0"); loadState(); const off=state.fragOn===false;
-      localStorage.removeItem(K.fragOn); loadState(); return (fresh&&off)?true:JSON.stringify({fresh,off}); }));
+  // v150.66 — the fragment model is the only way replies are built: an old stored switch-off ("0") is not read
+  ok("a fresh install has the threshold at 0.7; an old stored switch-off switches nothing off", await pg.evaluate(()=>{ localStorage.removeItem(K.fragAt); loadState();
+      const fresh=state.fragAt===0.7; localStorage.setItem(K.fragOn,"0"); loadState(); const still=!("fragOn" in state)&&fragOnFor("solo")===true;
+      localStorage.removeItem(K.fragOn); loadState(); return (fresh&&still)?true:JSON.stringify({fresh,still}); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");

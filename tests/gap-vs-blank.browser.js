@@ -42,15 +42,14 @@ const {chromium}=require('playwright');
   ok("a block heading still vanishes with its empty block", r.headGone.trim()==="", JSON.stringify(r.headGone));
   ok("a block heading stays when its block fills", r.headStays.indexOf("# OTHERS PRESENT")>=0, JSON.stringify(r.headStays));
 
-  // the editor warns about it, above every template box
+  // the editor warns about it — v150.66: in the Reply fragments card (the reply templates it sat above are gone)
   const ui=await pg.evaluate(()=>{
     show('settings');
-    renderPayloadTemplates();
-    const h=(document.getElementById('payloadTplList')||{innerHTML:""}).innerHTML;
-    const n=(h.match(/Separate your own wording from a call with a BLANK LINE/g)||[]).length;
-    return {n, kinds:(typeof PT_KINDS!=="undefined"?PT_KINDS.length:0)};
+    renderPayloadList();
+    const h=(document.getElementById('fragHost')||{innerHTML:""}).innerHTML;
+    return (h.match(/Separate your own wording from a call with a BLANK LINE/g)||[]).length;
   });
-  ok("the editor states the rule once per template", ui.n===ui.kinds && ui.n>0, ui.n+" notes for "+ui.kinds+" templates");
+  ok("the fragment editor states the rule, once", ui===1, ui+" notes");
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

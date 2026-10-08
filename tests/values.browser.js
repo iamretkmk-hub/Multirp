@@ -5,7 +5,6 @@ const {chromium}=require('playwright');
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html')); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(900);
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+(x?"\n        "+String(x).slice(0,320):""));} };
@@ -18,17 +17,15 @@ const {chromium}=require('playwright');
     chat.presentIds=[p.id]; state.user="Kemal";
     const reply=ptVars({chat,npc:p,targetName:"Kemal"});
     const eng=ptVars({chat},"any");
-    // does {{npc.name}} actually resolve in a reply template?
+    // does {{npc.name}} actually resolve in a reply? (v150.66 — a reply is its fragments: written in a fragment)
     const blocks={task:"# TASK\nx"};
-    const was=state.payloadTplOn; state.payloadTplOn=true;
-    ptSetTemplate("solo","[system]\n{{call//task}}\n[system end]\n{{call//dialogue_history}}\n[user]\nYou are {{npc.name}}, it is {{period}} on day {{current_day}} in {{location}}. Language: {{story_language}}. Area: {{sub_area}}.\n[end user]\n");
-    const m=ptBuildMessages("solo",blocks,[{role:"user",content:"hi"}],{chat,npc:p,targetName:"Kemal"},()=>blocks);
-    ptSetTemplate("solo",null);
+    const F=[{id:"h",name:"H",seg:"head",paths:["solo"],text:"{{call//task}}",options:[]},
+             {id:"t",name:"T",seg:"tail",paths:["solo"],text:"You are {{npc.name}}, it is {{period}} on day {{current_day}} in {{location}}. Language: {{story_language}}. Area: {{sub_area}}.",options:[]}];
+    const m=ptBuildMessages("solo",blocks,[{role:"user",content:"hi"}],{chat,npc:p,targetName:"Kemal",fragments:F},()=>blocks);
     // engine scan should REJECT npc.name
     const engScan=ptScan("[system]\n{{call//prompt}}\n[system end]\n[user]\n{{npc.name}} {{period}}\n[end user]",
                           epKnownNames("gmJudge"), ptVars({},"any"));
     const replyScan=ptScan("{{npc.name}} {{period}} {{nonsense}}", ptKnownNames());
-    state.payloadTplOn=was;
     return {replyKeys:Object.keys(reply).sort(), engKeys:Object.keys(eng).sort(),
       sent:(m||[]).map(x=>x.content).join("\n"),
       engRejects:engScan.unknownVar, replyRejects:replyScan.unknownVar,
@@ -52,15 +49,15 @@ const {chromium}=require('playwright');
   console.log("\n[the list is in the UI now]");
   const u=await pg.evaluate(()=>{
     show('settings'); renderPayloadList(); renderEngineTemplates();
-    let n=document.getElementById('payloadTplList'); while(n){ if(n.tagName==='DETAILS')n.open=true; n=n.parentElement; }
-    document.querySelectorAll('#payloadTplList details, #engineTplList details').forEach(d=>d.open=true);
-    const rep=document.getElementById('payloadTplList').innerText;
+    let n=document.getElementById('fragDataHost'); while(n){ if(n.tagName==='DETAILS')n.open=true; n=n.parentElement; }
+    document.querySelectorAll('#fragDataHost details, #engineTplList details').forEach(d=>d.open=true);
+    const rep=document.getElementById('fragDataHost').innerText;   // v150.66 — the reply values are listed in the Reply fragments card
     const engRows=[...document.querySelectorAll('#engineTplList code')].map(c=>c.textContent);
     const eng=document.getElementById('engineTplList').innerText;
     return {repHas:rep.indexOf("Values you can drop")>-1, repNpc:rep.indexOf("npc.name")>-1,
             engHas:eng.indexOf("Values you can drop")>-1, engNpc:engRows.indexOf("npc.name")>-1, engRows};
   });
-  ok("reply editor lists the values", u.repHas&&u.repNpc);
+  ok("the fragment editor lists the values", u.repHas&&u.repNpc);
   ok("engine editor lists values too", u.engHas);
   ok("engine value ROWS omit npc.name", !u.engNpc, JSON.stringify((u.engRows||[]).filter(x=>x.indexOf("npc")>-1)));
 

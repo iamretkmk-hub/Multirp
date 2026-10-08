@@ -9,7 +9,8 @@
      3. the player's relationship paragraph vanished from YOUR PEOPLE when the template did not call
         `feelings` (the v62.1 "stated once, in feelings" drop); the player's entry is always printed whole, and
         the "everyone" scope carries every tie (v150.39: and the social graph never goes at all).
-   Each is checked through the player's own template (template mode) AND the default block layout.
+   Each is checked through the reply as it is built: the fragments (v150.66 — it was checked through the player's own
+   template AND the classic block layout, both gone).
    Run: NODE_PATH=/path/to/node_modules node tests/reply-retry-gists.browser.js */
 const {chromium}=require('playwright');
 const USER_TEMPLATE=`[system]
@@ -66,7 +67,6 @@ const USER_TEMPLATE=`[system]
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
   await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(800);
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x===undefined?c:x).slice(0,900));} };
@@ -146,8 +146,8 @@ const USER_TEMPLATE=`[system]
   ok("retryOutputUsable, retryAsRewrite and repeatKind are gone", await pg.evaluate(()=>
       typeof retryOutputUsable==='undefined'&&typeof retryAsRewrite==='undefined'&&typeof repeatKind==='undefined'));
 
-  for(const mode of ["template","layout"]){
-    console.log(`\n[1 — the first reply is the reply, ${mode==="template"?"through the player's own template":"through the default block layout"}]`);
+  for(const mode of ["fragments"]){
+    console.log(`\n[1 — the first reply is the reply, through the reply fragments]`);
     const r1=await pg.evaluate(({mode,FIRST,ECHO1})=>__turn(mode,[FIRST,ECHO1]),{mode,FIRST,ECHO1});
     ok("a reply that echoes an earlier stage direction is posted as the model gave it — one roleplay call", r1.n===1&&r1.speaker==="Duygu Akbaba"&&/Yolunda işte/.test(r1.posted)&&!/Do not/.test(r1.posted), JSON.stringify({n:r1.n,posted:r1.posted}));
     ok("no director's note was ever sent", !JSON.stringify(r1.first||[]).includes("Director's note — not part of the story"));
@@ -164,7 +164,9 @@ const USER_TEMPLATE=`[system]
 
     console.log(`\n[3 — the player's relationship paragraph, ${mode}]`);
     const people=sent.slice(sent.indexOf("PLAYER_PARA")-200,sent.indexOf("PLAYER_PARA")+50);
-    ok("the player's entry carries its paragraph from the card's relationships.__user__", /\[Emre — friend\]/.test(sent)&&sent.indexOf("PLAYER_PARA")>=0, people);
+    /* v150.66 — a reply is its fragments: the player answered gets their entry in <what_they_are_to_you> (the tie, then the
+       card's paragraph), not the classic ties line "[Emre — friend]" */
+    ok("the player's entry carries its paragraph from the card's relationships.__user__", /What Emre is to you, in your own words: friend\.\\nPLAYER_PARA/.test(sent), people);
     ok("everyone else keeps theirs", sent.indexOf("HAKAN_PARA")>=0);
     // v150.39 — the social graph (the author's summary note) is gone: even the "everyone" scope never sends it
     ok("the social graph never reaches the payload, even on the \"everyone\" scope", sent.indexOf("Hakan is my husband. Emre is Hakan's old school friend.")<0, sent.slice(sent.indexOf("ties"),sent.indexOf("ties")+600));
@@ -172,23 +174,24 @@ const USER_TEMPLATE=`[system]
 
   console.log("\n[3 — only a payload that sends feelings may drop a character target's paragraph]");
   const f=await pg.evaluate(()=>{
-    __setup("template");
+    __setup("fragments");
     const a=_feelingsReachPayload(state.chats.c1,{payloadKind:"solo"});
-    state.payloadTemplates={}; const b2=_feelingsReachPayload(state.chats.c1,{payloadKind:"solo"});
-    state.payloadTplOn=false; const c=_feelingsReachPayload(state.chats.c1,{payloadKind:"solo"});
-    return {a,b:b2,c};
+    state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).filter(x=>x.id!=="feelings"); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(x=>x.key).join(","));
+    const b2=_feelingsReachPayload(state.chats.c1,{payloadKind:"solo"});
+    state.fragments=null;
+    return {a,b:b2};
   });
-  ok("the player's template (no {{call//feelings}}) does not; the default template and the block layout do", f.a===false&&f.b===true&&f.c===true, JSON.stringify(f));
+  ok("the shipped fragments send the stance (the feelings fragment); a list without that fragment does not", f.a===true&&f.b===false, JSON.stringify(f));
   const dl=await pg.evaluate(()=>{
-    __setup("layout"); const c=state.chats.c1; state.relScope="present";
+    __setup("fragments"); const c=state.chats.c1; state.relScope="present";
     const B=buildCharPromptBlocks(state.personas.find(x=>x.id==="p_d"),[],{recent:[],diary:[],longterm:[]},null,{chat:c,targetName:"Emre",targetId:"__user__",payloadKind:"solo"});
     return String(B.relationships||"");
   }).catch(e=>"ERR "+e.message);
-  ok("with feelings in the layout the player's paragraph still prints (the \"present\" scope too)", dl.indexOf("PLAYER_PARA")>=0, dl);
+  ok("with feelings in the payload the player's paragraph still prints (the \"present\" scope too)", dl.indexOf("PLAYER_PARA")>=0, dl);
 
   console.log("\n[4 — YOU ALREADY SAID THESE and the repeat check stay inside this scene and this day]");
   const YESTERDAY='*Omuzlarım gevşiyor.* "Tamam, tamam. Sağ ol, yarın akşam sekizde buradayım, söz."';
-  for(const mode of ["template","layout"]){
+  for(const mode of ["fragments"]){
     const n3=await pg.evaluate(async({mode,YESTERDAY})=>{
       const c=__setup(mode); const D=state.personas.find(x=>x.id==="p_d");
       c.messages=[
@@ -218,7 +221,6 @@ const USER_TEMPLATE=`[system]
       locations:[{id:"l_is",name:"Isdemir",description:"plant",residents:[],sublocations:[{id:"s_gate",name:"Main Security Gate"},{id:"s_can",name:"Worker Canteen"}]}]})];
     const mk=(id,n)=>({id,name:n,universeId:"u2",personality:"x",instructions:"x",backstory:"x",style:"x",goals:"x",look:{},relationships:{}});
     state.personas=[mk("p_s","Sami Özüçak"),mk("p_b","Burak Atan")];
-    state.payloadTplOn=true; state.payloadTemplates={solo:__USER_TEMPLATE,multi:__USER_TEMPLATE};
     state.chats={c1:{id:"c1",universeId:"u2",castIds:[],presentIds:["p_s"],memCounts:{},tempChars:[],activeEvent:null,gameDay:1,period:"Afternoon",
       locationId:"l_is",location:"Isdemir",subId:"s_can",subPos:{p_s:"s_can"},calendar:[],promises:[],rel:{},messages:[]}};
     state.curUniverse="u2"; state.curChat="c1"; applyUniverseProfile("u2");

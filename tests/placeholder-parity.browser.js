@@ -67,13 +67,13 @@ const {chromium}=require('playwright');
       const rep={unknownCall:[],unknownVar:[],emptyVar:[]};
       ptExpand("At {{location}}.",{},ptVars({chat:{}}),rep);
       return rep.emptyVar.indexOf("location")<0 ? true : "location was flagged"; }));
-  ok("both the reply and the engine reporter carry the field", await pg.evaluate(()=>
-      /emptyVar/.test(String(ptBuildMessages)) && /emptyVar/.test(String(epMessages))));
-
-  console.log("\n[nothing about the live payload changed]");
-  ok("the default template is still byte-identical to the classic build", await pg.evaluate(()=>{
-      // the parity suite proves this properly; this is the guard that step 1 stayed invisible
-      return typeof ptDefaultTemplate==="function" && !/PT_INLINE_HEAD/.test(String(ptDefaultTemplate)); }));
+  /* v150.66 — the reply is built from the fragments: a fragment with a name nobody filled is reported by the reply builder,
+     to Debug, and the engine reporter carries the field too */
+  ok("both the reply and the engine reporter carry the field", await pg.evaluate(()=>{
+      const rep={}, n0=dbgLog.length;
+      ptBuildMessages("solo",{},[{role:"user",content:"x"}],{fragments:[{id:"x",name:"X",seg:"head",paths:["solo"],text:"You are {{char}}.",options:[]}],report:rep});
+      const e=dbgLog.slice(n0).find(x=>/names that did not resolve \(solo\)/.test(x.label));
+      return ((rep.empty_names||[]).indexOf("char")>=0&&e&&(e.payload.empty_names||[]).indexOf("char")>=0&&/emptyVar/.test(String(epMessages))) ? true : JSON.stringify({rep,e:!!e}); }));
   ok("no page errors", errs.length===0?true:errs.join(" | "));
   console.log("\n"+pass+" passed, "+fail+" failed");
   await b.close(); process.exit(fail?1:0);

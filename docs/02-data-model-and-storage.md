@@ -43,8 +43,10 @@ IDB collections in `_idbColl`; `loadState()` prefers those over any legacy local
   `condenseOn`, `embedOn`, `heatOn/heatN`, `autoRpOn`, `recapOn`, `histTurns`,
   `stripNarr/stripKeepFull`, `narrPrivacy`, memory-retrieval weights `memW*`, tier counts
   `memRecentCount/memDistantCount/memLongtermCount`, `memIntimateFrac`, `memPerTypeCap`, …
-- **Payload customization**: `payloadLayouts` (per-payload block order), `payloadRemoved`
-  (blocks the user ✕-removed), `blockTpls` (fragment overrides), `styles` (image style list).
+- **Payload customization**: `fragments` (the user's reply fragment list, `sm_fragments`; blank = the shipped one),
+  `fragAdds`, `fragAt`, `blockTpls` (piece overrides), `payloadTemplates` (engine templates, `eng:<key>`) and
+  `payloadTplOn` (their switch), `styles` (image style list). (v150.66 — `payloadLayouts`, `payloadRemoved` and `fragOn`
+  are no longer read: the classic part list and the fragments' switch are gone.)
 - **UI**: `theme`, `font`, `streamReveal`, `revealCps`, `uiScale`, `storyLang` (en/de/tr).
 - **Collections**: `chats` (object keyed by chat id), `personas` (array), `universes` (array),
   `memory` (flat array of all memories), `gossip` (the rumor ledger), `images`, `videos`,

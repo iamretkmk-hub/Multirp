@@ -31,7 +31,7 @@ const {chromium}=require('playwright');
         {id:"p_a",name:"Ayla",universeId:uni.id,personality:"Sharp.",goals:"Open her own shop.",goalsLive:{lines:["Open the shop before winter"],day:1},
          relationships:{__user__:{tie:"neighbour",relationship:"Emre lives across the hall."},p_b:{tie:"older brother",relationship:"Berk raised her."}}},
         {id:"p_b",name:"Berk",universeId:uni.id,personality:"Loud, restless.",relationships:{p_a:{tie:"younger sister",relationship:"Ayla is your sister."}}}];
-      state.user="Emre"; state.key="sk-test"; state.fragOn=true; state.fragments=null; state.intentOn=true; state.mem=true; state.memory=[]; state.relOn=false;
+      state.user="Emre"; state.key="sk-test"; state.fragments=null; state.intentOn=true; state.mem=true; state.memory=[]; state.relOn=false;
       state.pulseOn=true; state.goalPursuitOn=true; state.charQuestsOn=true; state.gateOn=false; state.sceneOn=true; state.confrontOn=true;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       uni.gameData=uni.gameData||{}; uni.gameData.charQuests=[]; uni.cqAsked={};
@@ -41,20 +41,18 @@ const {chromium}=require('playwright');
       c.intents=[{id:"i_a",holderId:"p_a",holderName:"Ayla",targetId:"__user__",targetName:"Emre",valence:"warm",kind:"crush",aim:"to be asked out by Emre",status:"brewing",strength:0.6,born:1},
                  {id:"i_b",holderId:"p_b",holderName:"Berk",targetId:"p_a",targetName:"Ayla",valence:"warm",kind:"protection",aim:"to talk Ayla out of the loan before she signs",status:"brewing",strength:0.7,born:1}];
       return c; };
-    window.__payload=(c,p,tId,tName,kind,cl,addressed)=>{ kind=kind||"solo"; if(cl)state.fragOn=false;
-      try{ const B=Object.assign({},buildCharPromptBlocks(p,[],{recent:[],diary:[],longterm:[]},addressed||null,{chat:c,targetName:tName,targetId:tId,payloadKind:kind,textMode:kind==="text"}),
+    window.__payload=(c,p,tId,tName,kind,cl,addressed)=>{ kind=kind||"solo";   // v150.66 — the reply is its fragments (cl, the classic layout, is gone)
+      { const B=Object.assign({},buildCharPromptBlocks(p,[],{recent:[],diary:[],longterm:[]},addressed||null,{chat:c,targetName:tName,targetId:tId,payloadKind:kind,textMode:kind==="text"}),
           buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:tName,targetId:tId,injected:{recent:[],diary:[],longterm:[]},payloadKind:kind,textMode:kind==="text"}));
-        return (ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],{chat:c,npc:p,targetName:tName})||[{content:(B.your_bio||"")+"\n"+(B.private_intent||"")}]).map(m=>m.content).join("\n"); }
-      finally{ state.fragOn=true; } };
+        return ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],{chat:c,npc:p,targetName:tName}).map(m=>m.content).join("\n"); } };
   });
 
   console.log("\n[no quiet want in the reply]");
   const Q=await pg.evaluate(()=>{ const c=__setup(), p=state.personas[0]; const r={};
     ["solo","multi","gm","text","heat"].forEach(k=>{ if(k==="heat")c._heatBeat={n:1,total:3}; const t=__payload(c,p,"p_b","Berk",k); delete c._heatBeat;
       r[k]=!/what_you_quietly_want|Privately, you are working toward|asked out by Emre/.test(t)&&/Open the shop before winter/.test(t); });
-    r.classic=!/what_you_quietly_want|asked out by Emre/.test(__payload(c,p,"p_b","Berk","solo",true));
     return r; });
-  ok("no path carries the quiet want, and the live goals stay (answering Berk, a motive toward Emre)", ["solo","multi","gm","text","heat"].every(k=>Q[k]===true)&&Q.classic===true, JSON.stringify(Q));
+  ok("no path carries the quiet want, and the live goals stay (answering Berk, a motive toward Emre)", ["solo","multi","gm","text","heat"].every(k=>Q[k]===true), JSON.stringify(Q));
   ok("the decision-gated motive toward the one answered stays: asked yes, it is injected", await pg.evaluate(()=>{ const c=__setup(), p=state.personas[0];
       c.emo={p_a:{emotion:"Joy",intensity:"mild",tone:"",ego:"no_conflict",asks:{q_motive__bears:0.95},sig:"x"}};
       const t=__payload(c,p,"__user__","Emre"); return /# WHAT YOU ARE QUIETLY AFTER WITH Emre[\s\S]*to be asked out by Emre/.test(t)&&!/what_you_quietly_want/.test(t)?true:(t.match(/QUIETLY[\s\S]{0,200}/)||["(none)"])[0]; }));

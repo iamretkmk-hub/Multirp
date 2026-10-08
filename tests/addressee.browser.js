@@ -112,8 +112,11 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
       typeof BLOCK_TPL_DEFAULTS.guidance_not_yours==="string" && !!BLOCK_TPL_DEFAULTS.guidance_not_yours.trim()));
   ok("the response_guidance block lists it", await pg.evaluate(()=>
       (((REPLY_BLOCKS.response_guidance||{}).tpls)||[]).indexOf("guidance_not_yours")>-1));
-  ok("the default template calls it", await pg.evaluate(()=>
-      String(ptPieceTemplate("response_guidance")||"").indexOf("{{call//guidance_not_yours}}")>-1));
+  /* v150.66 — the reply is built from the fragments only: the guidance fragment words the note itself, injected when the
+     line being answered was said to someone else (its not_yours option, code line_for_other) */
+  ok("the guidance fragment carries it, on the flag the producer sets", await pg.evaluate(()=>{
+      const g=FRAG_DEFAULTS.find(f=>f.id==="guidance"), o=g&&(g.options||[]).find(x=>x.id==="not_yours");
+      return !!(o&&/line_for_other/.test(o.code||"")&&String(o.text||"").trim()) ? true : JSON.stringify(o||null); }));
   ok("and editing it changes the payload", await pg.evaluate(()=>{
       state.blockTpls=state.blockTpls||{};
       state.blockTpls.guidance_not_yours="EDITED {{addressee}} / {{speaker}} / {{self}}";

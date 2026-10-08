@@ -18,7 +18,6 @@ const {chromium}=require('playwright');
   await pg.goto('file://'+require('path').resolve(__dirname,'..','index.html'));
   await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
-  await pg.evaluate(()=>{ state.fragOn=false; store.setRaw(K.fragOn,"0"); });   // v150.57 — fragments are on by default; this pins the classic layout
   await pg.waitForTimeout(800);
   let pass=0,fail=0;
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,700));} };
@@ -89,12 +88,11 @@ const {chromium}=require('playwright');
       const pubW=JSON.stringify(_emoStakeState(c,p,"__user__").who_else_can_see_or_hear);
       c.locationId=keep.l; c.location=keep.n; c.presentIds=keep.pr;
       return (/strangers and staff at Palmera Beach Club/.test(pubW)&&!/alone with/.test(pubW))?true:pubW; }));
-  ok("a layout's own {{if ego = …}} and {{if emotion = …}} pick their text", await pg.evaluate(()=>{
-      const keepOn=state.payloadTplOn, keepT=state.payloadTemplates;
-      state.payloadTplOn=true; state.payloadTemplates={solo:"[system]\nBASE\n\n{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{else}}Your conscience holds.{{endif}}\n\n{{if emotion = anger}}You are angry.{{endif}}\n[system end]\n\n{{call//dialogue_history}}\n"};
-      const a=ptBuildMessages("solo",{_railFlags:{ego:"id_ahead",emotion:"Anger"}},[],{});
-      const b=ptBuildMessages("solo",{_railFlags:{ego:"superego_firm",emotion:"Joy"}},[],{});
-      state.payloadTplOn=keepOn; state.payloadTemplates=keepT;
+  /* v150.66 — a reply is its fragments: the {{if}} is written in a fragment */
+  ok("a fragment's own {{if ego = …}} and {{if emotion = …}} pick their text", await pg.evaluate(()=>{
+      const F=[{id:"x",name:"X",seg:"head",paths:["solo"],text:"BASE\n\n{{if ego = id_winning or ego = id_ahead}}Your desire is winning over your conscience.{{else}}Your conscience holds.{{endif}}\n\n{{if emotion = anger}}You are angry.{{endif}}",options:[]}];
+      const a=ptBuildMessages("solo",{_railFlags:{ego:"id_ahead",emotion:"Anger"}},[],{fragments:F});
+      const b=ptBuildMessages("solo",{_railFlags:{ego:"superego_firm",emotion:"Joy"}},[],{fragments:F});
       const ta=JSON.stringify(a), tb=JSON.stringify(b);
       return (/desire is winning/.test(ta)&&/You are angry/.test(ta)&&!/conscience holds/.test(ta)&&/conscience holds/.test(tb)&&!/angry/.test(tb)) ? true : ta.slice(0,300)+" || "+tb.slice(0,300); }));
 
@@ -118,8 +116,16 @@ const {chromium}=require('playwright');
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"?"); window.__mode="ok"; _emoBreak.fails=0;
       return c.emo.p_b&&c.emo.p_b.emotion==="Anger" ? true : JSON.stringify(c.emo.p_b); }));
   // v150.38 — spoken limits ride in the same request, so they are switched off here too
-  ok("off (and spoken limits off): nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10",role:"user",content:"!",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
-      await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!"); state.emoOn=true; state.limitsOn=true; return window.__reqs.length===0 ? true : "sent"; }));
+  /* v150.66 — the fragments are always how a reply is built, so the asked options of the path still go when the emotion pick
+     is off (the switch that used to silence them is gone); with no asked option on the path, nothing is sent */
+  ok("off (and spoken limits off): no emotion question — only the path's asked options", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10",role:"user",content:"!",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
+      await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!"); state.emoOn=true; state.limitsOn=true;
+      const q=(window.__reqs[0]||{}).questions||{};
+      return (window.__reqs.length===1&&!q.emotion&&Object.keys(q).length>0&&Object.keys(q).every(k=>/^q_/.test(k))) ? true : JSON.stringify(Object.keys(q)); }));
+  ok("off, and no asked option on the path: nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10b",role:"user",content:"!?",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
+      const keep=state.fragments; state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}));
+      try{ await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!?"); } finally{ state.fragments=keep; state.emoOn=true; state.limitsOn=true; }
+      return window.__reqs.length===0 ? true : "sent"; }));
   ok("no key: nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u11",role:"user",content:"!!",speaker:"Emre"}); state.key=""; window.__reqs=[];
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!!"); state.key="sk-test"; return window.__reqs.length===0 ? true : "sent"; }));
 

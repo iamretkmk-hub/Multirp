@@ -480,8 +480,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var reg=PROMPT_REGISTRY.map(function(r){var d="";try{d=String(r.def()||"");}catch(e){}
       return {key:r.key,label:r.label||r.key,hint:r.hint||"",json:!!r.json,def:d};});
     var blocks={};Object.keys(REPLY_BLOCKS).forEach(function(id){var b=REPLY_BLOCKS[id];blocks[id]={label:b.label,desc:b.desc||"",kind:b.kind,tpls:b.tpls||[],promptKey:b.promptKey||null};});
+    /* v150.66 — a reply is built from the fragments only: there are no reply layouts any more. The editor gets the shipped
+       fragment list (FRAG_DEFAULTS), the shipped changes a saved list may already hold (FRAG_SHIPPED_ADDS), and the few pieces
+       the app still writes outside the fragments (REPLY_EXTRA_TPLS — the "Other wording"). */
     var keep=state.payloadTemplates;state.payloadTemplates={};
-    var tdef={};PT_KINDS.forEach(function(k){try{tdef[k]=ptDefaultTemplate(k);}catch(e){tdef[k]="";}});
     var eng={};Object.keys(ENGINE_PARTS).forEach(function(k){var d=ENGINE_PARTS[k];var t="";try{t=epDefaultTemplate(k);}catch(e){}
       eng[k]={label:d.label,promptKey:d.promptKey,parts:(d.parts||[]).map(function(p){return {name:p.name,label:p.label||p.name,fixed:p.fixed!=null};}),tpl:t};});
     state.payloadTemplates=keep;
@@ -491,7 +493,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var ver="";try{ver=((document.getElementById("buildStamp")||{}).textContent||"").trim();}catch(e){}
     var kmap={};PROMPT_REGISTRY.forEach(function(r){kmap[r.key]=K[r.key];});PROMPT_PACK_KEYS.forEach(function(k){kmap[k]=K[k];});kmap.curUniverse=K.curUniverse;
     var settingsDef={};PROMPT_PACK_KEYS.forEach(function(k){var v=state[k];settingsDef[k]=(v==null)?"":(typeof v==="string"?v:JSON.stringify(v));});
-    return {registry:reg,blockDefaults:J(BLOCK_TPL_DEFAULTS),blocks:blocks,layoutKeys:J(LY_ORDER),kinds:J(PT_KINDS),tplDefaults:tdef,
+    var other={};try{Object.keys(REPLY_EXTRA_TPLS).forEach(function(g){other[g]=(REPLY_EXTRA_TPLS[g]||[]).filter(function(k){return k in BLOCK_TPL_DEFAULTS;});});}catch(e){}
+    var otherLabels={};try{otherLabels=J(OTHER_WORDING_LABELS);}catch(e){}
+    return {registry:reg,blockDefaults:J(BLOCK_TPL_DEFAULTS),blocks:blocks,layoutKeys:J(LY_ORDER),kinds:J(FRAG_PATHS),
+      fragDefaults:J(FRAG_DEFAULTS),fragAddKeys:FRAG_SHIPPED_ADDS.map(function(a){return a.key;}),otherWording:other,otherLabels:otherLabels,
       engines:eng,engineGroups:engGroups,packKeys:J(PROMPT_PACK_KEYS),known:Object.keys(known),values:vals,
       backupVersion:BACKUP_VERSION,appVersion:ver,settingsDef:settingsDef,kmap:kmap};
   }
@@ -510,12 +515,15 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var s=p.settings||{};
     /* during a live run the model settings carry their pe-field tags: a new value is kept for afterwards
        instead of overwriting the tag (which would leave every later call without its setting) */
-    Object.keys(s).forEach(function(k){if(k==="blockTpls"||k==="payloadTemplates")return;
+    /* v150.66 — the reply fragments: the working list (null = the shipped one). The shipped changes are marked as already in
+       it, so the app's one-time upgrades do not re-insert a fragment the list left out. */
+    if(Object.prototype.hasOwnProperty.call(p,"fragments")){
+      state.fragments=(Array.isArray(p.fragments)&&p.fragments.length)?J(p.fragments):null;
+      try{ store.setRaw(K.fragments,state.fragments?JSON.stringify(state.fragments):""); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(function(a){return a.key;}).join(",")); _fragMigratedFor=state.fragments; }catch(e){}
+    }
+    Object.keys(s).forEach(function(k){if(k==="blockTpls"||k==="payloadTemplates"||k==="fragments"||k==="fragAdds")return;
       try{ if(LIVE&&LIVE.fieldKeep&&(k in LIVE.fieldKeep)){LIVE.fieldKeep[k]=parseLike(LIVE.fieldKeep[k],s[k]);return;} state[k]=parseLike(state[k],s[k]);}catch(e){}});
-    state.payloadTplOn=true;
-    /* v150.57 — the app builds replies from the fragment model by default now. This editor edits the layout
-       templates, so its engine builds from them: the fragments are not part of a prompt pack. */
-    state.fragOn=false;
+    state.payloadTplOn=true;   // the engine layouts this editor edits are sent (replies are their fragments either way)
     return true;
   }
 
@@ -766,12 +774,20 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       if(m.role==="user"){break;} if(m.speakerId&&m.speakerId!==p.id){target=m.speaker;tid=m.speakerId;break;} if(m.speakerId===p.id)continue;}
     return {targetName:target,targetId:tid};
   }
-  /* Every {{call//…}} in this kind's layout, resolved against this turn's pieces: which came back empty. */
+  /* Every {{call//…}} in this path's fragments (main bodies, path boxes and options on the path), resolved against this
+     turn's data: which came back empty. (v150.66 — it read the reply layout, which is gone.) */
+  function pathCallText(kind){
+    var t=[];
+    fragList().forEach(function(f){ if(!f||f.on===false||(f.paths||[]).indexOf(kind)<0)return;
+      t.push(_fragTextFor(f,kind));
+      (f.options||[]).forEach(function(o){ if(o&&o.on!==false&&_fragOptPaths(f,o).indexOf(kind)>=0)t.push(_fragTextFor(o,kind)); }); });
+    return t.join("\n");
+  }
   function emptyCalls(kind,blocks,raw){
     var out=[],seen={};
     try{
       var srcs=ptSources(blocks,raw);
-      var re=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\s*)?\}\}/g,m,t=ptTemplate(kind);
+      var re=/\{\{\s*call\s*\/\/\s*([a-zA-Z0-9_]+)\s*(?:\/\/\s*([a-zA-Z0-9_]+)\s*)?\}\}/g,m,t=pathCallText(kind);
       while((m=re.exec(t))){var key=m[2]?m[1]+"//"+m[2]:m[1];if(seen[key]||m[1]==="dialogue_history")continue;seen[key]=1;
         var v=ptResolve(srcs,m[1],m[2],null);if(!String(v||"").trim())out.push(key);}
     }catch(e){}
@@ -841,8 +857,8 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   async function build(o){
     o=o||{};
     restoreBase();
-    state.fragOn=false;   // v150.57 — the layout templates this editor edits, not the fragment model (see apply)
-    var kind=o.kind||"solo";
+    var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo";
+    var REP={};   // v150.66 — what ptBuildMessages reports: the fragments and options that fired, the asked options, unknown names
     var chat=curChat();if(!chat)throw new Error("No scene to build from.");
     /* A scripted scene (the drift tests): its own place and cast, an opening line, and the exchange so far. */
     if(o.scene){
@@ -883,7 +899,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       var pl=await buildTextPayload(chat,p);
       var hist=inChatWorld(chat,function(){return tagLastForTarget(castHistory(chat,p,{textReply:true}));});HIST=hist;   // as _replyToText builds it
       blocks=pl.blocks||{};
-      msgs=inChatWorld(chat,function(){EMPTY=emptyCalls("text",blocks,pl.rawFn);return ptBuildMessages("text",blocks,o.noHistory?[]:hist,{chat:chat,npc:p,targetName:chatUserName(chat)},pl.rawFn);});
+      msgs=inChatWorld(chat,function(){EMPTY=emptyCalls("text",blocks,pl.rawFn);return ptBuildMessages("text",blocks,o.noHistory?[]:hist,{chat:chat,npc:p,targetName:chatUserName(chat),report:REP},pl.rawFn);});
     }else{
       var multi=(kind==="multi"||(kind==="heat"&&present.length>1));
       msgs=inChatWorld(chat,function(){
@@ -901,18 +917,18 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         }
         blocks=Object.assign({},hb,tb);
         var hist=tagLastForTarget(castHistory(chat,p));HIST=hist;EMPTY=emptyCalls(kind,blocks,raw);
-        return ptBuildMessages(kind,blocks,o.noHistory?[]:hist,{chat:chat,npc:p,targetName:t.targetName},raw);
+        return ptBuildMessages(kind,blocks,o.noHistory?[]:hist,{chat:chat,npc:p,targetName:t.targetName,report:REP},raw);
       });
     }
     var histN=0;try{histN=inChatWorld(chat,function(){return castHistory(chat,p).length;});}catch(e){}
     var empties=EMPTY;
-    var scan=null;try{scan=ptScan(ptTemplate(kind),ptKnownNames());}catch(e){}
     undo.forEach(function(u){state[u[0]]=u[1];});
     restoreBase();
-    if(!msgs)throw new Error("The template produced nothing to send (the app would fall back to its standard payload).");
+    if(!msgs||!msgs.length)throw new Error("The fragments produced nothing to send.");
     msgs=msgs.map(function(m){return {role:m.role,content:String(m.content==null?"":m.content),hist:HIST.indexOf(m)>=0};});
     return {messages:msgs,speaker:p.name,target:t.targetName,kind:kind,histCount:o.noHistory?0:histN,empties:empties,
-      unknownCalls:scan?scan.unknownCall:[],unknownVars:scan?scan.unknownVar:[],hasHistory:scan?scan.hasHistory:true};
+      unknownCalls:REP.unknown_calls||[],unknownVars:REP.unknown_values||[],hasHistory:true,
+      fired:REP.fired||[],asked:REP.asked||[],fellBack:REP.fellBack||"",list:REP.list||""};
   }
   function buildEngine(o){
     restoreBase();
@@ -935,9 +951,16 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var out={};
     if(o.type==="frag"){try{out.voice=voiceScan(o.key,o.text);}catch(e){out.voice=[];}}
     if(o.type==="tpl"){
-      try{var isEng=o.key.indexOf("eng:")===0;var ek=o.key.slice(4);
-        var sc=isEng?ptScan(o.text,epKnownNames(ek),Object.assign(ptVars({},"any"),epOwnVars(ek))):ptScan(o.text,ptKnownNames());
+      try{var ek=o.key.slice(4);
+        var sc=ptScan(o.text,epKnownNames(ek),Object.assign(ptVars({},"any"),epOwnVars(ek)));
         out.scan={unknownCall:sc.unknownCall,unknownVar:sc.unknownVar,hasHistory:sc.hasHistory,used:sc.used||[]};}catch(e){out.err=String(e.message||e);}
+    }
+    /* v150.66 — a fragment's text: every {{call//…}} must be a name the app knows, every {{value}} a reply value or a flag */
+    if(o.type==="fx"&&!/\.code$/.test(o.key)){
+      try{var known=ptKnownNames(); RAW_DATA_KEYS.forEach(function(k){known[k]=true;});
+        var vals=Object.assign(ptVars({}),{heat_beat:"",heat_beats:"",gap:""});
+        var sc2=ptScan("{{call//dialogue_history}}\n"+String(o.text||"").replace(PT_COMMENT,"").replace(PT_IF_ANY,""),known,vals);
+        out.scan={unknownCall:sc2.unknownCall,unknownVar:sc2.unknownVar,hasHistory:true,used:sc2.used||[]};}catch(e){out.err=String(e.message||e);}
     }
     return out;
   }
@@ -1133,7 +1156,8 @@ const S={
   fileName:"",
   prompts:{},         // registry key -> text (explicit)
   frag:{},            // blockTpls overrides
-  tpl:{},             // payloadTemplates overrides
+  tpl:{},             // payloadTemplates overrides (the engine layouts, "eng:<key>")
+  fx:null,            // v150.66 — the working reply fragment list (null = the file's list, or the shipped one)
   settings:{},        // the other pack settings, raw strings
   sel:null,           // {type,key}
   filter:"all", q:"",
@@ -1246,11 +1270,30 @@ $("#fileApp").addEventListener("change",async e=>{
 
 /* ---------------- the item model ---------------- */
 function regByKey(k){ return S.meta&&S.meta.registry.find(r=>r.key===k); }
+/* v150.66 — THE REPLY FRAGMENTS AS ITEMS. A reply is built from its fragments only, so they are what you edit here: each
+   fragment's main body and path boxes, and each choose-when option's text, code condition, question and path boxes. An
+   item's key names the field: "<fragment id>.text", "<id>.bp.<path>", "<id>.o.<option id>.text|code|ask",
+   "<id>.o.<option id>.bp.<path>". The list as a whole is the pack's `fragments` setting (blank = the shipped list). */
+function origFrags(){ const v=S.orig&&S.orig.settings&&S.orig.settings.fragments; let L=null;
+  try{ L=(typeof v==="string"&&v.trim())?JSON.parse(v):(Array.isArray(v)?v:null); }catch(e){ L=null; }
+  return (Array.isArray(L)&&L.length)?L:((S.meta&&S.meta.fragDefaults)||[]); }
+function curFrags(){ return Array.isArray(S.fx)&&S.fx.length?S.fx:origFrags(); }
+function fxParse(key){ const a=String(key).split("."); const r={fid:a[0]}; let i=1; if(a[i]==="o"){ r.oid=a[i+1]; i+=2; }
+  if(a[i]==="bp"){ r.field="bp"; r.path=a[i+1]; } else r.field=a[i]; return r; }
+function fxObj(list,key){ const r=fxParse(key); const f=(list||[]).find(x=>x&&x.id===r.fid); if(!f) return null;
+  let o=f; if(r.oid!=null){ o=(f.options||[]).find(x=>x&&x.id===r.oid); if(!o) return null; } return {o,r,f}; }
+function fxGet(list,key){ const x=fxObj(list,key); if(!x) return null; const {o,r}=x;
+  if(r.field==="bp"){ const v=o.byPath&&o.byPath[r.path]; return v==null?null:String(v); }
+  const v=o[r.field]; return v==null?"":String(v); }
+function fxSet(list,key,text){ const x=fxObj(list,key); if(!x) return false; const {o,r}=x;
+  if(r.field==="bp"){ o.byPath=o.byPath||{}; o.byPath[r.path]=String(text); } else o[r.field]=String(text); return true; }
+function fragsSameAsShipped(L){ return !!(S.meta&&JSON.stringify(L)===JSON.stringify(S.meta.fragDefaults)); }
 function itemDef(it){
   if(!S.meta) return "";
   if(it.type==="prompt"){ const r=regByKey(it.key); return r?r.def:""; }
   if(it.type==="frag") return String(S.meta.blockDefaults[it.key]==null?"":S.meta.blockDefaults[it.key]);
-  if(it.type==="tpl"){ if(it.key.indexOf("eng:")===0){ const e=S.meta.engines[it.key.slice(4)]; return e?e.tpl:""; } return S.meta.tplDefaults[it.key]||""; }
+  if(it.type==="tpl"){ if(it.key.indexOf("eng:")===0){ const e=S.meta.engines[it.key.slice(4)]; return e?e.tpl:""; } return ""; }   // v150.66 — engine layouts only
+  if(it.type==="fx"){ const v=fxGet(S.meta.fragDefaults,it.key); return v==null?"":v; }
   if(it.type==="setting") return S.meta.settingsDef[it.key]||"";
   return "";
 }
@@ -1259,6 +1302,7 @@ function itemVal(it){
   if(it.type==="prompt"){ const v=S.prompts[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }   // blank = the default, as StoryMind's up() reads it
   if(it.type==="frag"){ const v=S.frag[it.key]; if(typeof v==="string"&&(v.trim()||isLayout(it.key))) return v; return itemDef(it); }
   if(it.type==="tpl"){ const v=S.tpl[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }
+  if(it.type==="fx"){ const v=fxGet(curFrags(),it.key); return v==null?"":v; }
   if(it.type==="setting") return Object.prototype.hasOwnProperty.call(S.settings,it.key)?S.settings[it.key]:itemDef(it);
   return "";
 }
@@ -1267,6 +1311,7 @@ function origVal(it){
   if(it.type==="prompt") return (o.prompts&&typeof o.prompts[it.key]==="string"&&o.prompts[it.key].trim())?o.prompts[it.key]:itemDef(it);
   if(it.type==="frag"){ const b=parseObj(o.settings&&o.settings.blockTpls); const v=b[it.key]; if(typeof v==="string"&&(v.trim()||isLayout(it.key))) return v; return itemDef(it); }
   if(it.type==="tpl"){ const b=parseObj(o.settings&&o.settings.payloadTemplates); const v=b[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }
+  if(it.type==="fx"){ const v=fxGet(origFrags(),it.key); return v==null?"":v; }
   if(it.type==="setting") return (o.settings&&typeof o.settings[it.key]==="string")?o.settings[it.key]:itemDef(it);
   return "";
 }
@@ -1274,6 +1319,7 @@ function setVal(it,text){
   if(it.type==="prompt") S.prompts[it.key]=text;
   else if(it.type==="frag"){ if(text===itemDef(it)||(!text.trim()&&!isLayout(it.key))) delete S.frag[it.key]; else S.frag[it.key]=text; }
   else if(it.type==="tpl"){ if(!text.trim()||text.trim()===itemDef(it).trim()) delete S.tpl[it.key]; else S.tpl[it.key]=text; }
+  else if(it.type==="fx"){ if(!Array.isArray(S.fx)) S.fx=JSON.parse(JSON.stringify(curFrags())); fxSet(S.fx,it.key,text); }
   else if(it.type==="setting") S.settings[it.key]=text;
   saveDraft(); scheduleApply();
 }
@@ -1287,20 +1333,28 @@ function itemStatus(it){
 function allItems(){
   const m=S.meta; if(!m) return [];
   const out=[];
-  /* 1 · reply payload templates */
-  const KL={solo:"Solo reply",multi:"Several characters",gm:"Reacting to a gamemaster beat",text:"Text message reply",heat:"Heat of the moment"};
-  m.kinds.forEach(k=>out.push({type:"tpl",key:k,label:KL[k]||k,group:"Reply payload layouts",hint:"The whole reply payload as text. {{call//piece}} drops a piece in; [system] / [user] choose the message; {{call//dialogue_history}} is the conversation. A paragraph whose calls all come back empty is removed with its heading."}));
-  /* 2 · reply prompts that sit inside the reply */
+  /* 1 · the reply fragments (v150.66: the only way a reply is built — the five reply layouts are gone) */
+  const PL={solo:"Solo",multi:"Multi",gm:"Gamemaster",text:"Text",heat:"Heat"};
+  curFrags().forEach(f=>{ if(!f||!f.id) return;
+    const paths=(f.paths||[]).map(p=>PL[p]||p).join(", "), where=f.seg==="tail"?"after the conversation":"before the conversation";
+    const base={type:"fx",group:"Reply fragments",sub:(f.name||f.id),frag:f.id,paths:(f.paths||[]).slice()};
+    out.push(Object.assign({},base,{key:f.id+".text",label:"Main body",hint:`Always sent on its paths (${paths}), ${where}, and shared by all of them; a path box is added under it. Every word is written here: {{call//name}} brings in data only.`}));
+    Object.keys(f.byPath||{}).forEach(p=>{ if(f.byPath[p]==null) return;
+      out.push(Object.assign({},base,{key:f.id+".bp."+p,label:"On the "+(PL[p]||p)+" path",path:p,paths:[p],hint:`Added under the main body on the ${PL[p]||p} path only.`})); });
+    (f.options||[]).forEach(o=>{ if(!o||!o.id) return;
+      const on=(Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||[]), nm="When · "+(o.name||o.id), ob=Object.assign({},base,{paths:on.slice(),opt:o.id});
+      out.push(Object.assign({},ob,{key:f.id+".o."+o.id+".text",label:nm+" — text",hint:`Injected only when this choose-when option applies${o.code?" — code: "+o.code:""}${o.ask?" — asked: "+String(o.ask).slice(0,140):""}.`}));
+      out.push(Object.assign({},ob,{key:f.id+".o."+o.id+".code",label:nm+" — code condition",hint:"A fact the app knows, written like {{if}}: emotion = anger and intensity = intense. Blank = no code condition. With a question too, both must hold."}));
+      out.push(Object.assign({},ob,{key:f.id+".o."+o.id+".ask",label:nm+" — question",hint:"A yes/no question for the decision model, asked before the reply in the same Decisions request. Blank = not asked."}));
+      Object.keys(o.byPath||{}).forEach(p=>{ if(o.byPath[p]==null) return;
+        out.push(Object.assign({},ob,{key:f.id+".o."+o.id+".bp."+p,label:nm+" — on the "+(PL[p]||p)+" path",path:p,paths:[p],hint:"Added under this option's text on that path only."})); });
+    }); });
+  /* 2 · the few pieces the app writes outside the fragments (memory stamps, asides, how long ago…) */
+  Object.keys(m.otherWording||{}).forEach(g=>(m.otherWording[g]||[]).forEach(k=>out.push({type:"frag",key:k,label:k,group:"Other wording",sub:(m.otherLabels||{})[g]||g,hint:"Written by the app outside the reply fragments."})));
+  /* the base instruction and the format rules: no shipped fragment sends them, but a fragment can ({{call//task//full}},
+     {{call//format}}), so they sit with the other wording, as in the app */
   const replyPrompts=new Set(["baseInstruction","formatRules"]);
-  /* 3 · fragments, grouped by the block that uses them */
-  const seen=new Set();
-  Object.keys(m.blocks).forEach(bid=>{
-    const b=m.blocks[bid];
-    if(b.promptKey&&replyPrompts.has(b.promptKey)) out.push({type:"prompt",key:b.promptKey,label:(regByKey(b.promptKey)||{}).label||b.promptKey,group:"Reply pieces",sub:b.label,hint:(regByKey(b.promptKey)||{}).hint||b.desc,block:bid});
-    (b.tpls||[]).forEach(k=>{ if(seen.has(k)) return; seen.add(k);
-      out.push({type:"frag",key:k,label:k,group:bid==="layout"?"Layout headings":"Reply pieces",sub:b.label,hint:b.desc,block:bid}); });
-  });
-  Object.keys(m.blockDefaults).forEach(k=>{ if(!seen.has(k)) out.push({type:"frag",key:k,label:k,group:"Reply pieces",sub:"Other",hint:""}); });
+  replyPrompts.forEach(k=>{ const r=regByKey(k); if(r) out.push({type:"prompt",key:k,label:r.label||k,group:"Other wording",sub:"Your base instruction and format rules",hint:(r.hint||"")+" Sent only where a fragment calls {{call//task//full}} or {{call//format}}."}); });
   /* 4 · engine prompts */
   const engByPrompt={}; Object.keys(m.engines).forEach(ek=>{ const e=m.engines[ek]; (engByPrompt[e.promptKey]=engByPrompt[e.promptKey]||[]).push(ek); });
   m.registry.forEach(r=>{ if(replyPrompts.has(r.key)) return;
@@ -1309,14 +1363,14 @@ function allItems(){
   Object.keys(m.engines).forEach(ek=>{ const e=m.engines[ek];
     out.push({type:"tpl",key:"eng:"+ek,label:e.label,group:"Engine payload layouts",hint:"The engine's whole payload. {{call//prompt}} is its prompt; the other calls are the story data it is handed.",engine:ek}); });
   /* 6 · models and switches */
-  m.packKeys.filter(k=>k!=="blockTpls"&&k!=="payloadTemplates").forEach(k=>out.push({type:"setting",key:k,label:k,group:"Models & switches",hint:"Stored as text exactly as the app keeps it."}));
+  m.packKeys.filter(k=>["blockTpls","payloadTemplates","fragments","fragAdds"].indexOf(k)<0).forEach(k=>out.push({type:"setting",key:k,label:k,group:"Models & switches",hint:"Stored as text exactly as the app keeps it."}));
   return out;
 }
 let ITEMS=[];
 function findItem(id){ return ITEMS.find(it=>idOf(it)===id); }
 
 /* ---------------- list ---------------- */
-const openGroups=new Set(lsGet("open",["Reply payload layouts","Reply pieces"]));
+const openGroups=new Set(lsGet("open2",["Reply fragments"]));
 function renderList(){
   const host=$("#list");
   if(!S.meta){ host.innerHTML=`<div class="empty">Waiting for the engine…</div>`; return; }
@@ -1344,7 +1398,7 @@ function renderList(){
     const open=q||S.filter!=="all"||openGroups.has(g);
     return `<details class="grp" data-g="${esc(g)}"${open?" open":""}><summary>${esc(g)}<span class="n">${rows.length}</span></summary>${body}</details>`;
   }).join("")||`<div class="empty">Nothing matches.</div>`;
-  host.querySelectorAll("details.grp").forEach(d=>d.addEventListener("toggle",()=>{ if(q||S.filter!=="all") return; d.open?openGroups.add(d.dataset.g):openGroups.delete(d.dataset.g); lsSet("open",[...openGroups]); }));
+  host.querySelectorAll("details.grp").forEach(d=>d.addEventListener("toggle",()=>{ if(q||S.filter!=="all") return; d.open?openGroups.add(d.dataset.g):openGroups.delete(d.dataset.g); lsSet("open2",[...openGroups]); }));
   host.querySelectorAll(".item").forEach(b=>b.onclick=()=>{ select(findItem(b.dataset.id)); if(matchMedia("(max-width:980px)").matches) setView("edit"); });
   updatePackStat();
 }
@@ -1360,11 +1414,11 @@ function select(it){
 function curItem(){ return S.sel?findItem(S.sel.type+":"+S.sel.key):null; }
 function renderEditor(){
   const it=curItem(), ed=$("#ed");
-  if(!it){ $("#edTitle").textContent=S.meta?"Pick a prompt":"Loading…"; $("#edMeta").innerHTML=""; $("#edHint").textContent=S.meta?"Choose anything on the left. Every prompt, every piece of the reply payload, and every payload layout is here.":""; ed.value=""; ed.disabled=true; $("#edCalls").innerHTML=""; $("#edLint").innerHTML=""; $("#edStat").textContent=""; return; }
+  if(!it){ $("#edTitle").textContent=S.meta?"Pick a prompt":"Loading…"; $("#edMeta").innerHTML=""; $("#edHint").textContent=S.meta?"Choose anything on the left. Every reply fragment (main body, path boxes, each option's text, condition and question), every prompt and every engine layout is here.":""; ed.value=""; ed.disabled=true; $("#edCalls").innerHTML=""; $("#edLint").innerHTML=""; $("#edStat").textContent=""; return; }
   ed.disabled=false;
   $("#edTitle").textContent=it.label;
   const st=itemStatus(it);
-  const typeName={prompt:"Prompt",frag:"Reply piece",tpl:"Payload layout",setting:"Setting"}[it.type];
+  const typeName={prompt:"Prompt",frag:"Other wording",tpl:"Engine layout",fx:"Reply fragment",setting:"Setting"}[it.type];
   $("#edMeta").innerHTML=`<span class="chip">${esc(typeName)}</span><code>${esc(it.key)}</code>${it.sub?`<span class="chip">${esc(it.sub)}</span>`:""}
     <span class="chip ${st.edited?"busy":st.custom?"":"ok"}"><span class="dot"></span>${st.edited?"Edited here":st.custom?"Your version":"Shipped default"}</span>`;
   $("#edHint").textContent=it.hint||"";
@@ -1395,17 +1449,16 @@ async function lintNow(){
     ch.querySelectorAll("button[data-k]").forEach(b=>b.onclick=()=>{ const k=b.dataset.k; const t=ITEMS.find(x=>x.type==="frag"&&x.key===k)||ITEMS.find(x=>x.type==="frag"&&x.block===k); if(t) select(t); });
   } else ch.innerHTML="";
   if(it.type==="prompt"&&regByKey(it.key)&&regByKey(it.key).json){ /* nothing to parse: the prompt describes JSON, it is not JSON */ }
-  if(it.type==="setting"&&/^(payloadLayouts|blockTpls|payloadTemplates)$/.test(it.key)&&text.trim()){ try{ JSON.parse(text); }catch(e){ out.push({c:"err",t:"This setting must be valid JSON: "+e.message}); } }
-  if(ENG.ready&&(it.type==="frag"||it.type==="tpl")){
+  if(it.type==="setting"&&/^(blockTpls|payloadTemplates)$/.test(it.key)&&text.trim()){ try{ JSON.parse(text); }catch(e){ out.push({c:"err",t:"This setting must be valid JSON: "+e.message}); } }
+  if(ENG.ready&&(it.type==="frag"||it.type==="tpl"||it.type==="fx")){
     try{ const r=await engCall("lint",{type:it.type,key:it.key,text});
       if(r.scan){
         if(r.scan.unknownCall.length) out.push({c:"err",t:"These pieces do not exist and will send nothing: "+r.scan.unknownCall.map(n=>"{{call//"+n+"}}").join(", ")});
         if(r.scan.unknownVar.length) out.push({c:"warn",t:"These values do not exist and reach the model as literal text: "+r.scan.unknownVar.map(n=>"{{"+n+"}}").join(", ")});
-        if(it.key.indexOf("eng:")<0&&r.scan.hasHistory===false) out.push({c:"err",t:"No {{call//dialogue_history}}: the character will not see the conversation."});
-        if(it.key.indexOf("eng:")===0&&!/\{\{\s*call\s*\/\/\s*prompt\s*\}\}/i.test(text)) out.push({c:"err",t:"No {{call//prompt}}: this engine's own instructions are not sent."});
+        if(it.type==="tpl"&&it.key.indexOf("eng:")===0&&!/\{\{\s*call\s*\/\/\s*prompt\s*\}\}/i.test(text)) out.push({c:"err",t:"No {{call//prompt}}: this engine's own instructions are not sent."});
       }
       (r.voice||[]).forEach(p=>out.push({c:p.level==="error"?"err":"warn",t:(p.rule?p.rule+": ":"")+p.msg+(p.hit?` (“${p.hit}”)`:"")}));
-      if(!out.length) out.push({c:"ok",t:"✓ "+(it.type==="tpl"?"Every name in this layout exists.":"No problems found by StoryMind's own checks.")});
+      if(!out.length) out.push({c:"ok",t:"✓ "+(it.type==="tpl"?"Every name in this layout exists.":it.type==="fx"?"Every name in this fragment exists.":"No problems found by StoryMind's own checks.")});
     }catch(e){}
   }
   $("#edLint").innerHTML=out.map(o=>`<div class="${o.c}">${esc(o.t)}</div>`).join("");
@@ -1452,19 +1505,21 @@ function showDiff(title,a,b){ modal(title,diffHTML(a,b)); }
 function packForEngine(){
   const prompts={}; if(S.meta) S.meta.registry.forEach(r=>{ prompts[r.key]=itemVal({type:"prompt",key:r.key}); });
   const settings={}; Object.keys(S.settings).forEach(k=>settings[k]=S.settings[k]);
-  return {prompts,blockTpls:S.frag,payloadTemplates:S.tpl,settings};
+  const L=curFrags();
+  return {prompts,blockTpls:S.frag,payloadTemplates:S.tpl,settings,fragments:fragsSameAsShipped(L)?null:L};   // v150.66 — the reply fragments
 }
 function scheduleApply(){ clearTimeout(scheduleApply._t); scheduleApply._t=setTimeout(async()=>{ if(!ENG.ready) return; try{ await engCall("apply",packForEngine()); refreshPreview(); }catch(e){} },450); }
 
 /* ---------------- preview ---------------- */
-const KIND_LABEL={solo:"Solo reply",multi:"Several characters",gm:"Gamemaster beat",text:"Text message",heat:"Heat of the moment"};
+const KIND_LABEL={solo:"Solo",multi:"Multi",gm:"Gamemaster",text:"Text",heat:"Heat"};   // v150.66 — the paths, named as the app's Payloads preview names them
 let previewMode="reply";   // "reply" or "eng:<key>"
 function autoPreviewMode(){
   const it=curItem(); if(!it||!S.meta) return;
   let mode="reply";
   if(it.type==="tpl"&&it.key.indexOf("eng:")===0) mode=it.key;
   else if(it.type==="prompt"&&it.engines&&it.engines.length) mode="eng:"+it.engines[0];
-  if(it.type==="tpl"&&S.meta.kinds.indexOf(it.key)>=0) $("#plKind").value=it.key;
+  /* v150.66 — a fragment item previews a path it is on (its own path for a path box) */
+  if(it.type==="fx"&&Array.isArray(it.paths)&&it.paths.length&&mode==="reply"){ const cur=$("#plKind").value; if(it.paths.indexOf(cur)<0) $("#plKind").value=it.paths[0]; }
   if(mode!==previewMode){ previewMode=mode; fillPreviewControls(); }
 }
 function fillPreviewControls(){
@@ -1520,19 +1575,12 @@ const EMPTY_WHY={
   world:"Only when the universe has a setting.",
   relationships:"Only when the speaker has ties written."
 };
-/* Whole blocks that came back empty, each with the condition that brings it in. The rest are the
-   alternative wordings a layout calls one by one (heat or not, text or spoken, …): only one of a set
-   can fill on a given turn, so they are counted, not explained. */
+/* v150.66 — the data calls of this path's fragments that came back empty (each takes its paragraph with it), with the
+   condition that brings a block in where it is known. */
 function emptiesHTML(list){
   if(!list.length) return "";
-  const isBlock=k=>{ const b=String(k).split("//")[0]; return !!(S.meta&&S.meta.blocks[b])||!!EMPTY_WHY[b]; };
-  const blocks=list.filter(isBlock), variants=list.filter(k=>!isBlock(k));
-  let h="";
-  if(blocks.length) h+=`<details class="msg" style="padding:6px 10px" open><summary class="stat" style="cursor:pointer">${blocks.length} block${blocks.length>1?"s":""} left out on this turn</summary>
-    <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">${blocks.map(e=>`<div class="stat"><code>${esc(e)}</code>${whyEmpty(e)?" — "+esc(whyEmpty(e)):""}</div>`).join("")}</div></details>`;
-  if(variants.length) h+=`<details class="msg" style="padding:6px 10px"><summary class="stat" style="cursor:pointer">${variants.length} alternative wording${variants.length>1?"s":""} not used on this turn</summary>
-    <div class="stat" style="margin-top:6px">${variants.map(e=>"<code>"+esc(e)+"</code>").join(" ")}</div></details>`;
-  return h;
+  return `<details class="msg" style="padding:6px 10px"><summary class="stat" style="cursor:pointer">${list.length} data call${list.length>1?"s":""} of this path's fragments came back empty on this turn (their paragraphs were dropped)</summary>
+    <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">${list.map(e=>`<div class="stat"><code>${esc(e)}</code>${whyEmpty(e)?" — "+esc(whyEmpty(e)):""}</div>`).join("")}</div></details>`;
 }
 function whyEmpty(key){ const b=String(key).split("//")[0]; return EMPTY_WHY[b]||""; }
 $("#btnRebuild").onclick=refreshPreview;
@@ -1562,7 +1610,14 @@ function renderPreview(){
   const notes=[];
   if(p.engine) notes.push(`Engine <b>${esc(p.engine)}</b>. Its own story data is shown as ‹labels›; the shared pieces are filled from the story.`);
   else notes.push(`<b>${esc(p.speaker)}</b> answering <b>${esc(p.target||"")}</b> · ${esc(KIND_LABEL[p.kind]||p.kind)} · ${p.histCount} lines of dialogue`);
-  if(p.unknownCalls&&p.unknownCalls.length) notes.push(`<span style="color:var(--danger)">Unknown pieces in the layout: ${p.unknownCalls.map(esc).join(", ")}</span>`);
+  if(!p.engine){
+    if(p.fellBack) notes.push(`<span style="color:var(--danger)">The fragments failed to compile (${esc(p.fellBack)}): this is the shipped fragments' payload.</span>`);
+    const fired=(p.fired||[]).map(f=>esc(f.name)+((f.opts||[]).length?" ("+f.opts.map(o=>esc(o.name)+(o.by==="code"?"":" — asked "+Math.round(o.p*100)+"%")).join(", ")+")":""));
+    notes.push(`<span data-fired>Fragments that sent something (${(p.fired||[]).length}): ${fired.join(" · ")||"none"}</span>`);
+    const none=(p.asked||[]).filter(a=>a.p==null);
+    if((p.asked||[]).length) notes.push(`<span data-asked>Asked options: ${(p.asked||[]).map(a=>esc(a.name)+" "+(a.p==null?"(no stored answer — counts as no)":Math.round(a.p*100)+"%")).join(", ")}${none.length?". The editor asks nothing: an option is asked only in the real app.":""}</span>`);
+  }
+  if(p.unknownCalls&&p.unknownCalls.length) notes.push(`<span style="color:var(--danger)">Unknown names in the fragments: ${p.unknownCalls.map(esc).join(", ")}</span>`);
   if(p.unknownVars&&p.unknownVars.length) notes.push(`<span style="color:var(--warn)">Unknown values: ${p.unknownVars.map(esc).join(", ")}</span>`);
   out.innerHTML=`<div class="stat" style="font-size:12.5px">${notes.join("<br>")}</div>`+p.messages.map((m,i)=>{
     total+=String(m.content||"").length;
@@ -1705,8 +1760,9 @@ function openPack(b,name){
   S.orig={app:pack.app,kind:pack.kind,version:pack.version,date:pack.date,prompts:Object.assign({},pack.prompts||{}),settings:Object.assign({},pack.settings||{})};
   S.fileName=name||"";
   S.prompts={}; Object.keys(S.orig.prompts).forEach(k=>{ if(typeof S.orig.prompts[k]==="string") S.prompts[k]=S.orig.prompts[k]; });
-  S.frag=parseObj(S.orig.settings.blockTpls); S.tpl=parseObj(S.orig.settings.payloadTemplates);
-  S.settings={}; Object.keys(S.orig.settings).forEach(k=>{ if(k!=="blockTpls"&&k!=="payloadTemplates") S.settings[k]=String(S.orig.settings[k]); });
+  S.frag=parseObj(S.orig.settings.blockTpls); S.tpl=parseObj(S.orig.settings.payloadTemplates); S.fx=null;
+  S.settings={}; Object.keys(S.orig.settings).forEach(k=>{ if(["blockTpls","payloadTemplates","fragments","fragAdds"].indexOf(k)<0) S.settings[k]=String(S.orig.settings[k]); });
+  if(S.meta) ITEMS=allItems();   // v150.66 — the file's fragment list names the items
   saveDraft(); flushDraft(); renderList(); renderEditor(); scheduleApply();
   const n=Object.keys(S.prompts).length, f=Object.keys(S.frag).length, t=Object.keys(S.tpl).length;
   toast(`Opened ${name||"the file"}: ${n} prompts, ${f} piece overrides, ${t} layouts`,4000);
@@ -1735,6 +1791,9 @@ function buildExport(){
   Object.keys(S.settings).forEach(k=>{ settings[k]=String(S.settings[k]); });
   if(Object.keys(S.frag).length||settings.blockTpls!=null) settings.blockTpls=JSON.stringify(S.frag);
   if(Object.keys(S.tpl).length||settings.payloadTemplates!=null) settings.payloadTemplates=JSON.stringify(S.tpl);
+  /* v150.66 — the reply fragments: written whole when they were in the file or edited here ("" = the shipped list), with the
+     shipped changes they already hold, so the app does not re-insert a fragment the list left out */
+  if(Array.isArray(S.fx)||settings.fragments!=null){ const L=curFrags(); settings.fragments=fragsSameAsShipped(L)?"":JSON.stringify(L); settings.fragAdds=(S.meta.fragAddKeys||[]).join(","); }
   const ok=new Set(S.meta.packKeys); Object.keys(settings).forEach(k=>{ if(!ok.has(k)) delete settings[k]; });
   return {app:"StoryMind",kind:"prompts",version:S.meta.backupVersion||1,date:Date.now(),prompts,settings};
 }
@@ -1755,7 +1814,7 @@ $("#btnExport").onclick=()=>{
   modal("Download for StoryMind",
     `<p class="hint" style="margin:0">This file has the same shape as <b>Export prompts</b>. In StoryMind open <b>Settings › Backup › Import prompts</b> and pick it.
      It replaces your prompts and the model and switch settings it carries; chats, characters and memories are untouched, and StoryMind takes a safety snapshot first.</p>
-     <div class="stat">${nP} prompts · ${Object.keys(S.frag).length} piece overrides · ${Object.keys(S.tpl).length} payload layouts · ${changed.length} edited in this session</div>
+     <div class="stat">${nP} prompts · reply fragments: ${ex.settings.fragments==null?"not in the file (the app keeps its own)":ex.settings.fragments===""?"the shipped list":"your list"} · ${Object.keys(S.frag).length} piece overrides · ${Object.keys(S.tpl).length} engine layouts · ${changed.length} edited in this session</div>
      ${changed.length?`<div class="stat">Edited: ${changed.slice(0,40).map(it=>"<code>"+esc(it.key)+"</code>").join(" ")}${changed.length>40?" …":""}</div>`:""}
      <p class="hint" style="margin:0">To make these the app's shipped defaults (what a fresh install and “Reset to default” give you), send this file to Claude in your StoryMind repository and ask for them to be written into <code>index.html</code>.</p>`,
     [{label:"Cancel"},{label:"Download",pri:true,fn:async()=>{ const ok=await saveFile("storymind_prompts_"+stamp()+".json",JSON.stringify(ex)); if(ok) toast("Downloaded. Import it in StoryMind › Settings › Backup"); }}]);
@@ -1774,13 +1833,13 @@ $("#btnMore").onclick=()=>{
     </div>`);
   $("#mUnsaved").onclick=()=>{ const ch=ITEMS.filter(it=>itemStatus(it).edited);
     modal(ch.length+" edited",ch.length?ch.map(it=>`<div><b>${esc(it.label)}</b> <code>${esc(it.key)}</code></div>${diffHTML(origVal(it),itemVal(it))}`).join(""):`<div class="empty">Nothing edited yet.</div>`); };
-  $("#mDraft").onclick=()=>{ if(S.orig) openPack(Object.assign({},S.orig,{prompts:S.orig.prompts,settings:S.orig.settings}),S.fileName); else { S.prompts={};S.frag={};S.tpl={};S.settings={}; saveDraft(); renderList(); renderEditor(); scheduleApply(); } $("#modalHost").innerHTML=""; toast("Edits discarded"); };
+  $("#mDraft").onclick=()=>{ if(S.orig) openPack(Object.assign({},S.orig,{prompts:S.orig.prompts,settings:S.orig.settings}),S.fileName); else { S.prompts={};S.frag={};S.tpl={};S.fx=null;S.settings={}; ITEMS=allItems(); saveDraft(); renderList(); renderEditor(); scheduleApply(); } $("#modalHost").innerHTML=""; toast("Edits discarded"); };
   $("#mApp").onclick=()=>{ $("#modalHost").innerHTML=""; $("#fileApp").click(); };
 };
-function saveDraft(){ clearTimeout(saveDraft._t); saveDraft._t=setTimeout(()=>{ lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,settings:S.settings}); },500); }
-function flushDraft(){ if(saveDraft._t){ clearTimeout(saveDraft._t); saveDraft._t=null; lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,settings:S.settings}); } }
+function saveDraft(){ clearTimeout(saveDraft._t); saveDraft._t=setTimeout(()=>{ lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,fx:S.fx,settings:S.settings}); },500); }
+function flushDraft(){ if(saveDraft._t){ clearTimeout(saveDraft._t); saveDraft._t=null; lsSet("draft",{orig:S.orig,fileName:S.fileName,prompts:S.prompts,frag:S.frag,tpl:S.tpl,fx:S.fx,settings:S.settings}); } }
 addEventListener("pagehide",flushDraft); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") flushDraft(); });
-function loadDraft(){ const d=lsGet("draft",null); if(!d) return false; Object.assign(S,{orig:d.orig||null,fileName:d.fileName||"",prompts:d.prompts||{},frag:d.frag||{},tpl:d.tpl||{},settings:d.settings||{}}); return true; }
+function loadDraft(){ const d=lsGet("draft",null); if(!d) return false; Object.assign(S,{orig:d.orig||null,fileName:d.fileName||"",prompts:d.prompts||{},frag:d.frag||{},tpl:d.tpl||{},fx:Array.isArray(d.fx)?d.fx:null,settings:d.settings||{}}); return true; }
 
 /* ---------------- Claude ---------------- */
 const AI={sample:null,checked:false,ctl:null};
@@ -1932,7 +1991,7 @@ function payloadText(p){
    prompt is kept in this browser; Reset brings the shipped one back. */
 const AP_DEFS=[
  {id:"context",label:"The method (shared by every analysis)",desc:"Who Claude is helping and HOW TO FIX. Placed at the top of the other prompts through {{context}}.",vars:{},
-  def:`You are helping the author of StoryMind, an adult roleplay app (explicit sexual content between adult characters is in scope), write the prompts the app sends to language models. The app assembles each reply payload from a layout template ({{call//piece}} drops a named piece in, {{call//piece//full}} is the piece with its heading, [system]/[user] mark messages, {{call//dialogue_history}} is the transcript, {{if flag}}…{{endif}} and [[section]]…[[end]] are structure inside a piece, {{name}} values are filled by the app). Pieces ("fragments") are short fixed wordings the app wraps around live story data. The story language is Turkish; the instructions are English.
+  def:`You are helping the author of StoryMind, an adult roleplay app (explicit sexual content between adult characters is in scope), write the prompts the app sends to language models. The app builds each reply payload from one ordered list of FRAGMENTS shared by five paths (solo, multi, gm, text, heat). A fragment has a main body sent on its paths, text added on one path, and "choose when" options injected only when a code condition holds or the decision model answers yes before the reply; the fragments are compiled per reply into the messages before the transcript ([system]) and after it ([user]). Every word is written in the fragments: {{call//name}} brings in live story data only, {{if flag}}…{{else}}…{{endif}} is structure inside a text, {{name}} values are filled by the app. An item "fx:<fragment>.<field>" is one field of a fragment: .text (its main body), .bp.<path> (text added on that path), .o.<option>.text / .code / .ask (an option's text, its code condition, its question). "frag:<key>" items are the few wordings the app writes outside the fragments. The story language is Turkish; the instructions are English.
 
 WHAT THE AUTHOR WANTS FROM EVERY REPLY: Turkish a native speaker would actually say in that moment (the right words, register and idiom for the person and the situation, realistic in context, not only grammatical); sentences and topics with substance; a character who stays the same person, also during and after sex; desire that meets real resistance and moves at a believable pace (neither a wall nor instant surrender); characters aware of themselves (their body, their trackers, their marriage, their limits) and of their surroundings (who is present, who can hear, where and when); other people present who react to what happens in front of them; loyalty to memory, and memories used when a similar situation returns.
 
@@ -1962,7 +2021,7 @@ The roleplay model the author uses was given the payload below and wrote the rep
 Then fix the causes, following HOW TO FIX above. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text, or empty to delete it. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first, removals and rewrites before any addition.
 
 Reply with ONLY this JSON:
-{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
+{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
 
 ===== THE PAYLOAD =====
 {{payload}}
@@ -2079,14 +2138,14 @@ CHANGES APPLIED TO THIS PROMPT SINCE THE SCENE WAS PLAYED:
 
 {{calls}}`},
  {id:"fixer",fit:["catalogue","reports","payload"],label:"3 · Section fixer (one test section: its report, its payload once, its pieces)",desc:"One fixer per test section (Solo · Everyday voice, Solo · Desire over time, Solo · Memory, Several characters, Text messages, Heat). It reads that section's report and its scene reports, the section's payload once and the pieces that appear in it, and proposes edits for this section. The reconciler then merges every section's proposals.",
-  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the section's layout (the order of the pieces)",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",engines:"the engine prompts of the app (key and name), for naming who generated a block",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length",history:"every edit applied before to the pieces of this payload, oldest first",earlier:"what the section fixers that ran before this one proposed in this run"},
+  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the fragments of the section's path, in order: what each sends, and when",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",engines:"the engine prompts of the app (key and name), for naming who generated a block",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length",history:"every edit applied before to the pieces of this payload, oldest first",earlier:"what the section fixers that ran before this one proposed in this run"},
   def:`{{context}}
 
 You are the FIXER for ONE test section of the author's roleplay model: {{section}}. Its scenes were judged one by one (with probes on the turns each scene hinges on), then the section's analyst re-evaluated those reports against the payload. You get the section's report and every scene report under it, the payload once, its layout, and the current text of the pieces that appear in this payload. You do not get the dialogues: rely on the reports. Other sections have their own fixer; a reconciler merges all the proposals afterwards.
 
 1. Find the causes in THIS payload of what failed here (start from failed and partial probes), and check that a fix does not break what passed.
 2. Propose at most 5 edits, the most impactful first, each a general fix (never a rule about one scene or one line). Use the best kind: remove, rewrite, move or add.
-3. A piece marked SHARED appears in other sections' payloads too: an edit to it changes them as well. Prefer an edit that holds everywhere; when only this section needs it, say so ("this section only") so the reconciler can weigh it. A layout edit (tpl:kind) changes every section on that payload kind.
+3. A piece marked SHARED appears in other sections' payloads too: an edit to it changes them as well. Prefer an edit that holds everywhere; when only this section needs it, say so ("this section only") so the reconciler can weigh it. A fragment that is on several paths changes all of them.
 
 BEFORE FIXING, SORT EVERY CAUSE BY WHERE IT COMES FROM — only wording is fixed with edits:
 - "wording" (this payload's fixed pieces and layout) → an edit below.
@@ -2095,10 +2154,10 @@ BEFORE FIXING, SORT EVERY CAUSE BY WHERE IT COMES FROM — only wording is fixed
 - "code" (what the app selects or filters, privacy, order, cut text, timing) → the "backend" list: the problem, the evidence, the code change that would fix it and why it would be effective.
 Never paper over a generated, story or code cause with more wording in the payload ("ignore clothing that does not fit") unless the wording is also at fault; report it where it belongs.
 
-Edit format: "find" must be copied EXACTLY from a piece's CURRENT text in the catalogue below (or the layout), never story data the app filled in. For "move", "find" is the whole layout line to move and "before" the line it should go right before; "replace" stays empty. For "remove", "replace" is empty.
+Edit format: "find" must be copied EXACTLY from a piece's CURRENT text in the catalogue below (or the fragments of the path), never story data the app filled in. For "move", "find" is the whole line to move and "before" the line of the same item it should go right before; "replace" stays empty. For "remove", "replace" is empty.
 
 Reply with ONLY this JSON:
-{"summary":"two sentences: what fails in this section and why","edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"the words or structure responsible","why":"…","helps":["criterion ids"],"probes":["scene id t3"],"shared":"everywhere | this section only","risks":"what it could break elsewhere"}],"generated":[{"block":"the payload block","prompt":"engine prompt key from the list","problem":"…","evidence":"quote from the payload or a reply","fix":"what that prompt should do differently"}],"story":[{"who":"character","field":"bio|personality|backstory|appearance|instructions|other","problem":"…","evidence":"quote","change":"what to change"}],"backend":[{"area":"selection|privacy|order|truncation|timing|parsing|other","problem":"…","evidence":"quote","change":"the code change","impact":"why it would be effective"}],"keep":["what works in this section and must not be broken"]}
+{"summary":"two sentences: what fails in this section and why","edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"the words or structure responsible","why":"…","helps":["criterion ids"],"probes":["scene id t3"],"shared":"everywhere | this section only","risks":"what it could break elsewhere"}],"generated":[{"block":"the payload block","prompt":"engine prompt key from the list","problem":"…","evidence":"quote from the payload or a reply","fix":"what that prompt should do differently"}],"story":[{"who":"character","field":"bio|personality|backstory|appearance|instructions|other","problem":"…","evidence":"quote","change":"what to change"}],"backend":[{"area":"selection|privacy|order|truncation|timing|parsing|other","problem":"…","evidence":"quote","change":"the code change","impact":"why it would be effective"}],"keep":["what works in this section and must not be broken"]}
 {{#effect}}
 ===== WHAT THE LAST CHANGES DID (before → after) =====
 {{effect}}
@@ -2120,7 +2179,7 @@ Do not duplicate these. When you need the same piece, build on their edit (say "
 ===== THE SECTION'S REPORT AND ITS SCENE REPORTS =====
 {{report}}
 
-===== THE LAYOUT =====
+===== THE FRAGMENTS OF THIS PATH =====
 {{layout}}
 
 ===== THE PIECES IN THIS PAYLOAD (current text) =====
@@ -2144,7 +2203,7 @@ You are the RECONCILER and you write the COMPLETE ANALYSIS of a test run. The se
 5. Consolidate what the sections reported OUTSIDE the wording: problems in content other engines generated (by engine prompt), in the story's own data, and backend (code) changes. Merge duplicates, keep the evidence, drop what is not supported, and order each list by impact. A wording edit that only compensates for one of these should be dropped in favour of the real fix.
 
 Reply with ONLY this JSON:
-{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["section or scene"],"cause":"…"}],"structure":["one observation about the order or placement of a payload"],"decisions":[{"id":"S:section#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"…","why":"…","helps":["criterion ids"],"from":["S:section#1"],"risks":"…"}],"generated":[{"prompt":"engine prompt key","block":"…","problem":"…","evidence":"…","fix":"what that prompt should do differently","sections":["…"]}],"story":[{"who":"…","field":"…","problem":"…","evidence":"…","change":"…"}],"backend":[{"area":"…","problem":"…","evidence":"…","change":"…","impact":"…","priority":"high|medium|low"}]}
+{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["section or scene"],"cause":"…"}],"structure":["one observation about the order or placement of a payload"],"decisions":[{"id":"S:section#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"…","why":"…","helps":["criterion ids"],"from":["S:section#1"],"risks":"…"}],"generated":[{"prompt":"engine prompt key","block":"…","problem":"…","evidence":"…","fix":"what that prompt should do differently","sections":["…"]}],"story":[{"who":"…","field":"…","problem":"…","evidence":"…","change":"…"}],"backend":[{"area":"…","problem":"…","evidence":"…","change":"…","impact":"…","priority":"high|medium|low"}]}
 
 ===== THE RUBRIC ACROSS THIS RUN =====
 {{scores}}
@@ -2191,7 +2250,7 @@ You are checking WHAT THE LAST CHANGES DID. The same scenes were played twice by
 4. For an edit that hurt and should be undone or softened, give a "revert" edit on the CURRENT text: "find" is the new wording as it now reads, "replace" the old wording or a better middle.
 
 Reply with ONLY this JSON:
-{"summary":"three sentences: did the changes work","edits":[{"edit":"item: short description","effect":"helped|hurt|mixed|none|unclear","evidence":"which scores and findings moved","note":"…"}],"criteria":[{"criterion":"self","before":5,"after":7,"why":"…"}],"regressions":["…"],"keep":["…"],"revert":[{"item":"frag:key | prompt:key | tpl:kind","kind":"rewrite","find":"current wording","replace":"old or middle wording","why":"…"}],"next":"what the fixer should look at next"}
+{"summary":"three sentences: did the changes work","edits":[{"edit":"item: short description","effect":"helped|hurt|mixed|none|unclear","evidence":"which scores and findings moved","note":"…"}],"criteria":[{"criterion":"self","before":5,"after":7,"why":"…"}],"regressions":["…"],"keep":["…"],"revert":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"rewrite","find":"current wording","replace":"old or middle wording","why":"…"}],"next":"what the fixer should look at next"}
 
 ===== THE EDITS APPLIED BETWEEN THE RUNS =====
 {{applied}}
@@ -2366,13 +2425,13 @@ Reply with ONLY this JSON:
 You are discussing the fixes for {{which}} with their author, after a complete analysis of a test run. The author may question an edit, ask why, ask for a different or smaller correction, ask for something new, or point at a reply they did not like. Answer plainly and briefly, as a prompt engineer talking to the author. Hold to HOW TO FIX: find the cause first, fix in general (never for one scene or one line), keep it tight.
 
 When the author asks for a change, or agrees to one, give the edits in ONE fenced block marked \`\`\`edits containing a JSON array, in the same format as the analysis:
-[{"item":"frag:key | prompt:key | tpl:kind","kind":"remove|rewrite|move|add","find":"exact CURRENT text","replace":"new text","before":"move only: the line it goes right before","cause":"…","why":"…"}]
-"find" must be the item's own wording, copied EXACTLY from its CURRENT text (the catalogue, the layouts, the engine prompts) or as it reads in a payload, never story data the app filled in, and never words an applied edit has already changed. To revise an edit you proposed earlier, give the whole revised edit again. Without a request for a change, just answer, with no edits block.
+[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|move|add","find":"exact CURRENT text","replace":"new text","before":"move only: the line it goes right before","cause":"…","why":"…"}]
+"find" must be the item's own wording, copied EXACTLY from its CURRENT text (the catalogue, the fragments, the engine prompts) or as it reads in a payload, never story data the app filled in, and never words an applied edit has already changed. To revise an edit you proposed earlier, give the whole revised edit again. Without a request for a change, just answer, with no edits block.
 
 ===== THE COMPLETE ANALYSIS =====
 {{analysis}}
 {{#applied}}
-===== EDITS APPLIED SO FAR (oldest first; the catalogue, layouts and prompts below already include them; the payloads predate them) =====
+===== EDITS APPLIED SO FAR (oldest first; the catalogue, fragments and prompts below already include them; the payloads predate them) =====
 {{applied}}
 {{/applied}}{{#reports}}
 ===== THE REPORTS, ONE PER PAYLOAD KIND (no dialogues) =====
@@ -2381,7 +2440,7 @@ When the author asks for a change, or agrees to one, give the edits in ONE fence
 ===== THE ENGINE SCENES AND THEIR JUDGEMENTS =====
 {{scenes}}
 {{/scenes}}{{#layouts}}
-===== THE LAYOUTS (each payload kind: the order of the pieces) =====
+===== THE FRAGMENTS OF EACH PATH (in order: what each sends, and when) =====
 {{layouts}}
 {{/layouts}}{{#catalogue}}
 ===== THE CATALOGUE OF PIECES (current) =====
@@ -2460,7 +2519,7 @@ function apBuild(id,vars){ const d=AP_DEFS.find(x=>x.id===id)||{vars:{}}, blank=
   AP_LAST[id]={text:out,at:Date.now()}; return out; }
 function itemContext(it){
   const v=itemVal(it), d=itemDef(it);
-  let s=`THE OPEN ITEM: ${it.label} (${it.type==="frag"?"reply piece":it.type==="tpl"?"payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
+  let s=`THE OPEN ITEM: ${it.label} (${it.type==="fx"?"reply fragment field":it.type==="frag"?"wording outside the reply":it.type==="tpl"?"engine payload layout":it.type}, key "${it.key}")${it.sub?" — part of: "+it.sub:""}\n`;
   if(it.hint) s+=`What it is for: ${it.hint}\n`;
   s+=`\nCURRENT TEXT:\n<<<\n${v}\n>>>\n`;
   if(v!==d&&d) s+=`\nTHE SHIPPED DEFAULT, for reference:\n<<<\n${d.slice(0,12000)}\n>>>\n`;
@@ -2535,9 +2594,8 @@ function fragCatalog(since){
   const changed=[...new Set(appliedSince(since||0).map(a=>a.item))];
   if(since!=null&&changed.length){ rows.push("ITEMS CHANGED SINCE THIS TEST RAN — their CURRENT full text (quote this, not the payload):");
     changed.forEach(id=>{ const it=itemFromRef(id); if(it) rows.push(`${id} — CURRENT TEXT:\n<<<\n${itemVal(it).slice(0,6000)}\n>>>`); }); rows.push("ALL ITEMS:"); }
-  rows.push(`tpl:${kind} — the payload layout (${fmtN(itemVal({type:"tpl",key:kind}).length)} chars)`);
-  ["baseInstruction","formatRules"].forEach(k=>rows.push(`prompt:${k} — ${(regByKey(k)||{}).label||k}`));
-  Object.keys(S.meta.blockDefaults).forEach(k=>{ const v=itemVal({type:"frag",key:k}).replace(/\s+/g," ").slice(0,90); if(v.trim()) rows.push(`frag:${k} — ${v}`); });
+  /* v150.66 — the fields of the fragments on this path (a reply is its fragments) */
+  ITEMS.filter(it=>it.type==="fx"&&(it.paths||[]).indexOf(kind)>=0).forEach(it=>{ const v=itemVal(it).replace(/\s+/g," ").slice(0,90); if(v.trim()) rows.push(`fx:${it.key} — ${v}`); });
   return rows.join("\n");
 }
 async function runReview(output){
@@ -2548,7 +2606,7 @@ async function runReview(output){
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The review did not come back as JSON."}; return JSON.parse(m[0]);
 }
 function itemFromRef(ref){
-  const m=String(ref||"").trim().match(/^(frag|prompt|tpl)\s*:\s*([A-Za-z0-9_:.-]+)/); if(!m) return null;
+  const m=String(ref||"").trim().match(/^(fx|frag|prompt|tpl)\s*:\s*([A-Za-z0-9_:.-]+)/); if(!m) return null;
   return ITEMS.find(it=>it.type===m[1]&&it.key===m[2])||null;
 }
 function renderReview(r){
@@ -3591,7 +3649,7 @@ function effectInput(prev,cur){
         return `  - ${y.title}: ${f(x.score,y.score)}${crit(x.criteria,y.criteria)?" · "+crit(x.criteria,y.criteria):""}`; }).join("\n");
       return `${lab}: ${f(a.score,b.score)} · ${crit(a.criteria,b.criteria)}${sc?"\n"+sc:""}`; }).join("\n");
   const seenK=new Set(), diffs=kinds.filter(k=>{ const pk=secKind(k); if(seenK.has(pk)) return false; seenK.add(pk); return true; }).map(k=>{ const a=(prev.kinds[k]||{}).payload||"", b=(cur.kinds[k]||{}).payload||"";
-    return `## tpl:${secKind(k)} (${secLabel(k)})\n${!a||!b?"(no payload in one of the runs)":payloadDiff(a,b,30000)}`; }).join("\n\n");
+    return `## the ${secKind(k)} path (${secLabel(k)})\n${!a||!b?"(no payload in one of the runs)":payloadDiff(a,b,30000)}`; }).join("\n\n");
   const reports=kinds.map(k=>{ const a=prev.kinds[k]||{}, b=cur.kinds[k]||{}, lab=(KINDS.find(x=>x.k===k)||{label:k}).label;
     return `## ${lab}\nBEFORE: ${a.summary||"–"}${a.reasoning?"\n  reasoning: "+a.reasoning:""}\nAFTER: ${b.summary||"–"}${b.reasoning?"\n  reasoning: "+b.reasoning:""}`; }).join("\n\n");
   return {applied:appliedText(applied)||"(none recorded in this browser)",scores,diffs,reports,n:applied.length};
@@ -3636,9 +3694,20 @@ function fxSave(){ lsSet("fixers",FX); }
 function staticBits(v){ return String(v).split(/\{\{[^}]*\}\}|\[\[[^\]]*\]\]/).map(x=>x.trim()).filter(x=>x.length>=24).sort((a,b)=>b.length-a.length).slice(0,2).map(x=>x.slice(0,60)); }
 function piecesIn(text){
   const t=String(text||""), out=[];
-  ["baseInstruction","formatRules"].forEach(k=>{ const v=itemVal({type:"prompt",key:k}); if(staticBits(v).some(b=>t.indexOf(b)>=0)) out.push("prompt:"+k); });
-  Object.keys(S.meta.blockDefaults).forEach(k=>{ const v=itemVal({type:"frag",key:k}); if(v.trim()&&staticBits(v).some(b=>t.indexOf(b)>=0)) out.push("frag:"+k); });
+  /* v150.66 — the reply fragments' fields whose wording is in this payload, and the other wording */
+  ITEMS.filter(it=>it.type==="fx"&&!/\.code$/.test(it.key)).forEach(it=>{ const v=itemVal(it); if(v.trim()&&staticBits(v).some(b=>t.indexOf(b)>=0)) out.push("fx:"+it.key); });
+  ITEMS.filter(it=>it.type==="frag").forEach(it=>{ const v=itemVal(it); if(v.trim()&&staticBits(v).some(b=>t.indexOf(b)>=0)) out.push("frag:"+it.key); });
   return out;
+}
+/* v150.66 — the fragments of one path, in order, as the fixer and the discussion read them (they replaced the layout) */
+function pathFragmentsText(kind){
+  return curFrags().filter(f=>f&&f.on!==false&&(f.paths||[]).indexOf(kind)>=0).map(f=>{
+    const L=[`--- ${f.name||f.id} (${f.seg==="tail"?"after":"before"} the conversation${f.mode==="one"?"; only the likeliest option":""}) ---`];
+    if(String(f.text||"").trim()) L.push(`fx:${f.id}.text:\n${f.text}`);
+    if(f.byPath&&f.byPath[kind]!=null) L.push(`fx:${f.id}.bp.${kind}:\n${f.byPath[kind]}`);
+    (f.options||[]).forEach(o=>{ if(!o||o.on===false) return; const on=(Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||[]); if(on.indexOf(kind)<0) return;
+      L.push(`WHEN ${o.name||o.id}${o.code?" — code: "+o.code:""}${o.ask?" — asked: "+o.ask:""}\nfx:${f.id}.o.${o.id}.text:\n${o.text||""}`+(o.byPath&&o.byPath[kind]!=null?`\nfx:${f.id}.o.${o.id}.bp.${kind}:\n${o.byPath[kind]}`:"")); });
+    return L.join("\n"); }).join("\n\n");
 }
 function sectionPayload(k){ const kp=kindPayload(k)||kindPayload(secKind(k)); return kp?{scene:kp.scene,p:kp.p,text:instrText(kp.p)}:null; }
 function pieceUsage(){ const u={}; KINDS.forEach(kd=>{ const sp=sectionPayload(kd.k); if(!sp||!KA[kd.k]) return; piecesIn(sp.text).forEach(id=>{ (u[id]=u[id]||[]).push(kd.k); }); }); return u; }
@@ -3649,8 +3718,8 @@ async function fixSection(k,eff,sig){
     const usage=pieceUsage(), ids=sp?piecesIn(sp.text):[];
     const catalogue=ids.map(id=>{ const others=(usage[id]||[]).filter(x=>x!==k).map(secLabel); return `===== ${id}${others.length?` — SHARED with: ${others.join(", ")}`:" — this section only"} =====\n${itemVal(itemFromRef(id))}`; }).join("\n\n");
     const since=Math.min(...kindScenes(k).map(sc=>DR.results[sc.id]&&DR.results[sc.id].at).filter(Boolean),Date.now());
-    const v={section:`${kd.label} (payload kind tpl:${kd.kind})`,report:kindReport(k),layout:`===== tpl:${kd.kind} =====\n${itemVal({type:"tpl",key:kd.kind})}`,catalogue:catalogue||"(no piece found in the payload)",
-      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText(),history:historyFor(ids.concat(["tpl:"+kd.kind])),engines:enginePromptList(),earlier:earlierText(FX,"S",k,FX_RUN.since||0)};
+    const v={section:`${kd.label} (the ${kd.kind} path)`,report:kindReport(k),layout:`===== THE FRAGMENTS OF THE ${String(kd.kind).toUpperCase()} PATH =====\n${pathFragmentsText(kd.kind)}`,catalogue:catalogue||"(no piece found in the payload)",
+      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText(),history:historyFor(ids),engines:enginePromptList(),earlier:earlierText(FX,"S",k,FX_RUN.since||0)};
     v.payload=sp?cutMiddle(sp.text,Math.max(20000,AP_CAP-apBytes(apBuild("fixer",Object.assign({},v,{payload:""})))-4000)):"(not available)";
     const o=await claudeJson(apBuild("fixer",v),{signal:sig,modelTier:"complex",cache:false});
     (o.edits||[]).forEach((ed,i)=>{ ed._id=`S:${k}#${i+1}`; }); await repairEdits(o.edits,sig);
@@ -3666,7 +3735,7 @@ function earlierText(store,prefix,skip,since){ return Object.keys(store).filter(
 `+(o.edits||[]).map(ed=>`- ${ed._id||""} ${ed.item}: «${String(ed.find||"").slice(0,300)}» → «${String(ed.replace||"").slice(0,400)}»`).join("\n"); }).join("\n\n"); }
 function proposalsText(){
   return KINDS.filter(kd=>FX[kd.k]&&!FX[kd.k].err&&FX[kd.k].at).map(kd=>{ const o=FX[kd.k];
-    return `## ${kd.label} (tpl:${kd.kind})\nSUMMARY: ${o.summary||""}`+((o.keep||[]).length?"\nKEEP: "+o.keep.join(" · "):"")+(outsideText(o)?"\n"+outsideText(o):"")+"\nPROPOSED EDITS:\n"+((o.edits||[]).map(ed=>
+    return `## ${kd.label} (the ${kd.kind} path)\nSUMMARY: ${o.summary||""}`+((o.keep||[]).length?"\nKEEP: "+o.keep.join(" · "):"")+(outsideText(o)?"\n"+outsideText(o):"")+"\nPROPOSED EDITS:\n"+((o.edits||[]).map(ed=>
       `- ${ed._id} ${ed.item} (${ed.kind||"rewrite"}; ${ed.shared||"?"}) find «${String(ed.find||"").slice(0,800)}»${ed.before?` before «${ed.before}»`:""}${ed.replace?` → «${String(ed.replace).slice(0,1200)}»`:""}\n    cause: ${ed.cause||""} · why: ${ed.why||""} · helps: ${(ed.helps||[]).join(", ")}${(ed.probes||[]).length?" · probes: "+ed.probes.join(", "):""}${ed.risks?" · risks: "+ed.risks:""}`).join("\n")||"(none)"); }).join("\n\n");
 }
 
@@ -3718,7 +3787,7 @@ function kindReport(k){
   const list=kindScenes(k).filter(sc=>DR.results[sc.id]&&driftComplete(sc,DR.results[sc.id])); if(!list.length) return "";
   const a=KA[k]||{}, kd=KINDS.find(x=>x.k===k);
   const crit=c=>c?Object.keys(c).map(id=>{ const x=c[id], v=x&&typeof x==="object"?x.score:x; return v==null?null:`${id} ${v}${x&&x.note?" ("+x.note+")":""}`; }).filter(Boolean).join("; "):"";
-  return `## SECTION: ${kd.label} (payload kind tpl:${kd.kind})${a.score!=null?` — ${a.score}/10`:""}${a.at?"":" — NOT ANALYSED YET: only the scenes' own judgements, if any"}\n`+
+  return `## SECTION: ${kd.label} (the ${kd.kind} path)${a.score!=null?` — ${a.score}/10`:""}${a.at?"":" — NOT ANALYSED YET: only the scenes' own judgements, if any"}\n`+
     (a.summary?`SUMMARY: ${a.summary}\n`:"")+(a.reasoning?`THE KIND'S REASONING: ${a.reasoning}\n`:"")+(crit(a.criteria)?`RUBRIC: ${crit(a.criteria)}\n`:"")+
     (Array.isArray(a.patterns)&&a.patterns.length?"PATTERNS:\n"+a.patterns.map(x=>`- [${x.criterion||"?"}${x.source?" · "+x.source:""}] ${x.pattern||""}${x.scenes&&x.scenes.length?" ("+x.scenes.join(", ")+")":""}${x.cause?" — cause: "+x.cause:""}`).join("\n")+"\n":"")+
     (Array.isArray(a.payload_notes)&&a.payload_notes.length?"PAYLOAD STRUCTURE:\n"+a.payload_notes.map(x=>"- "+x).join("\n")+"\n":"")+
@@ -3730,14 +3799,15 @@ function kindPayload(k){ const sc=(KINDS.some(x=>x.k===k)?kindScenes(k):DRIFT_SC
 function payloadsText(budget){
   const ps=[...new Set(KINDS.map(x=>x.kind))].map(k=>({k,x:kindPayload(k)})).filter(o=>o.x); if(!ps.length) return "(none)";
   const each=Math.max(6000,Math.floor((budget||AP_CAP)/ps.length)-400);
-  return ps.map(o=>`===== PAYLOAD: ${({solo:"Solo",multi:"Several characters",text:"Text messages",heat:"Heat of the moment"})[o.k]||o.k} (tpl:${o.k}; as sent for the last reply of "${o.x.scene.title}") =====\n`+cutMiddle(payloadText(o.x.p),each)).join("\n\n");
+  return ps.map(o=>`===== PAYLOAD: ${({solo:"Solo",multi:"Several characters",text:"Text messages",heat:"Heat of the moment"})[o.k]||o.k} (the ${o.k} path; as sent for the last reply of "${o.x.scene.title}") =====\n`+cutMiddle(payloadText(o.x.p),each)).join("\n\n");
 }
 function pieceCatalogue(){
   /* the opening words keep their own line breaks, so wording copied from here matches the piece */
   const head=v=>{ const t=v.trim(); return t.length>200?t.slice(0,200)+" …":t; };
-  const rows=["baseInstruction","formatRules"].map(k=>`prompt:${k} — <<<${head(itemVal({type:"prompt",key:k}))}>>>`);
-  Object.keys(S.meta.blockDefaults).forEach(k=>{ const v=itemVal({type:"frag",key:k}); if(!v.trim()) return;
-    rows.push(/\{\{|\[\[/.test(v)?`frag:${k} — TEMPLATE:\n<<<\n${v}\n>>>`:`frag:${k} — <<<${head(v)}>>>`); });
+  /* v150.66 — every field of the reply fragments, and the other wording */
+  const rows=[];
+  ITEMS.filter(it=>it.type==="fx"||it.type==="frag").forEach(it=>{ const v=itemVal(it); if(!v.trim()) return; const id=it.type+":"+it.key;
+    rows.push(/\{\{|\[\[/.test(v)?`${id} — TEMPLATE:\n<<<\n${v}\n>>>`:`${id} — <<<${head(v)}>>>`); });
   return rows.join("\n");
 }
 function overallInput(){
@@ -3747,7 +3817,7 @@ function overallInput(){
     return `### Engine scene: ${sc.label}\n${gs}`; }).join("\n\n");
   const flagged=new Set(); ENGINE_SCENES.forEach(sc=>{ const r=ENGRUN.byScene[sc.id]; if(!r) return; Object.keys(r.judge||{}).forEach(k=>{ const j=r.judge[k]; if(j&&!judgeFailed(j)&&j.verdict!=="good"&&k.indexOf("dbg:")<0) flagged.add(k); }); });
   const prompts=[...flagged].slice(0,8).map(k=>`===== prompt:${k} =====\n${itemVal({type:"prompt",key:k}).slice(0,9000)}`).join("\n\n");
-  const layouts=["solo","multi","gm","text","heat"].map(k=>`===== tpl:${k} =====\n${itemVal({type:"tpl",key:k})}`).join("\n\n");
+  const layouts=["solo","multi","gm","text","heat"].map(k=>`===== THE FRAGMENTS OF THE ${k.toUpperCase()} PATH =====\n${pathFragmentsText(k)}`).join("\n\n");   // v150.66
   return {reports,engines,prompts,layouts,catalogue:pieceCatalogue(),scenes:reports};
 }
 /* Each complete analysis is kept with the run's rubric, so the next one can see what an edit changed. */
@@ -3781,7 +3851,7 @@ async function analyseTogether(){
   st("The reconciler is merging every section's proposals…");
   const prop=KINDS.filter(kd=>FX[kd.k]&&!FX[kd.k].err).flatMap(kd=>FX[kd.k].edits||[]);
   const touched=[...new Set(prop.map(ed=>String(ed.item||"").trim()).filter(Boolean))], usage=pieceUsage();
-  const v={proposals:proposalsText()||"(no section fixer ran)",usage:touched.map(id=>`- ${id}: ${/^tpl:/.test(id)?"every section on payload kind "+id.slice(4):((usage[id]||[]).map(secLabel).join(", ")||"(not found in a payload)")}`).join("\n"),
+  const v={proposals:proposalsText()||"(no section fixer ran)",usage:touched.map(id=>`- ${id}: ${((usage[id]||[]).map(secLabel).join(", ")||"(not found in a payload)")}`).join("\n"),
     pieces:touched.map(id=>{ const it=itemFromRef(id); return it?`===== ${id} =====\n${itemVal(it)}`:`===== ${id} ===== (unknown item)`; }).join("\n\n"),
     scores:scoresText(cur,prev),history:historyText(),effect:effT,engines:x.engines.slice(0,25000),prompts:x.prompts||"",applied:appliedText(appliedSince(since)),rotation:rotationText()};
   const o=await claudeJson(apBuild("overseer",v),{signal:sig,modelTier:"complex",cache:false});
@@ -4440,7 +4510,7 @@ async function afterEngine(hadDraft){
   await engCall("apply",packForEngine()).catch(()=>{});
   fillPreviewControls();
   const s=lsGet("sel",null);
-  const first=(s&&findItem(s.type+":"+s.key))||ITEMS.find(it=>it.type==="tpl"&&it.key==="solo");
+  const first=(s&&findItem(s.type+":"+s.key))||ITEMS.find(it=>it.type==="fx"&&it.key==="task.text")||ITEMS[0];
   renderList(); select(first);
 }
 (async function main(){

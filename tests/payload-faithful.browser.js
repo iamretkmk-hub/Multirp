@@ -251,6 +251,15 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const diff72=async(k,nm,text)=>{ const old=linesOf(await buildOld72(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
     const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all72.gone.add(l)); d.added.forEach(l=>all72.added.add(l)); return d; };
 
+  /* v150.74 — a text payload no longer carries the outfit (it was chosen for the PLAYER's scene, and nobody in a thread sees it):
+     the same situation built with the outfit kept (charBioBlock told to ignore noWear) against the build now. Only the outfit
+     lines of the text path may differ (checked below). */
+  const buildOld74=async(kind,name)=>pg.evaluate(([k,n])=>{ const real=window.charBioBlock;
+    window.charBioBlock=function(c,o){ return real(c,Object.assign({},o||{},{noWear:false})); };
+    try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.charBioBlock=real; } },[kind,name]);
+  const all74={gone:new Set(),added:new Set()};
+  const diff74=async(k,nm,text)=>{ if(k!=="text") return {gone:[],added:[]}; const old=linesOf(await buildOld74(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all74.gone.add(l)); d.added.forEach(l=>all74.added.add(l)); return d; };
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
   const rm65=(l,classic,n)=>removed65(l,classic,TGT[n][0],TGT[n][1]);
@@ -283,10 +292,12 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     const text=await build(k,nm), have=new Set(linesOf(text).map(h)); n++;
     const gone=new Set((await diff68(k,nm,text)).gone.map(h));   // v150.70 — the v150.67 memory lines (checked below)
     (await diff72(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.72 — the v150.71 compass / guidance lines (checked below)
+    (await diff74(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.74 — the text path's outfit line (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
   ok("in "+n+" payloads (every path × "+SITS.length+" situations — every fragment payload of the fixture), every line v150.63 sent is still sent (but v150.70's memory lines)", n===keys.length&&n>=290&&lost.length===0, lost.slice(0,10).join("\n        "));
+  ok("v150.74: the only lines a text payload drops for the outfit are its outfit lines, and none is added", [...all74.gone].every(l=>/wearing|wardrobe|have on|has on|dress/i.test(l))&&all74.added.size===0, JSON.stringify({gone:[...all74.gone].slice(0,4),added:[...all74.added].slice(0,4)}));
   ok("the only lines left out of the comparison are the removed ones ("+removedSeen+" of them: the quiet wants and the two old compass lines)", removedSeen>0);
   {let r5=0; Object.keys(F.removed65||{}).forEach(k=>{ r5+=F.removed65[k]; });
    ok("and v150.65's ("+r5+": what was found out, and the one answered's sheet line and old one-line entry)", r5>0&&F.removed65["solo|learned"]===3&&F.removed65["solo|player"]===1&&F.removed65["multi|char"]===2, JSON.stringify(F.removed65).slice(0,300));}
@@ -309,6 +320,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      const was=new Set(G.payloads[key].all), drop=new Set(G.payloads[key].drop); dropped+=drop.size;
      const d68=await diff68(k,nm,text), gone68=new Set(d68.gone.map(h)), added68=new Set(d68.added);   // v150.70 — the memories
      { const d72=await diff72(k,nm,text); d72.gone.forEach(l=>gone68.add(h(l))); d72.added.forEach(l=>added68.add(l)); }   // v150.72 — the words
+     { const d74=await diff74(k,nm,text); d74.gone.forEach(l=>gone68.add(h(l))); d74.added.forEach(l=>added68.add(l)); }   // v150.74 — no outfit in a text
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }

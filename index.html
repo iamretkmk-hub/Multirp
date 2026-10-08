@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.75</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.76</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4049,6 +4049,12 @@ Keep their clothes as they are, and SAY what they are: each person's garments wi
 People in this frame:
 {{people}}
 The pose picture is a textureless grey 3D model, not a photograph: begin your prompt by replacing its figures with the people listed — "replace the woman in the pose reference with the woman in IMAGE 1" (and the man with the man in IMAGE 2, when he is listed) — as real people with real skin texture. Then write the moment in that pose: keep its arrangement and framing, and say what the latest exchange changes — expressions, hands, small shifts of position, what someone holds. Call each person ONLY by their label ("the woman in IMAGE 1"), never by name. Where the scene instructions above call the pose picture "image1", they mean the LAST picture. Do not describe the face, hair or build of anyone who has a picture; their pictures carry them.`},
+  /* v150.76 — WHAT A POSE PICTURE SHOWS. A scene type's pose picture can carry one line of its own (Settings › Image ›
+     the scene type, under its pose pictures); when that picture is the one sent, the writer is told what it shows, so the
+     frame it writes and the line the story keeps about it describe the same thing. */
+  x_img_pose_shows:{label:"Image writer — what the chosen pose picture shows",json:false,
+    hint:"Added under the pose block the image prompt writer receives, only when the pose picture picked for this frame has a description (Settings › Image › the scene type › under its pose pictures). Placeholder: {{what}} (that description, with {{char}} and {{user}} already filled).",
+    def:`This pose picture shows: {{what}}`},
   x_img_pose_roster:{label:"Image model — the pose preset picture",json:false,
     hint:"Put in front of the prompt the edit model receives when a pose preset picture is sent (after the face pictures). Placeholders: {{n}} (its number — always the last), {{swap}} (who replaces which figure in it: the woman, and the man unless it is a POV scene type).",
     def:`Figure {{n}} is the pose reference for this scene: textureless grey 3D figures, not people. {{swap}}, keeping the pose, the body positions and the framing of Figure {{n}} exactly. Render them as real people with real skin texture — nothing of the grey 3D model, its smooth surface or its blank face remains. `},
@@ -25288,9 +25294,31 @@ async function rulePoseAdd(rule,dataUri){
 }
 async function rulePoseRemove(rule,id){
   if(!rule)return;
-  rule.poses=rulePoseIds(rule).filter(x=>x!==id); _saveImgRules();
+  rule.poses=rulePoseIds(rule).filter(x=>x!==id);
+  if(rule.poseDesc&&typeof rule.poseDesc==="object")delete rule.poseDesc[id];   // v150.76 — its description goes with it
+  _saveImgRules();
   try{ await mediaDB.kvDelete(_poseKey(id)); }catch(e){}
 }
+/* ===== v150.76 — WHAT A POSE PICTURE SHOWS =====
+   Asked: "four pose pictures on one scene type — they are all that scene, but each one is different. When one is picked at
+   random, it should also say what's on screen. Unlike the video cues it doesn't trigger a response: it's information that
+   takes its place in the characters' dialogue history."
+   Each pose picture can carry ONE line, kept on the rule by picture id (rule.poseDesc = {<poseId>: "text"}); {{char}} and
+   {{user}} are filled with the one the picture is for and the player. When the picked picture has one and the picture is
+   posted, the scene message keeps it (m.poseDesc, m.poseRuleId, m.poseId): the image prompt writer is told it
+   (x_img_pose_shows) and castHistory sets it into the transcript after that message (the pose_on_screen wording). A selfie
+   keeps her own description as the one that counts: there it reaches the writer only. */
+function rulePoseDesc(rule,id){
+  const d=(rule&&rule.poseDesc&&typeof rule.poseDesc==="object"&&id)?rule.poseDesc[id]:"";
+  return typeof d==="string"?d.replace(/\s+/g," ").trim():"";
+}
+// The picked picture's line with the names filled in ("" when it has none).
+function poseDescFilled(rule,id,charName,userName){
+  const d=rulePoseDesc(rule,id); if(!d)return "";
+  return fillTpl(d,{char:charName||"the character",user:userName||state.user||"the player"}).trim();
+}
+// The line the image prompt writer gets under the pose block ("" when there is nothing to say).
+function poseShowsLine(what){ return what?"\n"+fillTpl(up("x_img_pose_shows"),{what}).trim():""; }
 // The pose picture to send for this scene type: one of its pictures, at random ("" when it has none).
 async function rulePosePick(rule){
   const ids=rulePoseIds(rule); if(!ids.length)return {src:"",idx:-1,of:0,id:""};
@@ -25415,6 +25443,25 @@ async function renderRulePoses(rule,box){
     const add=document.createElement('div'); add.className="refSlot empty"; add.title="Add pose pictures";
     add.innerHTML=`<span>＋</span>`; add.onclick=()=>uploadRulePoses(rule,box); box.appendChild(add);
   }
+  // v150.76 — and one line per picture, under the strip
+  const host=box.parentNode&&box.parentNode.querySelector('[data-pose-descs]');
+  if(host)renderRulePoseDescs(rule,host);
+}
+/* v150.76 — one small box per pose picture: what it shows. Kept with the rule as it is typed (like the selfie pose text),
+   keyed by the picture's id, so removing the picture removes its line. */
+function renderRulePoseDescs(rule,host){
+  if(!rule||!host)return;
+  const ids=rulePoseIds(rule);
+  host.innerHTML=ids.map((id,i)=>`<label style="font-weight:400;margin:6px 0 2px">Picture ${i+1} — what it shows <span class="desc" style="display:inline;font-weight:400">(optional)</span></label>
+    <textarea class="fld" data-pose-desc="${esc(id)}" style="min-height:44px" placeholder="e.g. {{char}} kneels in front of {{user}}, looking up at him. Said in the story as what is on screen when this picture is the one drawn.">${esc(rulePoseDesc(rule,id)?String(rule.poseDesc[id]):"")}</textarea>`).join("");
+  host.querySelectorAll('[data-pose-desc]').forEach(ta=>{
+    ta.addEventListener('input',()=>{
+      const id=ta.getAttribute('data-pose-desc');
+      if(!rule.poseDesc||typeof rule.poseDesc!=="object")rule.poseDesc={};
+      if(String(ta.value||"").trim())rule.poseDesc[id]=ta.value; else delete rule.poseDesc[id];
+      _saveImgRules();
+    });
+  });
 }
 async function uploadRulePoses(rule,box){
   const files=await pickFiles("image/*",true);
@@ -29655,7 +29702,9 @@ const REPLY_EXTRA_TPLS={text_timing:["text_timing_days","text_timing_yesterday"]
      them, so they have no block to hang under either. */
   whisper:["whisper_to_you","whisper_aloud","whisper_back_guidance"],
   /* v136.1 — the meeting marker castHistory and the text engines set into a text thread. */
-  text_meet:["text_met_in_person"]};
+  text_meet:["text_met_in_person"],
+  /* v150.76 — what a posted pose picture shows, set into the transcript by castHistory where the picture is. */
+  on_screen:["pose_on_screen"]};
 const REPLY_BLOCKS={
   task:{label:"Task & base instruction",kind:"prompt",promptKey:"baseInstruction",desc:"The core directive + the global base instruction (universal roleplay principles). Universal — true for every character."},
   world:{label:"Universe setting",kind:"dyn",desc:"The current universe's setting text. Universal — true for every character."},
@@ -31637,7 +31686,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"sceneLangRetry"},
     {kind:"prompt",promptKey:"narrateVerbatim"},
     {kind:"prompt",promptKey:"imgFoundation"},{kind:"prompt",promptKey:"imgFrameGuide"},{kind:"prompt",promptKey:"imgPovGuide"},{kind:"prompt",promptKey:"x_img_cast"},{kind:"prompt",promptKey:"x_img_cast_text"},
-    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},{kind:"prompt",promptKey:"x_img_pose_writer"},{kind:"prompt",promptKey:"x_img_pose_roster"},{kind:"prompt",promptKey:"x_img_type_changed"},{kind:"prompt",promptKey:"x_body_block"},
+    {kind:"prompt",promptKey:"x_img_edit_scene"},{kind:"prompt",promptKey:"x_img_edit_move"},{kind:"prompt",promptKey:"x_img_edit_roster_scene"},{kind:"prompt",promptKey:"x_img_edit_roster_move"},{kind:"prompt",promptKey:"x_img_pose_writer"},{kind:"prompt",promptKey:"x_img_pose_shows"},{kind:"prompt",promptKey:"x_img_pose_roster"},{kind:"prompt",promptKey:"x_img_type_changed"},{kind:"prompt",promptKey:"x_body_block"},
     {kind:"dyn",label:"Continuity reference + latest exchange",scope:"chat",desc:"This character's own previous frame and the exchange being drawn. No character sheet is sent — appearances are auto-injected in code (the focal speaker's look), and the sticky scene type is per-character, so each character is drawn alone in their own pose."},
     {kind:"dyn",label:"Routed rule promptStyle",scope:"global-rules",desc:"The chosen scenario rule's camera/pose/shot detail — edited per rule in the Image Generation section, never shown to the router."}]},
   {key:"video_writer",label:"Video Prompt Writer",desc:"Turns a still into ONE motion prompt for the clip. Receives the configured clip length, the shared video ruleset (mid-scene pacing, the facial/hands/body detail, the anatomy rules) and the routed position's own template.",blocks:[
@@ -32838,6 +32887,9 @@ One reply. Not a scene, not a chain of exchanges — one turn.
   /* v136.1 — a meeting in person, set into the text thread where it happened. Written into the
      transcript (castHistory) and the text threads the engines read, so it has no block of its own. */
   text_met_in_person:`(Not a text: you and {{user}} met face to face {{when}}{{where}}. Everything in the thread before this came before that meeting — you have seen each other and talked in person since, so none of it is waiting on a reply, and nobody has been ignoring anybody.)`,
+  /* v150.76 — what a posted pose picture shows, set into the transcript (castHistory) right after the line the picture
+     belongs to: information for whoever reads the scene, never a turn of its own and never a line anyone said. */
+  pose_on_screen:`[ON SCREEN — a picture, not spoken by anyone] {{what}}`,
   watching_now:`# \u26a0\ufe0f THIS IS WHAT IS HAPPENING IN FRONT OF YOU RIGHT NOW \u26a0\ufe0f\nYou are seeing this as it happens. It is not a memory, not something you were told, and not something anyone said — it is in front of you:\n{{what}}\nThis is what your turn answers. React to it as this person would, from where you stand and from what it means to YOU — do not narrate it back, do not describe it as though reporting it to someone, and do not explain what it is. If it does not concern you, that too is a reaction.`,
   /* (!) VOLUME ONLY — WHERE the narration sits belongs to FORMAT RULES, which states it already.
      This rail used to carry "Do not open with scene-setting before you speak" as well, and that is
@@ -41701,7 +41753,7 @@ async function selfieImage(chat,p,rule,desc){
   const _rawStyle=(rule&&rule.promptStyle&&rule.promptStyle.trim())||"";
   const _foundation=!/# ?OUTPUT STRUCTURE/i.test(_rawStyle)?`\n\n${up("imgFoundation")}`:"";
   const sys=up("rewritePrompt")+_foundation+(_rawStyle?`\n\n${_rawStyle}`:"")+"\n\n"+up("imgFrameGuide")+(rulePov(rule)?"\n\n"+up("imgPovGuide"):"");
-  let _pack=null, _castBlock="", _label=p.name;
+  let _pack=null, _castBlock="", _label=p.name, _shows="";
   if(usesRefImage()){
     const solo=Object.assign({},rule,{cast:"solo"});
     _pack=await buildRefPack(solo,p,chat,editModelMaxRefs(effImgModel()),{noScene:true});
@@ -41712,9 +41764,11 @@ async function selfieImage(chat,p,rule,desc){
       if(me&&me.label)_label=me.label;
       const lines=(_pack.people||[]).map(x=>`- ${x.label} = ${x.name}${x.subject?` (${String(x.subject).toLowerCase()})`:""}, whose photo this is (picture ${x.from})`)
         .concat((_pack.unpictured||[]).map(x=>`- ${x.label} = ${x.name}${x.subject?` (${String(x.subject).toLowerCase()})`:""} — NO PICTURE: describe them briefly in words`));
-      _castBlock=fillTpl(up("x_img_pose_writer"),{people:lines.join("\n")||"- (nobody pictured)"})+"\n\n";
+      /* v150.76 — what this pose picture shows, for the writer only: her own description is the photo's (selfie.desc) */
+      try{ _shows=poseDescFilled(rule,pk.id,p.name,chatUserName(chat)||state.user); }catch(e){ _shows=""; }
+      _castBlock=fillTpl(up("x_img_pose_writer"),{people:lines.join("\n")||"- (nobody pictured)"})+poseShowsLine(_shows)+"\n\n";
     }
-    try{ const note=pk.src?`sent ${(_pack.people||[]).length?p.name+"'s":"no"} face picture, then pose picture ${pk.idx+1} of ${pk.of} last`
+    try{ const note=pk.src?`sent ${(_pack.people||[]).length?p.name+"'s":"no"} face picture, then pose picture ${pk.idx+1} of ${pk.of} last${_shows?` — it shows: ${_shows}`:""}`
         :`none: "${rule.label||"?"}" has no pose pictures — face pictures sent`;
       const e=dbg("Image references · pose presets","app","scene type: "+(rule.label||"(none)")+" (selfie)",{sceneType:rule.label||"",posePictures:rulePoseIds(rule).length,result:note});
       dbgDone(e,"ok",note); }catch(e){}
@@ -43483,7 +43537,23 @@ function castHistory(chat,forP,opts){
     const mids=_src.map((m,i)=>_mapped[i]?((m&&m.mid)||""):null).filter(x=>x!==null);
     mids.slice(-Math.max(2,state.histTurns||20)).forEach(id=>{ if(id)opts.mids.add(id); });
   }
-  return compactHistory(mapped);
+  /* v150.76 — WHAT A POSTED POSE PICTURE SHOWS, where the picture is. A scene message whose picture was drawn from a pose
+     picture with a description (m.poseDesc, see illustrate) is followed by one line of information in the Narrator's
+     channel — the pose_on_screen wording, "[ON SCREEN — a picture, not spoken by anyone] …". It is set in AFTER the
+     history cap (it is not a turn and takes no turn's place), only behind a message this reader actually gets, and it
+     starts nothing: unlike a video cue it is never the line a reply answers. A message without one maps exactly as before. */
+  const capped=compactHistory(mapped);
+  const _shows=[]; let _anyShow=false;
+  _src.forEach((m,i)=>{ if(!_mapped[i])return; const w=(m&&typeof m.poseDesc==="string")?m.poseDesc.replace(/\s+/g," ").trim():""; _shows.push(w); if(w)_anyShow=true; });
+  if(!_anyShow) return capped;
+  const _off=mapped.length-capped.length, withShows=[];
+  capped.forEach((h,j)=>{
+    withShows.push(h);
+    const w=_shows[j+_off]; if(!w) return;
+    const t=fillTpl(blkTpl("pose_on_screen"),{what:w}).trim();
+    if(t) withShows.push({role:"user",name:"Narrator",content:t});
+  });
+  return withShows;
 }
 /* (!) v43.7 — THE SAME LINE THREE TIMES IS THE TRANSCRIPT TEACHING REPETITION. Two shapes turn up
    in a built history and neither is content:
@@ -46516,7 +46586,7 @@ async function illustrate(mid,replyText,force,opts){
     try{ _nearby=(inSceneCast(chat)||[]).filter(c=>c&&c.id&&isActiveChar(c)&&(!speaker||c.id!==speaker.id)); }catch(e){}
     /* v150.13 — anyone in the scene set as a girl or a boy (the player included): no picture is made. */
     if([speaker].concat(_nearby).some(_imgChildSubject)||_imgPlayerChild()){
-      msg.imgState="blocked"; msg.imgErr=IMG_CHILD_BLOCK_MSG; delete msg.img;
+      msg.imgState="blocked"; msg.imgErr=IMG_CHILD_BLOCK_MSG; delete msg.img; delete msg.poseDesc; delete msg.poseRuleId; delete msg.poseId;
       persistChats(); refreshBubble(mid); if(force)toast(IMG_CHILD_BLOCK_MSG); return;
     }
 
@@ -46615,6 +46685,7 @@ async function illustrate(mid,replyText,force,opts){
        else in the frame who has a decided outfit gets it too, under their label. A one-person frame
        is written exactly as before. */
     let _pack=null, _castBlock="";
+    let _poseShows="", _poseShowsId="";   // v150.76 — what the picked pose picture shows, names filled ("" = nothing)
     if(usesRefImage()){
       let _involved=[];
       try{
@@ -46633,6 +46704,7 @@ async function illustrate(mid,replyText,force,opts){
            picture each; someone with none is described in words. */
         _pack=await buildPosePack(speaker,rule,_posePick.src,(_pack.people||[]).concat(_pack.unpictured||[]));
         msg.imgPose=rule.id; msg.imgPoseIdx=_posePick.idx; msg.imgPoseId=_posePick.id;
+        try{ _poseShows=poseDescFilled(rule,_posePick.id,speaker?speaker.name:who,chatUserName(chat)||state.user); _poseShowsId=_posePick.id; }catch(e){ _poseShows=""; }
         /* (!) v150.10 — THE POSE PICTURE GOES ALONE. Reported (debug export): a pose frame went out as the
            pose picture plus the previous scene picture, and the player wants only the pose picture. The
            scene chain stands down for a pose frame; the next ordinary frame edits the pose frame's result. */
@@ -46642,6 +46714,7 @@ async function illustrate(mid,replyText,force,opts){
       try{
         const _note=_posePick.src
           ?`sent ${(_pack.people||[]).map(p=>p.player?"the player's":p.name+"'s").join(" and ")||"no"} face picture${(_pack.people||[]).length===1?"":"s"}, then pose picture ${_posePick.idx+1} of ${_posePick.of} last`
+            +(_poseShows?` — it shows: ${_poseShows}`:"")
           :`none: "${(rule&&rule.label)||"?"}" has no pose pictures — face pictures sent`;
         const e=dbg("Image references · pose presets","app","scene type: "+((rule&&rule.label)||"(none)"),
           {sceneType:(rule&&rule.label)||"",posePictures:rulePoseIds(rule).length,result:_note});
@@ -46666,7 +46739,7 @@ async function illustrate(mid,replyText,force,opts){
         const _who=(_pack.people||[]).map(p=>`- ${p.label} = ${_nm(p)} (picture ${p.from})`)
           .concat((_pack.unpictured||[]).map(p=>`- ${p.label} = ${_nm(p)} — NO PICTURE: describe them briefly in words`));
         if(rulePov(rule))_who.push(`- ${state.user||"the player"} is the camera (POV): not in the picture, and no picture of them is sent`);
-        _castBlock=fillTpl(up("x_img_pose_writer"),{people:_who.join("\n")||"- (nobody pictured)"})+"\n\n";
+        _castBlock=fillTpl(up("x_img_pose_writer"),{people:_who.join("\n")||"- (nobody pictured)"})+poseShowsLine(_poseShows)+"\n\n";
       }else
       if(_ppl.length>=2||_unp.length||(_ppl.length===1&&!_ppl[0].speaker)){
         const _lines=_ppl.map(p=>{
@@ -46948,6 +47021,10 @@ async function illustrate(mid,replyText,force,opts){
       });
     }finally{ _frameOverride=null; }
     msg.img=url;msg.imgSrc=url;msg.imgState="done";msg.imgPrompt=finalPrompt;msg.imgCore=_imgCore||finalPrompt;
+    /* v150.76 — the picture is posted: what its pose picture shows goes with it (castHistory reads it). A frame
+       without one carries nothing, so its transcript is exactly what it was. */
+    if(_poseShows&&rule){ msg.poseDesc=_poseShows; msg.poseRuleId=rule.id; msg.poseId=_poseShowsId; }
+    else{ delete msg.poseDesc; delete msg.poseRuleId; delete msg.poseId; }
     // v29 — flag it only when the bytes are really in the store. This used to be set the instant
     // the fetch was FIRED, so a refused capture still reported itself as saved.
     saveMsgImage(mid,url,ok=>{ msg.imgStored=!!ok; try{ persistChats(); }catch(e){} });
@@ -46990,7 +47067,9 @@ async function illustrate(mid,replyText,force,opts){
     // v150.0 — THE BOOK'S TRIGGER: a picture was made (any image mode, or the Generate button) — write up to it.
     try{ bookOnMedia(chat,"story"); }catch(e){}
   }catch(err){
-    msg.imgState="error";msg.imgErr=err.friendly||"";persistChats();refreshBubble(mid);
+    msg.imgState="error";msg.imgErr=err.friendly||"";
+    delete msg.poseDesc; delete msg.poseRuleId; delete msg.poseId;   // v150.76 — no picture, nothing on screen
+    persistChats();refreshBubble(mid);
     if(err.friendly) toast(""+err.friendly);
   }
 }
@@ -61869,6 +61948,8 @@ function renderRules(kind){
         <div class="row" style="margin:0 0 4px"><button class="btn sec small" type="button" data-pose-up="1">＋ Upload</button>
           <button class="btn sec small" type="button" data-pose-gal="1"><svg class="ic"><use href="#i-image"/></svg> Choose from gallery</button></div>
         <div class="desc" data-help style="margin:-2px 0 6px">Neutral pose models (grey 3D figures) for this scene type, shared by every character. When this scene type is drawn — by the scene selector or picked by hand — the speaker's face and yours go first (only the speaker's on a POV scene type) and ONE of these pictures, chosen at random, goes last, to give the pose, the body positions and the framing. With none here, the faces go as usual.</div>
+        <div class="rulePoseDescs" data-pose-descs="1"></div>
+        <div class="desc" data-help style="margin:2px 0 6px">What each picture shows, if you want the story to know. When that picture is the one drawn, the image prompt writer is told, and once the picture is posted the line sits in the characters' transcript where the picture is — as what is on screen, not as something anyone said; it does not start a reply. <code>{{char}}</code> is the one the picture is for, <code>{{user}}</code> is you. A selfie by text keeps her own description: there the line reaches the image prompt writer only.</div>
         <label>Per-class image prompt (injected into the writer when this rule is chosen — NOT shown to the router)</label>
         <select data-tpl="1" style="width:100%;margin-bottom:4px">
           <option value="">Insert a foundation template…</option>
@@ -62499,7 +62580,8 @@ const PLACEHOLDER_DOCS={
   name:"The character's name (schedule generator).",
   energy:"The gamemaster's eagerness level.",
   sensitivity:"The gamemaster's eagerness label.",
-  reason:"Why the gamemaster fired."
+  reason:"Why the gamemaster fired.",
+  what:"What is on screen: a video cue's text, or what a posted pose picture shows (the scene type's own line for it, names filled in)."
 };
 function _phTokens(text){ return [...new Set((String(text||"").match(/\{\{(\w+)\}\}/g)||[]).map(t=>t.slice(2,-2)))]; }
 function _phDoc(t){ return PLACEHOLDER_DOCS[t]||"Filled by this engine at run time (see the prompt text for context)."; }
@@ -62640,6 +62722,7 @@ function ptCatalog(){
   out.push({name:"when",label:"How long ago / how far off",desc:"The words the app puts on a memory, a finished plan or an upcoming one once it has worked out the gap itself — “yesterday”, “three days ago”, “tomorrow”. The character is never asked to subtract one day number from another; these are what it reads instead. Blank a rung and that gap says nothing but the part of the day."});
   out.push({name:"whisper",label:"Asides — whispers and concealed acts",desc:"What /whisper looks like to the person it is for and to everybody else, said or done, plus the note telling the answering character their reply is private too. Written into the transcript by castHistory rather than assembled as a block, so it is not one of the ordered pieces."});
   out.push({name:"text_meet",label:"Met in person since the texts",desc:"The line set into a character's text thread where the two of you met face to face, so a text followed by an evening together does not read as a text left unanswered. Written into the transcript by castHistory and into the proactive and quest text threads, not assembled as a block."});
+  out.push({name:"on_screen",label:"What a pose picture shows (in the transcript)",desc:"The line set into the transcript right after a scene picture whose pose picture has a description (Settings › Image › the scene type): what is on screen, for every character who reads that scene. Information only — never a turn, never spoken. Written into the transcript by castHistory, not assembled as a block."});
   /* v38.0 — each guardrail by name. They are in the shipped template, so the validator has to know
      them or it flags its own default in red; and they are worth listing anyway — this is the list
      the editor shows, so a rule is something you can find, copy and move rather than guess at. */
@@ -63192,7 +63275,8 @@ function renderFragEditor(){
    data for the fragment migrations (FRAG_TPL_CARRY) and the producers, and are no longer listed. */
 const OTHER_WORDING_LABELS={text_timing:"How long the text sat unanswered",when:"How long ago / how far off",
   mem_plan:"Remembering that a plan was made",mem_noshow:"Remembering a meeting that did not happen",
-  whisper:"Asides — whispers and concealed acts",text_meet:"Met in person since the texts"};
+  whisper:"Asides — whispers and concealed acts",text_meet:"Met in person since the texts",
+  on_screen:"What a pose picture shows (in the transcript)"};
 function _otherWordingKeys(){
   const out=[];
   Object.keys(REPLY_EXTRA_TPLS).forEach(g=>(REPLY_EXTRA_TPLS[g]||[]).forEach(k=>{ if((k in BLOCK_TPL_DEFAULTS)&&out.indexOf(k)<0)out.push(k); }));

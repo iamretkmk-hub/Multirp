@@ -451,6 +451,9 @@ cancelled by any new player input (`_heatSeq`).
     rule, so a wordless exit is something the character can actually react to.
 - `mapMsgToApi` converts messages to API form (assistant lines carry `name:`; narrator
   events/presence notes/day markers become Narrator lines).
+- **v150.76** — after the cap below, a message whose picture came from a pose picture with a description (`m.poseDesc`)
+  is followed by one Narrator line, `[ON SCREEN — a picture, not spoken by anyone] …` (piece `pose_on_screen`). It takes
+  no turn's place and starts nothing. See docs/10-media-pipeline.md.
 - `compactHistory` then applies the cost controls: hard cap `histTurns` (default 20 **messages** —
   in a two-character scene that is six or seven exchanges), and optional narration-stripping of all
   but the last `stripKeepFull` messages. Narrator lines are exempt (they carry scene state) and,

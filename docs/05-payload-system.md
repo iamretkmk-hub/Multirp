@@ -1808,3 +1808,12 @@ Two things in the same export are the player's own saved text and were left alon
 wording escalates every turn under Desire (wrap it with `{{if not emotion = Desire}}…{{endif}}`, v150.71's values), and a
 pregnancy tracker line "You are ovulating" with no meaning attached (say what it means to her in the tracker's wording).
 Tests: `tests/heat-reckoning.browser.js`.
+
+## v150.76 — a picture on screen, in the transcript
+
+A scene picture drawn from a pose picture that has a description (Settings › Image › the scene type › *Picture N — what it
+shows*) is followed in the transcript by one line in the Narrator's channel, `[ON SCREEN — a picture, not spoken by anyone]
+…` — the piece `pose_on_screen` (`{{what}}`, Payloads › Other wording). `castHistory` sets it in right after the message the
+picture belongs to, after the `histTurns` cap, so it is information at its place in the history and never a turn: nothing
+answers it the way a video cue's `watching_now` is answered. A message without one maps exactly as before. Details:
+docs/10-media-pipeline.md, "v150.76 — what a pose picture shows".

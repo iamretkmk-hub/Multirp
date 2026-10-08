@@ -786,3 +786,43 @@ herself; that goes to the image prompt writer; after the image she sends a messa
   Saved fragment lists get it once (`FRAG_SHIPPED_ADDS` "v150.74.photo").
 
 Test: `tests/selfie-request.browser.js`.
+
+## v150.76 — what a pose picture shows
+
+Asked: "Add an image description feature like the one we have for videos, but an image has just one description. Say I've
+put 4 pose pictures on one image scene type: they're all that scene, but each one is different. When one is picked at
+random, it should also say what's on screen. Unlike the video cues, it doesn't trigger a response. It's just information
+that takes its place in the characters' dialogue history."
+
+- **Where the player writes it.** Settings › Image › a scene type › under its pose pictures: one small box per picture,
+  *Picture N — what it shows (optional)*. Stored on the rule by picture id, `rule.poseDesc = {<poseId>: "text"}`, and saved
+  as it is typed (`_saveImgRules`, like the selfie pose text); an emptied box keeps no entry. Removing a picture
+  (`rulePoseRemove`) removes its line. `{{char}}` is the one the picture is for (the speaker of the line it illustrates; on
+  a selfie, her) and `{{user}}` the player (`chatUserName`), filled when the picture is drawn (`poseDescFilled`).
+- **The image prompt writer.** When the picture `rulePosePick` chose has a line, the pose block (`x_img_pose_writer`) is
+  followed by one more line, the registry prompt `x_img_pose_shows` (default `This pose picture shows: {{what}}`,
+  Payloads › Image Prompt Writer), so the frame it writes and the line the story keeps describe the same thing. The debug
+  row *Image references · pose presets* ends "… then pose picture 2 of 3 last — it shows: …". The same in the scene path
+  (`illustrate`) and a selfie by text (`selfieImage`).
+- **On the posted message.** Once the picture is posted (`illustrate` succeeded), the message keeps `poseDesc` (the filled
+  line), `poseRuleId` and `poseId`. A picture that fails, a child-blocked frame, or a new picture of the same message drawn
+  from a picture with no line (or with no pose picture at all) clears all three, so nothing stays behind a picture that is
+  not there.
+- **In the transcript.** `castHistory` sets one line in right after a message that has `poseDesc`, in the Narrator's channel
+  like every non-dialogue beat: `{role:"user", name:"Narrator", content:"[ON SCREEN — a picture, not spoken by anyone] …"}`.
+  The wording is the piece `pose_on_screen` (`{{what}}`), Payloads › Other wording › *What a pose picture shows (in the
+  transcript)*. It sits behind its message only when that reader gets the message (the scene cut, the day window, the
+  witness and whisper rules decide as before), and it is set in AFTER `compactHistory`, so it takes no turn's place under
+  `histTurns` and is never thinned. It reaches every path that reads `castHistory`: solo, multi, heat, gamemaster and a
+  text reply. The memory builder and the Story Book read `chat.messages` themselves and were not changed.
+- **It starts nothing.** Unlike a video cue (`fireVidCue` → `watching_now`, which is the line the next turn answers), nothing
+  is queued and no turn is started; it is never a player turn and is not repeated anywhere else — it is simply there at its
+  place in the history on every later turn.
+- **A selfie by text** keeps her own description (`selfie.desc`) as the one the thread reads ("(sent a photo: …)"); the pose
+  picture's line goes to her image prompt writer only and is not stored on the photo message.
+- **The playground** (Image Playground) is not a story and posts nothing into a chat: its writer runs before the picture is
+  picked, so it gets no line.
+- **Nothing else changes:** a message without `poseDesc` maps exactly as before, so every payload without one is
+  byte-identical (`payload-faithful`).
+
+Test: `tests/pose-desc.browser.js`.

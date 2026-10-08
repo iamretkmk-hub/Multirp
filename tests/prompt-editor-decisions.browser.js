@@ -84,6 +84,35 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the record is the one the payload reads (emotion, its tone at that intensity, the id/superego answer)", hand.dec&&hand.dec.emotion===hand.em&&hand.dec.intensity==="intense"&&!!hand.dec.tone&&hand.dec.ego==="id_winning", JSON.stringify(hand.dec));
     ok("an option that needs the decision fires only with it (the compass at id_winning)", hand.b.join(" ").indexOf("id_winning")>=0&&hand.a.join(" ").indexOf("id_winning")<0, JSON.stringify(hand));
 
+    console.log("\n[B2 — the preview's decisions panel]");
+    const pv=await pg.evaluate(async()=>{
+      const em=__PE.S.meta.decisions.emotions[0].name;
+      $("#plKind").value="solo"; $("#plKind").onchange();
+      PV.src="hand"; PV.emotion=em; PV.intensity="intense"; PV.ego="torn"; PV.asks={}; PV.flags=["character"]; pvSave(); fillDecControls();
+      const asks=[...document.querySelectorAll("#decAsks [data-ask]")].map(e=>e.dataset.ask);
+      refreshPreview(); await new Promise(r=>setTimeout(r,1500));
+      const p=__PE.S.preview, txt=$("#plOut").textContent;
+      return {asks,dec:p.decisions,fired:(p.fired||[]).map(f=>f.id+":"+(f.opts||[]).map(o=>o.id).join("/")),line:/Decisions \(set by hand\)/.test(txt),em}; });
+    ok("set by hand: the panel lists the path's questions by the key the app stores them under", pv.asks.length>=1&&pv.asks.every(k=>/^q_.+__.+/.test(k)), JSON.stringify(pv.asks));
+    ok("and the preview is built with those decisions, and says so", pv.dec&&pv.dec.emotion===pv.em&&pv.dec.ego==="torn"&&pv.line, JSON.stringify(pv.dec));
+    ok("a flag set on their last reply reaches the guardrails", /guardrails:[^ ]*(broke_character|consistency_character)/.test(pv.fired.join(" ")), JSON.stringify(pv.fired.filter(x=>/guard/.test(x))));
+    const pa=await pg.evaluate(async()=>{ PV.src="ask"; PV.asked=null; await decAskNow(); await new Promise(r=>setTimeout(r,300));
+      return {src:PV.src,dec:PV.asked&&PV.asked.decisions,calls:(PV.asked&&PV.asked.calls||[]).length,txt:/Decisions \(asked\)/.test($("#plOut").textContent)}; });
+    ok("Ask: the decision model answers this reply's request and the preview uses it", pa.src==="ask"&&pa.dec&&!!pa.dec.emotion&&pa.calls>=1&&pa.txt, JSON.stringify(pa).slice(0,300));
+    const items=await pg.evaluate(async()=>{
+      const I=__PE.ITEMS(), dec=I.filter(it=>it.group==="Decision agents");
+      const ego=__PE.findItem("prompt:x_ego_pick"), emo=I.find(it=>it.type==="emo"&&/\.desc$/.test(it.key));
+      const bg=I.filter(it=>it.group==="Background engines").map(it=>it.key);
+      __PE.setVal(emo,__PE.itemVal(emo)+" EMO-EDIT");
+      const ex=buildExport();
+      select(ego); await new Promise(r=>setTimeout(r,2500));
+      const p=__PE.S.preview;
+      return {n:dec.length,ego:ego&&ego.group,egoInBg:bg.indexOf("x_ego_pick")>=0,emo:emo&&emo.key,exp:ex.settings.emotions||"",
+        prev:{dec:!!(p&&p.decision),feature:p&&p.feature,qs:(p&&p.messages||[]).map(m=>m.role).join(" | ")}}; });
+    ok("the decision agents are their own group, by feature, and not among the background engines", items.n>=30&&items.ego==="Decision agents"&&!items.egoInBg, JSON.stringify(items).slice(0,300));
+    ok("an emotion's description is an item, and its edit travels in the export's emotion list", !!items.emo&&/EMO-EDIT/.test(items.exp)&&Array.isArray(JSON.parse(items.exp)), JSON.stringify({emo:items.emo,exp:String(items.exp).slice(0,120)}));
+    ok("a decision agent's prompt previews the request it sends (its state and its questions)", items.prev.dec&&items.prev.feature==="Emotion pick"&&/state/.test(items.prev.qs)&&/question · ego/.test(items.prev.qs), JSON.stringify(items.prev));
+
     console.log("\n[D — the reply check, in the scene]");
     const ck=await pg.evaluate(async()=>{
       const sc={chat:{presentIds:["p_buket"]},opener:"*Akşam.*",turns:[{role:"user",content:"Nasılsın?"},{role:"assistant",speaker:"Buket Özüçak",speakerId:"p_buket",content:"\"İyiyim.\" *Emre gülümsedi ve oturdu.*"}]};

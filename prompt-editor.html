@@ -263,6 +263,13 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <label title="Replies are being read aloud (the spoken_delivery block)"><input type="checkbox" id="tVoice"> voiced aloud</label>
         <label title="They have already reckoned with a heat scene with the person they answer (the after_heat block)"><input type="checkbox" id="tAfterHeat"> after heat</label>
       </div>
+      <div class="ctl" id="decRow" title="What the decision model answered before this reply. The app asks it every reply (the emotion pick, the id/superego answer, every question this path's fragments ask); options that need an answer stay out without one.">
+        <span class="stat">Decisions:</span>
+        <select id="dSrc"><option value="none">none (no answers)</option><option value="hand">set by hand</option><option value="ask">asked now</option></select>
+        <span id="dHand"><select id="dEmo"></select><select id="dInt"></select><select id="dEgo"></select></span>
+        <button class="btn sm" id="btnDecAsk" type="button" title="Ask the decision model for this reply's decisions, as the app does, and use them">Ask</button>
+      </div>
+      <div class="ctl" id="decAsks" hidden></div>
       <div class="ctl">
         <label>Story data <select id="worldSel"><option value="sample">Sample: Isdemir Lojmanları</option></select></label>
         <button class="btn sm" id="btnWorld" type="button">Use my own story…</button>
@@ -1006,6 +1013,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
        hand (the preview's panel); o.decide asks for it with the line the app would hand the emotion pick (sendMessage's
        player line, a gamemaster's event, the newest text), in the mode the editor set (off / or / claude). The memory-status
        backfill that rides the first pick is skipped: the scene is rebuilt every turn, so it would be asked every turn. */
+    /* the reply check's verdict on the speaker's last reply, set by hand (the preview): the guardrails options read it */
+    if(Array.isArray(o.replyFlags)){ var lastOwn=null; (chat.messages||[]).forEach(function(m){ if(m&&m.role==="assistant"&&m.speakerId===p.id&&!m.narratorEvent)lastOwn=m; });
+      if(lastOwn)lastOwn.replyFlags=o.replyFlags.slice(); }
     var decRecs=[];
     if(o.decisions){ chat.emo=Object.assign({},chat.emo||{}); chat.emo[p.id]=decRecord(o.decisions,kind); }
     else if(o.decide){
@@ -1486,8 +1496,24 @@ function itemDef(it){
   if(it.type==="tpl"){ if(it.key.indexOf("eng:")===0){ const e=S.meta.engines[it.key.slice(4)]; return e?e.tpl:""; } return ""; }   // v150.66 — engine layouts only
   if(it.type==="fx"){ const v=fxGet(S.meta.fragDefaults,it.key); return v==null?"":v; }
   if(it.type==="setting") return S.meta.settingsDef[it.key]||"";
+  if(it.type==="emo") return emoField(emoShipped(),it.key);
   return "";
 }
+/* (v150.74) THE EMOTION LIST, field by field. Each emotion's description is one criterion of the emotion question (the decision
+   model reads it to tell the emotions apart); its three tones (mild, clear, intense) are what {{tone}} prints. The list travels
+   in a prompt pack as settings.emotions (JSON, "" = the shipped list). An item is "emo:<name>.desc" or "emo:<name>.tones"
+   (the three words, comma-separated). */
+function emoShipped(){ return (S.meta&&S.meta.decisions&&S.meta.decisions.emotionsDefault)||[]; }
+function emoParse(raw){ if(!raw) return null; try{ const v=JSON.parse(raw); return Array.isArray(v)&&v.length?v:null; }catch(e){ return null; } }
+function emoList(){ const raw=Object.prototype.hasOwnProperty.call(S.settings,"emotions")?S.settings.emotions:(S.orig&&S.orig.settings&&S.orig.settings.emotions); return emoParse(raw)||emoShipped(); }
+function emoOrigList(){ return emoParse(S.orig&&S.orig.settings&&S.orig.settings.emotions)||emoShipped(); }
+function emoSplit(key){ const i=String(key).lastIndexOf("."); return {name:String(key).slice(0,i),field:String(key).slice(i+1)}; }
+function emoField(list,key){ const r=emoSplit(key), e=(list||[]).find(x=>x&&x.name===r.name); if(!e) return "";
+  return r.field==="tones"?(Array.isArray(e.tones)?e.tones.join(", "):""):String(e.desc||""); }
+function emoSet(key,text){ const r=emoSplit(key), L=JSON.parse(JSON.stringify(emoList())), e=L.find(x=>x&&x.name===r.name); if(!e) return;
+  if(r.field==="tones"){ const t=String(text).split(",").map(x=>x.trim()).filter(Boolean); e.tones=[t[0]||"",t[1]||t[0]||"",t[2]||t[1]||t[0]||""]; }
+  else e.desc=String(text);
+  S.settings.emotions=JSON.stringify(L)===JSON.stringify(emoShipped())?"":JSON.stringify(L); }
 function isLayout(k){ return S.meta&&S.meta.layoutKeys.indexOf(k)>=0; }
 function itemVal(it){
   if(it.type==="prompt"){ const v=S.prompts[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }   // blank = the default, as StoryMind's up() reads it
@@ -1495,6 +1521,7 @@ function itemVal(it){
   if(it.type==="tpl"){ const v=S.tpl[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }
   if(it.type==="fx"){ const v=fxGet(curFrags(),it.key); return v==null?"":v; }
   if(it.type==="setting") return Object.prototype.hasOwnProperty.call(S.settings,it.key)?S.settings[it.key]:itemDef(it);
+  if(it.type==="emo") return emoField(emoList(),it.key);
   return "";
 }
 function origVal(it){
@@ -1504,6 +1531,7 @@ function origVal(it){
   if(it.type==="tpl"){ const b=parseObj(o.settings&&o.settings.payloadTemplates); const v=b[it.key]; return (typeof v==="string"&&v.trim())?v:itemDef(it); }
   if(it.type==="fx"){ const v=fxGet(origFrags(),it.key); return v==null?"":v; }
   if(it.type==="setting") return (o.settings&&typeof o.settings[it.key]==="string")?o.settings[it.key]:itemDef(it);
+  if(it.type==="emo") return emoField(emoOrigList(),it.key);
   return "";
 }
 function setVal(it,text){
@@ -1512,6 +1540,7 @@ function setVal(it,text){
   else if(it.type==="tpl"){ if(!text.trim()||text.trim()===itemDef(it).trim()) delete S.tpl[it.key]; else S.tpl[it.key]=text; }
   else if(it.type==="fx"){ if(!Array.isArray(S.fx)) S.fx=JSON.parse(JSON.stringify(curFrags())); fxSet(S.fx,it.key,text); }
   else if(it.type==="setting") S.settings[it.key]=text;
+  else if(it.type==="emo") emoSet(it.key,text);
   saveDraft(); scheduleApply();
 }
 function parseObj(s){ if(!s) return {}; if(typeof s==="object") return s; try{ const o=JSON.parse(s); return (o&&typeof o==="object")?o:{}; }catch(e){ return {}; } }
@@ -1546,15 +1575,26 @@ function allItems(){
      {{call//format}}), so they sit with the other wording, as in the app */
   const replyPrompts=new Set(["baseInstruction","formatRules"]);
   replyPrompts.forEach(k=>{ const r=regByKey(k); if(r) out.push({type:"prompt",key:k,label:r.label||k,group:"Other wording",sub:"Your base instruction and format rules",hint:(r.hint||"")+" Sent only where a fragment calls {{call//task//full}} or {{call//format}}."}); });
+  /* 3 · the decision agents (v150.74): every Decisions-API request's prompts, by feature, then the emotion list. A question
+     prompt is the question, then "YES:" and "NO:" lines saying what each answer means (a choice's options are fixed by the app,
+     except the emotions, whose descriptions are below). The fragments' own questions are with their fragments. */
+  const decKeys=new Set();
+  ((m.decisions&&m.decisions.features)||[]).forEach(f=>(f.keys||[]).forEach(k=>{ const r=regByKey(k); if(!r||decKeys.has(k)) return; decKeys.add(k);
+    out.push({type:"prompt",key:k,label:r.label||k,group:"Decision agents",sub:f.label,feature:f.name,hint:(r.hint||"")+" Read by the Decisions API ("+f.name+"); it answers with probabilities, never text."}); }));
+  emoList().forEach(e=>{ if(!e||!e.name) return;
+    out.push({type:"emo",key:e.name+".desc",label:e.name+" — what it is",group:"Decision agents",sub:"Emotions (the choices of the emotion question)",feature:"Emotion pick",
+      hint:"The description the decision model reads to tell this emotion from the others. A fragment's condition names the emotion (emotion = "+e.name+")."});
+    out.push({type:"emo",key:e.name+".tones",label:e.name+" — tones (mild, clear, intense)",group:"Decision agents",sub:"Emotions (the choices of the emotion question)",feature:"Emotion pick",
+      hint:"Three words, comma-separated: what {{tone}} prints at each intensity."}); });
   /* 4 · engine prompts */
   const engByPrompt={}; Object.keys(m.engines).forEach(ek=>{ const e=m.engines[ek]; (engByPrompt[e.promptKey]=engByPrompt[e.promptKey]||[]).push(ek); });
-  m.registry.forEach(r=>{ if(replyPrompts.has(r.key)) return;
+  m.registry.forEach(r=>{ if(replyPrompts.has(r.key)||decKeys.has(r.key)) return;
     out.push({type:"prompt",key:r.key,label:r.label,group:"Background engines",hint:r.hint,engines:engByPrompt[r.key]||[]}); });
   /* 5 · engine payload layouts */
   Object.keys(m.engines).forEach(ek=>{ const e=m.engines[ek];
     out.push({type:"tpl",key:"eng:"+ek,label:e.label,group:"Engine payload layouts",hint:"The engine's whole payload. {{call//prompt}} is its prompt; the other calls are the story data it is handed.",engine:ek}); });
   /* 6 · models and switches */
-  m.packKeys.filter(k=>["blockTpls","payloadTemplates","fragments","fragAdds"].indexOf(k)<0).forEach(k=>out.push({type:"setting",key:k,label:k,group:"Models & switches",hint:"Stored as text exactly as the app keeps it."}));
+  m.packKeys.filter(k=>["blockTpls","payloadTemplates","fragments","fragAdds","emotions"].indexOf(k)<0).forEach(k=>out.push({type:"setting",key:k,label:k,group:"Models & switches",hint:"Stored as text exactly as the app keeps it."}));
   return out;
 }
 let ITEMS=[];
@@ -1709,6 +1749,7 @@ function autoPreviewMode(){
   let mode="reply";
   if(it.type==="tpl"&&it.key.indexOf("eng:")===0) mode=it.key;
   else if(it.type==="prompt"&&it.engines&&it.engines.length) mode="eng:"+it.engines[0];
+  else if(it.feature) mode="dec:"+it.feature;   // v150.74 — a decision agent's prompt previews its request
   /* v150.66 — a fragment item previews a path it is on (its own path for a path box) */
   if(it.type==="fx"&&Array.isArray(it.paths)&&it.paths.length&&mode==="reply"){ const cur=$("#plKind").value; if(it.paths.indexOf(cur)<0) $("#plKind").value=it.paths[0]; }
   if(mode!==previewMode){ previewMode=mode; fillPreviewControls(); }
@@ -1720,8 +1761,10 @@ function fillPreviewControls(){
   const it=curItem();
   const engs=(it&&it.engines&&it.engines.length)?it.engines:(previewMode.indexOf("eng:")===0?[previewMode.slice(4)]:[]);
   engs.forEach(ek=>opts.push(`<option value="eng:${esc(ek)}">Engine · ${esc(S.meta.engines[ek].label)}</option>`));
-  const keep=previewMode.indexOf("eng:")===0?previewMode:(sel.value&&sel.value.indexOf("eng:")<0?sel.value:"solo");
+  if(it&&it.feature) opts.push(`<option value="dec:${esc(it.feature)}">Decision · ${esc(it.feature)}</option>`);
+  const keep=(previewMode.indexOf("eng:")===0||previewMode.indexOf("dec:")===0)?previewMode:(sel.value&&sel.value.indexOf(":")<0?sel.value:"solo");
   sel.innerHTML=opts.join(""); sel.value=keep; if(!sel.value) sel.value="solo";
+  fillDecControls();
   const w=S.world; if(!w) return;
   const sp=$("#plSpeaker"), keepSp=sp.value;
   sp.innerHTML=w.cast.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}${w.present.indexOf(c.id)>=0?" · here":""}</option>`).join("");
@@ -1730,7 +1773,87 @@ function fillPreviewControls(){
   tg.innerHTML=`<option value="">(the last line)</option><option value="__user__">${esc(w.user||"the player")}</option>`+w.cast.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
   tg.value=keepT||"";
 }
-$("#plKind").onchange=()=>{ const v=$("#plKind").value; previewMode=v.indexOf("eng:")===0?v:"reply"; refreshPreview(); };
+$("#plKind").onchange=()=>{ const v=$("#plKind").value; previewMode=v.indexOf("eng:")===0?v:(v.indexOf("dec:")===0?v:"reply"); fillDecControls(); refreshPreview(); };
+/* ---------------- (v150.74) the preview's decisions ----------------
+   PV holds what the reply's decisions are in the preview: none, set by hand (an emotion and its intensity, the id/superego
+   answer, a yes or no for each question this path's fragments ask, the reply check's flags on the speaker's last reply), or
+   asked now (the decision model answers, in the mode the tests use). Kept per browser. */
+const PV=Object.assign({src:"none",emotion:"",intensity:"clear",ego:"",asks:{},flags:[],asked:null},lsGet("pvdec",{}));
+function pvSave(){ lsSet("pvdec",{src:PV.src,emotion:PV.emotion,intensity:PV.intensity,ego:PV.ego,asks:PV.asks,flags:PV.flags}); }
+/* every option on this path that asks the decision model: its key is the one the app stores the answer under */
+function pathAsks(kind){ const out=[];
+  curFrags().forEach(f=>{ if(!f||f.on===false||(f.paths||[]).indexOf(kind)<0) return;
+    (f.options||[]).forEach(o=>{ if(!o||o.on===false||!String(o.ask||"").trim()) return;
+      const on=(Array.isArray(o.paths)&&o.paths.length)?o.paths:(f.paths||[]); if(on.indexOf(kind)<0) return;
+      out.push({key:"q_"+f.id+"__"+o.id,frag:f.name||f.id,name:o.name||o.id,ask:String(o.ask),code:String(o.code||"")}); }); });
+  return out; }
+function fillDecControls(){
+  const d=S.meta&&S.meta.decisions; if(!d) return;
+  const kind=$("#plKind").value||"solo", reply=(S.meta.kinds||[]).indexOf(kind)>=0;
+  $("#decRow").hidden=!reply; if(!reply){ $("#decAsks").hidden=true; return; }
+  $("#dSrc").value=PV.src;
+  $("#dEmo").innerHTML=`<option value="">emotion: none</option>`+emoList().map(e=>`<option value="${esc(e.name)}">${esc(e.name)}</option>`).join("");
+  $("#dEmo").value=PV.emotion||"";
+  $("#dInt").innerHTML=(d.emoLevels||[]).map(l=>`<option value="${esc(l.k)}">${esc(l.k)}</option>`).join(""); $("#dInt").value=PV.intensity||"clear";
+  $("#dEgo").innerHTML=`<option value="">id/superego: none</option>`+(d.egoLevels||[]).map(l=>`<option value="${esc(l.k)}" title="${esc(l.desc)}">${esc(l.k.replace(/_/g," "))}</option>`).join("");
+  $("#dEgo").value=PV.ego||"";
+  $("#dHand").hidden=PV.src!=="hand";
+  const asks=pathAsks(kind), flags=(d.replyChecks||[]);
+  const host=$("#decAsks"); host.hidden=PV.src!=="hand";
+  host.innerHTML=`<span class="stat">Questions (${asks.length}):</span>`+(asks.length?asks.map(a=>{ const v=PV.asks[a.key]; const st=v==null?"":(v>=0.5?"yes":"no");
+      return `<label title="${esc(a.frag+" · "+a.name+": "+a.ask+(a.code?" — and its condition: "+a.code:""))}">${esc(a.name)} <select data-ask="${esc(a.key)}"><option value=""${st===""?" selected":""}>—</option><option value="yes"${st==="yes"?" selected":""}>yes</option><option value="no"${st==="no"?" selected":""}>no</option></select></label>`; }).join(""):`<span class="stat">none on this path</span>`)
+    +`<span class="stat" style="margin-left:8px">Their last reply was marked:</span>`+flags.map(q=>`<label title="The reply check found the speaker's last reply ${esc(q.what)}"><input type="checkbox" data-flag="${esc(q.k)}"${PV.flags.indexOf(q.k)>=0?" checked":""}> ${esc(q.label)}</label>`).join("");
+  host.querySelectorAll("[data-ask]").forEach(el=>el.onchange=()=>{ const k=el.dataset.ask; if(!el.value) delete PV.asks[k]; else PV.asks[k]=el.value==="yes"?0.95:0.05; pvSave(); refreshPreview(); });
+  host.querySelectorAll("[data-flag]").forEach(el=>el.onchange=()=>{ const k=el.dataset.flag; PV.flags=PV.flags.filter(x=>x!==k); if(el.checked) PV.flags.push(k); pvSave(); refreshPreview(); });
+}
+$("#dSrc").onchange=()=>{ PV.src=$("#dSrc").value; pvSave(); fillDecControls(); if(PV.src==="ask"&&!PV.asked) return decAskNow(); refreshPreview(); };
+["#dEmo","#dInt","#dEgo"].forEach(id=>$(id).addEventListener("change",()=>{ PV.emotion=$("#dEmo").value; PV.intensity=$("#dInt").value; PV.ego=$("#dEgo").value; pvSave(); refreshPreview(); }));
+$("#btnDecAsk").onclick=()=>decAskNow();
+/* Ask the decision model for this preview's reply, in the tests' mode; the answers stay until you ask again or change paths. */
+async function decAskNow(){
+  if(!ENG.ready) return;
+  const m=decMode(); if(m==="off"){ toast("No decision model is reachable: add your OpenRouter key, or open the editor inside Claude",6000); return; }
+  $("#plStat").textContent="asking the decision model ("+DEC_LABEL[m]+")…";
+  try{
+    const v=$("#plKind").value||"solo";
+    const p=await withDecisions(()=>engCall("build",Object.assign(previewArgs(v),{decide:true}),120000),m);
+    PV.asked={kind:v,decisions:p.decisions||null,calls:p.decCalls||[],mode:m}; PV.src="ask"; pvSave();
+    S.preview=p; S.preview.err=null; fillDecControls(); renderPreview();
+  }catch(e){ toast("The decision model did not answer: "+(e.message||e),6000); $("#plStat").textContent=""; }
+}
+/* (v150.74) A decision agent's preview: the request it sends, built by the app from the preview story — the reply's decisions
+   from a reply on the last path previewed, the reply check on the speaker's last reply. The others are made during play
+   (gates when something is filed, the router, movement, the Gamemaster…): the last one an engine run recorded is shown. */
+function lastReplyKind(){ const k=lsGet("pvkind","solo"); return (S.meta.kinds||[]).indexOf(k)>=0?k:"solo"; }
+function decReqMessages(rec){
+  const b=rec.body||{}, L=[];
+  L.push({role:"state",content:typeof b.state==="string"?b.state:JSON.stringify(b.state==null?"":b.state,null,1)});
+  Object.keys(b.questions||{}).forEach(k=>{ const q=b.questions[k]||{};
+    L.push({role:"question · "+k+" ("+(q.type||"?")+")",content:String(q.instructions||"")+"\n\n"+Object.keys(q.criteria||{}).map(c=>"• "+c+": "+q.criteria[c]).join("\n")+(rec.answers&&rec.answers[k]?"\n\nANSWER: "+JSON.stringify(rec.answers[k]):"")}); });
+  return L;
+}
+async function decPreview(feature){
+  const k=lastReplyKind(); let rec=null, note="";
+  if(feature==="Emotion pick"){
+    const p=await withDecisions(()=>engCall("build",Object.assign(previewArgs(k),{decide:true})),"off");
+    rec=(p.decCalls||[])[0]||null; note=`The request the app sends before a ${esc(KIND_LABEL[k]||k)} reply (switch paths with the last reply path you previewed). Nothing is answered here: use Decisions → Ask on a reply path for answers.`;
+    if(!rec) note=`No request: on this ${esc(KIND_LABEL[k]||k)} reply nothing needs deciding (the emotion pick is off in this pack, and no fragment option on the path asks a question that applies).`;
+  }else if(feature==="Reply check"){
+    const r=await withDecisions(()=>engCall("check",{kind:k,speakerId:$("#plSpeaker").value}),"off");
+    rec=r&&(r.calls||[])[0]||null; note=rec?"The request the app sends after a reply is posted: here, on the speaker's last reply in the preview story.":(r&&!r.on?"The reply check is off in this pack.":"The speaker has no reply in the preview story to check.");
+  }else{
+    Object.values(ENGRUN.byScene||{}).forEach(r=>(r.calls||[]).forEach(c=>{ if(c&&c.decision&&c.feature===feature&&(!rec||c.at>rec.at)) rec=c; }));
+    note=rec?"The last request an engine run recorded (it is made during play, not for a single reply).":"This request is made during play, not for one reply. Run an engine test (Engine tests) and the last one recorded shows here.";
+  }
+  return {decision:true,feature,messages:rec?decReqMessages(rec):[],rec,note};
+}
+function previewArgs(v){ return {kind:v,speakerId:$("#plSpeaker").value,targetId:$("#plTarget").value||null,noHistory:!$("#plHist").checked,turn:turnOpts()}; }
+/* what the build is told about decisions, from PV */
+function pvDecArgs(v){
+  if(PV.src==="hand") return {decisions:{emotion:PV.emotion,intensity:PV.intensity,ego:PV.ego,asks:PV.asks},replyFlags:PV.flags.slice()};
+  if(PV.src==="ask"&&PV.asked&&PV.asked.kind===v&&PV.asked.decisions){ const d=PV.asked.decisions; return {decisions:{emotion:d.emotion,intensity:d.intensity,ego:d.ego,asks:d.asks||{}}}; }
+  return {};
+}
 ["#plSpeaker","#plTarget","#plHist","#tArriving","#tVideo","#tVoice","#tAfterHeat"].forEach(s=>$(s).addEventListener("change",refreshPreview));
 function turnOpts(){ return {arriving:$("#tArriving").checked,video:$("#tVideo").checked,voice:$("#tVoice").checked,afterHeat:$("#tAfterHeat").checked}; }
 /* Why a piece can come back empty. Most pieces are conditional by design: an empty one is the app doing
@@ -1785,15 +1908,29 @@ async function refreshPreview(){
     $("#plStat").textContent="building…";
     try{
       if(v.indexOf("eng:")===0) S.preview=Object.assign({engine:true},await engCall("buildEngine",{key:v.slice(4),speakerId:$("#plSpeaker").value}));
-      else S.preview=await engCall("build",{kind:v,speakerId:$("#plSpeaker").value,targetId:$("#plTarget").value||null,noHistory:!$("#plHist").checked,turn:turnOpts()});
+      else if(v.indexOf("dec:")===0) S.preview=await decPreview(v.slice(4));
+      else { lsSet("pvkind",v); S.preview=await engCall("build",Object.assign(previewArgs(v),pvDecArgs(v))); }
+      if(S.preview&&!S.preview.engine&&!S.preview.decision&&PV.src==="ask"&&PV.asked&&PV.asked.kind===v){ S.preview.decisions=PV.asked.decisions; S.preview.decCalls=PV.asked.calls; }
       S.preview.err=null;
     }catch(e){ S.preview={messages:[],err:e.message}; }
     renderPreview();
   },120);
 }
+function decisionsLine(d,src){
+  const how=src==="hand"?"set by hand":src==="ask"?"asked":"stored in the story from its last reply";
+  if(!d||(!d.emotion&&!d.ego&&!Object.keys(d.asks||{}).length)) return `Decisions (${how}): none — every option that needs one stays out.`;
+  const asks=Object.keys(d.asks||{}).map(k=>k.replace(/^q_/,"").replace("__"," · ")+" "+Math.round(d.asks[k]*100)+"%");
+  return `Decisions (${how}): ${d.emotion?esc(d.emotion)+" ("+esc(d.intensity||"")+(d.tone?", "+esc(d.tone):"")+")":"no emotion"} · ${d.ego?esc(d.ego.replace(/_/g," ")):"no id/superego answer"}${asks.length?" · "+esc(asks.join(", ")):""}`;
+}
 function renderPreview(){
   const p=S.preview, out=$("#plOut");
-  $("#plTargetWrap").hidden=!!(p&&p.engine); $("#turnRow").hidden=!!(p&&p.engine);
+  $("#plTargetWrap").hidden=!!(p&&(p.engine||p.decision)); $("#turnRow").hidden=!!(p&&(p.engine||p.decision));
+  if(p&&p.decision){
+    out.innerHTML=`<div class="stat" style="font-size:12.5px"><b>${esc(p.feature)}</b> · a Decisions-API request: a state and typed questions, answered with probabilities. ${p.note||""}</div>`+
+      (p.messages||[]).map((m,i)=>`<div class="msg ${i===0?"user":"system"}"><header>${esc(m.role)}<span class="stat">${fmtN(String(m.content||"").length)} chars</span></header><pre>${esc(m.content)}</pre></div>`).join("");
+    $("#plStat").textContent=p.rec?`${Object.keys((p.rec.body||{}).questions||{}).length} questions · ${fmtN(JSON.stringify(p.rec.body||{}).length)} chars`:"";
+    return;
+  }
   if(!p){ out.innerHTML=`<div class="empty">Building the first payload…</div>`; return; }
   if(p.err){ out.innerHTML=`<div class="empty"><b>Could not build this payload.</b><br>${esc(p.err)}</div>`; $("#plStat").textContent=""; return; }
   const find=$("#plFind").value.trim();
@@ -1807,7 +1944,9 @@ function renderPreview(){
     const fired=(p.fired||[]).map(f=>esc(f.name)+((f.opts||[]).length?" ("+f.opts.map(o=>esc(o.name)+(o.by==="code"?"":" — asked "+Math.round(o.p*100)+"%")).join(", ")+")":""));
     notes.push(`<span data-fired>Fragments that sent something (${(p.fired||[]).length}): ${fired.join(" · ")||"none"}</span>`);
     const none=(p.asked||[]).filter(a=>a.p==null);
-    if((p.asked||[]).length) notes.push(`<span data-asked>Asked options: ${(p.asked||[]).map(a=>esc(a.name)+" "+(a.p==null?"(no stored answer — counts as no)":Math.round(a.p*100)+"%")).join(", ")}${none.length?". The editor asks nothing: an option is asked only in the real app.":""}</span>`);
+    if((p.asked||[]).length) notes.push(`<span data-asked>Asked options: ${(p.asked||[]).map(a=>esc(a.name)+" "+(a.p==null?"(no answer — counts as no)":Math.round(a.p*100)+"%")).join(", ")}${none.length&&PV.src==="none"?". No decisions in this preview: set them by hand or Ask (Decisions, above).":""}</span>`);
+    notes.push(`<span data-decisions>${decisionsLine(p.decisions,PV.src)}</span>`);
+    if((p.decCalls||[]).length) notes.push(`<details><summary class="stat" style="cursor:pointer">The decision request (${esc(DEC_LABEL[(p.decCalls[0]||{}).mode]||"")})</summary>${p.decCalls.map(c=>decReqMessages(c).map(m=>`<div class="msg system"><header>${esc(m.role)}</header><pre>${esc(m.content)}</pre></div>`).join("")).join("")}</details>`);
   }
   if(p.unknownCalls&&p.unknownCalls.length) notes.push(`<span style="color:var(--danger)">Unknown names in the fragments: ${p.unknownCalls.map(esc).join(", ")}</span>`);
   if(p.unknownVars&&p.unknownVars.length) notes.push(`<span style="color:var(--warn)">Unknown values: ${p.unknownVars.map(esc).join(", ")}</span>`);
@@ -2135,6 +2274,11 @@ function modelBoxHTML(){
     <div class="row"><label class="stat"><input type="checkbox" class="pmReason" ${testReasoning()?"checked":""}> thinking (reasoning) on for the replies. Models that only work with reasoning get it on automatically.</label></div>
     ${pv==="nano"?`<div class="row"><label class="stat"><input type="checkbox" class="pmEngApi" ${engOnApi()?"checked":""}> engine tests: send the background engines to NanoGPT too (with the models in your prompts file); off sends them to OpenRouter</label></div>`:""}
     <div class="stat">Each reply is written by StoryMind's own request for a roleplay reply, sent to ${A.label}: this model, with the temperature, token limit and thinking setting from your prompts file. The key stays in this browser.</div>`;
+  /* v150.74 — who answers the app's Decisions requests (the emotion pick and the reply's questions, the reply check, gates…) */
+  const dc=decChoice(), dm=decMode(), dmod=(S.settings&&S.settings.decModel)||(S.meta&&S.meta.settingsDef&&S.meta.settingsDef.decModel)||"";
+  h+=`<div class="row" style="margin-top:4px"><b>Decision model</b><span class="chip ${dm==="off"?"bad":"ok"}"><span class="dot"></span>${esc(DEC_LABEL[dm])}</span></div>
+    <div class="row">${[["auto","auto"],["or","the Decisions API"],["claude","Claude stands in"],["off","off"]].map(([v,l])=>`<label class="stat"><input type="radio" class="pmDec" value="${v}" ${dc===v?"checked":""}> ${l}</label>`).join("")}</div>
+    <div class="stat">Before every reply the app asks the decision model for the emotion, the id/superego answer and every question the path's fragments ask; after it, the reply check; during play the gates, trackers, router, movement and the Gamemaster's judge. The tests and the previews take them the same way. The Decisions API is OpenRouter's (your OpenRouter key${dmod?", model "+esc(dmod):""}); auto uses it unless Claude stands in for your model${apiReady("or")?"":" — no OpenRouter key works here yet, so auto falls back to Claude"}.</div>`;
   h+=`<div class="row" style="margin-top:4px"><b>Analyst</b><span class="chip ${AI.sample?"ok":"bad"}"><span class="dot"></span>${AI.sample?"Claude, here (your Claude account)":"only in the editor inside Claude"}</span></div>`;
   if(!AI.sample) h+=`<div class="stat">This page plays the tests. Claude analyses them in the editor inside the Claude app: <b>Export results</b> here, <b>Import results</b> there.</div>`;
   h+=`<datalist id="pmModels">${list.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`;
@@ -2151,6 +2295,7 @@ function renderProvider(){
     if(ea) ea.onchange=e=>{ lsSet("engonapi",!!e.target.checked); };
     const rt=b.querySelector(".pmRot"); if(rt) rt.onchange=e=>{ lsSet("testrotation_"+pv,e.target.value.trim()); renderProvider(); };
     const rs=b.querySelector(".pmReason"); if(rs) rs.onchange=e=>{ lsSet("testreasoning",!!e.target.checked); pushModelToEngine(); renderProvider(); };
+    b.querySelectorAll(".pmDec").forEach(r=>{ r.name="pmDec"+sel; r.onchange=e=>{ lsSet("decmode",e.target.value); renderProvider(); }; });
     b.querySelectorAll(".pmMode").forEach(r=>{ r.name="pmMode"+sel; r.onchange=e=>{ lsSet("testmode",e.target.value); pushModelToEngine(); renderProvider(); }; });
   });
 }
@@ -2838,7 +2983,10 @@ async function runReview(output){
   const m=String(t).match(/\{[\s\S]*\}/); if(!m) throw {message:"The review did not come back as JSON."}; return JSON.parse(m[0]);
 }
 function itemFromRef(ref){
-  const m=String(ref||"").trim().match(/^(fx|frag|prompt|tpl)\s*:\s*([A-Za-z0-9_:.-]+)/); if(!m) return null;
+  const r=String(ref||"").trim();
+  /* an emotion's name may hold any letters ("emo:Kıskançlık.desc") */
+  const e=r.match(/^emo\s*:\s*(.+?\.(?:desc|tones))\b/); if(e) return ITEMS.find(it=>it.type==="emo"&&it.key===e[1])||null;
+  const m=r.match(/^(fx|frag|prompt|tpl)\s*:\s*([A-Za-z0-9_:.-]+)/); if(!m) return null;
   return ITEMS.find(it=>it.type===m[1]&&it.key===m[2])||null;
 }
 function renderReview(r){

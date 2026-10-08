@@ -126,12 +126,14 @@ const {chromium}=require('playwright');
       await reconcilePeriodFor(state.personas.find(p=>p.id==="p_m"),5,"Night");
       window.chatCompletion=real;
       return memsOfPeriod("p_m",5,"Night").length===2; }));
-  ok("it will not split beyond three", await pg.evaluate(async()=>{
+  // v150.73 — five at most (three lost a long afternoon's shower and goodbye); the sixth and seventh fold into the fifth
+  ok("it will not split beyond five, and loses nothing past it", await pg.evaluate(async()=>{
       const real=window.chatCompletion;
-      window.chatCompletion=()=>Promise.resolve(JSON.stringify({memories:[1,2,3,4,5].map(i=>({content:"R"+i}))}));
+      window.chatCompletion=()=>Promise.resolve(JSON.stringify({memories:[1,2,3,4,5,6,7].map(i=>({content:"R"+i}))}));
       await reconcilePeriodFor(state.personas.find(p=>p.id==="p_m"),5,"Night");
       window.chatCompletion=real;
-      return memsOfPeriod("p_m",5,"Night").length===3; }));
+      const m=memsOfPeriod("p_m",5,"Night");
+      return m.length===5&&m.some(x=>x.content==="R5 R6 R7"); }));
 
   console.log("\n[the prompt is yours to edit]");
   ok("registered and editable", await pg.evaluate(()=>

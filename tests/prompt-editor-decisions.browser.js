@@ -123,6 +123,51 @@ const ROOT=path.resolve(__dirname,'..');
     ok("the check answers every question and flags past the threshold", ck.r&&ck.r.probs&&Object.keys(ck.r.probs).length>=5&&ck.r.flags.length>=1&&ck.r.calls[0].feature==="Reply check", JSON.stringify(ck.r&&{p:ck.r.probs,f:ck.r.flags}));
     ok("the flags on the reply reach the next payload's guardrails", /guardrails:[^ ]*(broke_character|spoke_for_player|repeated|lost_track|consistency)/.test(ck.fired.join(" ")), JSON.stringify(ck.fired.filter(x=>/guard/.test(x))));
 
+    console.log("\n[E — a roleplay scene takes its decisions, and is checked, reply by reply]");
+    CL.answer=t=>/Below is the complete request an app sends/.test(t)?'"Tamam, gel otur." *Kapıyı açıyor.*':null;
+    const sc=await pg.evaluate(async()=>{
+      lsSet("testmode","claude"); lsSet("decmode","claude"); lsSet("driftdec",true);
+      const scene=JSON.parse(JSON.stringify(__PE.DRIFT_SCENES.find(x=>x.kind==="solo"))); scene.lines=scene.lines.slice(0,2);
+      const out=await __PE.playScene(scene,async p=>await generateReply(p,null),null,null);
+      return {turns:out.turns,mode:out.decisions,ex:__PE.exchangeText(scene,out.turns)}; });
+    const r0=sc.turns[0].replies[0], r1=sc.turns[1].replies[0];
+    ok("each reply is built after its decisions, and carries them", sc.mode==="claude"&&r0.decisions&&!!r0.decisions.emotion&&r1.decisions&&!!r1.decisions.emotion, JSON.stringify(r0.decisions));
+    ok("each reply is checked after it is posted", !!(r0.check&&r0.check.probs&&Object.keys(r0.check.probs).length>=5), JSON.stringify(r0.check));
+    ok("the judge reads the decisions under each reply", /\[decided before this reply: [^\]]*\|\s*reply check/.test(sc.ex), sc.ex.slice(0,600));
+    const carry=CL.calls.filter(t=>/standing in for a DECISIONS model/.test(t)&&/"emotion"/.test(t));
+    ok("the second reply's request knows the first one's feeling in this scene (carried over)", carry.length>=2&&/a few lines ago/.test(carry[carry.length-1]), carry.length+" "+String(carry[carry.length-1]||"").match(/feeling_earlier[^\n]*/));
+    const fx=await pg.evaluate(()=>{ const t=__PE.decisionPromptsText(); return {ego:/prompt:x_ego_pick/.test(t),chk:/prompt:x_reply_check_character/.test(t),emo:/emo:<Emotion>\.desc/.test(t)}; });
+    ok("the fixers get the decision prompts and the emotions when a section ran with decisions", fx.ego&&fx.chk&&fx.emo, JSON.stringify(fx));
+    const judge=await pg.evaluate(()=>__PE.apText("scene"));
+    ok("the scene judge can blame a decision (a fifth source) and name its prompt", /"decision"/.test(judge)&&/x_ego_pick/.test(judge)&&/emo:<Emotion>\.desc/.test(judge), "");
+    CL.answer=null;
+
+    console.log("\n[F — a live engine run takes and records the decisions]");
+    CL.answer=t=>/Below is the complete request an app sends/.test(t)?'"Evet, buradayım." *Gülümsüyor.*':null;
+    CL.calls.length=0;
+    const lv=await pg.evaluate(async()=>{
+      await __PE.engCall("liveBegin",{mode:"claude",decMode:"claude",key:""});
+      await __PE.engCall("liveTurn",{text:"Merhaba Buket, nasılsın?",maxMs:60000},90000);
+      const r=await __PE.engCall("liveCalls",{since:0}); await __PE.engCall("liveEnd",{});
+      const calls=r.calls, dec=calls.filter(c=>c.decision);
+      const groups=__PE.engGroupsOf?__PE.engGroupsOf(calls):null;
+      return {n:calls.length,dec:dec.map(c=>({f:c.feature,id:c.id,out:!!c.output,msgs:(c.messages||[]).length,prompts:c.prompts})),
+        ids:calls.map(c=>c.id),groups:groups&&groups.filter(g=>g.decision).map(g=>g.label)}; });
+    ok("the reply's decisions and its check are recorded among the run's calls, in its numbering", lv.dec.some(d=>d.f==="Emotion pick"&&d.out)&&lv.dec.some(d=>d.f==="Reply check"&&d.out)&&new Set(lv.ids).size===lv.ids.length, JSON.stringify(lv).slice(0,600));
+    ok("each reads as a call: the questions and the state as its messages, the answers as its output", lv.dec.every(d=>d.msgs===2), JSON.stringify(lv.dec));
+    ok("the run groups them as decision agents, by feature", (lv.groups||[]).some(g=>/^Decision · Emotion pick/.test(g))&&(lv.groups||[]).some(g=>/^Decision · Reply check/.test(g)), JSON.stringify(lv.groups));
+    CL.calls.length=0; CL.answer=t=>/You are JUDGING one BACKGROUND ENGINE/.test(t)?'{"verdict":"good","summary":"ok","problems":[]}':null;
+    const jd=await pg.evaluate(async()=>{
+      await __PE.engCall("liveBegin",{mode:"claude",decMode:"claude",key:""});
+      await __PE.engCall("liveTurn",{text:"Bu akşam bize gelir misin?",maxMs:60000},90000);
+      const calls=(await __PE.engCall("liveCalls",{since:0})).calls; await __PE.engCall("liveEnd",{});
+      const g=__PE.engGroupsOf(calls).find(x=>x.decision&&/Emotion pick/.test(x.label));
+      if(!g) return {err:"no group"};
+      await __PE.judgeEngine(g,{model:"claude",focus:"",lines:[],signal:null,at:0}); return {ok:true}; });
+    const jt=CL.calls.find(t=>/You are JUDGING one BACKGROUND ENGINE/.test(t))||"";
+    ok("a decision agent's judge is told it is one, and gets every prompt it read", jd.ok&&/This is a DECISION AGENT/.test(jt)&&/----- prompt:x_emotion_pick -----/.test(jt)&&/----- prompt:x_ego_pick -----/.test(jt), JSON.stringify(jd)+" "+jt.slice(0,200));
+    CL.answer=null;
+
     ok("no page errors", errs.length===0, errs.join(" | "));
   }catch(e){ fail++; console.log("  FAIL  (threw) "+(e&&e.stack||e)); }
   console.log(`\n${pass} passed, ${fail} failed`);

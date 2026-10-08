@@ -287,6 +287,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         <button class="btn sm" id="btnAllStop" type="button" hidden>Stop</button>
         <button class="btn sm" id="btnAllExport" type="button">Export results</button>
         <button class="btn sm" id="btnAllImport" type="button">Import results</button>
+        <label class="stat" title="Before each reply the decision model answers the emotion pick, the id/superego question and the fragments' questions; after it, the reply check (as the app does). Off: replies are built without decisions, which the phone never does."><input type="checkbox" id="driftDec"> take the decisions</label>
         <label class="stat" hidden title="Analysis now runs one by one">Analysts at once <input type="number" id="teamSize" min="1" max="8" value="3" style="width:42px"></label>
         <span class="stat" id="allStat"></span>
       </div>
@@ -811,10 +812,15 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   async function peDecisionsCall(br,body,e,ms){
     var mode=(LIVE&&LIVE.decMode)?LIVE.decMode:DEC.mode;
     var name=(br&&br.name)||"Decisions";
-    var rec={id:++DEC.n,decision:true,feature:name,label:String((e&&(e.label||e.title||e.name))||name),dbg:String((e&&(e.label||e.title||e.name))||name),
+    var did=++DEC.n;
+    var rec={id:did,did:did,decision:true,feature:name,label:String((e&&(e.label||e.title||e.name))||name),dbg:String((e&&(e.label||e.title||e.name))||name),
       body:J(body),prompts:decPromptKeys(name,body),model:String((body&&body.model)||""),mode:mode,at:Date.now()};
+    /* shaped like a recorded model call, so the engine views, judges and fixers read it as one: the questions are the
+       instructions, the state is what they are asked about, the answers are the output */
+    rec.messages=[{role:"system",content:"A Decisions-API request ("+name+"): typed questions answered with probabilities.\n\nQUESTIONS:\n"+JSON.stringify((body&&body.questions)||{},null,1)},
+      {role:"user",content:"STATE:\n"+(typeof (body&&body.state)==="string"?body.state:JSON.stringify((body&&body.state)||"",null,1))}];
     DEC.log.push(rec); if(DEC.log.length>300)DEC.log.shift();
-    if(LIVE){ rec.lid=++LIVE.n; LIVE.calls.push(rec); LIVE.inflight++; LIVE.lastAt=Date.now(); }
+    if(LIVE&&mode!=="off"){ rec.id=++LIVE.n; rec.lid=rec.id; LIVE.calls.push(rec); LIVE.inflight++; LIVE.lastAt=Date.now(); }
     try{
       var res=null;
       if(mode==="or") res=await window.__PE_realDec(br,body,e,ms);
@@ -822,12 +828,13 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         try{ dbgDone(e,res?"ok":"error",res?{answers:a,note:"answered by Claude standing in for the decision model (prompt editor)"}:"no answer"); }catch(_){} }
       else { try{ dbgDone(e,"error","decisions are off in the prompt editor"); }catch(_){} }
       rec.answers=res?J(res.answers):null; if(!res&&!rec.error)rec.error=mode==="off"?"off":"no answer";
+      if(res)rec.output=JSON.stringify(res.answers);
       return res;
     }catch(err){ rec.error=String((err&&err.message)||err); return null; }
     finally{ rec.ms=Date.now()-rec.at; if(LIVE&&rec.lid){LIVE.inflight--;LIVE.lastAt=Date.now();} }
   }
   function setDecMode(o){ DEC.mode=(o&&/^(or|claude|off)$/.test(o.mode))?o.mode:"off"; return {mode:DEC.mode}; }
-  function decLog(o){ var since=(o&&o.since)||0; return DEC.log.filter(function(r){return r.id>since;}); }
+  function decLog(o){ var since=(o&&o.since)||0; return DEC.log.filter(function(r){return r.did>since;}); }
   /* The reply's decisions record, as the build reads it (charDecisions): what a preview sets by hand. */
   function decRecord(d,kind){
     d=d||{}; var r={emotion:"",intensity:"",tone:"",ego:"",asks:{},relAbout:{},sig:"pe-set",scene:"",day:0,at:Date.now(),set:true};
@@ -1024,7 +1031,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       window.memStatusBackfill=function(){return null;};
       try{ await emotionEnsure(chat,p,decideLine(chat,p,kind),{targetId:t.targetId,targetName:t.targetName,kind:kind}); }catch(e){}
       finally{ window.memStatusBackfill=msb; state.key=keyWas; }
-      decRecs=DEC.log.filter(function(r){return r.id>since;});
+      decRecs=DEC.log.filter(function(r){return r.did>since;});
     }
     var DECIDED=null; try{ DECIDED=J(charDecisions(chat,p.id)); }catch(e){}
     var CARRY={emo:{},spokenLimits:J(chat.spokenLimits||{}),spokenLimitsRead:J(chat.spokenLimitsRead||{})}; if(DECIDED)CARRY.emo[p.id]=DECIDED;
@@ -1080,7 +1087,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     if(!String(state.key||"").trim())state.key="pe-claude";
     try{ await runReplyCheck(chat,msg,p); }catch(e){} finally{ state.key=keyWas; }
     var out={probs:msg.replyCheck?J(msg.replyCheck):null,flags:(msg.replyFlags||[]).slice(),at:(state.replyCheckAt!=null?+state.replyCheckAt:0.7),
-      on:!!state.replyCheckOn,calls:DEC.log.filter(function(r){return r.id>since;})};
+      on:!!state.replyCheckOn,calls:DEC.log.filter(function(r){return r.did>since;})};
     restoreBase(); return out;
   }
   function _buildEngine(o){
@@ -2350,7 +2357,9 @@ function payloadText(p){
    prompt is kept in this browser; Reset brings the shipped one back. */
 const AP_DEFS=[
  {id:"context",label:"The method (shared by every analysis)",desc:"Who Claude is helping and HOW TO FIX. Placed at the top of the other prompts through {{context}}.",vars:{},
-  def:`You are helping the author of StoryMind, an adult roleplay app (explicit sexual content between adult characters is in scope), write the prompts the app sends to language models. The app builds each reply payload from one ordered list of FRAGMENTS shared by five paths (solo, multi, gm, text, heat). A fragment has a main body sent on its paths, text added on one path, and "choose when" options injected only when a code condition holds or the decision model answers yes before the reply; the fragments are compiled per reply into the messages before the transcript ([system]) and after it ([user]). Every word is written in the fragments: {{call//name}} brings in live story data only, {{if flag}}…{{else}}…{{endif}} is structure inside a text, {{name}} values are filled by the app. An item "fx:<fragment>.<field>" is one field of a fragment: .text (its main body), .bp.<path> (text added on that path), .o.<option>.text / .code / .ask (an option's text, its code condition, its question). "frag:<key>" items are the few wordings the app writes outside the fragments. The story language is Turkish; the instructions are English.
+  def:`You are helping the author of StoryMind, an adult roleplay app (explicit sexual content between adult characters is in scope), write the prompts the app sends to language models. The app builds each reply payload from one ordered list of FRAGMENTS shared by five paths (solo, multi, gm, text, heat). A fragment has a main body sent on its paths, text added on one path, and "choose when" options injected only when a code condition holds or the decision model answers yes before the reply; the fragments are compiled per reply into the messages before the transcript ([system]) and after it ([user]). Every word is written in the fragments: {{call//name}} brings in live story data only, {{if flag}}…{{else}}…{{endif}} is structure inside a text, {{name}} values are filled by the app. An item "fx:<fragment>.<field>" is one field of a fragment: .text (its main body), .bp.<path> (text added on that path), .o.<option>.text / .code / .ask (an option's text, its code condition, its question). An option applies on its ticked paths; its condition is a fact the app knows or a decision taken before the reply (emotion, intensity, tone, ego, the reply check's broke_character / spoke_for_player / repeated / lost_track); its question is asked of the decision model, and only a yes sends its text. "frag:<key>" items are the few wordings the app writes outside the fragments. The story language is Turkish; the instructions are English.
+
+THE DECISION AGENTS. Beside the language models, the app asks a DECISIONS model (OpenRouter's Decisions API): it reads a state (the scene as the character heard it, their feelings toward the one they answer, the people they answer to, who can see them, their stakes) and answers typed questions with probabilities, never text. Before every reply it picks the emotion (one of the author's emotions, each with a description it reads, "emo:<Emotion>.desc"), its intensity, and who is winning between want and conscience (the id/superego level), and answers every question the path's fragments ask; after the reply, the reply check asks whether it refuses, speaks for the player, breaks character, repeats itself or contradicts what happened. During play it gates what is filed (promises, tasks, meetings, quests, motives), checks statuses, moves trackers, judges memory relevance and status, routes who answers next, moves people, judges the Gamemaster's beats and decides on proactive texts and pictures. Each question is a "prompt:x_…" item: the question, then "YES:" and "NO:" lines saying what each answer means (a choice's options are fixed by the app, the emotions excepted). A decision prompt is fixed like any prompt, by cause: a wrong answer usually traces to a question that is ambiguous, a criterion that leans one way, or a state the question never tells it how to weigh.
 
 WHAT THE AUTHOR WANTS FROM EVERY REPLY: Turkish a native speaker would actually say in that moment (the right words, register and idiom for the person and the situation, realistic in context, not only grammatical); sentences and topics with substance; a character who stays the same person, also during and after sex; desire that meets real resistance and moves at a believable pace (neither a wall nor instant surrender); characters aware of themselves (their body, their trackers, their marriage, their limits) and of their surroundings (who is present, who can hear, where and when); other people present who react to what happens in front of them; loyalty to memory, and memories used when a similar situation returns.
 
@@ -2380,7 +2389,7 @@ The roleplay model the author uses was given the payload below and wrote the rep
 Then fix the causes, following HOW TO FIX above. Each edit is a find-and-replace on ONE item from the catalogue at the end. "find" must be copied EXACTLY from that item's current text (long enough to be unique, short enough to be exact); "replace" is the new text, or empty to delete it. Keep {{…}} and [[…]] markers intact. At most 8 edits, most important first, removals and rewrites before any addition.
 
 Reply with ONLY this JSON:
-{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
+{"verdict":"one or two sentences on the reply","problems":[{"issue":"…","evidence":"quote from the reply or payload"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key | emo:Emotion.desc","kind":"remove|rewrite|add","cause":"the exact words responsible, and one line on how they caused it","find":"exact text","replace":"new text (empty for a removal)","why":"…"}]}
 
 ===== THE PAYLOAD =====
 {{payload}}
@@ -2418,12 +2427,15 @@ WHERE A PROBLEM COMES FROM — name it for every finding ("source"), because onl
 - "wording": the fixed instructions and pieces of this payload, or their order;
 - "generated": content another engine wrote into the payload (outfits and clothing, relationship readings, mood and drives, who is present, memories, plans, promises, rumours, summaries, diaries, trackers, the gamemaster's beats…): name the block in "origin";
 - "story": a character's own card (bio, personality, backstory, appearance, instructions) or other story data the author wrote;
-- "code": what the app chose to put in or leave out (which data, how much, who may know what, privacy), the order inside a block, cut text, or timing.
+- "code": what the app chose to put in or leave out (which data, how much, who may know what, privacy), the order inside a block, cut text, or timing;
+- "decision": a wrong answer of the decision model (see below): name the decision in "origin" and its prompt in "cause".
+
+THE DECISIONS. Under each reply, [decided before this reply: …] shows what the decision model answered before the payload was built — the emotion and its intensity, the id/superego level (no conflict, superego firm or ahead, torn, id ahead or winning), the fragments' questions it said yes to (each yes sent that option's text) — and the reply check's verdict on the posted reply (refusal, speaks for the player, out of character, repeats itself, continuity). The payload followed those answers, so judge them too. A decision the scene contradicts is a finding with source "decision": an emotion or intensity that does not fit what she has just been through; id winning where she has drawn a line, or superego firm where the want is plainly winning; a question answered yes that the scene says no to (or the reverse); the reply check flagging a clean reply or passing a broken one. In "cause" name the prompt: x_emotion_pick, x_emotion_intensity, x_ego_pick, the emotion's description (emo:<Emotion>.desc), a fragment's question (fx:<fragment>.o.<option>.ask), or x_reply_check_<refusal|player|character|repeat|continuity>. When a reply goes wrong because a right decision sent the wrong text, that is "wording" (the option's text), not "decision". Without decisions shown, the run took none; do not invent them.
 
 For each turn give a verdict: "good", "weak" (flat, generic, a step off) or "wrong" (the failure the scene is about, or a broken rule), with one short line. Then score the rubric with a one-line note and a short quote as evidence. Then list the FINDINGS: each concrete failure, its criterion and turn, the quote that shows it, and the payload words, piece or structure that most likely caused it (quote the payload and name the piece; "the payload never asks for this" is a valid cause). Judge the Turkish as a demanding native speaker and editor would, not as a grammar check. For every reply ask: would a real Turkish person of her age, background and mood say exactly this, here, to this person? Look at word choice (the word a native would pick, not a literal or translated one; collocations; bookish versus spoken), register (sen/siz, intimacy, anger, a text message, sex), sense in context (does the sentence follow from what was just said and fit the place and time), realism and culture (idioms used right, nothing a woman in her place would never say), rhythm and spoken particles, then grammar and suffixes. Quote the wrong words and give what a native would say instead in the finding.
 
 Reply with ONLY this JSON:
-{"turns":[{"verdict":"good|weak|wrong","note":"one short line"}],"criteria":{"turkish":{"score":7,"note":"…","evidence":"quote"}},"score":7,"summary":"two sentences","reasoning":"one paragraph: what drives the good and the bad replies in this scene, and which words or structure of the payload you think cause them, and why","probes":[{"turn":3,"result":"pass|partial|fail","evidence":"quote","note":"…"}],"findings":[{"criterion":"self","turn":5,"problem":"…","evidence":"quote from a reply","source":"wording|generated|story|code","origin":"the block or engine the content came from (generated), the character and field (story), or the app behaviour (code)","cause":"quoted payload words and the piece id, or what the payload is missing"}]}
+{"turns":[{"verdict":"good|weak|wrong","note":"one short line"}],"criteria":{"turkish":{"score":7,"note":"…","evidence":"quote"}},"score":7,"summary":"two sentences","reasoning":"one paragraph: what drives the good and the bad replies in this scene, and which words or structure of the payload you think cause them, and why","probes":[{"turn":3,"result":"pass|partial|fail","evidence":"quote","note":"…"}],"findings":[{"criterion":"self","turn":5,"problem":"…","evidence":"quote from a reply","source":"wording|generated|story|code|decision","origin":"the block or engine the content came from (generated), the character and field (story), the app behaviour (code), or the decision and its answer (decision)","cause":"quoted payload words and the piece id, or what the payload is missing"}]}
 
 ===== THE LAST PAYLOAD (as sent for the last reply; the transcript is left out: it is the exchange above) =====
 {{payload}}{{#applied}}
@@ -2437,7 +2449,7 @@ Name a cause only in wording that still exists; say so when an applied change al
 
 You are RE-EVALUATING the scene reports of one PAYLOAD KIND of the author's roleplay model: {{kind}}. Each scene below was played through this kind of payload and judged ON ITS OWN by a judge who saw its dialogue and its payload; you get their reports, not the dialogues. One filled payload of this kind is given ONCE, at the end: the others have the same layout and pieces and differ only in the story data and the transcript. Do not propose fixes: a fixer reads your report next to the other kinds' and fixes the prompts as a whole.
 
-1. Check each judge's causes against the payload: find the words they blame; confirm, correct or reject the cause, and say which. Check its "source" too: wording of the payload, content another engine generated, the story's own data, or the app's code. Correct it when the evidence points elsewhere.
+1. Check each judge's causes against the payload: find the words they blame; confirm, correct or reject the cause, and say which. Check its "source" too: wording of the payload, content another engine generated, the story's own data, the app's code, or an answer of the decision model (the decisions shown under each reply). Correct it when the evidence points elsewhere.
 2. Find the PATTERNS: the same failure in several scenes, or a strength the fixes must not break, each with its most likely cause in this payload.
 3. Read the payload's STRUCTURE: what sits where, what is buried, duplicated or contradicting, what the model weighs too much or too little.
 4. Score the kind on the rubric (from the scenes' scores and your own reading).
@@ -2461,7 +2473,7 @@ CHANGES APPLIED SINCE THESE SCENES WERE PLAYED (the payload below shows the word
 ===== ONE PAYLOAD OF THIS KIND (as sent for the last reply of "{{payload_scene}}"; the transcript left out) =====
 {{payload}}`},
  {id:"engine",label:"E1 · Engine judge (one background engine in one scene, no fixes)",desc:"One judge per engine recorded in an engine scene. It reports problems and their causes in the prompt; the complete analysis makes the fixes.",
-  vars:{context:"the method",engine:"the engine's name",prompt_key:"its prompt key (empty when it has none)",dbg:"its debug label",model:"the model that answered",focus:"what the scene was built to test",lines:"the script, numbered (scripted characters' lines included)",checks:"the engines the scene is aimed at",roleplay:"flag: this group is the characters' own replies",template:"the engine's prompt template (exact current text)",applied:"edits you applied to this prompt after the scene was played",calls:"up to two real calls: what the app sent and the answer"},
+  vars:{context:"the method",engine:"the engine's name",prompt_key:"its prompt key (empty when it has none)",dbg:"its debug label",model:"the model that answered",focus:"what the scene was built to test",lines:"the script, numbered (scripted characters' lines included)",checks:"the engines the scene is aimed at",roleplay:"flag: this group is the characters' own replies",decision:"flag: this group is a decision agent (a Decisions-API request)",template:"the engine's prompt template (exact current text)",applied:"edits you applied to this prompt after the scene was played",calls:"up to two real calls: what the app sent and the answer"},
   def:`{{context}}
 
 You are JUDGING one BACKGROUND ENGINE of the app — a model call the player never sees, whose output the app parses and stores (memories, relationship numbers, plans, promises, rumours, routing decisions, director beats…). Below are real calls from a played scene: the exact messages the app sent and what the model answered. Do not propose fixes: the complete analysis reads every judgement together and fixes the prompts as a whole.
@@ -2477,7 +2489,9 @@ THE PLAYER'S LINES, IN ORDER:
 {{lines}}
 {{/lines}}{{#roleplay}}
 This group is the characters' own replies: judge realism, character, awareness and whether the right person answered.
-{{/roleplay}}
+{{/roleplay}}{{#decision}}
+This is a DECISION AGENT: a Decisions-API request. The app sent a STATE and typed QUESTIONS (each with its instructions and criteria: a "choice" picks one criterion, a "noul" is yes/no); the answer is a probability per question, which the app acts on at its threshold (a gate files only past it, the reply check marks a reply past it, a fragment's question sends its text on a yes). Judge each answer against the state: would a careful reader of this state give it, and with that confidence? A wrong answer, an answer that hedges where the state is plain, or one that is sure where it is not, is a problem; name the question key, the probability, and the words of the question or its YES:/NO: lines that pulled it there (or what they fail to say). The output contract is the API's, not the prompt's.
+{{/decision}}
 Judge the ANSWER: does it keep the output contract exactly (format, JSON shape and field names); is every claim supported by the input (nothing invented); does it follow the prompt's rules and scope; would the next engine and the replies get something useful? For each problem, quote the evidence and name the prompt's words that most likely caused it (or what the prompt is missing). Keep the answer compact: each problem and quote one short line, at most 6 problems, the reasoning at most 120 words.
 
 WHERE A PROBLEM COMES FROM — name it for every problem ("source"), because only the first kind is fixed by rewording this prompt:
@@ -2497,7 +2511,7 @@ CHANGES APPLIED TO THIS PROMPT SINCE THE SCENE WAS PLAYED:
 
 {{calls}}`},
  {id:"fixer",fit:["catalogue","reports","payload"],label:"3 · Section fixer (one test section: its report, its payload once, its pieces)",desc:"One fixer per test section (Solo · Everyday voice, Solo · Desire over time, Solo · Memory, Several characters, Text messages, Heat). It reads that section's report and its scene reports, the section's payload once and the pieces that appear in it, and proposes edits for this section. The reconciler then merges every section's proposals.",
-  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the fragments of the section's path, in order: what each sends, and when",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",engines:"the engine prompts of the app (key and name), for naming who generated a block",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length",history:"every edit applied before to the pieces of this payload, oldest first",earlier:"what the section fixers that ran before this one proposed in this run"},
+  vars:{context:"the method",section:"the test section and its payload kind",report:"the section's report, then each scene report (reasoning, probes, findings with quotes)",payload:"the section's payload, once, as sent",layout:"the fragments of the section's path, in order: what each sends, and when",catalogue:"the pieces whose wording appears in this payload: key, whether other sections share it, and its current text",engines:"the engine prompts of the app (key and name), for naming who generated a block",decisions:"the decision prompts asked before and after each reply, and the emotions' descriptions, current text",effect:"what the changes before this run did, when an earlier run is on record",applied:"edits applied since these scenes were played",rotation:"with model rotation: each model's replies, speed and length",history:"every edit applied before to the pieces of this payload, oldest first",earlier:"what the section fixers that ran before this one proposed in this run"},
   def:`{{context}}
 
 You are the FIXER for ONE test section of the author's roleplay model: {{section}}. Its scenes were judged one by one (with probes on the turns each scene hinges on), then the section's analyst re-evaluated those reports against the payload. You get the section's report and every scene report under it, the payload once, its layout, and the current text of the pieces that appear in this payload. You do not get the dialogues: rely on the reports. Other sections have their own fixer; a reconciler merges all the proposals afterwards.
@@ -2511,12 +2525,13 @@ BEFORE FIXING, SORT EVERY CAUSE BY WHERE IT COMES FROM — only wording is fixed
 - "generated" (a block another engine wrote: outfits, readings, mood, presence, memories, plans, rumours, summaries, beats…) → the "generated" list: what is wrong in that content, the evidence, and the engine prompt that writes it (pick its key from the list of engine prompts below), with what that prompt should do differently.
 - "story" (a character's own card or story data) → the "story" list: whose, which field, what to change.
 - "code" (what the app selects or filters, privacy, order, cut text, timing) → the "backend" list: the problem, the evidence, the code change that would fix it and why it would be effective.
-Never paper over a generated, story or code cause with more wording in the payload ("ignore clothing that does not fit") unless the wording is also at fault; report it where it belongs.
+- "decision" (the decision model answered wrong: an emotion, an intensity, an id/superego level, a fragment's question, a reply-check verdict that the scene contradicts) → an edit below to the prompt that asked it: "prompt:x_…" (the question and its YES:/NO: lines, or a choice's instruction), an emotion's description "emo:<Emotion>.desc", or a fragment's question "fx:<fragment>.o.<option>.ask" — copied from THE DECISION PROMPTS below or the fragments. A decision prompt is read before every reply on every path: fix the question in general, and make sure the fix cannot swing the answer the other way where the old answer was right.
+Never paper over a generated, story, code or decision cause with more wording in the payload ("ignore clothing that does not fit") unless the wording is also at fault; report it where it belongs.
 
 Edit format: "find" must be copied EXACTLY from a piece's CURRENT text in the catalogue below (or the fragments of the path), never story data the app filled in. For "move", "find" is the whole line to move and "before" the line of the same item it should go right before; "replace" stays empty. For "remove", "replace" is empty.
 
 Reply with ONLY this JSON:
-{"summary":"two sentences: what fails in this section and why","edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"the words or structure responsible","why":"…","helps":["criterion ids"],"probes":["scene id t3"],"shared":"everywhere | this section only","risks":"what it could break elsewhere"}],"generated":[{"block":"the payload block","prompt":"engine prompt key from the list","problem":"…","evidence":"quote from the payload or a reply","fix":"what that prompt should do differently"}],"story":[{"who":"character","field":"bio|personality|backstory|appearance|instructions|other","problem":"…","evidence":"quote","change":"what to change"}],"backend":[{"area":"selection|privacy|order|truncation|timing|parsing|other","problem":"…","evidence":"quote","change":"the code change","impact":"why it would be effective"}],"keep":["what works in this section and must not be broken"]}
+{"summary":"two sentences: what fails in this section and why","edits":[{"item":"fx:fragment.field | frag:key | prompt:key | emo:Emotion.desc","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"the words or structure responsible","why":"…","helps":["criterion ids"],"probes":["scene id t3"],"shared":"everywhere | this section only","risks":"what it could break elsewhere"}],"generated":[{"block":"the payload block","prompt":"engine prompt key from the list","problem":"…","evidence":"quote from the payload or a reply","fix":"what that prompt should do differently"}],"story":[{"who":"character","field":"bio|personality|backstory|appearance|instructions|other","problem":"…","evidence":"quote","change":"what to change"}],"backend":[{"area":"selection|privacy|order|truncation|timing|parsing|other","problem":"…","evidence":"quote","change":"the code change","impact":"why it would be effective"}],"keep":["what works in this section and must not be broken"]}
 {{#effect}}
 ===== WHAT THE LAST CHANGES DID (before → after) =====
 {{effect}}
@@ -2543,7 +2558,10 @@ Do not duplicate these. When you need the same piece, build on their edit (say "
 
 ===== THE PIECES IN THIS PAYLOAD (current text) =====
 {{catalogue}}
-{{#engines}}
+{{#decisions}}
+===== THE DECISION PROMPTS (current text: what the decision model is asked before and after each reply) =====
+{{decisions}}
+{{/decisions}}{{#engines}}
 ===== THE APP'S ENGINE PROMPTS (key — name), for the "generated" list =====
 {{engines}}
 {{/engines}}
@@ -2560,9 +2578,10 @@ You are the RECONCILER and you write the COMPLETE ANALYSIS of a test run. The se
 3. Compare with the earlier runs and the before → after verdict: do not repeat an edit that did nothing, and undo or rework one that hurt.
 4. Write at most 10 final edits, the most impactful first. Copy a kept proposal's edit exactly; for a merge, write a new edit whose "find" is copied EXACTLY from the current text below.
 5. Consolidate what the sections reported OUTSIDE the wording: problems in content other engines generated (by engine prompt), in the story's own data, and backend (code) changes. Merge duplicates, keep the evidence, drop what is not supported, and order each list by impact. A wording edit that only compensates for one of these should be dropped in favour of the real fix.
+6. A decision prompt ("prompt:x_…", an emotion's "emo:<Emotion>.desc", a fragment's question ".ask") is read before or after every reply on every path: merge every section's proposals on it into one general edit, and weigh what each section says the decision got right as well as wrong — a question that over-fires in one section may be just right in another.
 
 Reply with ONLY this JSON:
-{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["section or scene"],"cause":"…"}],"structure":["one observation about the order or placement of a payload"],"decisions":[{"id":"S:section#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"…","why":"…","helps":["criterion ids"],"from":["S:section#1"],"risks":"…"}],"generated":[{"prompt":"engine prompt key","block":"…","problem":"…","evidence":"…","fix":"what that prompt should do differently","sections":["…"]}],"story":[{"who":"…","field":"…","problem":"…","evidence":"…","change":"…"}],"backend":[{"area":"…","problem":"…","evidence":"…","change":"…","impact":"…","priority":"high|medium|low"}]}
+{"score":7,"summary":"three sentences on the run as a whole","criteria":{"turkish":7},"patterns":[{"criterion":"self","pattern":"…","scenes":["section or scene"],"cause":"…"}],"structure":["one observation about the order or placement of a payload"],"decisions":[{"id":"S:section#1","verdict":"keep|merge|drop","why":"…"}],"edits":[{"item":"fx:fragment.field | frag:key | prompt:key | emo:Emotion.desc","kind":"remove|rewrite|move|add","find":"exact current text","replace":"new text","before":"move only","cause":"…","why":"…","helps":["criterion ids"],"from":["S:section#1"],"risks":"…"}],"generated":[{"prompt":"engine prompt key","block":"…","problem":"…","evidence":"…","fix":"what that prompt should do differently","sections":["…"]}],"story":[{"who":"…","field":"…","problem":"…","evidence":"…","change":"…"}],"backend":[{"area":"…","problem":"…","evidence":"…","change":"…","impact":"…","priority":"high|medium|low"}]}
 
 ===== THE RUBRIC ACROSS THIS RUN =====
 {{scores}}
@@ -2655,7 +2674,7 @@ You are the FIXER for ONE ENGINE PROMPT of the app: {{engine}}. Its output is pa
 
 1. Find the causes in THIS prompt: words that push the wrong way, rules that are missing, examples that get copied, an order that buries what matters.
 2. Propose at most 4 edits, the most impactful first, each general (never naming a test, a character or a scripted line). Use the best kind: remove, rewrite, move or add.
-3. Never rename an output field or change the JSON shape the app parses. Keep every {{…}} placeholder intact.
+3. Never rename an output field or change the JSON shape the app parses. Keep every {{…}} placeholder intact. A decision prompt (a question of the Decisions API: the question, then "YES:" and "NO:" lines) keeps that shape: fix what the question asks and what each answer means, so a careful reader of the state answers it right with the right confidence; never add an output format to it.
 4. SORT EVERY CAUSE BY WHERE IT COMES FROM — only this prompt's wording is fixed with edits:
 - "wording" → an edit below.
 - "input" (what another engine wrote and this one was given) → the "generated" list, naming that engine's prompt key from the list below and what it should do differently.
@@ -3401,7 +3420,7 @@ function renderDrift(){
     (r&&r.turns||[]).forEach((t,k)=>{
       const v=j&&j.turns&&j.turns[k]||null;
       el.insertAdjacentHTML("beforeend",`<div class="turnRow"><div class="pl"><b>${t.gm?"Gamemaster":sc.kind==="text"?"Emre (text)":"Emre"} ${k+1}:</b> ${esc(t.user)}</div>
-        ${t.reply==null&&!(t.replies||[]).length?'<div class="rp"><span class="stat">writing…</span></div>':turnReplies(sc,t).map(x=>`<div class="rp">${x.model?`<span class="chip" title="model rotation: the model that wrote this reply">${esc(x.model)}</span> `:""}${sceneSpeakers(sc).length>1?`<b>${esc(x.name||"")}:</b> `:""}${esc(x.text==null?"…":x.text)}</div>`).join("")}
+        ${t.reply==null&&!(t.replies||[]).length?'<div class="rp"><span class="stat">writing…</span></div>':turnReplies(sc,t).map(x=>`<div class="rp">${x.model?`<span class="chip" title="model rotation: the model that wrote this reply">${esc(x.model)}</span> `:""}${sceneSpeakers(sc).length>1?`<b>${esc(x.name||"")}:</b> `:""}${esc(x.text==null?"…":x.text)}${decLineHTML(x)}</div>`).join("")}
         ${v?`<div><span class="vd ${VD[v.verdict]||esc(v.verdict||"")}">${esc(v.verdict||"")}</span> <span class="stat">${esc(v.note||"")}</span></div>`:""}</div>`);
     });
     if(j){
@@ -3459,9 +3478,28 @@ function turnReplies(sc,t){ return (t.replies&&t.replies.length)?t.replies:[{id:
    their own payload, so the husband's reply is built with the wife's already in the transcript. */
 function speakerNameOf(id){ const sp=S.meta&&S.world?S.world.cast.find(c=>c.id===id):null; return sp?sp.name:id; }
 function sceneSpeakers(sc){ return (sc.speakers&&sc.speakers.length)?sc.speakers:[sc.speaker]; }
+/* (v150.74) A reply in a scene is taken as the app takes it: the decisions first (the emotion pick with its id/superego answer,
+   every question the path's fragments ask, spoken limits), then the payload built with them, the answer, the clean-up, and
+   the reply check on the posted reply — whose flags the next payload's guardrails read. What one turn leaves behind (each
+   speaker's last decision, the limits they drew) is carried to the next, since the scene is rebuilt every turn. Decisions
+   are answered in the tests' mode (decMode); off builds without them, as with the decisions paused. */
+/* the decisions a reply was built with, and the check it got, under the reply */
+function decLineHTML(x){
+  if(!x||(!x.decisions&&!x.check)) return "";
+  const fired=(x.fired||[]).flatMap(f=>(f.opts||[]).filter(o=>o.by&&o.by!=="code"&&o.by!=="path").map(o=>(f.name||f.id)+" · "+(o.name||o.id)));
+  return `<div class="stat" style="font-size:11.5px;margin-top:3px" data-dec>⚖ ${esc(decSummary(x.decisions)||"no decisions")}${x.check?" · "+esc(checkSummary(x.check)):""}${fired.length?` · <span title="options sent because the decision model said yes">asked in: ${esc(fired.join(", "))}</span>`:""}</div>`;
+}
+function driftDecisions(){ return lsGet("driftdec",true)!==false&&decMode()!=="off"; }
+function decSummary(d){
+  if(!d) return "";
+  const asks=Object.keys(d.asks||{}).filter(k=>d.asks[k]>=0.5).map(k=>k.replace(/^q_/,"").replace("__","/"));
+  return [d.emotion?d.emotion+" ("+(d.intensity||"")+")":"", d.ego?d.ego.replace(/_/g," "):"", asks.length?"yes to: "+asks.join(", "):""].filter(Boolean).join(" · ");
+}
+function checkSummary(c){ if(!c||!c.probs) return ""; const f=(c.flags||[]); return f.length?"reply check flagged: "+f.join(", "):"reply check: clean"; }
 async function playScene(sc,answer,onTurn,signal){
-  const turns=[], history=[], txt=sc.kind==="text", sps=sceneSpeakers(sc);
-  let last=null;
+  const turns=[], history=[], txt=sc.kind==="text", sps=sceneSpeakers(sc), dec=driftDecisions(), dm=dec?decMode():"off";
+  let last=null, carry={emo:{}};
+  const sceneOf=h=>({chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:h});
   for(let i=0;i<sc.lines.length;i++){
     if(signal&&signal.aborted) throw {code:"cancelled"};
     const ln=sc.lines[i], gm=ln&&typeof ln==="object"&&ln.gm;
@@ -3472,25 +3510,36 @@ async function playScene(sc,answer,onTurn,signal){
       const name=speakerNameOf(id);
       /* a reply to a gamemaster beat is built as StoryMind builds it: the gamemaster payload (in heat, the heat one) */
       const kind=(gm&&(sc.kind==="solo"||sc.kind==="multi"))?"gm":sc.kind;
-      const p=await engCall("build",{kind,speakerId:id,targetId:"__user__",scene:{chat:sc.chat,opener:sc.opener,setup:sc.setup||null,asOf:sc.asOf||null,turns:history.slice()}},30000);
+      const arg={kind,speakerId:id,targetId:"__user__",scene:sceneOf(history.slice()),carry};
+      const p=dec?await withDecisions(()=>engCall("build",Object.assign(arg,{decide:true}),300000),dm):await engCall("build",arg,30000);
+      if(p.carry){ carry={emo:Object.assign({},carry.emo||{},p.carry.emo||{}),spokenLimits:p.carry.spokenLimits,spokenLimitsRead:p.carry.spokenLimitsRead}; }
       if(kind===sc.kind||!last) last=p; if(kind==="gm") t.kinds=(t.kinds||[]).concat(["gm"]);
       const t0=performance.now();
       const a=await answer(p,id), mdl=a&&typeof a==="object"?a.model:null;
       let text=String((a&&typeof a==="object"?a.text:a)||"").trim(); const ms=Math.round(performance.now()-t0);
       text=text.replace(new RegExp("^\\s*"+name.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*:\\s*"),"");
       try{ text=String(await engCall("clean",{text,name,turns:history.slice(),heat:sc.kind==="heat",text_:txt},15000)||""); }catch(e){}
-      t.replies.push(Object.assign({id,name,text,ms},mdl?{model:mdl}:{})); if(id===sps[0]){ t.reply=text; t.ms=ms; }
-      history.push(Object.assign({role:"assistant",speaker:name,speakerId:id,content:text},txt?{textMsg:true,textWith:id,textWithName:name}:{}));
+      const msg=Object.assign({role:"assistant",speaker:name,speakerId:id,content:text},txt?{textMsg:true,textWith:id,textWithName:name}:{});
+      /* the reply check on the reply as posted: its flags ride on the line, so the next payload's guardrails read them */
+      let chk=null;
+      if(dec&&text){ try{ chk=await withDecisions(()=>engCall("check",{kind,speakerId:id,scene:sceneOf(history.concat([msg])),carry},120000),dm); }catch(e){} }
+      if(chk&&chk.probs){ msg.replyCheck=chk.probs; msg.replyFlags=chk.flags||[]; }
+      const rep=Object.assign({id,name,text,ms},mdl?{model:mdl}:{});
+      if(p.decisions&&dec) rep.decisions={emotion:p.decisions.emotion||"",intensity:p.decisions.intensity||"",tone:p.decisions.tone||"",ego:p.decisions.ego||"",asks:p.decisions.asks||{}};
+      if(chk&&chk.probs) rep.check={probs:chk.probs,flags:chk.flags||[]};
+      rep.fired=(p.fired||[]).map(f=>({id:f.id,name:f.name,opts:(f.opts||[]).map(o=>({id:o.id,name:o.name,by:o.by,p:o.p}))}));
+      t.replies.push(rep); if(id===sps[0]){ t.reply=text; t.ms=ms; }
+      history.push(msg);
       onTurn&&onTurn(turns);
     }
   }
-  return {turns,payload:last};
+  return {turns,payload:last,decisions:dec?dm:"off"};
 }
 async function runDriftScene(sc){
   const rot=testRotation(), r=Object.assign({turns:[],at:Date.now(),model:testLabel()},rot.length?{rotation:rot}:{}); DR.results[sc.id]=r; renderDrift();
   ROT.i=0;   // every scene starts from the first model, so runs compare
   const out=await playScene(sc,async p=>{ const m=rotNext(); const text=await generateReply(p,DR.ctl.signal,m); return m?{text,model:m}:text; },turns=>{ r.turns=turns; renderDrift(); },DR.ctl.signal);
-  r.turns=out.turns; r.payload=out.payload;
+  r.turns=out.turns; r.payload=out.payload; r.decMode=out.decisions;
   driftSave();
 }
 /* The hierarchy: 1. each scene judged on its own (its dialogue, its payload); 2. each payload kind
@@ -3560,7 +3609,8 @@ function driftSummary(list){
 const KIND_DESC={solo:"solo reply (one character, face to face)",multi:"several characters in the room (each answers in turn)",gm:"reacting to gamemaster beats (story events)",text:"a phone text-message thread (typed words only, no narration)",heat:"heat of the moment (beats in the middle of sex)"};
 function exchangeText(sc,turns,maxLen){
   return turns.map((t,i)=>`TURN ${i+1}\n${t.gm?"GAMEMASTER BEAT (an event in the story)":sc.kind==="text"?"EMRE (a text message)":"EMRE (the player)"}: ${t.user}\n`+
-    turnReplies(sc,t).map(r=>`${String(r.name||"").toUpperCase()}${sc.kind==="text"?" (texting back)":""}${r.model?` [model: ${r.model}]`:""}: ${maxLen?String(r.text||"").slice(0,maxLen):r.text}`).join("\n")).join("\n\n");
+    turnReplies(sc,t).map(r=>`${String(r.name||"").toUpperCase()}${sc.kind==="text"?" (texting back)":""}${r.model?` [model: ${r.model}]`:""}: ${maxLen?String(r.text||"").slice(0,maxLen):r.text}`
+      +(r.decisions||r.check?`\n  [decided before this reply: ${decSummary(r.decisions)||"nothing"}${r.check?" | "+checkSummary(r.check):""}]`:"")).join("\n")).join("\n\n");
 }
 function criteriaText(focus,rot){ return CRITERIA.filter(c=>!c.rotation||rot).map(c=>`${(focus||[]).indexOf(c.id)>=0?"★ ":"- "}${c.id} — ${c.label}: ${c.desc}`).join("\n"); }
 /* the models a played scene rotated between (none when one model wrote every reply) */
@@ -3733,8 +3783,8 @@ function engGroupKey(c){ return (c.prompts&&c.prompts[0])||("dbg:"+String(c.dbg|
 function engGroupsOf(calls){
   const g={};
   (calls||[]).forEach(c=>{ const k=engGroupKey(c); (g[k]=g[k]||[]).push(c); });
-  return Object.keys(g).map(k=>{ const r=k.indexOf("dbg:")===0?null:regByKey(k);
-    return {key:k,label:r?r.label:(k.slice(4)||k),prompt:r?k:null,calls:g[k]}; })
+  return Object.keys(g).map(k=>{ const r=k.indexOf("dbg:")===0?null:regByKey(k), c0=g[k][0];
+    return {key:k,label:c0&&c0.decision?"Decision · "+c0.feature:(r?r.label:(k.slice(4)||k)),prompt:r?k:null,decision:!!(c0&&c0.decision),calls:g[k]}; })
     .sort((a,b)=>a.calls[0].id-b.calls[0].id);
 }
 function engGroups(){ return engGroupsOf(ENGRUN.calls); }
@@ -3837,9 +3887,12 @@ async function runEngines(presetId,inAll){
 async function judgeEngine(gr,cx){
   cx=cx||{model:ENGRUN.model,focus:ENGRUN.focus,lines:ENGRUN.lines,signal:ENGRUN.ctl&&ENGRUN.ctl.signal,at:(ENGRUN.byScene[ENGRUN.cur]||{}).at||0};
   const sample=gr.calls.filter(c=>c.output!=null).slice(0,2);
-  const promptText=gr.prompt?itemVal({type:"prompt",key:gr.prompt}):"";
-  const input=apBuild("engine",{engine:gr.label,prompt_key:gr.prompt||"",dbg:gr.calls[0].dbg||"",model:cx.model||"(unknown)",focus:cx.focus||"",
-    lines:(cx.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n"),
+  const dec=!!gr.calls[0].decision;
+  /* a decision agent reads several prompts (one per question): every one it read, with its key */
+  const promptText=dec?[...new Set(gr.calls.flatMap(c=>c.prompts||[]))].map(k=>`----- prompt:${k} -----\n${itemVal({type:"prompt",key:k})}`).join("\n\n")
+    :(gr.prompt?itemVal({type:"prompt",key:gr.prompt}):"");
+  const input=apBuild("engine",{engine:dec?gr.calls[0].feature+" (decision agent)":gr.label,prompt_key:gr.prompt||"",dbg:gr.calls[0].dbg||"",model:(dec&&gr.calls[0].model)||cx.model||"(unknown)",focus:cx.focus||"",
+    lines:(cx.lines||[]).map((l,i)=>(i+1)+". "+l).join("\n"),decision:dec,
     checks:cx.checks||"",roleplay:/^Roleplay reply/.test(gr.calls[0].dbg||""),template:promptText?promptText.slice(0,30000):"",
     applied:appliedText(appliedSince(cx.at||0).filter(a=>!gr.prompt||a.item==="prompt:"+gr.prompt)),
     calls:sample.map((c,i)=>`===== CALL ${i+1}: WHAT THE APP SENT =====\n${payloadText(c).slice(0,50000)}\n\n===== CALL ${i+1}: THE ANSWER =====\n${String(c.output).slice(0,8000)}`).join("\n\n")});
@@ -3882,7 +3935,8 @@ function renderEstimate(){
   const el=$("#allEstimate"); if(!el) return;
   const rs=DRIFT_SCENES.filter(sc=>selReply().indexOf(sc.id)>=0);
   const replies=rs.reduce((a,sc)=>a+sc.lines.length*sceneSpeakers(sc).length,0);
-  el.textContent=`Selected: ${rs.length} scene${rs.length===1?"":"s"} (${replies} replies). Then each scene is judged on its own, each test section (${[...new Set(rs.map(sc=>sc.group))].length}) re-evaluates its scenes and gets its own fixer, and a reconciler merges the fixes. One analyst per section reads that section's payload once with its scenes, and one complete analysis reads the kinds together and proposes the fixes.`;
+  const dm=driftDecisions()?decMode():"off";
+  el.textContent=`Selected: ${rs.length} scene${rs.length===1?"":"s"} (${replies} replies${dm!=="off"?`, each with its decisions and its reply check: ${replies*2} decision requests to ${DEC_LABEL[dm]}`:", no decisions"}). Then each scene is judged on its own, each test section (${[...new Set(rs.map(sc=>sc.group))].length}) re-evaluates its scenes and gets its own fixer, and a reconciler merges the fixes. One analyst per section reads that section's payload once with its scenes, and one complete analysis reads the kinds together and proposes the fixes.`;
   renderOverall();
 }
 /* the overseer's verdict belongs to one test set: replaced or cleared with it */
@@ -4088,6 +4142,14 @@ function pathFragmentsText(kind){
 }
 function sectionPayload(k){ const kp=kindPayload(k)||kindPayload(secKind(k)); return kp?{scene:kp.scene,p:kp.p,text:instrText(kp.p)}:null; }
 function pieceUsage(){ const u={}; KINDS.forEach(kd=>{ const sp=sectionPayload(kd.k); if(!sp||!KA[kd.k]) return; piecesIn(sp.text).forEach(id=>{ (u[id]=u[id]||[]).push(kd.k); }); }); return u; }
+/* (v150.74) the decision prompts a reply is shaped by — asked before it (the emotion pick, intensity, id/superego, spoken
+   limits, who is talked about) and after it (the reply check) — and the emotions' descriptions, current text */
+function decisionPromptsText(){
+  const fs=((S.meta&&S.meta.decisions&&S.meta.decisions.features)||[]).filter(f=>f.name==="Emotion pick"||f.name==="Reply check");
+  const L=[]; fs.forEach(f=>(f.keys||[]).forEach(k=>{ const it=findItem("prompt:"+k); if(it) L.push(`===== prompt:${k} (${f.name}) =====\n${itemVal(it)}`); }));
+  L.push("===== the emotions (emo:<Emotion>.desc — the choices of the emotion question) =====\n"+emoList().map(e=>`${e.name}: ${e.desc||""} [tones: ${(e.tones||[]).join(", ")}]`).join("\n"));
+  return L.join("\n\n");
+}
 async function fixSection(k,eff,sig){
   const kd=KINDS.find(x=>x.k===k), sp=sectionPayload(k); if(!kd||!KA[k]||!KA[k].at) return null;
   FX[k]={running:true}; renderDrift();
@@ -4096,7 +4158,8 @@ async function fixSection(k,eff,sig){
     const catalogue=ids.map(id=>{ const others=(usage[id]||[]).filter(x=>x!==k).map(secLabel); return `===== ${id}${others.length?` — SHARED with: ${others.join(", ")}`:" — this section only"} =====\n${itemVal(itemFromRef(id))}`; }).join("\n\n");
     const since=Math.min(...kindScenes(k).map(sc=>DR.results[sc.id]&&DR.results[sc.id].at).filter(Boolean),Date.now());
     const v={section:`${kd.label} (the ${kd.kind} path)`,report:kindReport(k),layout:`===== THE FRAGMENTS OF THE ${String(kd.kind).toUpperCase()} PATH =====\n${pathFragmentsText(kd.kind)}`,catalogue:catalogue||"(no piece found in the payload)",
-      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText(),history:historyFor(ids),engines:enginePromptList(),earlier:earlierText(FX,"S",k,FX_RUN.since||0)};
+      effect:eff||"",applied:appliedText(appliedSince(since)),rotation:rotationText(),history:historyFor(ids),engines:enginePromptList(),earlier:earlierText(FX,"S",k,FX_RUN.since||0),
+      decisions:kindScenes(k).some(sc=>{ const r=DR.results[sc.id]; return r&&r.decMode&&r.decMode!=="off"; })?decisionPromptsText():""};
     v.payload=sp?cutMiddle(sp.text,Math.max(20000,AP_CAP-apBytes(apBuild("fixer",Object.assign({},v,{payload:""})))-4000)):"(not available)";
     const o=await claudeJson(apBuild("fixer",v),{signal:sig,modelTier:"complex",cache:false});
     (o.edits||[]).forEach((ed,i)=>{ ed._id=`S:${k}#${i+1}`; }); await repairEdits(o.edits,sig);
@@ -4117,7 +4180,9 @@ function proposalsText(){
 }
 
 /* the app's engine prompts, for naming who generated a block of the payload */
-function enginePromptList(){ return (S.meta&&S.meta.registry||[]).filter(r=>r.key!=="baseInstruction"&&r.key!=="formatRules").map(r=>`${r.key} — ${r.label||r.key}`).join("\n"); }
+function decisionKeySet(){ const set=new Set(); ((S.meta&&S.meta.decisions&&S.meta.decisions.features)||[]).forEach(f=>(f.keys||[]).forEach(k=>set.add(k))); return set; }
+/* the prompts that write content into a payload (the decision prompts answer with probabilities and write nothing) */
+function enginePromptList(){ const dk=decisionKeySet(); return (S.meta&&S.meta.registry||[]).filter(r=>r.key!=="baseInstruction"&&r.key!=="formatRules"&&!dk.has(r.key)).map(r=>`${r.key} — ${r.label||r.key}`).join("\n"); }
 /* outside the wording: generated content, story data, backend changes */
 function outsideText(o){ if(!o) return ""; const L=[];
   if((o.generated||[]).length) L.push("GENERATED CONTENT (another engine's prompt):\n"+o.generated.map(g=>`- ${g.prompt||"?"} (${g.block||""}): ${g.problem||""}${g.evidence?` — “${g.evidence}”`:""}${g.fix?` → ${g.fix}`:""}`).join("\n"));
@@ -4565,6 +4630,7 @@ $("#btnAllExport").onclick=async()=>{
   if(ok) toast("Results exported. Open them in the editor inside Claude with Import results");
 };
 $("#btnAllImport").onclick=()=>$("#fileDrift").click();
+$("#driftDec").checked=lsGet("driftdec",true)!==false; $("#driftDec").onchange=e=>{ lsSet("driftdec",!!e.target.checked); renderEstimate(); };
 $("#fileDrift").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{ const b=JSON.parse(await f.text());
@@ -4896,7 +4962,7 @@ async function afterEngine(hadDraft){
   renderList(); renderEditor();
   aiInit(); netProbe(); nanoProbe();
   if(await startEngine()){ await afterEngine(hadDraft); pushModelToEngine(); }
-  window.__PE={fixGenerated,backendMarkdown,outsideText,enginePromptList,selectableEdits,FX_RUN,historyFor,locateEdit,repairEdits,CQ,claudeJson,fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
+  window.__PE={engGroupsOf,judgeEngine,playScene,exchangeText,decMode,decChoice,withDecisions,decisionPromptsText,driftDecisions,decPreview,claudeDecide,fixGenerated,backendMarkdown,outsideText,enginePromptList,selectableEdits,FX_RUN,historyFor,locateEdit,repairEdits,CQ,claudeJson,fixSectionAlone,fixEnginePromptAlone,EFX,engSceneReport,engProblemPrompts,fixEnginePrompt,engSnapNow,engSnaps,checkEngEffect,writeEngFixesAlone,FX,fixSection,piecesIn,pieceUsage,proposalsText,secKind,snapNow,snaps,payloadDiff,checkEffect,judgeScene,sceneReport,kindReport,payloadsText,pieceCatalogue,DISC,discussSend,discussInput,KA,KINDS,analyseKind,analyseKinds,writeFixesAlone,AP_CAP,apBytes,engOverallInput,overallInput,CRITERIA,ENGALL,renderEstimate,runEngineTests,AP_DEFS,AP_LAST,apText,apFill,apBuild,renderAp,STORY,slimWorld,useTestWorld,llmCands,CLAUDE_TIERS,S,ENG,NET,LLM,runLlm,compareLlm,effectiveModels,MODEL_FIELDS,ENGRUN,ENGINE_SCENES,APPLIED,ALL,runEverything,analyseEverything,analyseTogether,engLoad,runEngines,analyseEngines,engGroups,relayAllowed,DRIFT_SCENES,runDriftScenes,DR,engCall,openPack,buildExport,itemVal,setVal,findItem,itemStatus,origVal,itemDef,ITEMS:()=>ITEMS,refreshPreview};
 })();
 </script>
 </body>

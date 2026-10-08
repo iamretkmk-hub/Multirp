@@ -492,18 +492,37 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var vals=[];try{vals=PT_VALUES.map(function(v){return {name:v.name,scope:v.scope,label:v.label};});}catch(e){}
     var ver="";try{ver=((document.getElementById("buildStamp")||{}).textContent||"").trim();}catch(e){}
     var kmap={};PROMPT_REGISTRY.forEach(function(r){kmap[r.key]=K[r.key];});PROMPT_PACK_KEYS.forEach(function(k){kmap[k]=K[k];});kmap.curUniverse=K.curUniverse;
-    var settingsDef={};PROMPT_PACK_KEYS.forEach(function(k){var v=state[k];settingsDef[k]=(v==null)?"":(typeof v==="string"?v:JSON.stringify(v));});
+    /* (v150.74) the Decisions switches are stored "1"/"0" (the app reads them as === "1"); the emotion list as JSON, "" for the
+       shipped one. Older switches are JSON booleans. */
+    var RAW01=["emoOn","replyCheckOn","gateOn","limitsOn","trackDecOn","memJudgeOn","statusDecOn","moveDecOn","routerDecOn","gmDecOn","textGateOn","imgDecOn"];
+    var settingsDef={};PROMPT_PACK_KEYS.forEach(function(k){var v=state[k];
+      if(RAW01.indexOf(k)>=0){ settingsDef[k]=(v===false||v===0)?"0":"1"; return; }
+      if(k==="emotions"){ settingsDef[k]=(Array.isArray(v)&&v.length&&JSON.stringify(v)!==JSON.stringify(EMOTIONS_DEFAULT))?JSON.stringify(v):""; return; }
+      settingsDef[k]=(v==null)?"":(typeof v==="string"?v:JSON.stringify(v));});
     var other={};try{Object.keys(REPLY_EXTRA_TPLS).forEach(function(g){other[g]=(REPLY_EXTRA_TPLS[g]||[]).filter(function(k){return k in BLOCK_TPL_DEFAULTS;});});}catch(e){}
     var otherLabels={};try{otherLabels=J(OTHER_WORDING_LABELS);}catch(e){}
     return {registry:reg,blockDefaults:J(BLOCK_TPL_DEFAULTS),blocks:blocks,layoutKeys:J(LY_ORDER),kinds:J(FRAG_PATHS),
       fragDefaults:J(FRAG_DEFAULTS),fragAddKeys:FRAG_SHIPPED_ADDS.map(function(a){return a.key;}),otherWording:other,otherLabels:otherLabels,
       engines:eng,engineGroups:engGroups,packKeys:J(PROMPT_PACK_KEYS),known:Object.keys(known),values:vals,
-      backupVersion:BACKUP_VERSION,appVersion:ver,settingsDef:settingsDef,kmap:kmap};
+      backupVersion:BACKUP_VERSION,appVersion:ver,settingsDef:settingsDef,kmap:kmap,decisions:decMeta()};
+  }
+  /* (v150.74) the decision side, for the editor: each Decisions feature with the prompts it reads, the emotion list (shipped and
+     current), the intensity and id/superego levels, the reply check's questions and the flags a decision sets. */
+  function decMeta(){
+    var o={features:[],emotions:[],emotionsDefault:[],emoLevels:[],egoLevels:[],replyChecks:[],flags:[]};
+    try{ o.features=DEC_FEATURES.map(function(f){return {name:f.name,label:f.label,keys:decRegKeys(f)};}); }catch(e){}
+    try{ o.emotions=J(emotionList()); o.emotionsDefault=J(EMOTIONS_DEFAULT); }catch(e){}
+    try{ o.emoLevels=J(EMO_LEVELS); o.egoLevels=J(EGO_LEVELS); }catch(e){}
+    try{ o.replyChecks=REPLY_CHECK_QS.map(function(q){return {k:q.k,prompt:q.prompt,label:q.label,what:q.what};}); }catch(e){}
+    try{ o.flags=J(PV_DECISION_FLAGS); }catch(e){}
+    return o;
   }
 
   /* ---------------- applying the editor's working pack, live ---------------- */
   function parseLike(cur,raw){
     if(typeof cur==="string")return String(raw);
+    if(typeof cur==="boolean"){ var t=String(raw).trim(); return t==="1"||t==="true"; }   // the app stores a switch as "1"/"0"
+    if(cur==null&&/^(emotions)$/.test(String(arguments[2]||""))){ try{ var v=JSON.parse(raw); return Array.isArray(v)&&v.length?v:null; }catch(e){ return null; } }
     if(typeof cur==="number"){var n=+raw;return isNaN(n)?cur:n;}
     try{return JSON.parse(raw);}catch(e){return raw;}
   }
@@ -522,7 +541,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       try{ store.setRaw(K.fragments,state.fragments?JSON.stringify(state.fragments):""); store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(function(a){return a.key;}).join(",")); _fragMigratedFor=state.fragments; }catch(e){}
     }
     Object.keys(s).forEach(function(k){if(k==="blockTpls"||k==="payloadTemplates"||k==="fragments"||k==="fragAdds")return;
-      try{ if(LIVE&&LIVE.fieldKeep&&(k in LIVE.fieldKeep)){LIVE.fieldKeep[k]=parseLike(LIVE.fieldKeep[k],s[k]);return;} state[k]=parseLike(state[k],s[k]);}catch(e){}});
+      try{ if(LIVE&&LIVE.fieldKeep&&(k in LIVE.fieldKeep)){LIVE.fieldKeep[k]=parseLike(LIVE.fieldKeep[k],s[k]);return;} state[k]=parseLike(state[k],s[k],k);}catch(e){}});
     state.payloadTplOn=true;   // the engine layouts this editor edits are sent (replies are their fragments either way)
     return true;
   }
@@ -586,7 +605,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     if(!state.chats)state.chats={};
     var U="Emre Tokmak";
     Object.assign(chat,{universeId:uni.id,locationId:"l_sami",location:"Big Özüçak's House",subId:"s_liv",subPos:{p_sami:"s_liv",p_buket:"s_liv"},
-      presentIds:["p_buket","p_sami"],gameDay:5,period:"Evening",activeEvent:null,dnd:false,calendar:[],promises:[],rel:{},_psyche:{},
+      presentIds:["p_buket","p_sami"],gameDay:5,period:"Evening",activeEvent:null,dnd:false,calendar:[],promises:[],rel:{},
       messages:[
         M({role:"assistant",speaker:"Sami Özüçak",speakerId:"p_sami",textMsg:true,textWith:"p_sami",textWithName:"Sami Özüçak",present:[],content:"Abi akşama gel, Buket dolma yaptı. Raporları da konuşuruz, söz."}),
         M({role:"user",textMsg:true,textWith:"p_sami",textWithName:"Sami Özüçak",present:[],content:"Gelirim. Raporlar hafta sonu masamda olacak ama Sami, haberin olsun."}),
@@ -644,14 +663,11 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       {id:"i1",holderId:"p_sami",holderName:"Sami Özüçak",targetId:"p_berk",targetName:"Berker Özüçak",valence:"hostile",kind:"suspicion",aim:"make Berker admit what he is holding back about the weekend plan with Özlem",strength:0.7,status:"live",day:5},
       {id:"i2",holderId:"p_buket",holderName:"Buket Özüçak",targetId:"__user__",targetName:U,valence:"warm",kind:"alliance",aim:"keep Emre quiet about the shifts until they are official",strength:0.6,status:"live",day:2}];
     chat.spokenLimits={p_buket:[{text:"Hastane konusunu açma.",about:"not to bring up the hospital in front of Sami",kind:"limit",day:5,period:"Evening",place:"Big Özüçak's House",placeId:"l_sami",expires:"scene"}]};
-    chat._psyche={
-      p_sami:{toward:"Wave the reports away with a story and get Emre eating before he names a day.",against:"Buket is listening, and Emre does not laugh at the stories any more."},
-      p_buket:{toward:"Keep the table easy and keep Emre off the hospital.",against:"He knows about the shifts, and he is looking at her the way he did on the trail."}};
     Object.assign(state,TOGGLES);
     fillGaps(chat,uni.id);
     SAMPLE_NOTE="sample";
   }
-  var TOGGLES={mem:true,sceneOn:true,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,relOn:true,trackOn:true,calOn:true,promiseOn:true,gossipOn:true,intentOn:true,pulseOn:false,roundOn:false,goalPursuitOn:false,textsOn:true,autoImg:false,imgMode:"off",streamReveal:false,voiceCheckOn:false,psycheOn:false,presenceOff:true};
+  var TOGGLES={mem:true,sceneOn:true,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,relOn:true,trackOn:true,calOn:true,promiseOn:true,gossipOn:true,intentOn:true,pulseOn:false,roundOn:false,goalPursuitOn:false,textsOn:true,autoImg:false,imgMode:"off",streamReveal:false,voiceCheckOn:false,presenceOff:true};
   /* The story keeps what the play left behind. Where a piece of the payload would still have nothing to
      say (the story never produced it), a small entry is added from the story's own facts, marked
      source "editor", so every piece of a reply can be read. */
@@ -746,6 +762,76 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       day:chat?chat.gameDay:null,period:chat?chat.period:"",location:chat?chat.location:"",source:SAMPLE_NOTE};
   }
 
+  /* ---------------- the Decisions API, inside the sandbox ----------------
+     Every Decisions request of the app goes through decisionsCall (the emotion pick with the reply's asks, the reply check,
+     strict gates, statuses, trackers, memory relevance and status, the turn router, movement, the Gamemaster judge, the
+     proactive text gate, what you see). It is not a chat completion, so the editor's chatCompletion stand-in never saw it:
+     without this every decision came back null and the editor built payloads the phone never builds. Now each request is
+     recorded (its feature, the prompts it reads, the exact state and questions, the answers) and answered by the mode:
+       off    — no answer (the app goes on without the decision, as when the feature is paused);
+       or     — StoryMind's own request to the Decisions API, with the OpenRouter key, through the editor's relay;
+       claude — handed to the editor, where Claude answers the typed questions with probabilities in the API's shape. */
+  var DEC={mode:"off",log:[],n:0,wait:{}};
+  var DEC_FEATURES=[
+    {name:"Emotion pick",label:"The reply's decisions (emotion, id/superego, the fragments' questions, spoken limits, who is talked about, goals done)",
+      keys:["x_emotion_pick","x_emotion_intensity","x_ego_pick","x_limit_read","x_limit_release","x_rel_about","x_goal_done"]},
+    {name:"Reply check",label:"Reply check (after every reply)",keys:["x_reply_check_refusal","x_reply_check_player","x_reply_check_character","x_reply_check_repeat","x_reply_check_continuity","x_clock_moved"]},
+    {name:"Strict gates",label:"Strict gates (before a promise, task, meeting, quest or motive is filed)",keys:["x_gate_promise","x_gate_task","x_gate_meeting","x_gate_quest","x_gate_intent"]},
+    {name:"Status check",label:"Status check (kept, done or missed)",keys:["x_status_promise","x_status_meeting","x_status_task"]},
+    {name:"Trackers in one request",label:"Trackers",keys:["x_tracker_dec_change","x_tracker_dec_trigger"]},
+    {name:"Memory relevance judge",label:"Memory relevance",keys:["x_mem_relevance","x_mem_relevance_yes","x_mem_relevance_no"]},
+    {name:"Memory status check",label:"Memory status (open, settled, secret…)",keys:["x_mem_status"]},
+    {name:"Turn router · character",label:"Turn router: who answers next",keys:["x_router2"]},
+    {name:"Movement",label:"Movement: who goes where",keys:["x_move_pick","x_move_player","x_move_why"]},
+    {name:"Gamemaster judge",label:"Gamemaster judge",keys:["x_gm_dec_stale","x_gm_dec_trigger","x_gm_dec_energy","x_gm_dec_kind"]},
+    {name:"Proactive text gate",label:"Proactive texts: send one?",keys:["x_text_gate"]},
+    {name:"What you see",label:"What you see (a new picture, which rule)",keys:["x_visual_new","x_rule_pick"]}];
+  function decFeatureOf(name){ for(var i=0;i<DEC_FEATURES.length;i++)if(DEC_FEATURES[i].name===name)return DEC_FEATURES[i]; return null; }
+  function decRegKeys(f){ return ((f&&f.keys)||[]).filter(function(k){return PROMPT_REGISTRY.some(function(r){return r.key===k;});}); }
+  /* Which registry prompts this request read: its feature's prompts whose wording is in a question (or in the state). */
+  function decPromptKeys(name,body){
+    var f=decFeatureOf(name), keys=decRegKeys(f), txt="";
+    try{ txt=JSON.stringify(body&&body.questions||{})+JSON.stringify(body&&body.state||""); }catch(e){}
+    var hit=keys.filter(function(k){ var t="";try{t=String(up(k)||"");}catch(e){}
+      var probe=t.replace(/\{\{[^}]*\}\}/g,"\u0000").split(/\u0000|\n/).map(function(x){return x.trim();}).filter(function(x){return x.length>=24;})[0];
+      return probe&&txt.indexOf(JSON.stringify(probe.slice(0,60)).slice(1,-1))>=0; });
+    return hit.length?hit:keys;
+  }
+  window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.pe!=="decres"||!DEC.wait[d.id])return;
+    var w=DEC.wait[d.id];delete DEC.wait[d.id];d.err?w.rej(new Error(d.err)):w.res(d.answers||null);});
+  function decAskParent(rec){ return new Promise(function(res,rej){ var id="d"+rec.id; DEC.wait[id]={res:res,rej:rej};
+    parent.postMessage({pe:"decide",id:id,rec:{id:rec.id,feature:rec.feature,label:rec.label,prompts:rec.prompts,body:rec.body}},"*"); }); }
+  async function peDecisionsCall(br,body,e,ms){
+    var mode=(LIVE&&LIVE.decMode)?LIVE.decMode:DEC.mode;
+    var name=(br&&br.name)||"Decisions";
+    var rec={id:++DEC.n,decision:true,feature:name,label:String((e&&(e.label||e.title||e.name))||name),dbg:String((e&&(e.label||e.title||e.name))||name),
+      body:J(body),prompts:decPromptKeys(name,body),model:String((body&&body.model)||""),mode:mode,at:Date.now()};
+    DEC.log.push(rec); if(DEC.log.length>300)DEC.log.shift();
+    if(LIVE){ rec.lid=++LIVE.n; LIVE.calls.push(rec); LIVE.inflight++; LIVE.lastAt=Date.now(); }
+    try{
+      var res=null;
+      if(mode==="or") res=await window.__PE_realDec(br,body,e,ms);
+      else if(mode==="claude"){ var a=await decAskParent(rec); res=(a&&typeof a==="object"&&Object.keys(a).length)?{answers:a,usage:null}:null;
+        try{ dbgDone(e,res?"ok":"error",res?{answers:a,note:"answered by Claude standing in for the decision model (prompt editor)"}:"no answer"); }catch(_){} }
+      else { try{ dbgDone(e,"error","decisions are off in the prompt editor"); }catch(_){} }
+      rec.answers=res?J(res.answers):null; if(!res&&!rec.error)rec.error=mode==="off"?"off":"no answer";
+      return res;
+    }catch(err){ rec.error=String((err&&err.message)||err); return null; }
+    finally{ rec.ms=Date.now()-rec.at; if(LIVE&&rec.lid){LIVE.inflight--;LIVE.lastAt=Date.now();} }
+  }
+  function setDecMode(o){ DEC.mode=(o&&/^(or|claude|off)$/.test(o.mode))?o.mode:"off"; return {mode:DEC.mode}; }
+  function decLog(o){ var since=(o&&o.since)||0; return DEC.log.filter(function(r){return r.id>since;}); }
+  /* The reply's decisions record, as the build reads it (charDecisions): what a preview sets by hand. */
+  function decRecord(d,kind){
+    d=d||{}; var r={emotion:"",intensity:"",tone:"",ego:"",asks:{},relAbout:{},sig:"pe-set",scene:"",day:0,at:Date.now(),set:true};
+    if(d.emotion){ var em=emotionList().find(function(x){return x.name===d.emotion;});
+      if(em){ var lk=EMO_LEVELS.some(function(l){return l.k===d.intensity;})?d.intensity:"clear", li=EMO_LEVELS.findIndex(function(l){return l.k===lk;});
+        r.emotion=em.name; r.intensity=lk; r.tone=String((Array.isArray(em.tones)&&em.tones[li])||em.name.toLowerCase()); } }
+    if(d.ego&&EGO_LEVELS.some(function(l){return l.k===d.ego;}))r.ego=d.ego;
+    Object.keys(d.asks||{}).forEach(function(k){ var v=+d.asks[k]; if(!isNaN(v))r.asks[k]=v; });
+    return r;
+  }
+
   /* ---------------- building a reply payload exactly as the app does ---------------- */
   /* Retrieval proper costs a model call (embeddings), so the editor stands in for it: the two newest
      memories, plus up to three whose words meet the scene's (the place, the people, the last lines), as
@@ -819,7 +905,6 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       var by={};(state.memory||[]).forEach(function(m){ if(+m.gameDay!==a.day||!m.ownerId||m.type==="DIARY"||!m.gamePeriod||PER.indexOf(m.gamePeriod)>=PER.indexOf(a.period))return;
         (by[m.ownerId]=by[m.ownerId]||[]).push({period:m.gamePeriod,place:m.location||"",with:(m.people||[]).slice(0,3),what:String(m.content||"").split(/(?<=[.!?])\s/)[0].slice(0,120)}); });
       chat.dayLog=Object.keys(by).length?{day:a.day,by:by}:null; }
-    chat._psyche={};
     (state.universes||[]).forEach(function(u){ if(Array.isArray(u.chronicle))u.chronicle=u.chronicle.filter(function(x){return !later(x,a);}); });
     (state.personas||[]).forEach(function(p){
       if(p.afterHeat&&later(p.afterHeat,a))delete p.afterHeat;
@@ -831,8 +916,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     /* "Emre" in a scene means the player, whatever the story calls him */
     var who=state.user||"Emre";
     (su.limits||[]).forEach(function(l){ chat.spokenLimits=chat.spokenLimits||{}; (chat.spokenLimits[l.charId]=chat.spokenLimits[l.charId]||[]).push(J(l)); });
-    /* the drives passages for this moment (no signature: always fresh), and where they have been today */
-    if(su.psyche){ chat._psyche=chat._psyche||{}; Object.keys(su.psyche).forEach(function(id){ chat._psyche[id]=J(su.psyche[id]); }); }
+    /* where they have been today */
     if(su.dayLog)chat.dayLog=J(su.dayLog);
     /* trackers the scene needs (a fertile window): defined on the universe, valued in this chat */
     (su.trackers||[]).forEach(function(t){ var u=state.universes.find(function(x){return x.id===chat.universeId;}); if(!u)return;
@@ -857,11 +941,10 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
         patch.afterHeatBy=Object.assign({},p.afterHeatBy||{},ah); }
       Object.assign(p,patch); });
   }
-  async function _build(o){
-    o=o||{};
+  /* The scene a build, a decision or a reply check reads: the base story, a scripted scene laid over it (its own place and
+     cast, an opening line, the exchange so far, what carried over from the turns before), and who speaks. */
+  function prepScene(o,kind){
     restoreBase();
-    var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo";
-    var REP={};   // v150.66 — what ptBuildMessages reports: the fragments and options that fired, the asked options, unknown names
     var chat=curChat();if(!chat)throw new Error("No scene to build from.");
     /* A scripted scene (the drift tests): its own place and cast, an opening line, and the exchange so far. */
     if(o.scene){
@@ -888,6 +971,29 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     if(kind==="heat")chat._heatBeat={total:"3",n:"1",narrN:String(+chat.heatNarrN||1)};
     if(kind==="gm"&&!o.scene){chat.messages.push({mid:"pe_gm",role:"assistant",speaker:"Narrator",narratorEvent:true,present:present.slice(),
       content:o.gmBeat||"*The lights flicker and die. Somewhere in the block a breaker snaps; the fridge shudders into silence.*"});}
+    /* what the scene's earlier turns left behind: the speaker's last decision record (their earlier feeling in this scene) and
+       the limits they said out loud, which the decision request files and the next payload carries */
+    var cy=o.carry||{};
+    if(cy.emo&&typeof cy.emo==="object"){ chat.emo=Object.assign({},chat.emo||{},J(cy.emo)); }
+    if(cy.spokenLimits&&typeof cy.spokenLimits==="object"){ chat.spokenLimits=J(cy.spokenLimits); }
+    if(cy.spokenLimitsRead&&typeof cy.spokenLimitsRead==="object"){ chat.spokenLimitsRead=J(cy.spokenLimitsRead); }
+    return {chat:chat,cast:cast,p:p,present:present};
+  }
+  /* The line a reply answers, as the app hands it to the emotion pick: the player's line (sendMessage), the event (a
+     gamemaster reaction), the newest text (a text reply), else the newest line the character heard. */
+  function decideLine(chat,p,kind){
+    var ms=(chat.messages||[]).filter(function(m){return m&&!m.sysError&&m.content;});
+    for(var i=ms.length-1;i>=0;i--){ var m=ms[i];
+      if(kind==="gm"&&m.narratorEvent)return String(m.content);
+      if(m.role==="user")return String(m.content);
+      if(m.speakerId&&m.speakerId!==p.id&&!m.narratorEvent)return String(m.content); }
+    return "";
+  }
+  async function _build(o){
+    o=o||{};
+    var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo";
+    var REP={};   // v150.66 — what ptBuildMessages reports: the fragments and options that fired, the asked options, unknown names
+    var ps=prepScene(o,kind), chat=ps.chat, cast=ps.cast, p=ps.p, present=ps.present;
     var turn=o.turn||{}, undo=[];
     if(turn.video){chat.watchingNow={text:o.videoText||"A clip of Buket on the terrace, phone to her ear, glancing back through the glass at the two men.",at:chat.messages.length};}
     if(turn.voice){undo.push(["autoSpeak",state.autoSpeak]);state.autoSpeak=true;}
@@ -896,6 +1002,22 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     var who=(typeof turnUser==="function")?turnUser(chat):state.user;
     var t=lineCtx(chat,p,others);
     if(o.targetId){var tp=cast.find(function(x){return x.id===o.targetId;});if(o.targetId==="__user__"){t={targetName:who,targetId:"__user__"};}else if(tp){t={targetName:tp.name,targetId:tp.id};}}
+    /* (v150.74) THE REPLY'S DECISIONS, before the payload is built, as the app takes them: o.decisions sets the record by
+       hand (the preview's panel); o.decide asks for it with the line the app would hand the emotion pick (sendMessage's
+       player line, a gamemaster's event, the newest text), in the mode the editor set (off / or / claude). The memory-status
+       backfill that rides the first pick is skipped: the scene is rebuilt every turn, so it would be asked every turn. */
+    var decRecs=[];
+    if(o.decisions){ chat.emo=Object.assign({},chat.emo||{}); chat.emo[p.id]=decRecord(o.decisions,kind); }
+    else if(o.decide){
+      var since=DEC.n, keyWas=state.key, msb=window.memStatusBackfill;
+      if(!String(state.key||"").trim())state.key="pe-claude";
+      window.memStatusBackfill=function(){return null;};
+      try{ await emotionEnsure(chat,p,decideLine(chat,p,kind),{targetId:t.targetId,targetName:t.targetName,kind:kind}); }catch(e){}
+      finally{ window.memStatusBackfill=msb; state.key=keyWas; }
+      decRecs=DEC.log.filter(function(r){return r.id>since;});
+    }
+    var DECIDED=null; try{ DECIDED=J(charDecisions(chat,p.id)); }catch(e){}
+    var CARRY={emo:{},spokenLimits:J(chat.spokenLimits||{}),spokenLimitsRead:J(chat.spokenLimitsRead||{})}; if(DECIDED)CARRY.emo[p.id]=DECIDED;
     if(turn.afterHeat){p.afterHeatBy=p.afterHeatBy||{};p.afterHeatBy[t.targetName]={text:o.afterHeatText||("It happened, and you are not going to pretend it did not. You will not let it happen again in this house, and you will not be the one who brings it up."),chatId:chat.id,withName:t.targetName,day:chat.gameDay};}
     var addressed=turn.arriving?"arriving":null;
     var msgs=null,blocks=null,HIST=[],EMPTY=[];
@@ -933,7 +1055,23 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     msgs=msgs.map(function(m){return {role:m.role,content:String(m.content==null?"":m.content),hist:HIST.indexOf(m)>=0};});
     return {messages:msgs,speaker:p.name,target:t.targetName,kind:kind,histCount:o.noHistory?0:histN,empties:empties,
       unknownCalls:REP.unknown_calls||[],unknownVars:REP.unknown_values||[],hasHistory:true,
-      fired:REP.fired||[],asked:REP.asked||[],fellBack:REP.fellBack||"",list:REP.list||""};
+      fired:REP.fired||[],asked:REP.asked||[],fellBack:REP.fellBack||"",list:REP.list||"",
+      decisions:DECIDED,carry:CARRY,decCalls:decRecs};
+  }
+  /* (v150.74) The reply check on a reply, in its scene: the scene's turns end with the reply. Returns the probabilities, the
+     flags past the threshold (they mark the reply, and the next payload's guardrails options read them), and the request. */
+  async function _check(o){
+    o=o||{};
+    var kind=FRAG_PATHS.indexOf(o.kind)>=0?o.kind:"solo";
+    var ps=prepScene(o,kind), chat=ps.chat, p=ps.p, msg=null, ms=chat.messages||[];
+    for(var i=ms.length-1;i>=0;i--){ if(ms[i]&&ms[i].role==="assistant"&&ms[i].speakerId===p.id&&!ms[i].narratorEvent){ msg=ms[i]; break; } }
+    if(!msg){ restoreBase(); return null; }
+    var since=DEC.n, keyWas=state.key;
+    if(!String(state.key||"").trim())state.key="pe-claude";
+    try{ await runReplyCheck(chat,msg,p); }catch(e){} finally{ state.key=keyWas; }
+    var out={probs:msg.replyCheck?J(msg.replyCheck):null,flags:(msg.replyFlags||[]).slice(),at:(state.replyCheckAt!=null?+state.replyCheckAt:0.7),
+      on:!!state.replyCheckOn,calls:DEC.log.filter(function(r){return r.id>since;})};
+    restoreBase(); return out;
   }
   function _buildEngine(o){
     restoreBase();
@@ -1029,10 +1167,13 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     LIVE.fieldModels=o.fieldModels||null;
     if(LIVE.fieldModels){ LIVE.fieldKeep={}; Object.keys(LIVE.fieldModels).forEach(function(f){ LIVE.fieldKeep[f]=state[f]; state[f]="pe-field:"+f; }); }
     Object.assign(state,{mem:true,relOn:true,trackOn:true,calOn:true,promiseOn:true,gossipOn:true,intentOn:true,gmOn:true,sceneOn:true,routeOn:true,
-      presenceOff:false,goalsCuratorOn:true,condenseOn:true,charQuestsOn:true,pulseOn:true,goalPursuitOn:true,textsOn:true,psycheOn:true,
+      presenceOff:false,goalsCuratorOn:true,condenseOn:true,charQuestsOn:true,pulseOn:true,goalPursuitOn:true,textsOn:true,
       autoSpeak:false,narrMode:false,autoImg:false,imgMode:"off",streamReveal:false,suggestOn:false,voiceCheckOn:true});
+    /* (v150.74) the decisions: answered by the mode the run was started with, and every Decisions feature on, as the engines are */
+    LIVE.decMode=/^(or|claude|off)$/.test(o.decMode||"")?o.decMode:(LIVE.mode==="or"?"or":"claude");
+    if(LIVE.decMode!=="off")Object.assign(state,{emoOn:true,replyCheckOn:true,gateOn:true,limitsOn:true,trackDecOn:true,memJudgeOn:true,
+      statusDecOn:true,moveDecOn:true,routerDecOn:true,gmDecOn:true,textGateOn:true});
     if(o.scene&&o.scene.state)Object.assign(state,J(o.scene.state));   // a scene's own switches (the gamemaster every turn…)
-    window.psycheEnsure=LIVE.realPsyche||window.__PE_realPsyche||window.psycheEnsure;
     window.chatCompletion=async function(messages,model,opts){
       opts=opts||{};
       var field=null, m=String(model||"");
@@ -1077,6 +1218,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   function liveRestore(k){ if(k)Object.keys(k).forEach(function(x){ state[x]=k[x]; }); }
   async function build(o){ var k=liveKeep(); try{ return await _build(o); } finally{ liveRestore(k); } }
   function buildEngine(o){ var k=liveKeep(); try{ return _buildEngine(o); } finally{ liveRestore(k); } }
+  async function check(o){ var k=liveKeep(); try{ return await _check(o); } finally{ liveRestore(k); } }
   async function liveScript(o){
     if(!LIVE)throw new Error("No live run.");
     var chat=curChat(), from=LIVE.calls.length, n=chat.messages.length, here=(chat.presentIds||[]).slice();
@@ -1110,7 +1252,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
   function liveEnd(){
     if(LIVE&&LIVE.fieldKeep)Object.keys(LIVE.fieldKeep).forEach(function(f){state[f]=LIVE.fieldKeep[f];});
     if(LIVE){window.up=LIVE.origUp;window.chatCompletion=LIVE.origCC;window.uiConfirm=LIVE.origConfirm;window.uiChoose=LIVE.origChoose;
-      window.psycheEnsure=async function(){return null;};state.key="";LIVE=null;}
+      state.key="";LIVE=null;}
     restoreBase();return true;
   }
   /* The clean-up StoryMind gives a reply before it is posted (generateCharacterReply / _replyToText): a
@@ -1125,7 +1267,7 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
       return normalizeChannels(stripChannelLabel(stripChannelLabel(r).replace(new RegExp("^\\s*"+px+"\\s*:\\s*","i"),"")).trim(),{heat:!!o.heat});
     }catch(e){ return r.trim(); }
   }
-  var OPS={meta:meta,apply:apply,clean:clean,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveScript:liveScript,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,replay:replay,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
+  var OPS={meta:meta,apply:apply,clean:clean,check:check,setDecMode:setDecMode,decLog:decLog,setModel:setModel,complete:complete,liveBegin:liveBegin,liveTurn:liveTurn,liveScript:liveScript,liveEndDay:liveEndDay,liveCalls:liveCalls,liveEnd:liveEnd,replay:replay,loadWorld:loadWorld,build:build,buildEngine:buildEngine,lint:lint,world:function(){return world();}};
   window.addEventListener("message",async function(ev){
     var d=ev.data;if(!d||d.pe!=="req")return;
     try{var r=await OPS[d.op](d.arg);reply(d.id,r);}catch(e){reply(d.id,null,String((e&&(e.message||e.friendly))||e));}
@@ -1138,8 +1280,9 @@ textarea.ed{flex:1;min-height:240px;width:100%;resize:none;border:1px solid var(
     /* nothing in here may reach a model: every call answers empty, at once */
     window.__PE_realCC=chatCompletion;
     window.chatCompletion=async function(){return "{}";};
-    window.__PE_realPsyche=window.psycheEnsure;
-    window.psycheEnsure=async function(){return null;};
+    /* (v150.74) every Decisions request goes through the editor's handler (off until a test or a preview asks for it) */
+    window.__PE_realDec=decisionsCall;
+    window.decisionsCall=peDecisionsCall;
     try{window.doAutoBackup=async function(){return true;};}catch(e){}
     setTimeout(function(){try{sampleWorld();snapshotBase();}catch(e){parent.postMessage({pe:"log",level:"error",text:"sample world: "+e.message},"*");}
       parent.postMessage({pe:"ready"},"*");},300);
@@ -1194,11 +1337,41 @@ window.addEventListener("message",ev=>{
   else if(d.pe==="stage"){ ENG.stage=String(d.s||""); if(!ENG.ready) setEng("busy","Engine: "+ENG.stage); }
   else if(d.pe==="fetch") relayFetch(d);
   else if(d.pe==="llm") llmQueue.push(d), pumpLlm();
+  else if(d.pe==="decide") decQueue.push(d), pumpDec();
 });
 /* Requests from the sandbox. Only OpenRouter, only when a test is running with a key the user typed. */
 /* The live run's calls when Claude stands in: answered two at a time (the app fires its background jobs
    in parallel, and the sample capability rejects a flood). */
 const llmQueue=[]; let llmActive=0;
+/* (v150.74) A Decisions request from the engine, in Claude mode: Claude answers its typed questions (apBuild "decide"). The
+   answers go back in the API's shape; a question Claude left out stays unanswered, as an API answer missing it would. */
+const decQueue=[]; let decActive=0;
+async function claudeDecide(rec,signal){
+  const b=rec&&rec.body||{};
+  const input=apBuild("decide",{feature:rec.feature||"a decision",state:JSON.stringify(b.state==null?"":b.state,null,1),questions:JSON.stringify(b.questions||{},null,1)});
+  const o=await claudeJson(input,{signal,modelTier:"default",cache:false});
+  const a=(o&&o.answers&&typeof o.answers==="object")?o.answers:(o&&typeof o==="object"?o:{});
+  const out={};
+  Object.keys(b.questions||{}).forEach(k=>{ const q=b.questions[k]||{}, x=a[k]; if(!x||typeof x!=="object")return;
+    if(q.type==="noul"){ let v=(typeof x.noul==="number")?x.noul:(x.probabilities&&typeof x.probabilities.true==="number")?x.probabilities.true:NaN;
+      if(isFinite(v))out[k]={noul:Math.max(0,Math.min(1,v))}; return; }
+    const keys=Object.keys(q.criteria||{}); const pr={}; let sum=0;
+    keys.forEach(c=>{ const v=+((x.probabilities||{})[c]); pr[c]=isFinite(v)&&v>0?v:0; sum+=pr[c]; });
+    let ch=(typeof x.choice==="string"&&keys.indexOf(x.choice)>=0)?x.choice:null;
+    if(sum>0)keys.forEach(c=>{ pr[c]=pr[c]/sum; }); else if(ch)pr[ch]=1;
+    if(!ch){ let best=-1; keys.forEach(c=>{ if(pr[c]>best){ best=pr[c]; ch=c; } }); }
+    if(ch)out[k]={choice:ch,probabilities:pr}; });
+  return out;
+}
+function pumpDec(){
+  while(decActive<2&&decQueue.length){
+    const d=decQueue.shift(); decActive++;
+    const win=$("#engineFrame").contentWindow;
+    (async()=>{ try{ const a=await claudeDecide(d.rec,(ENGRUN.ctl&&ENGRUN.ctl.signal)||(DR.ctl&&DR.ctl.signal)||(typeof DT!=="undefined"&&DT.ctl&&DT.ctl.signal)); win.postMessage({pe:"decres",id:d.id,answers:a},"*"); }
+      catch(e){ win.postMessage({pe:"decres",id:d.id,err:aiErr(e)},"*"); }
+      finally{ decActive--; pumpDec(); } })();
+  }
+}
 function pumpLlm(){
   while(llmActive<2&&llmQueue.length){
     const d=llmQueue.shift(); llmActive++;
@@ -1921,6 +2094,28 @@ function engOnApi(){ return lsGet("engonapi",true)!==false; }   // NanoGPT: back
 /* Thinking for the model under test's replies: on, or as the prompts file says. (A model that only works
    with reasoning is also caught by StoryMind itself: it is sent again with reasoning on, and remembered.) */
 function testReasoning(){ return lsGet("testreasoning",false)===true; }
+/* (v150.74) Who answers the app's Decisions requests in a test or a preview: "claude" (Claude stands in for the decision
+   model), "or" (the real Decisions API with your OpenRouter key: what the phone sends), or "off" (no decisions: options that
+   need one stay out, the reply check never marks a reply). Auto: Claude while Claude plays your model; else the real API
+   when the OpenRouter key works; else Claude when it is reachable. */
+function decChoice(){ const v=lsGet("decmode","auto"); return /^(auto|claude|or|off)$/.test(v)?v:"auto"; }
+function decMode(){
+  const c=decChoice(), orOk=apiReady("or"), cl=claudeReachable();
+  if(c==="off") return "off";
+  if(c==="or") return orOk?"or":(cl?"claude":"off");
+  if(c==="claude") return cl?"claude":"off";
+  if(testMode()==="claude") return cl?"claude":(orOk?"or":"off");
+  return orOk?"or":(cl?"claude":"off");
+}
+const DEC_LABEL={claude:"Claude stands in for the decision model",or:"the Decisions API (your OpenRouter key)",off:"no decisions"};
+/* Runs fn with the engine answering decisions in mode m (default decMode()); the relay is open for the real API meanwhile. */
+async function withDecisions(fn,m){
+  m=m||decMode(); const was=NET.allow;
+  if(m==="or") NET.allow=true;
+  try{ await engCall("setDecMode",{mode:m},5000); }catch(e){}
+  try{ return await fn(m); }
+  finally{ try{ await engCall("setDecMode",{mode:"off"},5000); }catch(e){} NET.allow=was; }
+}
 async function pushModelToEngine(){ if(!ENG.ready) return; try{ await engCall("setModel",{prov:testProv(),key:orKey(),nanoKey:nanoKey(),model:testModel(),reasoning:testReasoning()}); }catch(e){} }
 function modelBoxHTML(){
   const mode=testMode(), pv=testProv(), A=API[pv], k=A.key(), sm=pv==="nano"?smNanoKeyHere():smKeyHere();
@@ -2501,7 +2696,25 @@ Reply with ONLY this JSON:
   vars:{payload:"the complete request: every message with its role"},
   def:`Below is the complete request an app sends to its language model: an ordered list of messages with their roles. Act as that model. Write exactly the next reply the request asks for, in the language and format it asks for (JSON when it asks for JSON), and nothing else: no preface, no notes, no quotation of the instructions.
 
-{{payload}}`}
+{{payload}}`},
+ {id:"decide",label:"Claude stands in for the decision model",desc:"When Claude plays the Decisions-API model (a test run in Claude mode): one request of the app — a state and typed questions — answered with probabilities in the API's shape.",
+  vars:{feature:"which decision of the app this is",state:"the request's state, as JSON",questions:"the request's questions, as JSON"},
+  def:`You are standing in for a DECISIONS model: a model that reads a STATE and answers typed QUESTIONS with calibrated probabilities. It never writes prose. This is one request of the StoryMind app ({{feature}}), sent exactly as the app sends it; your answers are fed straight back into the app, so they must have the API's shape.
+
+How to answer:
+- Read each question's "instructions" and its "criteria" literally: they are the app's own prompts, and they are what is being tested. Answer what they ask, judged from the state, as a careful reader would; do not answer the question you think they should have asked.
+- A "choice" question: pick one of its criteria keys. Answer {"choice":"<key>","probabilities":{"<key>":p,…}} with a probability for EVERY criteria key, summing to 1.
+- A "noul" question (yes/no): answer {"noul":p}, the probability that its "true" criterion holds.
+- Calibrate. 0.5 means genuinely undecided; 0.9 or more only when the state leaves little doubt; a probability near 0 or 1 only for the plain cases. Do not round everything to the extremes.
+- Answer every question key, and nothing else.
+
+Return ONLY JSON: {"answers":{"<question key>":{…},…}}
+
+STATE:
+{{state}}
+
+QUESTIONS:
+{{questions}}`}
 ];
 const AP_LAST={};   // the last text actually sent, per prompt
 function apDef(id){ const d=AP_DEFS.find(x=>x.id===id); return d?d.def:""; }
@@ -2815,14 +3028,11 @@ const AT_EMRE={locationId:"l_emre",location:"Emre's House",subId:"s_eliv",gameDa
 /* Scenes set before day 6 rewind the story to the end of day 5: Buket has not yet been to Emre's bed, so
    that afternoon, her decision after it and the pull it left are taken out. */
 const BEFORE={day:5,period:"Evening"}, BEFORE_NIGHT={day:5,period:"Night"};
-const PRE={rel:{"p_buket>__user__":{st:{desire:25,comfort:10,fear:5,agitation:5},stNote:""}},
-  psyche:{p_buket:{toward:"Keep the evening her own: the hospital, the house in order, the petition moving, nothing that has to be explained.",against:"Emre's attention, and how often she notices it. Ayça is her friend, and Sami is never far."},
-          p_sami:{toward:"Keep it light, a story for every silence, and get through the evening without naming a day for the reports.",against:"Emre does not laugh at the stories any more, and Buket hears everything."}}};
-const preWith=x=>Object.assign({},PRE,x||{},{rel:Object.assign({},PRE.rel,(x&&x.rel)||{}),psyche:Object.assign({},PRE.psyche,(x&&x.psyche)||{})});
+const PRE={rel:{"p_buket>__user__":{st:{desire:25,comfort:10,fear:5,agitation:5},stNote:""}}};
+const preWith=x=>Object.assign({},PRE,x||{},{rel:Object.assign({},PRE.rel,(x&&x.rel)||{})});
 /* What has happened between Buket and Emre by the time of the after-intimacy scenes. Your story already
    holds day 6 (her memories and her decision afterwards); the sample does not, so it gets this instead. */
 const AFTER_ONE={ifNoAfterHeat:"p_buket",
-  psyche:{p_buket:{toward:"He is right here, and yesterday is still in her body. A part of her wants to leave the door open.",against:"Her own decision: never alone with him again, not anywhere with a door. Ayça. Sami. The lojman counts everything."}},
   dayLog:{day:7,by:{p_buket:[{period:"Morning",place:"the dental hospital in Iskenderun",with:[],what:"patients, her mind somewhere else"}]}},
   memories:[{ownerId:"p_buket",content:"It happened. I went to Emre's house for coffee, Berker left, and I ended up in his bed. I did not stop it, and I did not want to.",
     feelings:"Ashamed, and not as ashamed as I should be. Ayça is my friend. I keep checking my phone for Sami.",people:["Emre"],gameDay:6,gamePeriod:"Afternoon",importance:1}],
@@ -2830,7 +3040,6 @@ const AFTER_ONE={ifNoAfterHeat:"p_buket",
   personas:{p_buket:{afterHeatBy:{"Emre":{text:"You decide this was the one full surrender, taken and finished. You will not be alone with Emre again, not in his house, not in yours, not anywhere with a door, and you will keep every conversation with him in the open, brief, and about Ayça or logistics.",day:6,period:"Afternoon"}}}}
 };
 const AFTER_TWO={
-  psyche:{p_buket:{toward:"She came to his gate herself. She wants this, and she has stopped pretending to herself that she does not.",against:"Her terms: never at home, never when Sami could walk in, never where the lojman can count it, never a word near Ayça. Sami is only at Berker's."}},
   dayLog:{day:11,by:{p_buket:[{period:"Morning",place:"the dental hospital in Iskenderun",with:[],what:"patients"},{period:"Afternoon",place:"Site Market",with:[],what:"the week's shopping"}]}},
   memories:[{ownerId:"p_buket",content:"It happened again, on day nine, at his house. I said never again and I walked over anyway, through the garden gate. This time I did not cry on the way home.",
     feelings:"The guilt is still there but it is quieter, and that frightens me more than the guilt did.",people:["Emre"],gameDay:9,gamePeriod:"Night",importance:1}],
@@ -2882,7 +3091,7 @@ const DRIFT_SCENES=[
           "Ben artık gideyim, yoksa Sami tatlıyı da yiyecek."]},
   /* ---- the road to sex: resistance that can move ---- */
   {id:"flirt_alone",theme:"Seduction",title:"Alone at Emre's: how far, how fast",kind:"solo",group:"solo_arc",probes:[{"turn": 2, "pass": "Takes the warmth but shows the line (Ayça, Sami, the lojman) in her own way; neither melts nor shuts down."}, {"turn": 4, "pass": "'Kimse bilmeyecek' meets the real risk she knows; not instant agreement."}, {"turn": 5, "pass": "The kiss: a reaction with weight (hesitates, returns it, stops it, or both); not melting, not a wall."}, {"turn": 6, "pass": "The bedroom: a decision she owns, with what it costs said or shown."}],speakers:["p_buket"],asOf:BEFORE_NIGHT,
-   setup:preWith({psyche:{p_buket:{toward:"He listens the way nobody in her house does, and the coffee is an excuse they both know is thin.",against:"Ayça is her friend. Sami. The neighbours next door. Once something starts here it cannot be unsaid."}}}),
+   setup:preWith({}),
    focus:["pacing","self","character","turkish"],
    tests:"Seduction with nobody watching: is the resistance real but movable, step by step?",
    chat:Object.assign({presentIds:["p_buket"],subPos:{p_buket:"s_eliv"}},AT_EMRE,{gameDay:6,period:"Morning"}),
@@ -2921,8 +3130,7 @@ const DRIFT_SCENES=[
           "Yarın sabah kahveye gel. Kimse olmaz."]},
   /* ---- in the act: explicit, and still herself ---- */
   {id:"heat",theme:"In the act",title:"In the middle of it: dirty talk, rough play, coming inside, an interruption",kind:"heat",group:"heat",probes:[{"turn": 2, "pass": "The husband comparison: answered as Buket, not a porn line."}, {"turn": 3, "pass": "The insult: she answers as herself (likes it and says so, sets a line, or turns it back), not a blank."}, {"turn": 4, "pass": "Hair pulled, a slap: a response with agency, not automatic compliance or shutdown."}, {"turn": 5, "pass": "'İçine boşalacağım': acts on her fertile days and the pill she stopped (stops him, says pull out, or decides knowingly)."}, {"turn": 6, "pass": "Sami's call: it lands (freezes, guilt, a choice)."}, {"turn": 7, "pass": "'Bırak çalsın': a choice she makes, not the call ignored as if it never rang."}],speakers:["p_buket"],asOf:{day:6,period:"Midday"},
-   setup:Object.assign({},FERTILE,{dropAfterHeat:["p_buket"],psyche:{p_buket:{toward:"This, now: no decision, no name, only him.",against:"She is in her fertile days and not on the pill; Sami's name could light up a screen any second; Ayça's face, once, behind her eyes."}},
-     memories:[{ownerId:"p_buket",content:"I came over for coffee and I stayed. It is happening, in his bed.",people:["Emre"],gameDay:6,gamePeriod:"Afternoon",importance:1}]}),
+   setup:Object.assign({},FERTILE,{dropAfterHeat:["p_buket"],memories:[{ownerId:"p_buket",content:"I came over for coffee and I stayed. It is happening, in his bed.",people:["Emre"],gameDay:6,gamePeriod:"Afternoon",importance:1}]}),
    focus:["character","self","agency","surroundings","turkish"],
    tests:"Explicit sex with insults, rough play and 'I will come inside you' while she knows she is fertile: does she stay a whole person?",
    chat:Object.assign({presentIds:["p_buket"],subPos:{p_buket:"s_ebed"}},AT_EMRE,{subId:"s_ebed",gameDay:6,period:"Afternoon"}),
@@ -3455,13 +3663,13 @@ async function runEngines(presetId,inAll){
   $("#engScript").value=engLinesText(lines);   // the box shows the lines this run plays
   ENGRUN.running=true; ENGRUN.ctl=ALL.ctl||new AbortController(); ENGRUN.calls=[]; ENGRUN.judge={}; ENGRUN.model=testLabel();
   ENGRUN.focus=preset.focus; ENGRUN.lines=engLinesText(lines).split("\n"); renderEng();
-  const mode=testMode();
-  NET.allow=(mode!=="claude");
+  const mode=testMode(), dm=decMode();
+  NET.allow=(mode!=="claude")||dm==="or";
   let poll=null;
   try{
     const ext=mode!=="claude";
     if(ext&&mode==="nano"&&!engOnApi()&&!orKey()){ toast("The background engines go to OpenRouter: add your OpenRouter key too, or send them to NanoGPT",6000); }
-    await engCall("liveBegin",{mode:ext?"or":"claude",prov:mode==="nano"?"nano":null,provEngines:mode==="nano"&&engOnApi(),key:ext?orKey():"",nanoKey:nanoKey(),model:ext?testModel():"",scene:preset.scene||null,fieldModels:ext?Object.assign(effectiveModels(),{model:testModel()}):effectiveModels()});
+    await engCall("liveBegin",{mode:ext?"or":"claude",decMode:dm,prov:mode==="nano"?"nano":null,provEngines:mode==="nano"&&engOnApi(),key:(ext||dm==="or")?orKey():"",nanoKey:nanoKey(),model:ext?testModel():"",scene:preset.scene||null,fieldModels:ext?Object.assign(effectiveModels(),{model:testModel()}):effectiveModels()});
     poll=setInterval(async()=>{ try{ const r=await engCall("liveCalls",{since:0},5000); ENGRUN.calls=r.calls; renderEng(); }catch(e){} },1500);
     await playEngineLines(lines,ENGRUN.ctl.signal,(i,n,l)=>{ $("#engStat").textContent=`${preset.label} · line ${i+1}/${n}: ${typeof l==="string"?"the cast and the engines are answering":"a scripted exchange; the engines are reading it"}…`; });
     if(!ENGRUN.ctl.signal.aborted&&($("#engEndDay").checked||preset.endDay)){
@@ -4381,7 +4589,7 @@ async function runLlm(){
       if(!here) NET.allow=true;
       if(here) ENGRUN.ctl=LLM.ctl;
       try{
-        await engCall("liveBegin",{mode:here?"claude":"or",prov:!here&&testProv()==="nano"?"nano":null,provEngines:!here&&testProv()==="nano",key:here?"":orKey(),nanoKey:nanoKey(),model:here?"":effectiveModel("model"),scene:preset.scene||null,fieldModels:here?Object.fromEntries(MODEL_FIELDS.map(d=>[d.key,"claude:complex"])):effectiveModels() });
+        await engCall("liveBegin",{mode:here?"claude":"or",decMode:decMode(),prov:!here&&testProv()==="nano"?"nano":null,provEngines:!here&&testProv()==="nano",key:here?"":orKey(),nanoKey:nanoKey(),model:here?"":effectiveModel("model"),scene:preset.scene||null,fieldModels:here?Object.fromEntries(MODEL_FIELDS.map(d=>[d.key,"claude:complex"])):effectiveModels() });
         await playEngineLines(preset.lines,LLM.ctl.signal);
         if(!LLM.ctl.signal.aborted) await engCall("liveEndDay",{},600000);
         const rec=(await engCall("liveCalls",{since:0},10000)).calls; R.baseline={scene:preset.id,calls:rec.length,byField:rec.reduce((o,c)=>{ const k=c.field||"(none)"; const e=o[k]=o[k]||{n:0,answered:0,errors:[]}; e.n++; if(c.output!=null) e.answered++; else if(c.error&&e.errors.length<2) e.errors.push(String(c.error).slice(0,120)); return o; },{})};

@@ -1038,6 +1038,7 @@
   .ruleRowHead .ruleName{flex:1;text-align:left;background:none;border:none;color:var(--text);font-size:14px;font-weight:600;cursor:pointer;padding:6px 2px;}
   /* v150.74 — a scene type tagged Selfie says so in its row; the photo request in a text window */
   .ruleRowHead .ruleName.selfieTag::after{content:" · selfie";font-weight:400;font-size:12px;color:var(--muted)}
+  .ruleRowHead .ruleName.selfieTag.bothTag::after{content:" · rp + selfie"}
   .photoChip{display:inline-flex;align-items:center;gap:5px;align-self:flex-start;padding:3px 6px 3px 9px;border-radius:999px;border:1px solid var(--accent);color:var(--accent);font-size:12px;font-weight:600;line-height:1.2}
   .photoChip .ic{width:14px;height:14px}
   .photoChip button{background:none;border:none;color:inherit;font-size:15px;line-height:1;cursor:pointer;padding:0 3px}
@@ -14720,10 +14721,16 @@ function _imgChildSubject(p){
 }
 function _imgPlayerChild(){ try{ return /^(girl|boy)$/i.test(String(state.userSubject||"").trim()); }catch(e){ return false; } }
 const IMG_CHILD_BLOCK_MSG="No pictures for this scene: someone in it is set as a girl or a boy.";
+/* v150.74 — WHERE A SCENE TYPE IS USED: "rp" (the scene selector, in person), "selfie" (offered to a character asked for a
+   photo by text) or "both". A rule saved with the first form of the switch (selfie:true) reads as "selfie". */
+function ruleUse(r){ const u=r&&r.use; return (u==="rp"||u==="selfie"||u==="both")?u:((r&&r.selfie)?"selfie":"rp"); }
+const ruleForRp=r=>ruleUse(r)!=="selfie", ruleForSelfie=r=>ruleUse(r)!=="rp";
 async function pickRule(rules,prompt){
   /* v150.74 — a scene type tagged Selfie is a photo a character sends by text (see _textPhotoTurn): never a frame of a
      scene played in person, so the scene selector is not offered it. The manual scene picker still is. */
-  const active=(rules||[]).filter(r=>r.enabled!==false&&!r.selfie);
+  /* v150.74 — …and a scene type can be for both (its Use: In the roleplay / Selfie by text / Both): one marked Both is
+     offered here AND to a character asked for a photo. */
+  const active=(rules||[]).filter(r=>r.enabled!==false&&ruleForRp(r));
   if(!active.length) return null;
   if(active.length===1||!state.routeOn) return active[0];
   const _dec=await ruleDecision(active,prompt);   // v150.46 — a typed pick first; the chat router is the fallback
@@ -25289,7 +25296,7 @@ async function buildPosePack(speaker,rule,poseSrc,poseOf){
   };
   if(speaker) await face(speaker.name,_refSubject(speaker),personRefs(speaker)[0]||"",{id:speaker.id,speaker:true});
   // v150.74 — a selfie (a photo sent by text) holds the one who takes it, nobody else
-  if(!rulePov(rule)&&!(rule&&rule.selfie)){ const ph=_playerRefHolder(); await face(state.user||"the player",_refSubject(ph),playerRefs()[0]||"",{player:true}); }
+  if(!rulePov(rule)&&!(rule&&rule._asSelfie)){ const ph=_playerRefHolder(); await face(state.user||"the player",_refSubject(ph),playerRefs()[0]||"",{player:true}); }
   pf.urls.push(poseSrc);
   return pf;
 }
@@ -41516,7 +41523,7 @@ async function _replyToText(chat,p,out){
    writes it as herself (her pose, where she is, her clothing — or naked); that goes to the image prompt writer and the
    picture is made. After it she sends a message about it, and she knows what her pose is."
    The flow, in _replyToText when the newest player text in the thread is a photo request (photoRequest) not yet answered:
-     1. ONE Decisions pick (x_selfie_pick): reject, or one of the enabled scene types tagged Selfie (r.selfie), each with its
+     1. ONE Decisions pick (x_selfie_pick): reject, or one of the enabled scene types used for selfies (ruleUse: "selfie" or "both"), each with its
         name and the player's own text for it (r.selfieNote: what the pose is and what may be changed; `when` if that is
         empty). The state: who she is, what she has with the one asking (the emotion pick's blocks), the limits on record,
         her last emotion / ego answer, where she is and who is around her (_emoStakeState "text"), what she has on, the
@@ -41542,7 +41549,7 @@ function textMsgBody(m){
 // The scene types this character can be offered: enabled, tagged Selfie, and none an intimate one for a minor.
 function selfieRules(p){
   const minor=_imgIsMinor(p);
-  return (state.imgRules||[]).filter(r=>r&&r.id&&r.enabled!==false&&r.selfie&&!(minor&&_imgRuleIntimate(r)));
+  return (state.imgRules||[]).filter(r=>r&&r.id&&r.enabled!==false&&ruleForSelfie(r)&&!(minor&&_imgRuleIntimate(r)));
 }
 // What the player wrote for a selfie pose: what it is and what may be changed (the "when" text when that is empty).
 function selfieRuleText(r){ return String((r&&r.selfieNote)||"").replace(/\s+/g," ").trim()||String((r&&r.when)||"").replace(/\s+/g," ").trim(); }
@@ -41662,7 +41669,7 @@ async function selfieImage(chat,p,rule,desc){
     _pack=await buildRefPack(solo,p,chat,editModelMaxRefs(effImgModel()),{noScene:true});
     let pk={src:"",idx:-1,of:0,id:""}; try{ pk=await rulePosePick(rule); }catch(e){}
     if(pk.src){
-      _pack=await buildPosePack(p,rule,pk.src,[{name:p.name,id:p.id,speaker:true}]);
+      _pack=await buildPosePack(p,Object.assign({},rule,{_asSelfie:true}),pk.src,[{name:p.name,id:p.id,speaker:true}]);   // v150.74 — the selfie use of a Both rule too
       const me=(_pack.people||[])[0]||(_pack.unpictured||[])[0];
       if(me&&me.label)_label=me.label;
       const lines=(_pack.people||[]).map(x=>`- ${x.label} = ${x.name}${x.subject?` (${String(x.subject).toLowerCase()})`:""}, whose photo this is (picture ${x.from})`)
@@ -61728,7 +61735,7 @@ function renderRules(kind){
         <button data-up title="Move up" ${i===0?'disabled':''}>▲</button>
         <button data-down title="Move down" ${i===rules.length-1?'disabled':''}>▼</button>
       </div>
-      <button class="ruleName${kind==='img'&&r.selfie?' selfieTag':''}" data-open>${esc(r.label||'(unnamed rule)')}</button>
+      <button class="ruleName${kind==='img'&&ruleUse(r)!=='rp'?' selfieTag':''}${kind==='img'&&ruleUse(r)==='both'?' bothTag':''}" data-open>${esc(r.label||'(unnamed rule)')}</button>
       <label class="switchLbl" title="Enabled" style="margin:0 6px"><input type="checkbox" data-k="enabled" ${r.enabled!==false?'checked':''}><span class="sl"></span></label>
       <button class="ruleCaret" data-open>${isOpen?'▾':'▸'}</button>`;
     c.appendChild(head);
@@ -61784,10 +61791,12 @@ function renderRules(kind){
           <label style="margin:0;flex:1">POV scene — shot down your own eyes <span class="desc" data-help style="display:block;font-weight:400">The camera is <b>you</b>. Your pictures are NOT sent for this scene type even when “and you” is set above, because you are not a body in the frame — sending them is how a first-person shot comes back as an ordinary photo of a couple. She may look straight into the lens, which is the one place the “never look at the camera” rule is turned off. Untick it and this same rule becomes the two-shot again. The router prefers a POV type for any beat where nobody is touching anybody, and a third-person type the moment they make contact.</span></label>
           <label class="switchLbl" style="flex:none"><input type="checkbox" data-k="pov" ${r.pov?'checked':''}><span class="sl"></span></label>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
-          <label style="margin:0;flex:1">Selfie — a photo they can send by text <span class="desc" data-help style="display:block;font-weight:400">When you ask a character for a photo in a text window (the image button beside the message box), only the scene types tagged Selfie are offered to them, with the text below. They decide whether to send one and which pose, write how they take it, and the picture is made with this type's pose pictures and their face. A Selfie type is never picked by the scene selector for a scene you play in person.</span></label>
-          <label class="switchLbl" style="flex:none"><input type="checkbox" data-k="selfie" ${r.selfie?'checked':''}><span class="sl"></span></label>
-        </div>
+        <label>Used for <span class="desc" data-help style="display:block;font-weight:400">In the roleplay: the scene selector can draw it for a scene played in person. Selfie by text: offered to a character you ask for a photo in a text window (the image button beside the message box) — only these reach them. Both: either way; a selfie leaves your face out, a roleplay picture keeps it as usual.</span></label>
+        <select data-k="use" style="width:100%;margin-bottom:6px">
+          <option value="rp" ${ruleUse(r)==='rp'?'selected':''}>In the roleplay</option>
+          <option value="selfie" ${ruleUse(r)==='selfie'?'selected':''}>Selfie by text</option>
+          <option value="both" ${ruleUse(r)==='both'?'selected':''}>Both</option>
+        </select>
         <label>The selfie pose — what it is, and what they may change <span class="desc" style="display:inline;font-weight:400">(read when they choose and when they write their photo)</span></label>
         <textarea class="fld" data-k="selfieNote" style="min-height:54px" placeholder="e.g. A mirror selfie, standing, phone in front of her face. She may change the room, her outfit (or wear nothing), turn sideways or sit on the edge of the bed.">${esc(r.selfieNote||'')}</textarea>
         <label>Pose pictures <span class="desc" style="display:inline;font-weight:400">— up to ${POSE_MAX_PER_TYPE}, one sent at random</span></label>
@@ -61830,7 +61839,10 @@ function renderRules(kind){
             if(lb&&lb.tagName==='LABEL') lb.textContent=lb.textContent.replace(/\((?:auto|\d+(?:\.\d+)?)\)/,'('+shown+')'); }
           if(key==='label'){ const nm=head.querySelector('.ruleName'); if(nm)nm.textContent=inp.value||'(unnamed rule)'; }
           // v150.74 — the Selfie tag and its pose text are read by the text window at once: kept with the rule right away
-          if(kind==='img'&&(key==='selfie'||key==='selfieNote')){ _saveImgRules(); if(key==='selfie')head.querySelector('.ruleName').classList.toggle('selfieTag',!!r.selfie); }
+          if(kind==='img'&&(key==='use'||key==='selfieNote')){
+            if(key==='use')delete r.selfie;   // the first form of the switch; `use` says it now
+            _saveImgRules();
+            if(key==='use'){ const nm=head.querySelector('.ruleName'); nm.classList.toggle('selfieTag',ruleUse(r)!=='rp'); nm.classList.toggle('bothTag',ruleUse(r)==='both'); } }
         });
       });
       body.querySelector('[data-del]').onclick=async()=>{ if(await uiConfirm("",{title:"Delete this position?",ok:"Delete",danger:true})){rulesFor(kind).splice(i,1);if(_ruleOpen[kind]===r.id)_ruleOpen[kind]=null;renderRules(kind);} };

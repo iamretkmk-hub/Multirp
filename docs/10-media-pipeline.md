@@ -738,11 +738,13 @@ selfie poses in the image section, only the ones tagged selfie); she decides how
 herself; that goes to the image prompt writer; after the image she sends a message about it, knowing what she sent." And:
 "Add auto download option after selfie."
 
-- **Selfie scene types.** Settings › Image › a scene type has a **Selfie** switch (`rule.selfie`) and a box *The selfie
-  pose — what it is, and what they may change* (`rule.selfieNote`; its `when` is used when the box is empty). Both are
-  stored with the rule as soon as they change. A Selfie type shows "· selfie" in its row. `pickRule` leaves Selfie types
-  out, so the scene selector (Decisions or the chat router) never draws an in-person frame with one; the manual scene
-  picker still lists them. `selfieRules(p)` is what a character can be offered: enabled, tagged, and never an intimate
+- **What a scene type is used for.** Settings › Image › a scene type has a **Used for** choice (`rule.use`): *In the
+  roleplay* (`rp`, the default), *Selfie by text* (`selfie`) or *Both* (`both`), and a box *The selfie pose — what it is,
+  and what they may change* (`rule.selfieNote`; its `when` is used when the box is empty). Both are stored with the rule
+  as soon as they change; a rule saved with the first form of the switch (`selfie:true`) reads as `selfie` (`ruleUse`).
+  The row shows "· selfie" or "· rp + selfie". `pickRule` is offered `rp` and `both` (`ruleForRp`), so the scene
+  selector never draws an in-person frame with a selfie-only type; the manual scene picker still lists them all. A
+  Both type drawn in the roleplay keeps the player's face as usual; drawn as a selfie (`_asSelfie`) it holds only hers. `selfieRules(p)` is what a character can be offered: enabled, `selfie` or `both` (`ruleForSelfie`), and never an intimate
   type for a minor.
 - **The composer.** A text window has an image button beside the message box (`togglePhotoRequest`). It arms a photo
   request: a "Photo request" chip on the box (× cancels) and the placeholder "What kind of photo?". Sending posts an

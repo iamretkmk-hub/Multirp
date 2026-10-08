@@ -77,9 +77,11 @@ const {chromium}=require('playwright');
   const other=await run(JSON.stringify({memory:{content:"Tek bir anı.",emotion:"content"}}));
   ok("so is a single object under another obvious wrapper word",
      other.kept.length===1&&other.kept[0].src==="reconciled", JSON.stringify(other.kept.map(k=>k.src)));
+  /* v150.73 — up to five are kept (the cap of three lost a long afternoon's shower and goodbye); past five, the rest
+     folds into the fifth (see mem-reconcile-keep) */
   const many=await run(JSON.stringify({memories:[
-    {content:"Bir."},{content:"İki."},{content:"Üç."},{content:"Dört."}]}));
-  ok("more than three is still capped at three", many.kept.length===3, String(many.kept.length));
+    {content:"Bir."},{content:"İki."},{content:"Üç."},{content:"Dört."},{content:"Beş."},{content:"Altı."}]}));
+  ok("up to five are kept, the rest folded into the fifth", many.kept.length===5, String(many.kept.length));
 
   // ---- and a genuinely empty answer keeps the fragments AND says so
   const empty=await run("no json here at all");

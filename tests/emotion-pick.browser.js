@@ -80,7 +80,8 @@ const {chromium}=require('playwright');
       c.messages.push({mid:"u4",role:"user",content:"Kal bu gece.",speaker:"Emre"}); window.__reqs=[];
       await emotionEnsure(c,p,"Kal bu gece.",{targetId:"__user__",targetName:"Emre"});
       const st=window.__reqs[0]&&window.__reqs[0].state;
-      return (st&&/fought about money/.test(JSON.stringify(st.earlier_today))&&/Burak — husband/.test(JSON.stringify(st.people_they_answer_to))&&/alone with Emre/.test(JSON.stringify(st.who_else_can_see_or_hear))&&/who else can see or hear/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify(st); }));
+      // v150.68 — today's memory is in memories_that_weigh_now (the reader's format), and only once: earlier_today keeps what did not make that list
+      return (st&&/^\[earlier today \| 3\] Burak and I fought about money this morning\.$/.test((st.memories_that_weigh_now||[])[0]||"")&&(JSON.stringify(st).match(/fought about money/g)||[]).length===1&&/Burak — husband/.test(JSON.stringify(st.people_they_answer_to))&&/alone with Emre/.test(JSON.stringify(st.who_else_can_see_or_hear))&&/who else can see or hear/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify(st); }));
   ok("in a public place the state says strangers can see and hear, not 'alone' (v150.42)", await pg.evaluate(()=>{
       const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); const uni=universeById(c.universeId)||state.universes[0];
       uni.locations=(uni.locations||[]).filter(l=>l.id!=="l_pub").concat([{id:"l_pub",name:"Palmera Beach Club",type:"poi",gossipChance:0.6,description:"x",residents:[],sublocations:[{id:"s_bw",name:"Boardwalk",entrance:true}]}]);

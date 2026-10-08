@@ -164,6 +164,7 @@ const {chromium}=require('playwright');
         "token",
         "swap",
         "memory",                 // v150.29 — x_mem_relevance*: the memory being judged, filled by memRelevanceJudge
+        "later",                  // v150.68 — x_mem_status: their later memories that touch the same matter, filled by memStatusBackfill
         "holder","line","detail","kind","aim","trigger","text","tie","story_language","sensitivity","area","speaker",   // v150.44 x_router2;   // v150.42 x_move_*: the area they are in;   // v150.41 x_gm_dec_*: the eagerness; v150.40 x_style_writer   // v150.39 x_rel_about: the absent person's tie; v150.33 — x_gate_*: the item being gated, filled by its caller through strictGate
         "period","day","next",    // v150.53 — x_clock_moved: the story clock, filled by _clockQuestion
         "item",                   // v150.55 — x_status_*: the item being judged, filled by runStatusCheck

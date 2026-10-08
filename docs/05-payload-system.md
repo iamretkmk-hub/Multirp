@@ -1661,3 +1661,12 @@ is an option again, so the editor shows where it goes and when:
 Text and heat keep their own formats, as the classic builder did. The text of the base instruction and the format rules is
 still edited in Settings → Payloads → Other wording; delete the option to stop sending it. A saved list gets each option
 once (`FRAG_SHIPPED_ADDS` keys `v150.67.base`, `v150.67.format_rules`, `v150.67.narr`); an edited fragment keeps its text.
+
+## v150.68 — memories in the reader's format
+
+"What you remember" is the player's own wording (option `recall`, code `has_memories`: no memory text over empty lists), and the
+memory entries the fragments call (`mem_recent_entries`, `mem_distant_entries`, `mem_latest_entries`) are one line per memory,
+`[when, at place | importance 1–5] what happened. Felt: … Status: …`, oldest to newest, an exact repeat once; "What happened just
+before this" lists oldest first. A saved list gets both while they are the v150.67 default (`v150.68.memories`). The worded blocks
+keep the numbered form for the engine contexts that read them. Details, status and the emotion pick: doc 07, "v150.68 — memories in
+the reply and in the emotion pick".

@@ -397,3 +397,77 @@ Two payload fixes from the same export, outside memory proper:
   `intent_self`), so a yes to `q_motive__bears` injects it; the standing aim stays in the bio as before.
 - **A quotation mark opens on its first word** (`stripDeliveryTags`, `_dispText`, `_cleanTextReply`): the space a
   stripped `[say …]` tag left inside a quote is trimmed.
+
+## v150.68 — memories in the reply and in the emotion pick
+
+The player rewrote the "What you remember" fragment in their own list: how to read an entry, how a memory feels now, how it
+fades, and what keeps it from fading. And: "the decision model should consider these the same way. A woman cheating her
+husband should not feel calm the next day."
+
+**One memory, one line.** The lists the fragments call — `mem_recent_entries`, `mem_distant_entries`, `mem_latest_entries` —
+give each memory as
+
+    [two days ago, at the market | 3] I bought bread and saw Berk. Felt: sad. Status: open.
+
+- **when** (`memEntryWhen`), from now in game time: the part of the day for today and yesterday ("this morning", "tonight",
+  "yesterday afternoon", "last night"; "earlier today" / "yesterday" when no part is recorded), then the `when_*` ladder ("four
+  days ago", "last week"), then "two weeks ago" … "a month ago", "N months ago", "over a year ago". The place follows, ", at …".
+- **importance** (`memImp5`), the stored 0–1 score on 1–5: ≤0.2 → 1, ≤0.4 → 2, ≤0.6 → 3, ≤0.8 → 4, else 5 (none on record → 3; a
+  0–10 score is scaled).
+- **what happened** (`memEntryWhat`): the memory's own text, with no frozen "Day N, Period." lead and no "(feeling)" tail, cut at a
+  sentence end (700 characters, 1100 for the long-term tier).
+- **Felt**: the feelings sentence, else the emotion word (not "neutral"); left out when there is neither.
+- **Status**: open / secret / resolved; the whole "Status: …" is left out when the memory has none.
+
+Oldest to newest (`memTimeCmp`: day, part of the day, when it was written), an exact repeat once across the lists of one payload
+(`memEntryLines`, `opts.seen`). Every piece is an Other-wording template under "How long ago / how far off" (`mem_entry`,
+`mem_entry_place`, `mem_entry_felt`, `mem_entry_status`, `when_today_*`, `when_yesterday_*`, `when_weeks_n`, `when_month`,
+`when_months_n`, `when_year`). Only the entries the fragments call changed: the worded blocks (`recent_memories`, …) keep the
+numbered "Memory 1: This happened …" form for the proactive texter's context and the call, and every engine, judge and writer
+still reads `memInjectText`.
+
+**The fragments.** "What you remember" ships the player's text word for word (`{{char}}` / `{{user}}` filled), as its option
+`recall` with the code condition `has_memories` (a head flag: there are recent or long-term entries), so the explanation of an
+entry never goes out over two empty lists. "What happened just before this" lists oldest first and says how an entry reads. A saved
+list gets both once (`FRAG_SHIPPED_ADDS` `v150.68.memories`, against `FRAG_DEFAULTS_V150_67_OLD`) only while they are still the
+v150.67 default; an edited one is the player's.
+
+**Status: a memory that is not over.** `status` is `open` (an unresolved situation that still matters: a fight not made up, a
+promise not kept, a betrayal not faced), `secret` (something they did or know and hide from someone it concerns: an affair kept
+from a spouse), `resolved`, or none. Every writer with a JSON contract asks for it, and for `resolves`:
+
+| Writer | Prompt | Shown the open / secret matters |
+|---|---|---|
+| arc builder (`commitMemoryArc`) and phone thread (`_commitTextArc`) | `memBuild` FIELDS: `status`, `resolves` | the owner's (`memOpenMatters`, newest 8, with ids) — engine part `matters` |
+| period reconciler (`reconcilePeriodFor`) | `memReconcile`: `status` per memory, `# WHAT THIS STRETCH RESOLVED` | the owner's from before the stretch; each fragment shows its own status |
+| day round, offstage interaction, calendar executor, character quest step (`_plantWorldMemory`) | `worldRound`, `offstageEvent`, `calExec`, `charQuestStep`: `status` and `resolves` in each memory, `_MEM_STATUS_WORLD_RULE` | each person's, under their name (`memMattersFor`) |
+
+A returned id among those shown (`memResolve`) becomes `status: "resolved"` with `wasStatus`, `resolvedDay`, `resolvedPeriod`
+and `resolvedBy` (the new memory). A reconciled memory with no status from the answer takes the strongest of its fragments'
+(secret, open, resolved), and so does a long-term merge. An answer that carries the field marks the memory `_statusChecked`. The
+memory editor has a Status box, and the card shows it. Parsers tolerate it missing. Stored prompts are upgraded **in place** (the
+v150.5 way): each shipped passage is put in only where the stored copy still has the passage it follows word for word, so the
+player's own edits elsewhere are kept; a copy without them is the player's.
+
+**Older saves** (`memStatusBackfill`). Memories of the last 30 game days with importance 3 or more and no status are classified
+once, in a background Decisions request after that character's emotion request (never ahead of it): one choice question per memory
+(`x_mem_status`, open / secret / resolved / none), at most 12 per request, with the memory in the entry format, their later
+memories that share people or words, and their ties as state. The answer is stored (none as no status) with `_statusChecked`, so it
+is never asked again; the next pick asks what is left; a failed request leaves them to the next pick. Its own breaker
+(`_memStatusBreak`), the Decisions model, a Debug row "Memory status · …".
+
+**The emotion pick feels them too.** `_emoStakeState` adds `memories_that_weigh_now` (`memWeighNow`): by the fragment's own rules,
+today's and yesterday's memories of importance 2 or more, the last 14 days' of 3 or more, any 4–5 within 90 days, and every open
+or secret one at any age — not a diary, not superseded, this world and chat — in the entry format, oldest to newest, at most ten
+(open and secret kept first, then the newest). `earlier_today` now holds only what of today did not make that list (left out when
+nothing did), and an ask's latest memories (`memories` ctx) leave out what the list carries: no memory is sent twice.
+`x_emotion_pick` and `x_ego_pick` carry the fading rules in short (raw for hours to a day, strong for days, background for weeks, a
+mood after months; importance 1–2 fades in a day or two, 3 over days to weeks, 4–5 never fully, changing shape; an open or secret
+matter does not fade until a later memory resolves it and sharpens around the people involved; feelings can be mixed; acting calm
+is not being calm) and say outright that someone who cheated on their spouse yesterday and hides it is not Calm today, least of all
+around the spouse. Calm reads "settled; nothing much is pulling at them — not when an open or secret memory is weighing on them";
+Guilt "…even when nobody knows and they act as if nothing happened". A stored old default of either question is replaced
+(`_refreshPipe`, marker "HOW A PAST FEELING LASTS"); a saved emotion list whose Calm or Guilt still has the v150.67 description gets
+the new one.
+
+Pinned by `tests/memory-format.browser.js`; `tests/payload-faithful.browser.js` checks that only the memory lines changed.

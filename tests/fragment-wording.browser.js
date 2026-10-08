@@ -35,7 +35,8 @@ const {chromium}=require('playwright');
         {id:"p_d",name:"Deniz",universeId:uni.id,personality:"Deniz is quiet.",look:{},style:"y"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
       state.payloadTplOn=false; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
-      state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
+      state.trackOn=false; state.memory=[]; state.pursuitRelevantOn=false;   // v150.79 — the wording of every piece, with every pursuit present (what a scene does not touch is left out: tests/pursuit-weight, tests/payload-faithful)
+       state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};
       uni.setting="A rainy port town where everyone owes someone.";

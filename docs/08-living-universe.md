@@ -917,3 +917,83 @@ before her text, and her text carries `photo_sent` with her own description. The
 and builder, the emotion pick, the proactive gate, her history) read the photo as "(sent a photo: …)". A failed pick falls
 back to the chat model; a failed picture leaves a notice and no photo note. Optional automatic download of her photos.
 Details: doc 10, "v150.74 — asking for a photo by text". Test: `tests/selfie-request.browser.js`.
+
+## v150.79 — a topic earns its weight
+
+Reported: "At the beginning we talked about the ledger book with Berker, and now it has become the biggest topic. Berker's
+wife is in my lap and nothing happens, but we talk about a book for a couple of turns and it becomes the biggest thing."
+The exports showed a loop: a ledger mentioned at a dinner became Özlem's goal ("Say out loud to Berker one thing about the
+notebook"), her character quest ("Dinner That Outlasts Berker's Ledger"), Berker's meetings ("Sami'nin borcunu kendi
+ağzından rakam rakam dinle", the water bill, the figures), world-pulse events advancing them and dozens of memories about it.
+Memories fed the goals curator, the curator and the memories fed the quest designer and the intent former, those fed the
+world engines (round, calendar executor, goal pursuit), and those wrote new memories about the same thing. Nothing weighed
+how much a topic mattered, so the topic with the most momentum won. Four changes (the module is the block "A TOPIC EARNS
+ITS WEIGHT" beside `pursuitStatusBlock`):
+
+**1. Weight before a topic becomes a pursuit.** A NEW goal line (`_curateGoalsFor`: a line that is not a rewording of one
+already in the section, of the authored goals, or of a pursuit or motive they carry), a NEW character quest
+(`runCharQuestSpawn`, after the strict gate) and a NEW motive (`runIntentEngine` FORM, after the strict gate; one that feeds
+a motive already carried is not new) go through `pursuitAdmit`. It asks the Decisions API one yes/no question per candidate,
+all of one character's candidates in one request (`pursuitWeightCheck`, breaker "Pursuit weight"): **"Does this matter
+enough to {{char}} to pursue for days?"** The prompt is `x_pursuit_weight` (Payloads → Strict gates; the prompt editor lists
+it as its own Decisions feature). The state is who the character is (personality, backstory) and their ties to the people
+the candidates involve (the sheet entry and the latest read); each question carries the candidate, who it involves, how many
+of the character's memories of the last seven days and how many live pursuits (anyone's) already revolve around the topic
+(`{{echo}}`), and how much those memories mattered (`{{source}}`: the strongest importance, 1–5, and the latest of them).
+Its rules: real weight is money that changes a life, a marriage or relationship at stake, someone's safety, a betrayal, a
+secret that could come out, a career or a child; a detail mentioned in passing (a book, a chore, a figure, a bill) is not a
+pursuit unless it carries one of those; a topic that already drives other pursuits needs MORE weight, not less. Kept at
+`pursuitWeightAt()` (Settings → Features → Pursuit weight threshold, 0.6). A rejected candidate is dropped — it stays a
+memory. Debug rows: "Pursuit weight (Decisions) · <char>" (each candidate, its probability, kept or not) and "Pursuit spread
+· <char>" (what was not taken on, and why). A failed or paused request (or the switch off) takes candidates on as before,
+with the spread limit applied strictly: a topic already behind two pursuits — anyone's, this character's own included —
+takes no other. The quest and motive keep the memories they grew out of (`srcMems`), a goal line in `goalsLive.meta[line].src`.
+
+**2. A limit on spread.**
+- *A topic* (`pursuitTopic`: the 5-letter stems of its key words — four letters or more, no names, no filler — the people it
+  names or involves, and its source memories; `topicSame`: two key words in common, or one and a person, or a source memory)
+  drives at most `PURSUIT_TOPIC_CAP` (2) people's pursuits at once, goals, quests and motives counted together
+  (`pursuitLiveList`, `topicDrivers`). A candidate on a topic already behind two other people's pursuits is dropped before it
+  is asked about.
+- *One quest each*: `cqPerChar()` (Settings → Game Preferences → Live quests per character, 1). The designer is not asked for
+  someone already carrying that many; an agreed task (`source:"task"`) does not take the slot.
+- *Fading*: a pursuit nobody touches in a scene with the player for `pursuitFadeDays()` days (Settings → Game Preferences →
+  A pursuit fades after, 3; 0 = never) fades. Touched (`pursuitTouchTick`, after every turn): two of its key words in the last
+  lines of the player's scene, or one with its holder there (they acted on it with the player), or it is why the holder came
+  (the active event). It is stamped on the quest / motive (`touchedDay`) or the goal line (`goalsLive.meta[line].touched`).
+  `pursuitFadeSweep` runs at day end, first thing in the "pulse" stage (before the world pulse and the period engines): a
+  quest is closed quietly as let go (`status:"failed"`, `lapsed`, `faded`, a result line; no bubble, no memory — a faded
+  topic gets no new memory), a motive is spent (`faded`; the former reads it as "LET FADE"), a goal line leaves the list
+  (kept in `goalsLive.faded`). The authored goals never fade; an agreed task and an armed plan are not timed out here; a
+  pursuit from before v150.79 starts counting the day the sweep first sees it. Meetings it already made stay.
+- *The world engines* stop advancing a faded pursuit: it is no longer in what they read (`engineGoals`, `_pulseWants`,
+  `pursuitStatusBlock` — which no longer reports a faded quest as "recently let go"). And none of them files a new meeting or
+  event on a faded topic or one that already drives two other people's pursuits (`pursuitSpreadBlocks`, strict overlap: two
+  key words or a source memory): goal pursuit's plan (and its older instant event), the whole-cast round's plan
+  (`_roundPlan`) and its entry (the people are still placed and the whereabouts row kept; no event, memories, feelings, plan
+  or promise are filed), and the calendar executor's follow-up (`_calExecFollowup`). Each says why on the Debug screen ("…
+  · not filed").
+
+**3. Less in the reply.** A reply carries a live goal (the "Who you are" fragment's `bio_goals_live_raw`, filtered in
+`charBioBlock` when it is given the reply's scene) or a story thread (the "Story threads" block, `questContextFor` given
+`pursuitQuestFilter` by `buildTailBlocks`) only when the scene touches it: its people are here or named in the last lines,
+one of its key words is in the last six lines (the text thread for a text reply), or it is why the character is here (an
+active event or approach they came for). With none left the goals section is simply absent — the authored goals do not stand
+in for a curated list that is all elsewhere right now. The private motive in a reply is already only the colouring toward
+someone present or the one answered (v150.64), so it meets the rule as it is; a faded motive is spent and colours nothing.
+Switch: Settings → Features → Pursuits only when the scene touches them (on). `tests/payload-faithful.browser.js` compares
+every payload against the same build with the switch off: the only lines that go are the story threads and the one live goal
+no line of those scenes touches.
+
+**4. Big moments get weight** (doc 07, "v150.79"). The memory builder is told that the same everyday topic again scores no
+higher, and a near-exposure, a spouse walking in, being seen with the wrong person, a betrayal, a threat or a close call does
+(`MEMBUILD_RULE_V150_79`; a stored copy is upgraded only while it is exactly the v150.78 default). In code, a new memory on
+the same topic as three or more of the owner's memories of the last week is capped at the highest of those
+(`memRepeatCap`), and a stretch with a spouse or partner of someone present, right after something intimate or secret, marks
+its memories at least 0.8 with a status (`memSpikeScene`, `memSpikeMark`). Those memories then outweigh the repeated topic in
+recall, in `memories_that_weigh_now` and in every engine that reads importance.
+
+Limits: key words are compared as written, so an English goal and a Turkish line only meet through the people in them (or a
+shared source memory). A text thread does not touch a pursuit for fading; only the player's spoken scene does.
+
+Pinned by `tests/pursuit-weight.browser.js`.

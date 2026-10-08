@@ -1817,3 +1817,13 @@ shows*) is followed in the transcript by one line in the Narrator's channel, `[O
 picture belongs to, after the `histTurns` cap, so it is information at its place in the history and never a turn: nothing
 answers it the way a video cue's `watching_now` is answered. A message without one maps exactly as before. Details:
 docs/10-media-pipeline.md, "v150.76 — what a pose picture shows".
+
+## v150.79 — a pursuit rides when the scene touches it
+
+The live goals (`bio_goals_live_raw` in "Who you are") and the story threads (`quests`) were in every reply, so a character
+steered every scene toward the same topic. Each is now filtered where its data is built — `charBioBlock` given the reply's
+scene (`opts.scene`), `questContextFor` given `pursuitQuestFilter` by `buildTailBlocks` — and rides only when its people are
+here or named in the last lines, a key word of it is in the last six lines (the thread, for a text), or it is why the
+character came (an active event or approach). With every live goal left out, the goals section is absent (the authored goals
+do not stand in). Switch: Settings → Features → Pursuits only when the scene touches them. Details: doc 08, "v150.79 — a
+topic earns its weight".

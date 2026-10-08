@@ -490,3 +490,27 @@ memories retold almost every beat, and the shower never became a memory.
   scenes, and that only a decision's own subject can reverse it.
 - **Stored copies:** upgraded only while exactly the v150.72 default (`MEMRECONCILE_V150_72_OLD`); an edited copy is the
   player's (Settings → the reconciler → Reset to default brings the new one).
+
+## v150.79 — a spike, not a repeat
+
+A ledger talked over at dinner on day one had dozens of memories by day six, each scored like the last, while the evening
+Berker's wife sat in the player's lap left one ordinary memory. Importance now follows what happened, not how often:
+
+- **The builder's rule** (`DEFAULT_MEMBUILD`, importance_score): repetition is not importance — the same everyday topic
+  again (an object, an errand, a bill, a figure, a chore) scores no higher than the last time, however much of the scene it
+  took; a spike does (a secret nearly exposed, a spouse or partner walking in on someone with another person, being seen
+  with the wrong person, a betrayal, a threat, a close call). The passage is `MEMBUILD_RULE_V150_79`; a stored copy is
+  upgraded only while it is exactly the v150.78 default (the new default without it), an edited one is left alone.
+- **Repetition capped in code** (`memRepeatCap`, in `commitMemoryArc`): a new memory sharing at least three key words (and a
+  quarter of the shorter memory's) with three or more of the owner's memories of the last seven days is capped at the
+  highest importance among those (`repeatCapped` records how many). A memory that changes what kind of thing it is — secret
+  or resolved where those were neither — is not capped.
+- **A spouse in the room** (`memSpikeScene`, `memSpikeMark`): a stretch of the player's scene with a pair tied as spouses or
+  partners on their sheets and somebody else besides them (the player counts), where the stretch or the six lines before it
+  read as intimate (`intimacyReads`, one cue enough; or a heat beat) or one of the pair carries a secret memory from that
+  day. Every memory of that stretch (and the owner's intimate or secret memories of the same part of the day) gets at least
+  0.8 and, when it has none, a status: open for someone who walked in on it, secret for the others (`spike` records why).
+  Not for a glimpse from another area.
+
+These reach `memories_that_weigh_now` (importance 4–5 weighs for 90 days; open and secret ones until resolved), recall and
+the pursuit weight check's `{{source}}` (doc 08, "v150.79 — a topic earns its weight"). Test: `tests/pursuit-weight.browser.js`.

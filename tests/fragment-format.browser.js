@@ -33,6 +33,7 @@ const {chromium}=require('playwright');
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
       state.payloadTplOn=false; state.fragments=frags||null; state.autoSpeak=false; state.narrMode=false; state.gossip=[];
+      state.pursuitRelevantOn=false;   // v150.79 — the wording of every piece, with every pursuit present (scene scoping: tests/pursuit-weight)
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));   // these lists are what the test means: no migration
       const c=curChat(); ["_heatBeat","activeEvent","watchingNow"].forEach(k=>{ delete c[k]; });
       Object.assign(c,{universeId:uni.id,presentIds:["p_a","p_b"],emo:{},promises:[],wearing:{},

@@ -160,10 +160,9 @@ const {chromium}=require('playwright');
       const st=_emoStakeState(curChat(),bu,"__user__");
       const who=JSON.stringify(st.people_they_answer_to);
       const pins=["p_ha","p_bk","p_ba","p_ay"].map(id=>relPinned(bu,id));
-      /* v150.64 made each person answered to a line of how they stand ("Burak — husband | Burak is your husband. | How Burcu
-         feels…", _answerToLines): the husband, and only him */
-      const _w=st.people_they_answer_to||[];
-      return (_w.length===1&&/^Burak — husband\b/.test(_w[0])&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
+      // v150.64 — each line says how they stand (the tie's paragraph follows "|"): still only Burak
+      const L=st.people_they_answer_to||[];
+      return (L.length===1&&/^Burak — husband( \||$)/.test(L[0])&&!/Hakan|Berker|Ayça/.test(who)&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
 
   ok("(v150.48) 'son of my best friend' is known through the friend, not one's own son; 'friend of the family' is still a friend", await pg.evaluate(()=>{
       const r=["son of my best friend","Son of best friend","daughter of the Brandts","friend of the family","son","best friend"].map(t=>relTieKind(t,""));

@@ -72,7 +72,7 @@ const {chromium}=require('playwright');
     return op.mem_recent_entries||"";
   });
   /* v133.1 — when and where open the memory as a sentence instead of trailing it.
-     v150.68 — as the reader's one-line entry: "[when, at place | importance] what happened.", oldest first; yesterday and today
+     v150.70 — as the reader's one-line entry: "[when, at place | importance] what happened.", oldest first; yesterday and today
      say the part of the day. */
   ok("recent memories open with when, where and the part of the day, in words",
      mem==="[four days ago, at Site Shopping Center | 3] I bought the test.\n[yesterday evening, at Site Shopping Center | 3] We argued.",

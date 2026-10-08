@@ -32,7 +32,7 @@ const {chromium}=require('playwright');
     const wr=memoryBlocks(inj,"recent",r).join("\n"), wl=memoryBlocks(inj,"longterm",l).join("\n");
     return {r:r.mem_recent_entries,l:l.mem_distant_entries,wr,wl};
   });
-  /* v150.68 — the entries a reply sends carry no number at all (one line each: "[when | importance] what happened."), so no two
+  /* v150.70 — the entries a reply sends carry no number at all (one line each: "[when | importance] what happened."), so no two
      can share a label; the worded blocks the proactive texter and the call still read keep their unique numbering. */
   ok("the reply's entries carry no label to collide: each opens with its own when and importance", /^\[four days ago \| 3\] Recent one\.$/.test(ml.r)&&/^\[five days ago \| 3\] Old one\.$/.test(ml.l)&&!/Memory \d/.test(ml.r+ml.l), JSON.stringify(ml));
   ok("the worded blocks: recent memories are 'Memory N', the older tier 'Earlier memory N'", /\nMemory 1: /.test(ml.wr)&&/\nEarlier memory 1: /.test(ml.wl)&&!/\nMemory 1/.test(ml.wl), JSON.stringify({wr:ml.wr.slice(-120),wl:ml.wl.slice(-120)}));

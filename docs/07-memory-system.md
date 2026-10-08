@@ -398,7 +398,7 @@ Two payload fixes from the same export, outside memory proper:
 - **A quotation mark opens on its first word** (`stripDeliveryTags`, `_dispText`, `_cleanTextReply`): the space a
   stripped `[say …]` tag left inside a quote is trimmed.
 
-## v150.68 — memories in the reply and in the emotion pick
+## v150.70 — memories in the reply and in the emotion pick
 
 The player rewrote the "What you remember" fragment in their own list: how to read an entry, how a memory feels now, how it
 fades, and what keeps it from fading. And: "the decision model should consider these the same way. A woman cheating her

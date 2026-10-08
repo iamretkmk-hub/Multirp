@@ -1,4 +1,4 @@
-/* v150.68 — MEMORIES IN THE REPLY AND IN THE EMOTION PICK.
+/* v150.70 — MEMORIES IN THE REPLY AND IN THE EMOTION PICK.
    The player rewrote the "What you remember" fragment: how to read an entry ([when | importance] what happened. Felt: …
    Status: …), how a memory feels now, how it fades, and what keeps it from fading (an open or secret matter, until a later
    memory resolves it). "A woman cheating her husband should not feel calm the next day": the decision model reads the same.

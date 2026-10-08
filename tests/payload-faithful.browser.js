@@ -172,7 +172,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
         o.st.desire=60; o.st.agitation=20; o.stNote="Keep answering him, but stand further away."; o.stNoteAt=c.messages.length; o.stNoteDay=c.gameDay; c.rel[relDirKey("p_a","__user__")]=o; }
     };
     window.__S=S; window.__base=base;
-    /* v150.68 — the memories as v150.67 sent them, to tell what v150.68 changed on purpose from anything else: the v150.67
+    /* v150.70 — the memories as v150.67 sent them, to tell what v150.70 changed on purpose from anything else: the v150.67
        "What you remember" and "What happened just before this" fragments (FRAG_DEFAULTS_V150_67_OLD), and their numbered
        entries ("Memory 1: This happened …"), which the worded blocks still carry word for word. */
     window.__oldMemBlocks=B=>{ const ent=t=>{ t=String(t||""); const i=t.indexOf("\n\n"); return i>=0?t.slice(i+2):""; };
@@ -192,7 +192,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       const topts={chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:("tail" in o)?o.tail:tName,targetId:tId,multi:kind==="multi",
         injected:inj,textMode:kind==="text",payloadKind:kind};
       const mk0=()=>Object.assign({},buildCharPromptBlocks(p,others,inj,o.addressed||null,hopts),buildTailBlocks(topts));
-      // v150.68 — window.__oldMem: the same build as v150.67 sent its memories (see __oldMemBlocks)
+      // v150.70 — window.__oldMem: the same build as v150.67 sent its memories (see __oldMemBlocks)
       const mk=window.__oldMem?()=>__oldMemBlocks(mk0()):mk0;
       const B=mk();
       if(dataOnly){ const r=dataOnly(B,mk); state.relScope=undefined; state.formatRules=undefined; return r; }
@@ -234,7 +234,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const KINDS=["solo","multi","gm","text","heat"];
   const build=async(kind,name)=>pg.evaluate(([k,n])=>{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); },[kind,name]);
   const fragKeys=P=>Object.keys(P).filter(key=>key.indexOf("classic:")!==0);   // v150.66 — the classic layout is gone
-  /* v150.68 — what v150.68 changes on purpose, per payload: the same situation built with the v150.67 memories (window.__oldMem)
+  /* v150.70 — what v150.70 changes on purpose, per payload: the same situation built with the v150.67 memories (window.__oldMem)
      against the build now. Only the memory lines may differ (checked below); they are what a fixture line may be missing for. */
   const buildOld=async(kind,name)=>pg.evaluate(([k,n])=>{ window.__oldMem=true; try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.__oldMem=false; } },[kind,name]);
   const all68={gone:new Set(),added:new Set()};
@@ -271,11 +271,11 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     const [k,nm]=key.split("|");
     if(SITS.indexOf(nm)<0){ lost.push(key+": situation missing"); continue; }
     const text=await build(k,nm), have=new Set(linesOf(text).map(h)); n++;
-    const gone=new Set((await diff68(k,nm,text)).gone.map(h));   // v150.68 — the v150.67 memory lines (checked below)
+    const gone=new Set((await diff68(k,nm,text)).gone.map(h));   // v150.70 — the v150.67 memory lines (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
-  ok("in "+n+" payloads (every path × "+SITS.length+" situations — every fragment payload of the fixture), every line v150.63 sent is still sent (but v150.68's memory lines)", n===keys.length&&n>=290&&lost.length===0, lost.slice(0,10).join("\n        "));
+  ok("in "+n+" payloads (every path × "+SITS.length+" situations — every fragment payload of the fixture), every line v150.63 sent is still sent (but v150.70's memory lines)", n===keys.length&&n>=290&&lost.length===0, lost.slice(0,10).join("\n        "));
   ok("the only lines left out of the comparison are the removed ones ("+removedSeen+" of them: the quiet wants and the two old compass lines)", removedSeen>0);
   {let r5=0; Object.keys(F.removed65||{}).forEach(k=>{ r5+=F.removed65[k]; });
    ok("and v150.65's ("+r5+": what was found out, and the one answered's sheet line and old one-line entry)", r5>0&&F.removed65["solo|learned"]===3&&F.removed65["solo|player"]===1&&F.removed65["multi|char"]===2, JSON.stringify(F.removed65).slice(0,300));}
@@ -296,7 +296,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      if(SITS.indexOf(nm)<0){ lost64.push(key+": situation missing"); continue; }
      const text=await build(k,nm), L=linesOf(text), have=new Set(L.map(h)); n64++;
      const was=new Set(G.payloads[key].all), drop=new Set(G.payloads[key].drop); dropped+=drop.size;
-     const d68=await diff68(k,nm,text), gone68=new Set(d68.gone.map(h)), added68=new Set(d68.added);   // v150.68 — the memories
+     const d68=await diff68(k,nm,text), gone68=new Set(d68.gone.map(h)), added68=new Set(d68.added);   // v150.70 — the memories
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
@@ -305,12 +305,12 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      L.forEach(l=>{ if(!was.has(h(l))&&!block.has(l)&&!added68.has(l))extra.push(key+" new line: "+l.slice(0,120)); });
    }
    ok("in "+n64+" payloads, every line v150.64 sent is still sent, except what was found out and the one answered's sheet line and old entry line ("+dropped+")", n64===keys64.length&&n64>=290&&lost64.length===0&&dropped>0, lost64.slice(0,10).join("\n        "));
-   ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you>, v150.67's base instruction / format rules and v150.68's memories", extra.length===0, extra.slice(0,10).join("\n        "));}
+   ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you>, v150.67's base instruction / format rules and v150.70's memories", extra.length===0, extra.slice(0,10).join("\n        "));}
 
-  /* v150.68 — what the memories change is the memories, and nothing else: every line the v150.67 memories sent and the build now
+  /* v150.70 — what the memories change is the memories, and nothing else: every line the v150.67 memories sent and the build now
      does not is a line of the old "What you remember" / "What happened just before this" or an old numbered entry; every line
      the build now adds is a line of the new fragments or an entry in the reader's format. */
-  console.log("\n[v150.68: only the memories change]");
+  console.log("\n[v150.70: only the memories change]");
   {const NEW=await pg.evaluate(()=>{ const t=[]; ["memories","latest"].forEach(id=>{ const f=FRAG_DEFAULTS.find(x=>x.id===id); [f].concat(f.options||[]).forEach(x=>t.push(String(x.text||""))); }); return t.join("\n"); });
    const newLines=new Set(linesOf(NEW.replace(/\{\{char\}\}/g,"Ayla").replace(/\{\{user\}\}/g,"Emre")));
    const OLDRE=/^(?:# YOU REMEMBER THAT THESE HAPPENED|A past put to you|## MEMORIES YOU RECALL|(?:Earlier memory|Memory|Latest) \d+: |# WHAT HAPPENED JUST BEFORE THIS|The last things that passed between you)/;

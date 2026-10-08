@@ -4,6 +4,8 @@ One of ten grouped prompt files. **Read `../README.md` first** — it holds the 
 
 The rare, high-leverage generation jobs that run a handful of times per universe rather than per turn: building a world, writing the people in it, and tuning the rest of the prompts to fit. Output here shapes everything downstream for the whole playthrough.
 
+> **v150.61:** the card writers (`bioPrompt`, `batchBioPrompt`, `univPrompt`) no longer ask for `traits` (the ten-state behaviour profile). They ask for `likes` (six lines), and their `style` is a baseline with example lines. The speech & behaviour per group and per emotion is written by `x_style_writer`. The full texts below predate that; `index.html` holds the current ones. See `../05-payload-system.md`, "v150.61".
+
 Each entry below gives the prompt's job, its mechanical contract, and **its current full text**. The text is the shipped default; a user who has edited that prompt keeps their own copy, and a rewrite reaches them only through a refresh pipe (README § 7).
 
 

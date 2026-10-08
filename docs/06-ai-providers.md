@@ -192,8 +192,34 @@ audio, blob:, http(s) only).
 
 `dbg(label, provider, url, body)` pushes an entry (newest first, bounded), `dbgDone` completes
 it with status/result/duration/token estimate. `renderDebug` renders each as an expandable
-row; `payloadCapsules`/`splitSystemSections` pretty-print system messages into labeled
-capsules — this is how you *see* the assembled payload blocks in practice. `scrubSecrets`
+row (the payload itself is rendered when the row is opened). A segmented switch picks the view
+(`K.dbgView`, `dbgViewMode`/`setDbgView`): **As sent** is the request body verbatim (JSON for a
+chat payload), **Readable** (v150.63, replaced the old "Capsules" view; a stored `"capsules"`
+reads as Readable) is `pvReadable` — one block per message with a bold badge
+("message N — role (name)"), `#` heading lines bold, and the text coloured by where it came from:
+white = fixed wording (fragment main bodies, options chosen by a code fact, anything of unknown
+source), green = live data (every `{{call//…}}` value except the layout headings and an engine's
+own `{{call//prompt}}`, every `{{value}}`, the conversation turns), red = chosen by the decision
+model (a choose-when option whose ask passed, or whose condition reads a flag in
+`PV_DECISION_FLAGS`: emotion, intensity, tone, ego, broke_character, spoke_for_player, repeated,
+lost_track). A Decisions request reads as `# STATE` (indented `key: value`, values green) and
+`# QUESTIONS` (each with its instructions and criteria); any other payload as headings and
+`key: value` lines. Copy gives the readable plain text (or the JSON in As sent), then the response.
+
+**How the colours are known without touching what is sent.** `ptBuildMessages` and `epMessages`
+build twice: the first pass is the payload that is sent, unchanged; the second passes `ann` to
+`ptExpand` (and `annotate` to `fragCompile`), which marks data and red options with private-use
+characters (`PV_D0/PV_D1`, `PV_R0/PV_R1`). Red marks are taken off each paragraph before
+`ptExpand`'s logic reads it and put back on its output line by line; data marks are placed
+inside each line (after the indent and a heading's `# `), so the annotated build, stripped, is
+the sent build — `pvRemember` keeps it only when that holds, in a bounded map keyed by the clean
+message text. `dbg()` looks each logged message up (`pvAnnotList`) and stores `entry.annot`, used
+only by the Readable view: `exportDebug` writes the clean payload, and a payload with no
+annotation (hand-built, or a rebuilt list) reads with system white and conversation turns green.
+Markers never leave the app: both builders run `pvCleanMessages` on their output, and
+`chatCompletion` does it again before the request body is made. The Payloads screen's previews
+(`ptPreview` "Preview with my story", `epPreview`) use the same renderer.
+`payloadCapsules`/`splitSystemSections` remain as helpers but no longer drive a view. `scrubSecrets`
 redacts keys; `exportDebug` downloads the latest payloads as JSON ("send for diagnosis").
 Local, no-network entries are also logged (memory-retrieval ranking trace per turn).
 

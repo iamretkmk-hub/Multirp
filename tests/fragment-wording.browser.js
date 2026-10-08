@@ -26,7 +26,7 @@ const {chromium}=require('playwright');
     uni.locations=[L1,L2,L3];
     const base=()=>{
       state.personas=[
-        {id:"p_a",name:"Ayla",universeId:uni.id,personality:"Ayla is sharp.",backstory:"Grew up by the docks.",traits:"When pushed, she pushes back.\nWhen praised, she deflects.",
+        {id:"p_a",name:"Ayla",universeId:uni.id,personality:"Ayla is sharp.",backstory:"Grew up by the docks.",traits:"When pushed, she pushes back.\nWhen praised, she deflects.",likes:"Likes: strong tea, the harbour at dawn\nPet peeves: being rushed",
          goals:"Open her own shop.",look:{hair:"red hair",face:"freckles"},style:"Short, dry sentences.",instructions:"Hold the pause before answering.",
          wardrobe:"A green raincoat.",scenario:"The flat above the bakery, late.",
          relationships:{p_b:{tie:"my older brother",relationship:"Berk raised her after their father left."},__user__:{tie:"neighbour",relationship:"Emre lives across the hall."},p_c:{tie:"old friend",relationship:"Cem and she grew up together.",pinned:true}}},
@@ -211,9 +211,9 @@ const {chromium}=require('playwright');
     return {solo:g("solo",all),multi:g("multi",{s:["apart","limits"],targetId:"p_b",targetName:"Berk"}),gm:g("gm",{s:["guest","wants2"]}),text:g("text",all),heat:g("heat",all),
       heatLast:g("heat",{s:["lastbeat","trackersOwn"]}),changed:g("solo",{s:["changed"]}),bar:g("solo",{s:["bar"]}),aside:g("solo",{s:["motiveAside","asks"]}),hostile:g("multi",{s:["intentHostile","asks"],targetId:"p_b",targetName:"Berk"}),
       cont:g("solo",{s:["cont"]}),player:g("solo",{})}; });
-  ok("solo: the task, the world, the identity sheet with its rules and live goals, the ties with what was found out",
+  ok("solo: the task, the world, the identity sheet with its likes and live goals, the ties with what was found out",
     /^<<system>>\nYou are Ayla\.\n\n# TASK\nYou live as Ayla/.test(P.solo)&&/# UNIVERSE SETTING\nA rainy port town/.test(P.solo)&&/# THIS IS WHO YOU ARE\n\n<backstory>Grew up by the docks\.<\/backstory>/.test(P.solo)
-    &&/<how_you_behave>Rules for how you act[^\n]*\n    When pushed, she pushes back\./.test(P.solo)&&/<goals_and_ambitions>\n    What you are actually after[^\n]*\n    - Get the shop keys/.test(P.solo)
+    &&/<what_you_like>What you like and dislike[^\n]*\n    Likes: strong tea, the harbour at dawn\n    Pet peeves: being rushed\n  <\/what_you_like>/.test(P.solo)&&!/how_you_behave/.test(P.solo)&&/<goals_and_ambitions>\n    What you are actually after[^\n]*\n    - Get the shop keys/.test(P.solo)
     &&/<wardrobe>What you usually wear \([^)]*\): A green raincoat\.<\/wardrobe>/.test(P.solo)&&/# WHO THESE PEOPLE ARE TO YOU[\s\S]*What you have found out about them since[^\n]*\n- Berk — has stopped answering the phone\n\n• \[Emre — neighbour\]/.test(P.solo), P.solo.slice(0,1800));
   ok("solo: the scene in her own home, privacy with Berk and Deniz nearby, plans by group, the limits, the four consistency notes",
     /# SCENE RIGHT NOW\n+This is your live situation\.[\s\S]*CURRENT DAY: Day 3, Evening\n\n⚠️ YOUR CURRENT LOCATION: Ayla's Flat — specifically the Kitchen\. THIS IS WHERE YOU ARE RIGHT NOW\. ⚠️\n\nThis place is YOUR home/.test(P.solo)

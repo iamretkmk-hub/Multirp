@@ -174,7 +174,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
   await pg.evaluate(()=>{
     const uni=state.universes[0];
     const mk=(id,name,bio)=>({id,name,universeId:uni.id,instructions:"",personality:"I am the hidden head of my household.",
-      backstory:bio,style:"s",goals:"",traits:"Default: when nothing pulls at me -> I keep the room warm",
+      backstory:bio,style:"s",goals:"",traits:"Default: when nothing pulls at me -> I keep the room warm",likes:"Likes: my garden, strong coffee",
       wardrobe:"Daily: my green dress",look:{raw:"tall, dark hair"}});
     [["v_oz","Ozlem","I married Berker."],["v_bu","Burcu","I came to Iskenderun and stayed for Burak."]]
       .forEach(([id,n,b])=>{ if(!state.personas.some(p=>p.id===id))state.personas.push(mk(id,n,b)); });
@@ -206,13 +206,14 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
        /says "you" — or "I" — it means Emre/.test(r.player)?true:r.player);
     ok("and no longer calls it 'their' with no owner named",
        !/<their_backstory>I /.test(r.target)?true:r.target);
-    ok("the bystander behaviour label names the person, not 'they'",
-       /How Burcu behaves/.test(r.engine) && /it means Burcu, never you/.test(r.engine)
+    // v150.61 — the bystander sheet carries what they like (the behaviour lines are the speech groups now)
+    ok("the bystander likes label names the person, not 'they'",
+       /What Burcu likes and dislikes/.test(r.engine) && /it means Burcu, never you/.test(r.engine) && !/how_you_behave/.test(r.engine)
        && !/How they act/.test(r.engine), r.engine.slice(0,240));
     ok("so does the wardrobe label",
        /What Burcu usually wears/.test(r.engine) && !/Their usual clothing/.test(r.engine));
     ok("neither label guesses a gender", await pg.evaluate(()=>{
-        const bad=["bio_behave_other","bio_wardrobe_other","target_bg","target_look"]
+        const bad=["bio_behave_other","bio_likes_other","bio_wardrobe_other","target_bg","target_look"]
           .filter(k=>/\b(he|him|his|she|her|hers)\b/i.test(BLOCK_TPL_DEFAULTS[k]));
         return bad.length?bad.join(", "):true; }));
   }

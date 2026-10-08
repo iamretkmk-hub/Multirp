@@ -326,7 +326,7 @@ const {chromium}=require('playwright');
     ok("the request reads them through the registry", (()=>{
         const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
         const n=(src.match(/up\("imgFrameGuide"\)/g)||[]).length;
-        return n===2?true:"frame guide read at "+n+" of the 2 image paths"; })());
+        return n===3?true:"frame guide read at "+n+" of the 3 image paths"; })());   // v150.74 — the story, the playground and a photo sent by text
     ok("no layer ships its newlines escaped into visible text", await pg.evaluate(L=>{
         const bad=L.concat("narrateVerbatim").filter(k=>/\\n/.test(up(k)));
         return bad.length===0?true:"literal \\n inside: "+bad.join(", "); },LAYERS));

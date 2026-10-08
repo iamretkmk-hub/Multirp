@@ -730,3 +730,57 @@ reply payload. When the reply is aimed at the player, *Who you are responding to
 `player_wearing`. The outfit entries are written to the player ("You wear…"), so both fragments say
 whose "you" it is. Texts never carry it, because nobody sees your clothes over a phone. Nothing on
 record means neither fragment fires, and the block is exactly as before.
+
+## v150.74 — asking for a photo by text
+
+Asked: "Selfie during text messages. A Request Photo button on the text screen; she gets a list of options (reject, or the
+selfie poses in the image section, only the ones tagged selfie); she decides how she will do the pose and writes it as
+herself; that goes to the image prompt writer; after the image she sends a message about it, knowing what she sent." And:
+"Add auto download option after selfie."
+
+- **Selfie scene types.** Settings › Image › a scene type has a **Selfie** switch (`rule.selfie`) and a box *The selfie
+  pose — what it is, and what they may change* (`rule.selfieNote`; its `when` is used when the box is empty). Both are
+  stored with the rule as soon as they change. A Selfie type shows "· selfie" in its row. `pickRule` leaves Selfie types
+  out, so the scene selector (Decisions or the chat router) never draws an in-person frame with one; the manual scene
+  picker still lists them. `selfieRules(p)` is what a character can be offered: enabled, tagged, and never an intimate
+  type for a minor.
+- **The composer.** A text window has an image button beside the message box (`togglePhotoRequest`). It arms a photo
+  request: a "Photo request" chip on the box (× cancels) and the placeholder "What kind of photo?". Sending posts an
+  ordinary text with `photoRequest:true`, shown with a camera mark; empty words are allowed (stored as `📷`, read as "a
+  photo"). The button exists only in the text window. With no Selfie types it toasts how to tag one; a girl or boy card
+  gets the no-pictures message.
+- **Her choice** (`_textPhotoTurn`, run by `_replyToText` before her text, beside her emotion pick, which is handed to
+  `buildTextPayload` so it is asked once). One Decisions pick (`x_selfie_pick`, editable; its `REJECT:` line describes the
+  reject option): reject, or each Selfie type as "name: pose text". The state is who she is, `toward_the_one_asking` (the
+  emotion pick's feelings block), `_emoStakeState(…,"text")` (what weighs on her, the people she answers to, that they are
+  texting, who is around her), `limits_on_record`, her last emotion / ego answer, where she is (her own world position and
+  area), what she has on (`currentOutfit`, else her wardrobe), the time, the request and the last texts. Debug: *Selfie pick
+  (Decisions) · name*. A failed, refused or paused request: the same options to the router's chat model (*Selfie pick (chat
+  model)*); if that fails too there is no photo this turn and she answers as to any text, with no photo note.
+- **Refused.** Her text payload gets the `photo_refused` head flag and `_ph.photo_request_raw`; the shipped fragment *A photo
+  you were asked for* (text path, before *Respond as*) says she was asked and decided not to send one, and to answer in
+  character: no, later, a tease, never an assistant's apology.
+- **Sent.** The selfie writer (`x_selfie_writer`, her roleplay model, first person, English, 2–4 sentences: the pose as she
+  does it, where she is, what she has on or that she has nothing on, the framing). `selfieImage` then runs the scene
+  pipeline for one person: the image prompt writer (rewritePrompt + the type's template + the frame guide) with
+  `x_img_pose_writer` for her alone, her Body field, where she is, and `x_img_selfie` carrying her words; her face first and
+  the type's pose picture last (`buildPosePack` sends no player picture for a Selfie type); lighting and the style tail in
+  code; the global provider through `genImageForRule`. Debug: *Image references · pose presets*, *Selfie image prompt
+  writer · name*, *Selfie image · name*. The picture is posted in the thread as her message (`selfie:{ruleId,name,desc}`,
+  `img`, `photoFor`), stored in the byte cache and her gallery, and drawn as a picture bubble. Her text after it carries
+  `photo_sent` and `_ph.photo_desc_raw`: *THE PHOTO YOU JUST SENT*, her own words. Readers of the thread (`textMsgBody`:
+  `castHistory`, the emotion pick's scene, the memory arc tracker and builder, the proactive gate) read the photo as
+  "(sent a photo: …)" and the request as "… (asking for a photo)".
+- **A picture that fails** (or no description): `req.photo={state:"failed",err}`, a toast and a line under the request;
+  no photo message, and her text carries no photo note.
+- **On screen:** the request, her photo, her text.
+- **Saving.** Every photo bubble has a **Save** button (**Save to Photos** on iOS) that calls `saveMedia` with the photo's
+  gallery record. Settings › Image › *Save their photos to my phone automatically* (`state.selfieAutoSave`, off by default)
+  calls `saveMedia` once right after the photo is posted, named `storymind-<character>-<yyyymmdd-hhmmss>.<ext>`
+  (Downloads on Android and desktop). Not on iOS, where a share sheet needs a tap: the bubble's button is the way. After the
+  first automatic save of a session a toast says the browser may ask to allow multiple downloads; a failed one is a quiet
+  toast and the photo stays in the thread and the gallery.
+- **Nothing else changes:** with no photo request the new fragment is empty and no payload moves (`payload-faithful`).
+  Saved fragment lists get it once (`FRAG_SHIPPED_ADDS` "v150.74.photo").
+
+Test: `tests/selfie-request.browser.js`.

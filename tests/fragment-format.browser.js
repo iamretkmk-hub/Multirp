@@ -106,7 +106,7 @@ const {chromium}=require('playwright');
     return {bad,n:FRAG_DEFAULTS.length,order:FRAG_DEFAULTS.map(f=>f.id).join(",")};
   },OLD_PIECES);
   ok("no converted fragment calls an old header / intro / body / footer piece", scan.bad.length===0, scan.bad.join("; "));
-  ok("41 shipped fragments (v150.58: + what you already said), with \"What you know of them\" right after \"Who you are answering\"", scan.n===41&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
+  ok("43 shipped fragments (v150.58: + what you already said; v150.64: + the two feelings), with \"What you know of them\" right after \"Who you are answering\"", scan.n===43&&/,target,target_sheet,/.test(scan.order), scan.n+" "+scan.order);
   ok("every *_raw name a converted fragment calls is a known data name, and none is in an ORDER list the classic template prints",
     await pg.evaluate(()=>{ const used=new Set(); FRAG_DEFAULTS.forEach(f=>{ JSON.stringify(f).replace(/\{\{call\/\/([a-z_]+_raw)\}\}/g,(m,k)=>used.add(k)); });
       const miss=[...used].filter(k=>RAW_DATA_KEYS.indexOf(k)<0), printed=RAW_DATA_KEYS.filter(k=>RT_ORDER.concat(PL_ORDER,SI_ORDER,LL_ORDER,RG_ORDER,RU_ORDER,SS_ORDER,WN_ORDER,PR_ORDER,PRE_ORDER).indexOf(k)>=0);

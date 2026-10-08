@@ -223,9 +223,11 @@ const {chromium}=require('playwright');
     &&/# WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES\n[^\n]*\n- limit: "Not tonight\."/.test(P.solo)
     &&/LAST TIME YOU SLIPPED OUT OF CHARACTER[\s\S]*LAST TIME YOU WROTE Emre'S PART[\s\S]*LAST TIME YOU REPEATED YOURSELF[\s\S]*LAST TIME YOU LOST TRACK/.test(P.solo), (P.solo.match(/# SCENE RIGHT NOW[\s\S]{0,1600}/)||[""])[0]);
   ok("multi: apart from everyone, in the balcony", /PRIVACY: you are at Balcony, apart from everyone else\./.test(P.multi), (P.multi.match(/# PRIVACY[\s\S]{0,300}/)||[""])[0]);
-  ok("gm: a guest at Emre's, alone with him; two quiet wants, each worded by its own kind",
+  /* v150.64 — the quiet wants left the reply: two live motives (a grudge toward Emre, an ambition about Cem) put nothing on
+     the sheet; they reach play through plans, pursuits and staged moves (tests/quiet-wants.browser.js) */
+  ok("gm: a guest at Emre's, alone with him; two live motives, and no quiet wants on the sheet (v150.64)",
     /This place is Emre's home — Emre lives here and you do not\. You are a GUEST/.test(P.gm)&&/PRIVACY: you are ALONE with Emre — nobody else/.test(P.gm)
-    &&/<what_you_quietly_want>Privately, you are set on something concerning Emre: to see him fail \(a grudge\)\.[^\n]*\nPrivately, you want something out of Cem: to borrow his van \(an ambition\)\.[^\n]*<\/what_you_quietly_want>/.test(P.gm), (P.gm.match(/<what_you_quietly_want>[\s\S]{0,500}/)||[""])[0]);
+    &&!/what_you_quietly_want|Privately, you are set on something|Privately, you want something out of|to borrow his van/.test(P.gm)&&/# THIS IS WHO YOU ARE/.test(P.gm), (P.gm.match(/<what_you_quietly_want>[\s\S]{0,500}/)||[""])[0]||P.gm.slice(0,400));
   ok("a public place, alone with the player; what just changed, item by item",
     /But this is a PUBLIC place/.test(P.bar)&&/How exposed this place is: /.test(P.bar)&&/⚠️ WHAT JUST CHANGED[^\n]*\n\n- You have just MOVED\. You are now at Ayla's Flat — a moment ago you were at Harbour Bar\./.test(P.changed)
     &&/- Time has just JUMPED forward — it is now Day 3, Evening \(the next day\)\./.test(P.changed)&&/- Just LEFT the scene: Deniz\./.test(P.changed)&&!/Just ARRIVED/.test(P.changed), (P.changed.match(/WHAT JUST CHANGED[\s\S]{0,900}/)||[""])[0]);

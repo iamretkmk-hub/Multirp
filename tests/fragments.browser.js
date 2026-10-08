@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("forty-one fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===41&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("forty-three fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said; v150.64: + how you feel about them, + what your body is doing), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===43&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   // v150.59 — the heading, the intro and the data in one box: the "Your ties" option, injected when there are ties (has_ties)
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties"), o=(f.options||[]).find(x=>x.id==="ties");
       return (o&&o.code==="has_ties"&&/^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(o.text)&&/\{\{call\/\/rel_sheet_raw\}\}/.test(o.text)) ? true : JSON.stringify(f); }));
@@ -107,6 +107,8 @@ const {chromium}=require('playwright');
           const answers={}; Object.keys(body.questions).forEach(k=>{ answers[k]=k==="emotion"?{type:"choice",choice:"joy"}:k==="intensity"?{type:"choice",choice:"mild"}:k==="ego"?{type:"choice",choice:"no_conflict"}:{type:"noul",noul:k==="q_say_no__unknown_past"?0.88:0.1}; });
           return new Response(JSON.stringify({answers}),{status:200}); } return realF(u,o); };
       const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); state.key="sk-test"; state.fragOn=true; state.emoOn=true; c.emo={};
+      // v150.64 — the motive question is asked only when a motive toward the one answered can be injected: Burcu carries one
+      c.intents=[{id:"i_m",holderId:"p_b",holderName:"Burcu",targetId:"__user__",targetName:state.user,valence:"warm",kind:"crush",aim:"to be asked out",status:"brewing",strength:0.6}];
       state.memory=[{id:"m1",ownerId:"p_b",content:"We went to the market on Tuesday.",gameDay:1}];
       c.messages.push({mid:"u2",role:"user",content:"Remember our trip to Paris?",speaker:state.user});
       const out=await emotionEnsure(c,p,"Remember our trip to Paris?",{targetId:"__user__",kind:"solo"});

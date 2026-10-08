@@ -279,6 +279,15 @@ without a vector yet scores its word overlap on a fixed scale capped at 0.6, so 
 a strong semantic match; the cosine rescale is gated by the absolute match, so an irrelevant pool
 scores low across the board.
 
+**v150.64 — a rejected model is a setting to fix.** A Decisions model typed into the embeddings box ("typesafe/jev-1.13")
+failed every request with HTTP 400 and the Debug row said only "HTTP 400 ": the body had been read as JSON, so the raw text
+was empty. `_embErrText` puts the endpoint's own words on the row and in `_embLastErr` ("HTTP 400 — … is not an embeddings
+model (…)"), for the query and the backfill. A 400 / 404 / 422 shows one notice per model per session naming the setting
+(Settings → 2 · LLM Selection → Memory & Daily Engines → Semantic-memory embeddings model); recall stays lexical meanwhile.
+Saving warns (once per value) when the box holds a Decisions model (the current one, or any `*-decisions` id) or a model the
+user has set for chat (`embedModelLooksWrong`). The Decision models have their own card (doc 06). Pinned by
+`tests/decision-models.browser.js`.
+
 ## Injection into payloads
 
 `memoryBlocks(injected)` renders the tiers under their fragment headers:

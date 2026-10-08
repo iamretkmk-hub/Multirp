@@ -35,7 +35,10 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     window.chatCompletion=async(messages,model,opts)=>{ window.__calls.push({dbg:(opts&&opts.dbg)||"",t:messages.map(m=>m.content).join("\n")});
       return /After it is over/.test((opts&&opts.dbg)||"")?"It happened and you will not pretend it did not. You will not let it happen again in this flat."
         :JSON.stringify({toward:"PULL_MARKER tell him a date",against:"BRAKE_MARKER Buket is right there"}); };
-    state.payloadTemplates=tpls; state.payloadTplOn=true;
+    /* the player's own TEMPLATES are what this pins, so the fragment model (on by default since v150.57) is off: since v150.64
+       the shipped fragments carry the feelings again ("How you feel about them", "What your body is doing"), and a player who
+       does not want them deletes those fragments, as they took the calls out of these templates */
+    state.payloadTemplates=tpls; state.payloadTplOn=true; state.fragOn=false;
     const uni=state.universes[0];
     uni.locations=[{id:"l_f",name:"The flat",type:"home",description:"f",residents:[],sublocations:[{id:"s_l",name:"Living room"}]}];
     const mk=(id,name,x)=>Object.assign({id,name,universeId:uni.id,instructions:"",personality:"You are "+name+".",backstory:"b",style:"s",goals:"",look:{raw:name+" is tall"},relationships:{}},x||{});

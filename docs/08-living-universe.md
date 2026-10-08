@@ -905,3 +905,15 @@ One answer now serves the map and every offstage resolver:
   and the step keeps no memory or rel line for them.
 
 Pinned by `tests/offstage-availability.browser.js`.
+
+## v150.74 — asking for a photo by text
+
+A text can be a photo request (the image button in a text window). Before the character answers it, one Decisions pick
+(`x_selfie_pick`) decides from her tie to the player, her feelings, her limits, where she is and who is around, and what she
+has on whether she sends one, and which of the scene types tagged **Selfie** in Settings › Image she takes. Refused: her
+reply carries the `photo_refused` note and she answers it in character. Sent: she writes the photo she takes in her own words
+(`x_selfie_writer`), the picture is made from that with the type's pose picture and her face, it is posted in the thread
+before her text, and her text carries `photo_sent` with her own description. The thread's readers (the memory arc tracker
+and builder, the emotion pick, the proactive gate, her history) read the photo as "(sent a photo: …)". A failed pick falls
+back to the chat model; a failed picture leaves a notice and no photo note. Optional automatic download of her photos.
+Details: doc 10, "v150.74 — asking for a photo by text". Test: `tests/selfie-request.browser.js`.

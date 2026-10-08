@@ -380,11 +380,13 @@ const {chromium}=require('playwright');
     c.messages.push({mid:"s2",role:"assistant",speaker:"Berk Kaya",speakerId:"p_b",present:["p_a","p_b"],toId:"__user__",content:'*BERKNARR leans back.* "Heard." _BERKTHOUGHT I lied._'});
     let q=null; const _rm=window.retrieveMemories; window.retrieveMemories=async(query)=>{ q=query; return {recent:[],diary:[],longterm:[]}; };
     enterUniverseChat("u2",true);
-    let pl; try{ pl=await buildTextPayload(c,state.personas.find(p=>p.id==="p_a")); }finally{ window.retrieveMemories=_rm; }
+    let pl, pay=""; try{ const P=state.personas.find(p=>p.id==="p_a"); pl=await buildTextPayload(c,P);
+      /* v150.66 — the reply is the text path's fragments, built in this chat's world */
+      pay=inChatWorld(c,()=>ptBuildMessages("text",pl.blocks||{},[],{chat:c,npc:P,targetName:chatUserName(c)},pl.rawFn)).map(m=>m.content).join("\n"); }finally{ window.retrieveMemories=_rm; }
     const raw=JSON.stringify(pl.rawFn());
     enterUniverseChat("u1",true);
     const scene=recentSceneMsgsFor(c,state.personas.find(p=>p.id==="p_a"),10).map(m=>m.content).join("\n");
-    return {q, pay:(pl.head||"")+(pl.tail||""), raw, scene};
+    return {q, pay, raw, scene};
   });
   ok("the memory query holds the texter's own texts and the player's", /OWNTEXT/.test(tx.q)&&/PLAYERTEXT/.test(tx.q), tx.q);
   ok("and never a scene the texter did not witness, nor another's thought", !/SECRETSCENE|BERKTHOUGHT/.test(tx.q)&&/Heard/.test(tx.q), tx.q);

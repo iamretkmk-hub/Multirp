@@ -190,7 +190,7 @@ const {chromium}=require('playwright');
     return {n,filled,names:names.size,bad:[...bad]}; });
   ok("in "+D.n+" situations, every one of the "+D.names+" names the shipped fragments call brings in data only", D.n>=250&&D.filled>2000&&D.bad.length===0, D.bad.slice(0,8).join("\n        "));
   ok("no shipped fragment calls a worded piece any more: only *_raw data, the authored text, lists and memories", await pg.evaluate(()=>{
-      const data=new Set(["scenario","others_list","mem_distant_entries","mem_recent_entries","mem_latest_entries","style_body","style_emotion","whereabouts_lines","rumor_carrier_list","calendar_done","quest_lines","after_heat"]);
+      const data=new Set(["scenario","others_list","mem_distant_entries","mem_recent_entries","mem_latest_entries","style_body","style_emotion","whereabouts_lines","rumor_carrier_list","calendar_done","quest_lines","after_heat","text_timing"]);   // v150.66 — the text timing note is its own Other-wording piece
       const bad=[]; FRAG_DEFAULTS.forEach(f=>JSON.stringify(f).replace(/\{\{call\/\/([a-zA-Z0-9_]+(?:\/\/[a-zA-Z0-9_]+)?)\}\}/g,(m,k)=>{ if(!/_raw$/.test(k)&&!data.has(k))bad.push(f.id+": "+k); }));
       const raw=new Set(); FRAG_DEFAULTS.forEach(f=>JSON.stringify(f).replace(/\{\{call\/\/([a-z0-9_]+_raw)\}\}/g,(m,k)=>raw.add(k)));
       const unknown=[...raw].filter(k=>RAW_DATA_KEYS.indexOf(k)<0), known=ptKnownNames(), unlisted=RAW_DATA_KEYS.filter(k=>!known[k]);

@@ -1637,5 +1637,11 @@ fragment field is an item (`fx:<fragment>.text`, `.bp.<path>`, `.o.<option>.text
 previews build from the fragments on the path picked; the export carries the list; its engine no longer switches the
 fragments off.
 
+**One fragment added: "How long the text sat"** (`text_timing`, text path only, tail, right after "How to answer"). It
+calls `{{call//text_timing}}` — the note `buildTextPayload` writes when the player's text sat for a while ("…days ago and
+they are only replying now"). Since v150.57 no fragment called it, so with fragments on the note was built and never sent;
+the classic tail used to carry it. A stored list gets it once by `FRAG_SHIPPED_ADDS` key `v150.66.timing`. Its wording is
+the Other-wording piece of the same name.
+
 Pinned by `tests/fragments-only.browser.js`; the tests that only pinned the classic layout or the reply templates are
 deleted or rewritten (tests/README.md, "Removed in v150.66").

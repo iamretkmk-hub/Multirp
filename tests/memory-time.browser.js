@@ -133,14 +133,16 @@ const {chromium}=require('playwright');
   });
   ok("the reply payload still says how long it sat", await pg.evaluate(async()=>{
       const p=(state.personas||[]).find(x=>x.id==="m_a");
-      const pl=await buildTextPayload(curChat(),p);
-      return /days ago and they are only replying now/.test(String(pl.tail||""))
+      const c=curChat(), pl=await buildTextPayload(c,p);
+      /* v150.66 — the reply is the text path's fragments: "How long the text sat" calls the note */
+      const sent=ptBuildMessages("text",pl.blocks||{},[],{chat:c,npc:p,targetName:chatUserName(c)},pl.rawFn).map(m=>m.content).join("\n");
+      return /days ago and they are only replying now/.test(sent)
           && /days ago/.test(String((pl.blocks||{}).text_timing||""))
         ? true : "the note is missing from the reply payload"; }));
   ok("the decision to text unprompted never sees it", await pg.evaluate(async()=>{
       const p=(state.personas||[]).find(x=>x.id==="m_a");
       const pl=await buildTextPayload(curChat(),p,{timing:false});
-      return !/only replying now/.test(String(pl.tail||""))
+      return !/only replying now/.test(textContextJoin(pl.blocks||{}))
           && !String((pl.blocks||{}).text_timing||"").trim()
         ? true : "the note reached the proactive context"; }));
   ok("and the proactive texter is the caller that asks for it that way", await pg.evaluate(()=>

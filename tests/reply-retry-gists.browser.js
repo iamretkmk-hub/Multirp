@@ -164,7 +164,9 @@ const USER_TEMPLATE=`[system]
 
     console.log(`\n[3 — the player's relationship paragraph, ${mode}]`);
     const people=sent.slice(sent.indexOf("PLAYER_PARA")-200,sent.indexOf("PLAYER_PARA")+50);
-    ok("the player's entry carries its paragraph from the card's relationships.__user__", /\[Emre — friend\]/.test(sent)&&sent.indexOf("PLAYER_PARA")>=0, people);
+    /* v150.66 — a reply is its fragments: the player answered gets their entry in <what_they_are_to_you> (the tie, then the
+       card's paragraph), not the classic ties line "[Emre — friend]" */
+    ok("the player's entry carries its paragraph from the card's relationships.__user__", /What Emre is to you, in your own words: friend\.\\nPLAYER_PARA/.test(sent), people);
     ok("everyone else keeps theirs", sent.indexOf("HAKAN_PARA")>=0);
     // v150.39 — the social graph (the author's summary note) is gone: even the "everyone" scope never sends it
     ok("the social graph never reaches the payload, even on the \"everyone\" scope", sent.indexOf("Hakan is my husband. Emre is Hakan's old school friend.")<0, sent.slice(sent.indexOf("ties"),sent.indexOf("ties")+600));

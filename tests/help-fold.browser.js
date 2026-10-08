@@ -68,7 +68,7 @@ const {chromium}=require('playwright');
       dot.click();
       const body=document.getElementById('infoBody').textContent;
       closeModal('infoModal');
-      return /Placeholders are NOT universal/.test(body) && /A payload is an ordered stack of parts/.test(body)
+      return /Placeholders are NOT universal/.test(body) && /A reply payload \(solo, multi, gamemaster, text, heat\) is built from the Reply fragments/.test(body)
         ? true : body.slice(0,120); }));
   ok("with its markup intact — the warning box, the bold, the code spans", await pg.evaluate(()=>{
       const h=[...document.querySelectorAll('.card h3')].find(x=>/How payloads/i.test(x.textContent));

@@ -113,9 +113,7 @@ const {chromium}=require('playwright');
         targetId:"__user__",multi:false,injected:{recent:[],diary:[],longterm:[]}});
       return /ONE short \*narrated\* beat in the whole reply at most/.test(String(T.final_guardrails||""))
         ? true : "rail_form did not render"; }));
-  ok("and every spoken layout calls the block that carries it", await pg.evaluate(()=>{
-      const miss=["solo","multi","gm"].filter(k=>ptPreset(k).indexOf("{{call//final_guardrails//full}}")<0);
-      return miss.length?miss.join(", "):true; }));
+  // (v150.66 — "every spoken layout calls the block that carries it" pinned the authored reply layouts, which are gone)
   /* v148.6 — INTENTIONALLY CHANGED. The "gist" was the verbatim line cut at 140 characters mid-quote, so the
      label promised a summary and delivered a truncated copy. The line now goes in whole and the label says
      "word for word" (tests/reply-retry-gists.browser.js). What still holds: it never calls itself a shape. */
@@ -279,8 +277,8 @@ const {chromium}=require('playwright');
    && !/_psycheBodySig\(chat\)/.test(String(buildTailBlocks))));
   ok("the self-gating paragraph is gone from the text, now that code decides",
      await pg.evaluate(()=>!/THIS ONLY APPLIES IF SOMETHING WAS ACTUALLY ASKED/.test(blkTpl("resistance_body"))));
-  ok("and the duplicate heading is gone from every layout", await pg.evaluate(()=>
-      ["solo","multi","gm","text","heat"].every(k=>ptPreset(k).indexOf("{{call//head_resistance}}")<0)));
+  ok("and no reply fragment calls the duplicate heading", await pg.evaluate(()=>
+      !/\{\{call\/\/head_resistance\}\}/.test(JSON.stringify(FRAG_DEFAULTS))));   // v150.66 — a reply is its fragments
 
   console.log("\n[the absence note answers direct address, not any mention]");
   /* Merely MENTIONING somebody who is not here is how people talk about other people, and it was
@@ -323,11 +321,8 @@ const {chromium}=require('playwright');
      were all this: `drive_ego` is inlined into the template as fixed prose, it contains a blank
      line, and that blank line split the one paragraph the auto-drop needs in order to remove the
      whole piece. So the closing note shipped on every turn the psyche engine had not written for. */
-  // v150.38 — the drives piece is the spoken limits alone now, so the gap rule is checked on the helper itself
-  ok("inlined prose keeps its blank lines as {{gap}}, which stays inside the paragraph",
-     await pg.evaluate(()=>{
-      const t=_ptGapify("A heading line.\n\nA closing note.\n \nAnd more.");
-      return !/\n[ \t]*\n/.test(t) && (t.match(/\{\{gap\}\}/g)||[]).length===2 ? true : JSON.stringify(t).slice(0,300); }));
+  /* (v150.66 — the helper that inlined a piece's prose into a generated reply template, _ptGapify, went with the generated
+     templates; the {{gap}} rule itself is pinned by tests/gap-vs-blank.browser.js) */
   ok("so a turn with no limits ships none of the drives block", await pg.evaluate(()=>{
       const chat=curChat(); chat.spokenLimits={};
       const P=state.personas.find(p=>p.id==="p_b");
@@ -338,7 +333,7 @@ const {chromium}=require('playwright');
   console.log("\n[one copy of each rule, in the place it fires hardest]");
   ok("do-not-recap is stated once, under the quoted line", await pg.evaluate(()=>{
       const n=["last_line_footer","guidance_reply"].filter(k=>/do not recap|never by repeating it back/i.test(blkTpl(k)));
-      const heading=["solo","multi","gm","text","heat"].some(k=>ptPreset(k).indexOf("{{call//head_react_not_recap}}")>-1);
+      const heading=/\{\{call\/\/head_react_not_recap\}\}/.test(JSON.stringify(FRAG_DEFAULTS));   // v150.66 — the fragments, not the authored layouts
       return (n.length===1 && n[0]==="last_line_footer" && !heading) ? true
            : JSON.stringify({n,heading}); }));
   ok("who the turn is aimed at is asserted once, at the generation point", await pg.evaluate(()=>{

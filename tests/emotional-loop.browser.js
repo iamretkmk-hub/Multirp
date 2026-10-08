@@ -215,53 +215,18 @@ const {chromium}=require('playwright');
                   "rp_say_no","rp_last_before"];
       const missing=need.filter(k=>!(k in BLOCK_TPL_DEFAULTS)||LY_ORDER.indexOf(k)<0);
       return missing.length?missing.join(", "):true; }));
-  ok("solo, multi, gm and text carry no prose of their own", await pg.evaluate(()=>{
-      const bad=[];
-      ["solo","multi","gm","text"].forEach(k=>{
-        ptPreset(k).split("\n").forEach(ln=>{
-          const t=ln.trim();
-          if(!t||/^\[(system|user)( end)?\]$/.test(t))return;
-          if(/^\{\{call\/\/[a-zA-Z0-9_]+(\/\/full)?\}\}$/.test(t))return;
-          bad.push(k+": "+t.slice(0,50));
-        });
-      });
-      return bad.length?bad.slice(0,4).join(" | "):true; }));
-  ok("all four resolve every name they call", await pg.evaluate(()=>{
-      const bad=["solo","multi","gm","text"].map(k=>({k,s:ptScan(ptPreset(k),ptKnownNames())}))
-        .filter(x=>x.s.unknownCall.length||x.s.unknownVar.length||!x.s.hasHistory);
-      return bad.length?JSON.stringify(bad):true; }));
-  ok("the four carry the whole feeling family, in order", await pg.evaluate(()=>{
-      const want=["feelings//full","feelings_now//full","drives//full",
-                  "private_intent//full","after_heat//full"];
-      const bad=[];
-      ["solo","multi","gm","text"].forEach(k=>{
-        const t=ptPreset(k);
-        let last=-1;
-        want.forEach(w=>{ const i=t.indexOf("{{call//"+w+"}}");
-          if(i<0)bad.push(k+" missing "+w); else if(i<last)bad.push(k+" out of order at "+w);
-          else last=i; });
-      });
+  /* v150.66 — the authored reply layouts (PT_PRESETS) are gone: a reply is its fragments. What they guaranteed is checked
+     on the fragments: every spoken path and the text path carry the feeling family in order, and the text path takes the
+     texting format, never the spoken three-channel rules. (Their "no prose of their own" and per-call checks went with them.) */
+  ok("every spoken path and the text path carry the feeling family, in order (the settled view, the live charge, the compass, what you decided)", await pg.evaluate(()=>{
+      const ids=FRAG_DEFAULTS.map(f=>f.id), on=(id,k)=>((FRAG_DEFAULTS.find(f=>f.id===id)||{}).paths||[]).indexOf(k)>=0;
+      const fam=["feelings","feelings_now","compass","decided"], bad=[];
+      ["solo","multi","gm","text"].forEach(k=>{ let last=-1; fam.forEach(id=>{ const i=ids.indexOf(id);
+        if(i<0||!on(id,k))bad.push(k+" missing "+id); else if(i<last)bad.push(k+" out of order at "+id); else last=i; }); });
       return bad.length?bad.join(", "):true; }));
-  ok("and the blocks a multi-character turn needs", await pg.evaluate(()=>
-      ["solo","multi","gm","text"].every(k=>{
-        const t=ptPreset(k);
-        return t.indexOf("{{call//others_present//full}}")>-1
-            && t.indexOf("{{call//response_target//full}}")>-1
-            && t.indexOf("{{call//latest_arcs//full}}")>-1
-            && t.indexOf("{{call//watching_now//full}}")>-1; })));
-  ok("a typed text takes the FORMAT block, never the spoken three-channel rules",
-     await pg.evaluate(()=>{
-      const t=ptPreset("text");
-      return t.indexOf("{{call//format//full}}")>-1
-          && t.indexOf("{{call//rp_format}}")<0
-          && t.indexOf("{{call//spoken_delivery//full}}")<0
-          && t.indexOf("{{call//head_type_it}}")>-1; }));
-  ok("heat is untouched — it is its own contract", await pg.evaluate(()=>{
-      const t=ptPreset("heat");
-      return t.indexOf("{{call//head_format_heat}}")>-1
-          && t.indexOf("{{call//head_pressure_heat}}")>-1
-          && t.indexOf("{{call//rp_format}}")<0
-          && t.indexOf("{{call//rp_task}}")<0; }));
+  ok("a typed text takes the texting format, never the spoken three-channel rules", await pg.evaluate(()=>{
+      const t=fragCompile("text",ptCondFlags({render_mode:"text"}),{}), s=fragCompile("solo",ptCondFlags({render_mode:"solo"}),{});
+      return (/YOU ARE TEXTING/.test(t)&&!/THE THREE CHANNELS/.test(t)&&/THE THREE CHANNELS/.test(s))?true:"format"; }));
 
   /* v70.3 — ONE SLOT COULD NOT HOLD A HISTORY. The previous decision handed to the reckoning was
      already scoped to the right person, but it lived in a single p.afterHeat that every reckoning

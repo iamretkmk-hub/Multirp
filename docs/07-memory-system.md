@@ -471,3 +471,22 @@ Guilt "…even when nobody knows and they act as if nothing happened". A stored 
 the new one.
 
 Pinned by `tests/memory-format.browser.js`; `tests/payload-faithful.browser.js` checks that only the memory lines changed.
+
+## v150.73 — the reconciler keeps what matters, not everything
+
+Reported from a live afternoon (64 fragments: texts, the kitchen, the bedroom, the shower, the goodbye): the reconciled
+memories retold almost every beat, and the shower never became a memory.
+
+- **Nothing is dropped.** `reconcilePeriodFor` kept the first three answers (`made.slice(0,3)`) after every fragment had
+  gone in and been deleted, so a fourth and fifth answer — the shower and the goodbye — were lost. Every answer is stored
+  now, up to five; anything past five is folded into the fifth.
+- **The reckoning stays its own record.** `memsOfPeriod` leaves out `source:"after_heat"` (the DECISION the "After it is
+  over" prompt writes), like a rumour or a glimpse; folded in, it was retold or lost.
+- **The shipped prompt** (`DEFAULT_MEMRECONCILE`) says what to KEEP (what they would still know a week later: turns,
+  firsts, what was agreed, promised, refused or risked, a name that mattered), what to DROP (the road there, repeated
+  beats, who moved which hand, the order of positions, repeated "left with" notes), one quoted line at most and only when
+  the line was the event, intimacy told plainly and concretely but not stroke by stroke, a length ceiling (about 120
+  words for the biggest thing of the week), up to five memories when one long stretch moved through clearly different
+  scenes, and that only a decision's own subject can reverse it.
+- **Stored copies:** upgraded only while exactly the v150.72 default (`MEMRECONCILE_V150_72_OLD`); an edited copy is the
+  player's (Settings → the reconciler → Reset to default brings the new one).

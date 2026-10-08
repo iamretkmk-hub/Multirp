@@ -19,6 +19,9 @@
    it built them from the classic templates, and both fixtures were written that way.)
    v150.66 — the fixtures' "classic:" payloads are no longer compared: the classic layout and the reply templates are gone, a
    reply is its fragments. Every fragment payload of both fixtures still is.
+   v150.72 — the compass's id_winning / id_ahead lines and the heat guidance gain "your words stay your own" on purpose: each
+   payload is also built with the v150.71 "Your inner compass" and "Guidance" (FRAG_DEFAULTS_V150_71_OLD), and the lines that
+   differ are allowed in both comparisons and checked to be exactly those (see "[v150.72: only the words change]").
    Run: node tests/payload-faithful.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
@@ -181,6 +184,8 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       return B; };
     // the list this build would compile (fragList: the shipped one, or a copy carrying the situation's rewritten pieces), with the v150.67 memories
     window.__oldMemFrags=()=>fragList().map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_67_OLD[f.id]||f)));
+    // v150.72 — the same list with the v150.71 compass and guidance
+    window.__old72Frags=()=>fragList().map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_71_OLD[f.id]||f)));
     window.__build=(kind,o,dataOnly)=>{
       o=o||{}; const c=base();
       if(kind==="heat")S.heat(c); (o.s||[]).forEach(k=>S[k](c));
@@ -196,7 +201,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       const mk=window.__oldMem?()=>__oldMemBlocks(mk0()):mk0;
       const B=mk();
       if(dataOnly){ const r=dataOnly(B,mk); state.relScope=undefined; state.formatRules=undefined; return r; }
-      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:{}),mk)||[];
+      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:window.__old72?{fragments:__old72Frags()}:{}),mk)||[];
       state.relScope=undefined; state.formatRules=undefined;
       return m.map(x=>"<<"+x.role+">>\n"+x.content).join("\n\n");
     };
@@ -240,6 +245,11 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const all68={gone:new Set(),added:new Set()};
   const diff68=async(k,nm,text)=>{ const old=linesOf(await buildOld(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
     const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all68.gone.add(l)); d.added.forEach(l=>all68.added.add(l)); return d; };
+  // v150.72 — the same, against the v150.71 compass and guidance
+  const buildOld72=async(kind,name)=>pg.evaluate(([k,n])=>{ window.__old72=true; try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.__old72=false; } },[kind,name]);
+  const all72={gone:new Set(),added:new Set()};
+  const diff72=async(k,nm,text)=>{ const old=linesOf(await buildOld72(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all72.gone.add(l)); d.added.forEach(l=>all72.added.add(l)); return d; };
 
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
@@ -272,6 +282,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     if(SITS.indexOf(nm)<0){ lost.push(key+": situation missing"); continue; }
     const text=await build(k,nm), have=new Set(linesOf(text).map(h)); n++;
     const gone=new Set((await diff68(k,nm,text)).gone.map(h));   // v150.70 — the v150.67 memory lines (checked below)
+    (await diff72(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.72 — the v150.71 compass / guidance lines (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
@@ -297,6 +308,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      const text=await build(k,nm), L=linesOf(text), have=new Set(L.map(h)); n64++;
      const was=new Set(G.payloads[key].all), drop=new Set(G.payloads[key].drop); dropped+=drop.size;
      const d68=await diff68(k,nm,text), gone68=new Set(d68.gone.map(h)), added68=new Set(d68.added);   // v150.70 — the memories
+     { const d72=await diff72(k,nm,text); d72.gone.forEach(l=>gone68.add(h(l))); d72.added.forEach(l=>added68.add(l)); }   // v150.72 — the words
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
@@ -317,6 +329,15 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
    const badGone=[...all68.gone].filter(l=>!OLDRE.test(l)), badAdd=[...all68.added].filter(l=>!newLines.has(l)&&!/^\[[^\]]*\| [1-5]\] \S/.test(l));
    ok("the lines that go are the v150.67 memory heading, instruction and numbered entries ("+all68.gone.size+" distinct), and nothing else", all68.gone.size>0&&badGone.length===0, badGone.slice(0,8).join("\n        "));
    ok("the lines that come are the new memory fragments and the one-line entries ("+all68.added.size+" distinct), and nothing else", all68.added.size>0&&badAdd.length===0&&[...all68.added].some(l=>/^\[[a-z ]+ \| 3\] He asked where she had been\.$/.test(l)), badAdd.slice(0,8).join("\n        ")+" | "+[...all68.added].slice(0,6).join(" / "));}
+
+  /* v150.72 — what the words change is those lines, and nothing else: every line the v150.71 compass / guidance sent and the
+     build now does not is an id_winning / id_ahead line; every line the build now adds is one of them saying the want does not
+     hand over her words, or the heat guidance's "your words stay your own". */
+  console.log("\n[v150.72: only the words change]");
+  {const badGone=[...all72.gone].filter(l=>!/^Right now your want (?:has won over|is ahead of) your conscience\./.test(l)||/does not hand over your words/.test(l));
+   const badAdd=[...all72.added].filter(l=>!(/^Right now your want (?:has won over|is ahead of) your conscience\..* does not hand over your words: you still speak as yourself\. A line someone dictates to you that you would never say, you do not recite — you answer in your own words, or not at all\.$/.test(l))&&!/^Your words stay your own\. Wanting it does not mean saying whatever you are handed: repeating the other's dictated phrasing back is not desire, it is losing yourself\. Choose your own words, or say nothing\.$/.test(l));
+   ok("the lines that go are the v150.71 id_winning / id_ahead lines ("+all72.gone.size+" distinct), and nothing else", all72.gone.size>0&&badGone.length===0, badGone.slice(0,8).join("\n        "));
+   ok("the lines that come are the same with her own words kept, and the heat guidance's ("+all72.added.size+" distinct), and nothing else", all72.added.size>0&&badAdd.length===0&&[...all72.added].some(l=>/^Your words stay your own\./.test(l)), badAdd.slice(0,8).join("\n        "));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};

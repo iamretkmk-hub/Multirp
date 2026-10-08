@@ -1753,3 +1753,58 @@ They are read from the speaker's stored pick (`charEmotion`), so they are empty 
 before the first pick. Wrap them so an empty value drops the sentence: `{{if tone}}Right now you feel {{tone}}.{{endif}}` — an
 empty value is false in `{{if}}`, the same as in a condition. In Debug → Readable a printed decision value is red
 (`PT_DECISION_VALUES`); the markers never reach the sent text.
+
+## v150.72 — a heat scene keeps the person
+
+A live export: a married woman in bed with the player, heat going off between two scene clips (one act to the next) with the
+two of them still together. Four things went wrong at once, and each has its own fix.
+
+**The reckoning ran mid-sex.** `runAfterHeat` fired on every transition of heat to off, and `_afterHeatFor`'s "is the other one
+still here" read `presentCast`, where the player never is — so with the player it always wrote "They have gone. It is still the
+same part of the day and you are on your own with it." Now:
+
+- `_heatStillWith(chat, p, withWho)` decides "still together": the player is with the character while the character is in the
+  player's scene (`inSceneIds` — the same place and the same area); another character, while both are in the player's scene,
+  or (the player gone elsewhere) both at the same place on the world map (`resolveWorldPositions`). `whenNow` uses it, so a
+  reckoning taken with them together says "You are still in the room with them."
+- While a character is still with the person the heat was with, `runAfterHeat` reckons nothing: the beats stay unreckoned
+  (`_afterHeatMid` does not move) and `chat._afterHeatPending` = `{day, period}` marks one as owed. Who it was with is fixed
+  when heat goes off (`chat._afterHeatWith`), so the reckoning after they part is still about them; a person already reckoned
+  in a pass that left another waiting is in `chat._afterHeatDone`. All three are durable chat keys.
+- `afterHeatCatchUp(chat)` takes an owed reckoning on the next tick: after every turn (`postTurn`), when someone leaves
+  (`applyPresence`), after a move (`moveToSub`, `travelTo`), on a day roll and at End Day. It runs when they have separated, or
+  — once the part of the day the run ended in is over — as the period-change safety net does (`runAfterHeat` with the day and
+  period stamps), even with them still together. Never while heat is back on with them together (the next clip), never while a
+  heat beat is being written. Once only, as before: the marker moves when everyone owed has been reckoned.
+
+**The reckoning had no conscience.** It now gets, in its `ask` part after WHEN THIS IS BEING DECIDED, a WHAT IS AT STAKE FOR YOU
+block (`_afterHeatStakes`): whether a spouse or partner is on record (`_partnerTies`, the `has_partner` rule — "You are not
+free: Sami — husband. What happened with Emre was not with them."), the people they answer to (`_answerToLines`), the plans it
+puts at risk (`_plansAtRisk`), where their conscience stood (the last ego level and emotion picked, `charDecisions`), and the
+open or secret matters they carry (`memWeighNow`, status open / secret). `DEFAULT_AFTER_HEAT` gains one rule
+(`AFTER_HEAT_RULE_V150_72`): someone not free who did this behind a partner's back does not conclude that guilt does not apply
+— the conclusion can be defiant, but the cost is in it (fear of being found out, what it does at home tonight).
+
+**The emotion pick anchored on itself.** `feeling_earlier_in_this_scene` carried the last pick with its ego level ("Desire
+(intense), id winning"), and every later pick repeated it. It now reads "Desire (intense) a few lines ago; it may have moved
+since" — no ego level. The ego question (`x_ego_pick`) gains `EGO_PICK_RULE_V150_72`: someone not free, doing this behind that
+partner's back, rarely has the want silence conscience completely, even in the middle of it — id_ahead and torn stay live
+during the act, and Guilt, Shame or Fear can sit beside Desire; the want can still win (id_winning is not forbidden).
+
+**Wanting it did not keep her words.** She recited, word for word, degrading lines the player dictated. The compass options
+`id_winning` and `id_ahead` keep "you go on", and add that the want winning (or ahead) does not hand over her words: she still
+speaks as herself, and a line someone dictates that she would never say, she does not recite — she answers in her own words or
+not at all. The heat guidance (fragment "Guidance", heat path, and the `heat_guidance` piece) adds under WANTING IT AND HATING IT:
+"Your words stay your own. Wanting it does not mean saying whatever you are handed: repeating the other's dictated phrasing back
+is not desire, it is losing yourself. Choose your own words, or say nothing."
+
+**Upgrades never clobber an edit.** A saved fragment list gets the new compass and guidance only while each is still exactly its
+v150.71 default (`FRAG_SHIPPED_ADDS` "v150.72.words", against `FRAG_DEFAULTS_V150_71_OLD`). A stored `afterHeatPrompt` or
+`x_ego_pick` (global or a story's own) is upgraded only while it is still exactly the v150.71 default — the new default without
+the new line; a copy edited in any way is the player's. Everything else in the reply payload is unchanged
+(`tests/payload-faithful.browser.js` checks the only lines that differ are these).
+
+Two things in the same export are the player's own saved text and were left alone: an immediate-feelings text whose argument
+wording escalates every turn under Desire (wrap it with `{{if not emotion = Desire}}…{{endif}}`, v150.71's values), and a
+pregnancy tracker line "You are ovulating" with no meaning attached (say what it means to her in the tracker's wording).
+Tests: `tests/heat-reckoning.browser.js`.

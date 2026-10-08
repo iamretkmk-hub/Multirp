@@ -677,6 +677,11 @@ per-person record first and fall back. A decision is still never shown to anyone
 The reckoning is also told **which moment it is being taken in** — still in the room with them, just
 after they have gone, or later with the day moved on. Same night, three different decisions.
 
+(v150.72 — the reckoning no longer runs while the two are still together: heat going off between scene clips leaves it owed
+until they separate or the part of the day ends, the player counts as present while the character is in the player's scene,
+and the reckoning gets the conscience state — not free, who they answer to, plans at risk, the last ego, open or secret
+matters. See doc 05, "v150.72 — a heat scene keeps the person".)
+
 ## v70.4 — the character-quest loop closes
 
 **The designer could not see what was already being chased.** `charQuestGen` was asked whether this

@@ -211,10 +211,14 @@ const {chromium}=require('playwright');
     return {solo:g("solo",all),multi:g("multi",{s:["apart","limits"],targetId:"p_b",targetName:"Berk"}),gm:g("gm",{s:["guest","wants2"]}),text:g("text",all),heat:g("heat",all),
       heatLast:g("heat",{s:["lastbeat","trackersOwn"]}),changed:g("solo",{s:["changed"]}),bar:g("solo",{s:["bar"]}),aside:g("solo",{s:["motiveAside","asks"]}),hostile:g("multi",{s:["intentHostile","asks"],targetId:"p_b",targetName:"Berk"}),
       cont:g("solo",{s:["cont"]}),player:g("solo",{})}; });
-  ok("solo: the task, the world, the identity sheet with its likes and live goals, the ties with what was found out",
+  /* v150.65 — one relationship sheet: nothing "found out" beside it (what play learns is in each entry), and the one answered
+     (the player here) is not in the ties: their whole entry is in "What you know of them" */
+  ok("solo: the task, the world, the identity sheet with its likes and live goals, the ties without the one answered, whose entry is with them",
     /^<<system>>\nYou are Ayla\.\n\n# TASK\nYou live as Ayla/.test(P.solo)&&/# UNIVERSE SETTING\nA rainy port town/.test(P.solo)&&/# THIS IS WHO YOU ARE\n\n<backstory>Grew up by the docks\.<\/backstory>/.test(P.solo)
     &&/<what_you_like>What you like and dislike[^\n]*\n    Likes: strong tea, the harbour at dawn\n    Pet peeves: being rushed\n  <\/what_you_like>/.test(P.solo)&&!/how_you_behave/.test(P.solo)&&/<goals_and_ambitions>\n    What you are actually after[^\n]*\n    - Get the shop keys/.test(P.solo)
-    &&/<wardrobe>What you usually wear \([^)]*\): A green raincoat\.<\/wardrobe>/.test(P.solo)&&/# WHO THESE PEOPLE ARE TO YOU[\s\S]*What you have found out about them since[^\n]*\n- Berk — has stopped answering the phone\n\n• \[Emre — neighbour\]/.test(P.solo), P.solo.slice(0,1800));
+    &&/<wardrobe>What you usually wear \([^)]*\): A green raincoat\.<\/wardrobe>/.test(P.solo)&&/# WHO THESE PEOPLE ARE TO YOU\n[^\n]*\n\n• \[Berk — my older brother\] \[here now\]\n  Berk raised her after their father left\./.test(P.solo)
+    &&!/found out about them|stopped answering the phone|• \[Emre/.test(P.solo)
+    &&/<what_they_are_to_you>What Emre is to you, in your own words: neighbour\.\nEmre lives across the hall\.\nThat, and what Emre shows and says in front of you/.test(P.solo), P.solo.slice(0,1800));
   ok("solo: the scene in her own home, privacy with Berk and Deniz nearby, plans by group, the limits, the four consistency notes",
     /# SCENE RIGHT NOW\n+This is your live situation\.[\s\S]*CURRENT DAY: Day 3, Evening\n\n⚠️ YOUR CURRENT LOCATION: Ayla's Flat — specifically the Kitchen\. THIS IS WHERE YOU ARE RIGHT NOW\. ⚠️\n\nThis place is YOUR home/.test(P.solo)
     &&/SUB-AREAS of Ayla's Flat: Entrance; Kitchen; Balcony\./.test(P.solo)&&/# PRIVACY — WHO CAN HEAR YOU\n+PRIVACY: you are NOT alone with Emre\. Others are in the room[^\n]*: Berk — my older brother\./.test(P.solo)

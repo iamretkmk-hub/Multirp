@@ -527,8 +527,10 @@ blocks as a spoken turn, only the format rules differ (doc 05).
    v146.1: started by `endDayBackground` itself, at once and bounded to the day marker, so a day end
    queued behind another never flushes the next day's arc under the older day.
 2. `reconcileCalendarDay` → 3. `reconcileQuestsForDay`
-4. `writeDayDiaries` (∥ `runDailyRelationships` — slow axes over the day snapshot)
-5. `reEvaluateRelationshipsForDay` (regenerate factual sheets for pairs whose axes moved)
+4. `writeDayDiaries` (∥ `runDailyRelationships` — slow axes over the day snapshot; since v150.65 also what each
+   character learned, written into that person's relationship entry — see below)
+5. `reEvaluateRelationshipsForDay` (regenerate factual sheets for pairs whose axes moved; v150.65: entries play wrote
+   into are handed to the generator to carry, and the text it replaces goes into the entry's history)
 6. `runGossipPropagation` → 7. `maybeWorldPulse({dayEnd:true})` (settle still-due plans)
 8. `runPeriodEngines(…, endPeriod, {dayEnd:true})` — char quests, goal pursuit, offstage tasks,
    intents (form for the last stretch + tick)
@@ -556,6 +558,38 @@ Every pass reads the ending chat's world — its cast, places, setting and playe
 ⚠️ `endDayBackground` resolves the universe as **both** id string and object (`uid`/`uniObj`)
 because half the passes expect each — passing the wrong shape silently no-ops a pass (this
 killed the char-quest pipeline once, v24.4).
+
+### v150.65 — the daily relationship read writes what was learned into the entry
+
+`evalRelationship` (one pair; `evalRelationshipsBatch` reads a character's people in one call and applies each answer
+through it) used to return a `social_fact` per person, kept in `persona.socialFacts` and sent beside the sheet as "What you
+have found out about them since". It returns **`relationship`** instead: the whole relationship entry for that person, and
+only when the day taught something durable (field left out = the entry is kept as it is).
+
+- **What it is told** (`relPrompt` / `DEFAULT_REL`, section 3 "WHAT THEY LEARNED GOES INTO THE RELATIONSHIP", plus the
+  read's own message): keep the foundation (the kinship or role, the shared history, what the author wrote); add what was
+  learned ("she told you her sister only ever says 'I'm fine' before the line goes dead"); leave out anything tied to a time
+  (an invitation, a plan, "next week" — the calendar keeps those); second person; one paragraph, at most ~700 characters.
+  A stored copy of the v150.64 default is refreshed (`_refreshPipe`, marker "WHAT THEY LEARNED GOES INTO THE
+  RELATIONSHIP"). The token room is at least 600 (per person in the batch, up to 4800).
+- **What is stored** (`relApplyLearned`): the text as given, with an opening that names the character turned into "You",
+  a sentence pinned to a relative time dropped (`_relDropDated`, the net under the rule), bounded to `REL_ENTRY_MAX`
+  (700). Only a different text replaces the entry; the replaced text goes into `relationships[id].history` (`{text, day}`,
+  the last `REL_HISTORY_KEEP` = 3), and `learnedDay` marks the entry as written by play. Works toward the player
+  (`__user__`) and for someone with no entry yet (one is made, with no tie). Unlike the day's feeling (`o.desc`, per
+  chat), this is the persona's own sheet, as the social facts were.
+- **Undo**: the character editor's "Who they know" shows each entry's current text, "Updated from play, day N", and
+  **Undo last update** while there is history (`relUndoLearned`: the newest previous text comes back; with none left the
+  mark goes too). Saved at once.
+- **Regeneration** (`generateRelationshipsFor`, manual or `reEvaluateRelationshipsForDay`): every entry with `learnedDay`
+  is handed to the generator ("WHAT … HAS LEARNED IN PLAY — carry every durable thing in each into the new entry"), and in
+  the merge the text it replaces is pushed onto that entry's history (`regen: true`) with `learnedDay` kept, so a
+  regeneration that drops something is one "Undo last update" away.
+- **The old social facts** (migration): an entry left in `persona.socialFacts` for a pair is handed to that pair's next read
+  as **LEARNED EARLIER**, to be folded in; when an entry comes back the fact is deleted (and the store with its last one).
+  If no entry comes back it waits for the next read. Nothing writes `socialFacts` any more; `socialFactOf` is the tolerant
+  reader (an old card's `{text,day}` or a bare string); a universe reset still clears it. Pinned by
+  `tests/relationship-sheet.browser.js`.
 
 ## Universe memory
 

@@ -71,7 +71,7 @@ an empty block renders nothing.
 | `world` | The universe's `setting` text. Universal. |
 | `format` | Formatting contract (`*narration*`, `_thoughts_`, `"dialogue"`) **+ the player's story language**. Swapped for the text/heat format in those payloads. |
 | `your_bio` ⚠️ | The identity sheet of the ONE character speaking: identity, backstory, personality, behavior, the **maintained** goals & ambitions list, appearance, wardrobe, where they live. See "v30.3 — one maintained want-list" below. |
-| `relationships` | **(v150.39: dynamic — see "Dynamic relationships" below; the social-graph note is gone.)** Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. **(!)** Full prose only for the player and whoever is actually present; everyone else collapses to a `Name — tie` list under `rel_elsewhere`. The block keeps *every* tie on purpose (you don't forget your daughter because she isn't in the room) — but a live two-person scene was spending ~1,300 tokens on nine people, ~700 of it paragraphs about seven who could not be spoken to. The tie is what stops a bond being played as a stranger and it survives; the paragraph only earns its place for someone in front of you. A tie-less entry falls back to a trimmed clause of its prose. |
+| `relationships` | **(v150.39: dynamic — see "Dynamic relationships" below; the social-graph note is gone. v150.65: the facts group is gone too — what play learns is written into each entry — and in the fragments the one answered is in `response_target` instead; see "v150.65 — one relationship sheet".)** Full relationship sheet, in three labelled groups: the author's hand-written `socialGraph` note, the facts play has since revealed (`socialFacts`, one per person, headed by `rel_learned`), then the structured ties. Ordered player → whoever is `[here now]` → the rest by name. **(!)** Full prose only for the player and whoever is actually present; everyone else collapses to a `Name — tie` list under `rel_elsewhere`. The block keeps *every* tie on purpose (you don't forget your daughter because she isn't in the room) — but a live two-person scene was spending ~1,300 tokens on nine people, ~700 of it paragraphs about seven who could not be spoken to. The tie is what stops a bond being played as a stranger and it survives; the paragraph only earns its place for someone in front of you. A tie-less entry falls back to a trimmed clause of its prose. |
 | `scenario` | The character's scenario, when set. |
 | `others_present` | Who else is within earshot + the "only these people exist" footer. |
 | `response_target` ⚠️ | **The person this turn is aimed at** — player *or* another character — with their backstory and appearance. |
@@ -1166,7 +1166,8 @@ returns each person with the reason they are included:
   marked `[not here — being talked about]`.
 
 Anyone else stays out of the payload. What play has learned about people (`socialFacts`) rides only
-with the people carried. `B._relInclude` records who was included and why.
+with the people carried. `B._relInclude` records who was included and why. (v150.65: what play learns is in each
+person's own entry, and the one answered carries theirs with them — see "v150.65 — one relationship sheet".)
 
 **Setting.** Settings → "How much of the relationship sheet each reply carries" has two values:
 `dynamic` (the default) or `everyone`, which sends every tie every reply. Stored `present` / `brief`
@@ -1485,3 +1486,58 @@ the classic layout) and checks that every line the v150.63 build sent is still s
 `tests/fixtures/payload-v150.63.json` (one hash per distinct line, written by the same script against the v150.63 build) —
 except the removed lines it names (the quiet wants and the two old compass lines); and that the feelings arrive once, in
 their places.
+
+## v150.65 — one relationship sheet
+
+From a reply payload where the ties carried two lists about the same people: "THINGS YOU LEARNED ABOUT THESE PEOPLE" (Emre —
+"…has now been invited to your table next week"; Duygu — "the one who insisted Emre be invited… so you should be the one to
+make the call") above the sheet that said who Emre and Duygu are. The learned list was a second, unedited record that piled
+plans beside the ties, and the person being answered was described in the ties, away from the section about them.
+
+**What was found out is gone from the payload.** "What you have found out about them since" (`rel_learned`, data
+`rel_learned_raw`, from `persona.socialFacts`) is no longer built — fragments, the classic block, the classic templates.
+`rel_learned_raw` stays in `RAW_DATA_KEYS`, never filled, so an edited ties fragment that still calls it gets nothing there
+(its paragraph drops) and no unknown-name report. `rel_learned` left `FRAG_TPL_CARRY`; its `BLOCK_TPL_DEFAULTS` text is kept
+(nothing fills it), like `bio_behave_self`. `socialFactLines` is gone; the state screen and the editor no longer show the facts.
+
+**What they learn updates that person's entry.** The daily relationship read returns `relationship`, the whole updated entry,
+in place of `social_fact` (doc 08, "the daily relationship read writes what was learned into the entry"): the foundation
+kept, the durable things learned added, nothing tied to a time, ~700 characters, only when something durable changed; the
+previous text kept in `relationships[id].history` (3) for **Undo last update** in the character editor's "Who they know"
+list, which now shows each entry's current text. A regeneration is handed the learned entries and keeps the replaced text in
+the history. Old `socialFacts` are fed to the next read for that pair (LEARNED EARLIER), then deleted.
+
+**The one answered carries their whole entry.** In the fragments:
+
+| Fragment | v150.64 | v150.65 |
+|---|---|---|
+| `ties` *Who these people are to you* | heading, intro, what you found out (`rel_learned_raw`), notes, the tie lines, everyone else | heading, intro, notes, the tie lines **without the one answered**, everyone else |
+| `target_sheet` *What you know of them* | `<what_they_are_to_you>What {{target}} is to you, in your own words: {{call//target_tie_raw}}. That, and what…` — the tie of a character answered, nothing for the player | `<what_they_are_to_you>{{if target_tie_raw}}What {{target}} is to you, in your own words: {{call//target_tie_raw}}.\n{{endif}}{{call//target_rel_raw}}\nThat, and what…` — tie and relationship text, player or character |
+
+- `buildCharPromptBlocks` resolves the one answered as the target block does (the player, or the character by id, else by
+  name among those present) and reads their entry with `relTargetEntry` — the same rules as the sheet line it replaces
+  (hidden, deleted, nameless, the character's own duplicate card, a "stranger" tie to the player: nothing — except a stranger
+  player whose entry play has written into, `learnedDay`). `target_tie_raw` is the tie label (now for the player too) and
+  `target_rel_raw` (new in `RAW_DATA_KEYS`) the relationship text — the updated one.
+- `relSheetBlockFull(…, {rawExclude})` leaves that person out of `rel_sheet_raw` only. It is passed only when the payload
+  carries the entry (`_targetEntryReachPayload`: a fragment on that path calls `target_rel_raw`). The classic layout, or an
+  edited "What you know of them" that does not call it, keeps the one answered in the ties, so no relationship is lost. The
+  worded block (`B.relationships`, classic) is unchanged, `_stanceElsewhere` included.
+- Per reply: the next reply's target decides the next payload; in a multi-character scene each speaker's payload uses its own
+  sheet and its own target. Everyone else is chosen as before (`relInjectIds`: player, here, pinned, mentioned).
+- `has_ties` is false when the one answered was the only thing the ties had (no heading over nothing).
+- Feelings: the "not twice" test (`_mostlySame`, v150.64) now also applies to a character answered when their entry moved
+  (their paragraph is printed whole with them).
+- A stranger tie to the player whose entry play wrote into is also no longer hidden in the sheet.
+
+**Migration.** `FRAG_DEFAULTS_V150_64_OLD` keeps the v150.64 `ties` and `target_sheet`; `FRAG_SHIPPED_ADDS` `v150.65.rel`
+replaces each only while it is still that default. An edited `target_sheet` that still holds the shipped
+`<what_they_are_to_you>` paragraph word for word gets the new paragraph in its place (`_fragTargetEntrySwap`); everything else
+the user wrote stays. An edited `ties` is left alone (its learned paragraph drops on its own).
+
+**Faithfulness.** `tests/payload-faithful.browser.js` now also compares against the v150.64 build both ways
+(`tests/fixtures/payload-v150.64.json`, 335 payloads): every line v150.64 sent is still sent except what was found out and,
+in the fragments, the one answered's sheet line and old one-line entry (`removed65`); and every line sent now was sent by
+v150.64 except inside the one answered's `<what_they_are_to_you>`. The v150.63 fixture was rewritten with the same lines left
+out. Its "classic layout" builds had been fragment builds (the situation setup switched fragments back on); they are built
+from the classic templates now, in both fixtures. Pinned by `tests/relationship-sheet.browser.js`.

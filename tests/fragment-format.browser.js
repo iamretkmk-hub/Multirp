@@ -125,7 +125,9 @@ const {chromium}=require('playwright');
     const out={diff:[],n:0,raw:0,left:[]};
     /* v150.60 — last_before, language and privacy have their own text-path wording on purpose; this check holds the rest
        of the payload to v150.56, so those three are compared at their v150.59 wording */
-    const at59=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
+    /* v150.65 — and the ties and "What you know of them" at their v150.64 wording: the one answered moving into their own
+       section (with their whole entry) is on purpose, and is checked in tests/relationship-sheet.browser.js */
+    const at59=FRAG_DEFAULTS.map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_64_OLD[f.id]||FRAG_DEFAULTS_V150_60_OLD[f.id]||f)));
     __cases.forEach(([k,n,o])=>{ const a=__build(k,o,__oldList()), b=__build(k,o,at59); out.n++;
       if(a!==b)out.raw++;
       if(norm(a)!==norm(b)){ const A=norm(a).split("\n"), B=norm(b).split("\n"); let i=0; while(i<A.length&&A[i]===B[i])i++;

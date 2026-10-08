@@ -41,7 +41,10 @@ const {chromium}=require('playwright');
         "p_d":{tie:"wife",relationship:"Duygu is my wife. I cannot bear the disappointment in her eyes, so I avoid her."},
         "p_n":{tie:"daughter",relationship:"Nil is my daughter. I do not know how to talk to a teenage girl."},
         "p_b":{tie:"childhood friend",relationship:"Berker balanced the ledgers. We sit and say nothing important."}};
-      hakan.socialFacts={p_n:{text:"has stopped answering his calls",day:1},p_b:{text:"was let go from the mill",day:1}};
+      /* v150.65 — what play learned is written into the entry itself (learnedDay); an old socialFacts note is never sent */
+      hakan.relationships.p_n.relationship+=" She has stopped answering his calls."; hakan.relationships.p_n.learnedDay=1;
+      hakan.relationships.p_b.relationship+=" You heard he was let go from the mill."; hakan.relationships.p_b.learnedDay=1;
+      hakan.socialFacts={p_d:{text:"old note: sleeps at her sister's",day:1},p_n:{text:"old note: skipped school twice",day:1}};
       const chat=curChat(); chat.presentIds=["p_h","p_e"]; chat.emo={};
       chat.messages=[{mid:"h1",role:"user",content:'"Long day?"',present:["p_h","p_e"]}]; markChatDirty(chat);
       return {chat,hakan};
@@ -58,7 +61,7 @@ const {chromium}=require('playwright');
   ok("the wife is pinned by default, so she goes though she is not here", /cannot bear the disappointment/.test(D.rel)&&/Duygu — wife\] \[not here right now\]/.test(D.rel), D.rel);
   ok("an absent daughter and old friend nobody is talking about stay out", !/teenage girl/.test(D.rel)&&!/Berker/.test(D.rel), D.rel);
   ok("the social graph never reaches the block", !/Nil is my daughter\. Emre is my oldest friend/.test(D.rel)&&!/brother in exhaustion/.test(D.rel), D.rel);
-  ok("what play learned rides only with the people carried", !/stopped answering/.test(D.rel)&&!/let go from the mill/.test(D.rel), D.rel);
+  ok("what play learned rides only with the people carried (in their entries); an old social-fact note never, even for the wife carried", !/stopped answering/.test(D.rel)&&!/let go from the mill/.test(D.rel)&&!/old note/.test(D.rel)&&/cannot bear the disappointment/.test(D.rel), D.rel);
   ok("why each one is there is recorded", JSON.stringify(D.inc)===JSON.stringify([["__user__","player"],["p_e","here"],["p_d","pinned"]]), JSON.stringify(D.inc));
 
   console.log("\n[pinning]");
@@ -67,7 +70,7 @@ const {chromium}=require('playwright');
     hakan.relationships.p_n.pinned=true; const on=__blk().rel;
     return {off,on}; });
   ok("unpinning the wife leaves her out", !/cannot bear the disappointment/.test(P.off), P.off);
-  ok("pinning the daughter brings her in, with what play learned about her", /teenage girl/.test(P.on)&&/stopped answering his calls/.test(P.on), P.on);
+  ok("pinning the daughter brings her in, with what play learned about her (in her entry, not an old note)", /teenage girl/.test(P.on)&&/stopped answering his calls/.test(P.on)&&!/old note/.test(P.on), P.on);
 
   console.log("\n[being talked about]");
   const M=await pg.evaluate(()=>{ const {chat}=__setup();
@@ -157,7 +160,10 @@ const {chromium}=require('playwright');
       const st=_emoStakeState(curChat(),bu,"__user__");
       const who=JSON.stringify(st.people_they_answer_to);
       const pins=["p_ha","p_bk","p_ba","p_ay"].map(id=>relPinned(bu,id));
-      return (who==='["Burak — husband"]'&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
+      /* v150.64 made each person answered to a line of how they stand ("Burak — husband | Burak is your husband. | How Burcu
+         feels…", _answerToLines): the husband, and only him */
+      const _w=st.people_they_answer_to||[];
+      return (_w.length===1&&/^Burak — husband\b/.test(_w[0])&&JSON.stringify(pins)==="[false,false,true,false]")?true:who+" "+JSON.stringify(pins); }));
 
   ok("(v150.48) 'son of my best friend' is known through the friend, not one's own son; 'friend of the family' is still a friend", await pg.evaluate(()=>{
       const r=["son of my best friend","Son of best friend","daughter of the Brandts","friend of the family","son","best friend"].map(t=>relTieKind(t,""));

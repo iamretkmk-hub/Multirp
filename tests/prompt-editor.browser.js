@@ -544,7 +544,9 @@ const ROOT=path.resolve(__dirname,'..');
       const first=P.snaps().length, noEffect=!P.ALL.effect;
       /* the author applies an edit, and the scenes are played again: a later run with the new wording in its payload */
       const it=P.findItem("frag:style_header"), old=P.itemVal(it), line=old.split("\n").find(l=>l.trim().length>20).trim();
-      P.setVal(it,old.replace(line,"PE-NEW-OPENING "+line)); APPLIED["pe-eff"]={t:Date.now(),item:"frag:style_header",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
+      P.setVal(it,old.replace(line,"PE-NEW-OPENING "+line)); /* the edit is AFTER run 1's snapshot (effectInput takes edits with t > prev.at): in the same millisecond as the snapshot
+         it would not count as "in between" (a CI-only failure) */
+      APPLIED["pe-eff"]={t:Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).at||0)+1),item:"frag:style_header",find:line,replace:"PE-NEW-OPENING "+line}; lsSet("applied",APPLIED);
       /* the later run is LATER than run 1's snapshot: on a fast machine Date.now() here can be the very millisecond the
          snapshot took as its id, and an equal id is not "earlier", so nothing would be compared (a CI-only failure) */
       const _later=Math.max(Date.now(),((P.snaps().slice(-1)[0]||{}).id||0)+1);

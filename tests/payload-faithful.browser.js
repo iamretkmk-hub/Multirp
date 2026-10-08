@@ -268,6 +268,10 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
    await pg.close(); pg=await (await b.newContext({viewport:{width:412,height:915}})).newPage(); pg.on('pageerror',e=>errs.push(e.message));
    await boot();
    let n64=0, lost64=[], extra=[], dropped=0;
+   /* the shipped base instruction, format rules and narration shape, and the format rules the "fmt" / "fmtHead" situations
+      above set (filled for Ayla, as the reply fills them) */
+   const own67=await pg.evaluate(()=>[up("baseInstruction")||"",_stripLangSection(up("formatRules")||""),BLOCK_TPL_DEFAULTS.narr_shape||"",
+     "Write in first person. Keep it short, Ayla.","# MY RULES\nWrite in first person."].join("\n"));
    const keys64=fragKeys(G.payloads);
    for(const key of keys64){
      const [k,nm]=key.split("|");
@@ -277,10 +281,12 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
+     // … or from v150.67's options: the Settings base instruction, format rules and the narration shape (no fragment sent them)
+     linesOf(own67).forEach(l=>block.add(l));
      L.forEach(l=>{ if(!was.has(h(l))&&!block.has(l))extra.push(key+" new line: "+l.slice(0,120)); });
    }
    ok("in "+n64+" payloads, every line v150.64 sent is still sent, except what was found out and the one answered's sheet line and old entry line ("+dropped+")", n64===keys64.length&&n64>=290&&lost64.length===0&&dropped>0, lost64.slice(0,10).join("\n        "));
-   ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you>", extra.length===0, extra.slice(0,10).join("\n        "));}
+   ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you> and v150.67's base instruction / format rules", extra.length===0, extra.slice(0,10).join("\n        "));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};

@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
   const C=(kind,flags,asks)=>pg.evaluate(a=>fragCompile(a[0],ptCondFlags(a[1]||{}),a[2]||{}),[kind,flags,asks]);
 
   console.log("\n[the shipped fragments]");
-  ok("forty-four fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said; v150.64: + how you feel about them, + what your body is doing; v150.66: + how long the text sat), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===44&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
+  ok("forty-five fragments (v150.48: + the spoken limits; v150.57: + what you know of them; v150.58: + what you already said; v150.64: + how you feel about them, + what your body is doing; v150.66: + how long the text sat; v150.74: + a photo you were asked for), every one with an id, a name, a segment and paths", await pg.evaluate(()=>FRAG_DEFAULTS.length===45&&FRAG_DEFAULTS.every(f=>f.id&&f.name&&(f.seg==="head"||f.seg==="tail")&&Array.isArray(f.paths)&&f.paths.length)));
   // v150.59 — the heading, the intro and the data in one box: the "Your ties" option, injected when there are ties (has_ties)
   ok("a header and its body are one box (ties: heading, the user's intro, the data)", await pg.evaluate(()=>{ const f=FRAG_DEFAULTS.find(x=>x.id==="ties"), o=(f.options||[]).find(x=>x.id==="ties");
       return (o&&o.code==="has_ties"&&/^# WHO THESE PEOPLE ARE TO YOU\nThese are your established ties/.test(o.text)&&/\{\{call\/\/rel_sheet_raw\}\}/.test(o.text)) ? true : JSON.stringify(f); }));

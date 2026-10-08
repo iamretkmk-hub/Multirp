@@ -169,6 +169,7 @@ const {chromium}=require('playwright');
         "period","day","next",    // v150.53 — x_clock_moved: the story clock, filled by _clockQuestion
         "item",                   // v150.55 — x_status_*: the item being judged, filled by runStatusCheck
         "desc",                   // v150.74 — x_img_selfie: their own description of the photo, filled by selfieImage
+        "what",                   // v150.76 — x_img_pose_shows: what the chosen pose picture shows, filled by poseShowsLine
         "bodies"]);               // v150.21 — x_body_block: each person's Body field, filled by bodyBlock                 // v150.18 — x_img_pose_roster: who replaces which grey figure, filled by editPrompt                // v150.17 — x_vid_motion_ref: the reference video's @token, filled by animateScene / sceneVideo // v150.12 — x_img_type_changed: the two scene types and the clothing to keep, filled by illustrate                    // v150.5 — x_img_edit_roster_*: the number of the scene picture, filled by editPrompt
       const bad=[];
       Object.keys(X_ENGINE_PROMPTS).forEach(k=>{

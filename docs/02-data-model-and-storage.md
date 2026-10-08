@@ -128,11 +128,14 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
   interject,     // pressure points / hooks — read by GM & Scene Writer only
   socialGraph,   // v150.39: no longer shown, edited or sent. Kept only as a seed: a card whose ties exist only
                  // here gets them generated once on its first reply (relSeedMigrate). Never overwritten.
-  relationships: { [id]: {tie, relationship, pinned?} },  // the structured ties; pinned = "Always include"
-                 // (v150.39; unset = pinned only for a spouse). Kept across a regeneration.
-  socialFacts: { [targetId]: {text, day} },  // v30.3: ONE durable fact per person, REWRITTEN in
-                 // place by the daily relationship pass. Replaces socialGraphAuto, an append-only
-                 // blob that grew a line a day and was cleared by a one-time migration.
+  relationships: { [id]: {tie, relationship, pinned?, learnedDay?, history?} },  // the structured ties; pinned =
+                 // "Always include" (v150.39; unset = pinned only for a spouse). Kept across a regeneration.
+                 // v150.65: the daily relationship read writes what was learned into `relationship` (learnedDay = the
+                 // day it last did); history = the last 3 previous texts [{text, day, regen?}] for "Undo last update".
+  socialFacts: { [targetId]: {text, day} },  // v30.3–v150.64: ONE durable fact per person, rewritten by the daily
+                 // pass. v150.65: retired — nothing writes it; an entry left from an older build is handed to the
+                 // next daily read for that pair (LEARNED EARLIER), folded into the relationship, then deleted.
+                 // Kept as is on import/export; a universe reset clears it.
   relGen,        // AI-generated factual tie sheet (re-run at End Day when bonds shift)
   visitLocs, schedule/whereabouts,      // daily placement inputs
   temp,          // true = auto-created mid-story, card pending

@@ -8,28 +8,51 @@
    against the v150.63 build:
        SM_FAITH_WRITE=1 SM_FAITH_INDEX=<v150.63 index.html> node tests/payload-faithful.browser.js
    The situations are the ones tests/fragment-wording.browser.js builds (same setup, copied), plus the feelings.
+   v150.65 — ONE RELATIONSHIP SHEET. Two more changes on purpose (REMOVED_65): "What you have found out about them since" and
+   its lines are gone from every payload, and, in the fragments, the one answered leaves the ties (their sheet line) and their
+   old one-line <what_they_are_to_you> is rewritten to carry the whole entry. The v150.63 fixture was rewritten by the same
+   command with those left out as well. And against the v150.64 build both ways (tests/fixtures/payload-v150.64.json: every
+   line's hash, and which of them REMOVED_65 drops): every v150.64 line is still sent except those, and every line sent now
+   was sent by v150.64 except inside the one answered's <what_they_are_to_you>. Written by
+       SM_FAITH_WRITE=64 SM_FAITH_INDEX=<v150.64 index.html> node tests/payload-faithful.browser.js
+   (Also v150.65: the "classic layout" builds were fragment builds, because the situation setup switched fragments back on;
+   it now builds them from the classic templates (window.__classic: templates on, fragments off), and both fixtures were
+   written that way.)
    Run: node tests/payload-faithful.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
 const FIX=path.resolve(__dirname,'fixtures','payload-v150.63.json');
+const FIX64=path.resolve(__dirname,'fixtures','payload-v150.64.json');
 const INDEX=process.env.SM_FAITH_INDEX||path.resolve(__dirname,'..','index.html');
-const WRITE=!!process.env.SM_FAITH_WRITE;
+const WRITE=process.env.SM_FAITH_WRITE||"";
 // lines v150.64 removes on purpose: the quiet wants, and the two compass lines it rewrote
 const REMOVED=[/what_you_quietly_want|^Privately, you (?:are working toward|are set on|want something out of)/,
   /^Right now your want has won over your conscience\. You know what it costs and you go anyway/,
   /^Right now your want is ahead of your conscience\. You are finding reasons, and the reasons are getting easier\.$/];
+/* lines v150.65 removes or moves on purpose. Everywhere: what was found out (its heading and its one line here). In the
+   fragments, for a reply with a target on record (tId): the target's own sheet line ("• [Emre — neighbour]") — their
+   paragraph goes with them into <what_they_are_to_you> — and that block's old one-line form. Nothing else. */
+const removed65=(l,classic,tId,tName)=>{
+  if(/^What you have found out about them since\b/.test(l)||/^- (?:Berk — )?has stopped answering the phone$/.test(l))return true;
+  if(classic||!tId)return false;
+  if(l==="• ["+tName+"]"||l.indexOf("• ["+tName+" — ")===0)return true;
+  return /^<what_they_are_to_you>What .+ is to you, in your own words: .+\. That, and what .+ is not yours to know\.<\/what_they_are_to_you>$/.test(l);
+};
 const norm=l=>String(l).replace(/\s+/g," ").trim();
 const h=s=>{ let x=0x811c9dc5; for(let i=0;i<s.length;i++){ x^=s.charCodeAt(i); x=Math.imul(x,0x01000193)>>>0; } return x.toString(36); };
 const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
 (async()=>{
   const b=await chromium.launch({executablePath:process.env.SM_CHROME||'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
-  const pg=await b.newPage({viewport:{width:412,height:915}});
+  let pg=await b.newPage({viewport:{width:412,height:915}});
   const errs=[]; pg.on('pageerror',e=>errs.push(e.message));
+  /* v150.65 — the page and the situations, as a function: the comparison against v150.64 runs on a fresh page, in the order
+     it was written in (a text payload's "[here now]" reads the day's placement, which the builds before it leave on the chat) */
+  let pass=0,fail=0;
+  const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x===undefined?c:x).slice(0,1200));} };
+  const boot=async()=>{
   await pg.goto('file://'+INDEX); await pg.waitForTimeout(2400);
   await pg.evaluate(()=>{ if(typeof finishOnboard==='function'&&!store.get(K.onboarded,false)) finishOnboard(); });
   await pg.waitForTimeout(800);
-  let pass=0,fail=0;
-  const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x===undefined?c:x).slice(0,1200));} };
 
   await pg.evaluate(()=>{
     const uni=state.universes[0];
@@ -47,7 +70,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
         {id:"p_c",name:"Cem",universeId:uni.id,personality:"Cem is away.",look:{},style:"x"},
         {id:"p_d",name:"Deniz",universeId:uni.id,personality:"Deniz is quiet.",look:{},style:"y"}];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
-      state.payloadTplOn=false; state.fragOn=true; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
+      state.payloadTplOn=!!window.__classic; state.fragOn=!window.__classic; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
       state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};
@@ -193,17 +216,34 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       c.rel[relDirKey("p_a","__user__")]=o; state.personas[0].relationships.__user__.relationship="Emre lives across the hallway; you see him nearly every single morning."; };
     __S.relConsidered=c=>{ state.relOn=true; const o=relObj(c,"p_a","__user__"); o.desc=""; o.trust=50; o.affection=45; o.familiarity=40; c.rel[relDirKey("p_a","__user__")]=o; };
   });
+  };
+  await boot();
   const SITS=await pg.evaluate(()=>__SIT.map(x=>x[0]));
   const KINDS=["solo","multi","gm","text","heat"];
   const build=async(kind,name,classic)=>pg.evaluate(([k,n,cl])=>{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1];
-      if(cl)state.fragOn=false; try{ return __build(k,o); } finally{ state.fragOn=true; } },[kind,name,!!classic]);
+      window.__classic=!!cl; try{ return __build(k,o); } finally{ window.__classic=false; state.fragOn=true; } },[kind,name,!!classic]);
   const CLASSIC=["player","rich","intent_warm","intent_away","wants2","live_goals","relon","all"];
 
+  // who each situation answers (null when the target is nobody on record), for removed65
+  const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
+  const rm65=(l,classic,n)=>removed65(l,classic,TGT[n][0],TGT[n][1]);
+
+  if(WRITE==="64"){
+    const out={version:"v150.64",note:"per payload: all = one FNV-1a hash per distinct line (whitespace collapsed); drop = those removed65 in tests/payload-faithful.browser.js leaves out",payloads:{}};
+    const put=(key,L,classic,n)=>{ out.payloads[key]={all:L.map(h),drop:L.filter(l=>rm65(l,classic,n)).map(h)}; };
+    for(const k of KINDS)for(const n of SITS)put(k+"|"+n,linesOf(await build(k,n)),false,n);
+    for(const k of KINDS)for(const n of CLASSIC)put("classic:"+k+"|"+n,linesOf(await build(k,n,true)),true,n);
+    fs.writeFileSync(FIX64,JSON.stringify(out));
+    console.log("wrote "+FIX64+" — "+Object.keys(out.payloads).length+" payloads");
+    await b.close(); process.exit(0);
+  }
   if(WRITE){
-    const out={version:"v150.63",note:"one FNV-1a hash per distinct line (whitespace collapsed); lines matching REMOVED in tests/payload-faithful.browser.js left out",payloads:{},removed:{}};
-    for(const k of KINDS)for(const n of SITS){ const L=linesOf(await build(k,n)); out.payloads[k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))).map(h);
-      const rm=L.filter(l=>REMOVED.some(r=>r.test(l))).length; if(rm)out.removed[k+"|"+n]=rm; }
-    for(const k of KINDS)for(const n of CLASSIC){ const L=linesOf(await build(k,n,true)); out.payloads["classic:"+k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))).map(h); }
+    const out={version:"v150.63",note:"one FNV-1a hash per distinct line (whitespace collapsed); lines matching REMOVED (v150.64) or removed65 (v150.65) in tests/payload-faithful.browser.js left out",payloads:{},removed:{},removed65:{}};
+    for(const k of KINDS)for(const n of SITS){ const L=linesOf(await build(k,n)); out.payloads[k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))&&!rm65(l,false,n)).map(h);
+      const rm=L.filter(l=>REMOVED.some(r=>r.test(l))).length; if(rm)out.removed[k+"|"+n]=rm;
+      const r5=L.filter(l=>rm65(l,false,n)).length; if(r5)out.removed65[k+"|"+n]=r5; }
+    for(const k of KINDS)for(const n of CLASSIC){ const L=linesOf(await build(k,n,true)); out.payloads["classic:"+k+"|"+n]=L.filter(l=>!REMOVED.some(r=>r.test(l))&&!rm65(l,true,n)).map(h);
+      const r5=L.filter(l=>rm65(l,true,n)).length; if(r5)out.removed65["classic:"+k+"|"+n]=r5; }
     fs.writeFileSync(FIX,JSON.stringify(out));
     console.log("wrote "+FIX+" — "+Object.keys(out.payloads).length+" payloads");
     await b.close(); process.exit(0);
@@ -221,12 +261,33 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
   ok("in "+n+" payloads (every path × "+SITS.length+" situations, and the classic layout in "+CLASSIC.length+"), every line v150.63 sent is still sent", n>=300&&lost.length===0, lost.slice(0,10).join("\n        "));
   ok("the only lines left out of the comparison are the removed ones ("+removedSeen+" of them: the quiet wants and the two old compass lines)", removedSeen>0);
+  {let r5=0; Object.keys(F.removed65||{}).forEach(k=>{ r5+=F.removed65[k]; });
+   ok("and v150.65's ("+r5+": what was found out, and the one answered's sheet line and old one-line entry)", r5>0&&F.removed65["solo|learned"]===3&&F.removed65["solo|player"]===1&&F.removed65["multi|char"]===2, JSON.stringify(F.removed65).slice(0,300));}
+
+  console.log("\n[against v150.64, both ways: only what was found out goes, and the one answered's entry moves]");
+  {const G=JSON.parse(fs.readFileSync(FIX64,"utf8"));
+   // a fresh page, as when the fixture was written (see boot)
+   await pg.close(); pg=await (await b.newContext({viewport:{width:412,height:915}})).newPage(); pg.on('pageerror',e=>errs.push(e.message));
+   await boot();
+   let n64=0, lost64=[], extra=[], dropped=0;
+   for(const key of Object.keys(G.payloads)){
+     const classic=key.indexOf("classic:")===0, [k,nm]=key.replace(/^classic:/,"").split("|");
+     if(SITS.indexOf(nm)<0){ lost64.push(key+": situation missing"); continue; }
+     const text=await build(k,nm,classic), L=linesOf(text), have=new Set(L.map(h)); n64++;
+     const was=new Set(G.payloads[key].all), drop=new Set(G.payloads[key].drop); dropped+=drop.size;
+     G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x))lost64.push(key+" lost a line ("+x+")"); });
+     // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
+     const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m&&!classic)linesOf(m[0]).forEach(l=>block.add(l)); }
+     L.forEach(l=>{ if(!was.has(h(l))&&!block.has(l))extra.push(key+" new line: "+l.slice(0,120)); });
+   }
+   ok("in "+n64+" payloads, every line v150.64 sent is still sent, except what was found out and the one answered's sheet line and old entry line ("+dropped+")", n64>=300&&lost64.length===0&&dropped>0, lost64.slice(0,10).join("\n        "));
+   ok("and every line sent now was sent by v150.64, except the one answered's entry in <what_they_are_to_you>", extra.length===0, extra.slice(0,10).join("\n        "));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};
     ["solo","multi","gm","text","heat"].forEach(k=>["wants2","live_goals","intent_away","all"].forEach(n=>{ const t=__build(k,(__SIT.find(x=>x[0]===n)||[0,{}])[1]);
       if(/what_you_quietly_want|Privately, you are set on|Privately, you want something out of|Privately, you are working toward/.test(t))r[k+"|"+n]=true; }));
-    state.fragOn=false; const cl=__build("solo",(__SIT.find(x=>x[0]==="wants2")||[0,{}])[1]); state.fragOn=true;
+    window.__classic=true; const cl=__build("solo",(__SIT.find(x=>x[0]==="wants2")||[0,{}])[1]); window.__classic=false; state.fragOn=true;
     return {left:Object.keys(r),classic:/what_you_quietly_want/.test(cl)}; });
   ok("no quiet want reaches any reply, on any path, fragments or the classic layout", R.left.length===0&&!R.classic, JSON.stringify(R));
 
@@ -244,9 +305,13 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     &&G.solo.indexOf("# WHAT YOUR BODY IS DOING")>G.solo.indexOf("(history)")&&(G.solo.indexOf("# YOUR INNER COMPASS")<0||G.solo.indexOf("# WHAT YOUR BODY IS DOING")<G.solo.indexOf("# YOUR INNER COMPASS")), (G.solo.match(/# WHAT YOUR BODY[\s\S]{0,900}/)||[""])[0]);
   ok("on heat and text too", /# WHAT YOU HAVE COME TO FEEL ABOUT Emre/.test(G.heat)&&/# WHAT YOUR BODY IS DOING THIS SECOND/.test(G.heat)&&/# WHAT YOU HAVE COME TO FEEL ABOUT Emre/.test(G.text)&&/# WHAT YOUR BODY IS DOING THIS SECOND/.test(G.text));
   ok("each sent once: the view and the note appear one time each", (G.solo.match(/She has never forgiven him/g)||[]).length===1&&(G.solo.match(/Keep answering him, but stand further away/g)||[]).length===1);
-  ok("a character answered: their stance is the feelings block, and their tie paragraph is not printed a second time in the ties",
-    /# WHAT YOU HAVE COME TO FEEL ABOUT Berk[\s\S]*You lean on him more than you admit\./.test(G.char)&&/• \[Berk — my older brother\]/.test(G.char)&&!/Berk raised her after their father left\./.test(G.char),
-    (G.char.match(/# WHO THESE PEOPLE[\s\S]{0,700}/)||[""])[0]);
+  /* v150.65 — the one answered carries their whole entry ("What you know of them"), so a character answered is no longer a line
+     in the ties at all; their stance is the feelings block, and their relationship text is printed once, with them. */
+  ok("a character answered: their stance is the feelings block, their entry is with them once, and they are not in the ties",
+    /# WHAT YOU HAVE COME TO FEEL ABOUT Berk[\s\S]*You lean on him more than you admit\./.test(G.char)&&!/• \[Berk/.test(G.char)
+    &&/<what_they_are_to_you>What Berk is to you, in your own words: my older brother\.\nBerk raised her after their father left\.\nThat, and what Berk shows/.test(G.char)
+    &&(G.char.match(/Berk raised her after their father left\./g)||[]).length===1,
+    (G.char.match(/# WHO THESE PEOPLE[\s\S]{0,700}/)||[""])[0]+"\n…\n"+(G.char.match(/<what_they_are_to_you>[\s\S]{0,300}/)||[""])[0]);
   ok("the player answered, and the settled view says what the tie already says: the tie paragraph stays, the view is not sent again",
     /Emre lives across the hallway; you see him nearly every single morning\./.test(G.same)&&!/LASTING \/ CONSIDERED VIEW/.test(G.same), (G.same.match(/# WHO THESE PEOPLE[\s\S]{0,600}/)||[""])[0]);
   ok("no written view: the considered one, in its own wording", /LASTING \/ CONSIDERED VIEW \(your settled, filtered opinion — governs your behaviour\): you [^\n]+\./.test(G.cons), (G.cons.match(/LASTING[^\n]*/)||[""])[0]);

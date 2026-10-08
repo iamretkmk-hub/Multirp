@@ -8,7 +8,8 @@ A separate page, next to `index.html`, for rewriting StoryMind's prompts away fr
 2. Open `prompt-editor.html` and use **Open prompt export** to load that file. A full backup works too:
    the prompts are lifted out of its `localStorage` copy.
 3. Edit. Every field of every reply fragment (v150.66: a reply is built from its fragments only), the other wording,
-   every registry prompt, every `eng:` engine layout and the model/switch settings are in the list on the left.
+   the decision agents' prompts and the emotion list (v150.74), every other registry prompt, every `eng:` engine layout and
+   the model/switch settings are in the list on the left.
    The dot beside each item tells you its state: violet means your version differs from the shipped
    default, and pink means you edited it in this session.
 4. **Download for StoryMind** writes a file of the same shape. In StoryMind: **Settings › Backup › Import
@@ -31,7 +32,10 @@ The editor does not reimplement payload assembly. It fetches `index.html`, boots
 localStorage or IndexedDB), and gives it:
 
 - an in-memory `localStorage`/`sessionStorage` and a small in-memory IndexedDB (the shim in `#shimSrc`);
-- no network (`fetch`, XHR and WebSocket throw), `chatCompletion` answering `"{}"`;
+- no network of its own (`fetch` is relayed to the editor, which lets through only OpenRouter and NanoGPT while a test runs;
+  XHR and WebSocket throw), `chatCompletion` answering `"{}"` outside a test;
+- (v150.74) every Decisions-API request (`decisionsCall`) handed to the editor's handler, which records it and answers it by
+  the decision mode: off, Claude standing in, or the real API (see "v150.74 — the decision agents" below);
 - a bridge (`#bridgeSrc`) that applies the editor's working pack to `state` live and builds payloads
   through the same calls the reply paths make: `buildSystemPromptBlocks` / `buildCharPromptBlocks`,
   `buildTailBlocks`, `castHistory` + `tagLastForTarget`, `ptBuildMessages`; `buildTextPayload` for the
@@ -46,7 +50,8 @@ The defaults it compares against are read from the running engine (`PROMPT_REGIS
 
 Memory retrieval is replaced by the speaker's own memories (newest six fresh, newest four condensed),
 because the real retrieval costs a model call. (v150.38: the drives writer is gone; the drives block is
-the character's spoken limits, so it is empty unless the story data carries `spokenLimits`.)
+the character's spoken limits, so it is empty unless the story data carries `spokenLimits` — or, since v150.74, a scene's
+decisions filed one.)
 
 **Story data: your story.** **Use my own story…** reads a full backup (best), a roleplay export or a
 universe export (`slimWorld`). It prefers the universe that has Buket in it, and slims it: no pictures,
@@ -687,3 +692,77 @@ them and nothing else of the reply:
 - **Export:** the list goes out as `fragments` (with `fragAdds`), and StoryMind's import accepts it (`PROMPT_PACK_KEYS`).
 
 Pinned by `tests/prompt-editor.browser.js` ("4b — the reply fragments are the items").
+
+## v150.74 — the decision agents
+
+Beside the language models the app asks a **Decisions model** (OpenRouter's Decisions API, docs/06): a state and typed
+questions, answered with probabilities. Before every reply it takes the emotion, its intensity and the id/superego level, and
+answers every question the path's fragments ask (and reads spoken limits, who is being talked about, goals done); after the
+reply, the reply check; during play the strict gates, status checks, trackers, memory relevance and status, the turn router,
+movement, the Gamemaster's judge, the proactive text gate and the picture decisions. These requests are not chat completions,
+so until v150.74 the sandbox answered none of them: every option that needs a decision stayed out, the reply check never
+marked a reply, and the editor built and tested payloads the phone never builds. The editor now covers them end to end.
+
+**In the sandbox.** The bridge replaces `decisionsCall` with its own handler. Each request is recorded — its feature (the
+breaker's name), the registry prompts it read (`DEC_FEATURES` maps each feature to its prompt keys; the ones whose wording is
+in the questions are named), the exact state and questions, and the answers — and answered by the **decision mode**:
+
+| Mode | Who answers |
+|---|---|
+| `or` | StoryMind's own request to the Decisions API, with your OpenRouter key, through the editor's relay (what the phone sends) |
+| `claude` | the editor: Claude answers the typed questions (analyst prompt `decide`), in the API's shape — `{choice, probabilities}` for a choice, `{noul}` for a yes/no; the editor normalises what comes back (`claudeDecide`) |
+| `off` | nobody: the app goes on without the decision, as when a feature is paused |
+
+The model box has a **Decision model** row: auto (Claude while Claude stands in for your model, else the real API when the
+OpenRouter key works, else Claude), the Decisions API, Claude, or off. A live engine run switches every Decisions feature on,
+as it does the engines.
+
+**Builds.** `build` takes `decisions` (the record set by hand: emotion, intensity — its tone is looked up —, id/superego, the
+asks by the key the app stores them under, `q_<fragment>__<option>`), or `decide` (the app's own `emotionEnsure`, with the
+line it would be handed: the player's line, a gamemaster's event, the newest text), and `replyFlags` (the reply check's verdict
+on the speaker's last reply, which the guardrails options read). It returns the record (`decisions`), the requests
+(`decCalls`) and a `carry` — each speaker's last decision record and the spoken limits with their read pointer — which a scene
+passes to its next turn, since a scene is rebuilt every turn. `check` runs the reply check on a scene's last reply.
+`decCase` runs one decision test case (below).
+
+**The list.** A **Decision agents** group: each feature's prompts (out of "Background engines"), then the emotion list, one
+item per emotion's description (`emo:<Emotion>.desc`, the criterion the emotion question reads) and tones
+(`emo:<Emotion>.tones`, what `{{tone}}` prints). The list is exported as `settings.emotions` (JSON; `""` = the shipped one).
+The app's `PROMPT_PACK_KEYS` carries it now, with the Decisions model and its per-feature overrides, every Decisions switch
+(stored `"1"`/`"0"`) and the certainty each acts at (`replyCheckAt`, `gateAt`; `fragAt` already travelled).
+
+**The preview.** Under "This turn", **Decisions**: none (the story's own last answers, if it carries any), set by hand (an
+emotion and intensity, an id/superego level, a yes or no for each question the path's fragments ask, the reply check's flags
+on the speaker's last reply), or **Ask** (the decision model answers this reply's request in the decision mode). The notes
+say which decisions the payload was built with, which options fired by a decision, and show the request. A decision agent's
+prompt previews the request its agent sends: the reply's request from the last reply path previewed, the reply check on the
+speaker's last reply; the others (made during play) show the last one an engine run recorded.
+
+**Roleplay tests.** With **take the decisions** on (default), each reply in a scene is taken as the app takes it: its decisions,
+the payload built with them, the answer, the clean-up, then the reply check on the posted reply, whose flags ride on the line
+into the next payload. Under each reply: what was decided, the check's verdict, and which options a decision sent. The judge
+reads them (`[decided before this reply: …]`) and has a fifth source, **decision**, naming the prompt (`x_emotion_pick`,
+`x_ego_pick`, `emo:<Emotion>.desc`, a fragment's `.ask`, `x_reply_check_*`). The section fixers get the current decision
+prompts when their scenes ran with decisions and edit them for a decision cause; the reconciler merges proposals on one
+decision prompt into one general edit. The estimate counts the decision requests.
+
+**Engine tests.** A live run records each Decisions request among its calls, in its numbering, shaped like a model call (the
+questions and the state as its messages, the answers as its output) and grouped by feature ("Decision · Reply check"). Its
+judge is told it judges a decision agent and gets every prompt the request read; the prompt fixers keep a decision prompt's
+shape (the question, then YES: and NO: lines).
+
+**Decision tests** (a tab of its own). The decision agents tested as what they are, classifiers: `DEC_CASES` are scenes whose
+right answer is known — the reply's decisions (small talk; pressed past a no; a past that never happened; mocked by her
+husband; in bed while married), the reply check (a clean reply; one that writes the player's part; a refusal; the same
+closing dare again; a contradiction), the strict gates (a dinner agreed; a maybe; a promise given; "I'll make a salad") and
+memory relevance (a beach memory at the beach, a work schedule). Each is put to its agent through the app's own function
+(`emotionEnsure`, `runReplyCheck`, `strictGate` with the state the future tracker builds, `memRelevanceJudge`) and scored at
+the threshold the app acts at (`fragAt`, the reply check's, `gateAt`; 0.5 for relevance); a choice is right when it is one of
+the allowed answers, and its probability mass on them is shown. A question that was not asked counts as no. **Analyse the
+misses** (analyst prompt `decfix`) reads every miss with the state it was given, next to the passes and the current text of
+every prompt the cases asked, and proposes edits that keep every pass passing (or says a miss is not the prompt's fault). The
+results travel in Export/Import results.
+
+**Gone.** The scenes' `psyche` passages (the drives writer's output, removed in v150.38) and the editor's drives switches.
+
+Pinned by `tests/prompt-editor-decisions.browser.js`.

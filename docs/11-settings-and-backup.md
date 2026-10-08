@@ -31,7 +31,7 @@ Prompts edited in Settings → Payloads save **instantly** through their own han
 | **Automatic snapshots** | `scheduleAutoBackup`/`doAutoBackup`/`renderAutoBackups`/`restoreAutoBackup` | A **text-only** bundle (no gallery media, v110.1; v150.3: the kept books' text, not their pictures), kept **inside IndexedDB** — the last `AUTO_KEEP` = **6**, ~once/min after changes and when the app goes to the background. v144.1: skipped when nothing changed since the last one (`_dataRev`/`_lsRev`), never started on `pagehide`. Restore goes through `applyBackupBundle`, which snapshots the current state first. |
 | **Roleplay** | `exportRoleplay`/`importRoleplayFile` | Current universe's chats + its memories + the universe & cast (self-contained; static images inlined), and (v150.3) that story's kept book with its pictures, restored on import. |
 | **Universes** | `exportUniverses`/`importUniversesFile` | Worlds + characters, no chats. |
-| **Prompts & settings** | `exportPrompts`/`importPromptsFile` | The prompt pack: prompt overrides + payload layouts/fragments + related settings. Import (v144.1) writes **only** `PROMPT_REGISTRY` keys and `PROMPT_PACK_KEYS`, string values only — a pack cannot set API keys or the embeddings endpoint. |
+| **Prompts & settings** | `exportPrompts`/`importPromptsFile` | The prompt pack: prompt overrides + payload layouts/fragments + related settings (v150.74: also the emotion list, the Decisions model and its overrides, every Decisions switch and the certainty each acts at). Import (v144.1) writes **only** `PROMPT_REGISTRY` keys and `PROMPT_PACK_KEYS`, string values only — a pack cannot set API keys or the embeddings endpoint. |
 
 Dispatch: one hidden `<input type=file>` + `importPick(kind)`/`importDispatch(file)`.
 

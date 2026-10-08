@@ -1,4 +1,4 @@
-/* v150.25 — THE THIRD BACKEND LIST FROM THE PROMPT ANALYSIS, CHECKED AGAINST THE CODE.
+/* v150.74 — THE THIRD BACKEND LIST FROM THE PROMPT ANALYSIS, CHECKED AGAINST THE CODE.
      · the recall block never cuts a memory inside a sentence (v150.24's cap did: "…rather than so…");
      · a plan memory leaves recall once its calendar entry is closed;
      · a text payload carries no outfit (it was the player's scene's, and nobody in a thread can see it);

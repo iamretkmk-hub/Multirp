@@ -1737,3 +1737,19 @@ memory entries the fragments call (`mem_recent_entries`, `mem_distant_entries`, 
 before this" lists oldest first. A saved list gets both while they are the v150.67 default (`v150.68.memories`). The worded blocks
 keep the numbered form for the engine contexts that read them. Details, status and the emotion pick: doc 07, "v150.70 — memories in
 the reply and in the emotion pick".
+
+## v150.71 — the decision's answers as text
+
+The emotion pick's answers are printable values in any fragment text, like `{{player_name}}`:
+
+| Value | What it prints |
+|---|---|
+| `{{emotion}}` | the emotion picked for this turn (Anger, Joy… as in Settings → Emotions) |
+| `{{intensity}}` | `mild`, `clear` or `intense` |
+| `{{tone}}` | the word for that emotion at that intensity (irritated / angry / furious…) |
+| `{{ego}}` | `no_conflict`, `superego_firm`, `superego_ahead`, `torn`, `id_ahead` or `id_winning` |
+
+They are read from the speaker's stored pick (`charEmotion`), so they are empty with the emotion pick off, on a failed request, or
+before the first pick. Wrap them so an empty value drops the sentence: `{{if tone}}Right now you feel {{tone}}.{{endif}}` — an
+empty value is false in `{{if}}`, the same as in a condition. In Debug → Readable a printed decision value is red
+(`PT_DECISION_VALUES`); the markers never reach the sent text.

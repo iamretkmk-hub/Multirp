@@ -178,7 +178,7 @@ const {chromium}=require('playwright');
       order:[reqIdx,photoIdx,textIdx],selfie:ph.selfie||null,img:ph.img||"",bubble,imgEl:!!img,reply:r.reply,
       memTracker:__usr(__call(/^Memory arc tracker/)[0])+(__call(/^Memory arc tracker/)[0]||{msgs:[]}).msgs.map(m=>m.content).join("\n"),
       poseLog:(dbgLog.slice().reverse().find(x=>/pose presets/.test(x.label||""))||{}).result||"",
-      dbgLabels:dbgLog.map(x=>x.label).filter(l=>/Selfie/.test(l)),
+      dbgLabels:dbgLog.map(x=>x.label).filter(l=>/Selfie|^Image generation \(/.test(l)),
       hist:castHistory(r.c,state.personas[0],{textReply:true}).map(m=>m.content).join("\n")};
   });
   ok("the request is a text tagged photoRequest, shown with a camera mark", A.req&&A.req.photoRequest===true&&A.req.content==="show me what you're wearing"&&A.mark===true, JSON.stringify(A.req));
@@ -194,7 +194,14 @@ const {chromium}=require('playwright');
   ok("the image prompt writer gets her own words and the pose block", A.imgWriter.indexOf("I'm standing at the bedroom mirror in my red sundress")>-1&&/POSE REFERENCE/.test(A.imgWriter)&&/THIS PICTURE IS A PHOTO/.test(A.imgWriter), A.imgWriter.slice(0,900));
   ok("her face, then the pose picture last — and nobody else's face", JSON.stringify(A.images)==='["data:image/png;base64,FACE","data:image/png;base64,POSE"]', JSON.stringify(A.images));
   ok("the debug log names the pose picture sent", /pose picture 1 of 1 last/.test(A.poseLog), A.poseLog);
-  ok("debug rows: the pick, the writer, the image prompt writer, the image", ["Selfie pick (Decisions) · Burcu","Selfie image · Burcu"].every(l=>A.dbgLabels.indexOf(l)>-1), JSON.stringify(A.dbgLabels));
+  // v150.77 — one picture, one row: the provider's own "Image generation (…) · <scene type>", no second "Selfie image" row
+  ok("the writer is told a public place is not a home, and a home is one (v150.77)", await pg.evaluate(()=>{
+      const pub=_selfieExposure({loc:{type:"public",name:"Iskenderun"}}), home=_selfieExposure({loc:{type:"home",name:"Burcu's House"}}), none=_selfieExposure({loc:null});
+      const def=X_ENGINE_PROMPTS.x_selfie_writer.def;
+      return (/NOT a home: a public place/.test(pub)&&/not in a bedroom or a home/.test(pub)&&/a home/.test(home)&&!/NOT/.test(home)&&none===""
+        &&/never move the photo to a home, a bedroom or a room you are not in/.test(def))?true:JSON.stringify({pub,home,none}); }));
+  ok("debug rows: the pick, the writer, the image prompt writer, ONE image row", A.dbgLabels.indexOf("Selfie pick (Decisions) · Burcu")>-1
+     &&A.dbgLabels.filter(l=>/^Image generation \(/.test(l)).length===1&&!A.dbgLabels.some(l=>/^Selfie image ·/.test(l)), JSON.stringify(A.dbgLabels));
   ok("on screen: the request, her photo, then her text", A.order[0]>=0&&A.order[0]<A.order[1]&&A.order[1]<A.order[2], JSON.stringify(A.order));
   ok("the photo message stores the scene type and her words", A.selfie&&A.selfie.ruleId==="r_mirror"&&A.selfie.name==="Mirror selfie"&&/bedroom mirror/.test(A.selfie.desc)&&A.img==="data:image/png;base64,OUT", JSON.stringify(A.selfie));
   ok("it is drawn as a photo bubble in the thread", A.imgEl===true, JSON.stringify(A.bubble));

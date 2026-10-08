@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.76</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.77</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4439,7 +4439,7 @@ REJECT: {{char}} does not send a photo now: says no, puts it off, teases, or cha
     hint:"One call to the roleplay model when a character decides to send a photo: in the first person, the photo they take (the pose as they adapt it, where they are, what they have on or that they have nothing on, the framing). It goes to the image prompt writer and into their text after the photo. Supports {{char}} and {{user}}.",
     def:`You are {{char}}. {{user}} asked you for a photo by text, and you are about to take one and send it. The pose you chose is below: what it is, and what you may change about it.
 Write the photo you take, as yourself, in the first person and the present tense, in 2 to 4 sentences: how you do the pose (what you change, and how it becomes yours); exactly where you are (the place, the part of it, what is behind you); what you have on, garment by garment with colours, or that you have nothing on, or what you took off for it; and the framing (a selfie at arm's length, a mirror shot, the phone propped up; how much of you is in it; your expression).
-Stay inside what the pose allows, and inside who you are, where you are and what you are wearing right now. Write only the description: no message to {{user}}, no quotation marks, no explanation.`},
+Stay inside what the pose allows, and inside who you are, where you are and what you are wearing right now. You take it exactly where WHERE YOU ARE says: never move the photo to a home, a bedroom or a room you are not in. In a public place you take it where you plausibly could there — a restroom, a changing room, your car, a quiet corner — or it shows that public place, and it shows only what you would actually do there. Write only the description: no message to {{user}}, no quotation marks, no explanation.`},
   x_img_selfie:{label:"Image writer — a photo sent by text",json:false,
     hint:"Sent to the image prompt writer when a character sends a photo by text, in place of the latest exchange. Placeholders: {{char}}, {{desc}} (their own description of the photo).",
     def:`THIS PICTURE IS A PHOTO {{char}} TAKES ON THEIR OWN PHONE AND SENDS BY TEXT: a selfie, a mirror shot or the phone propped up, as the description says. {{char}} is alone in it; nobody else is in the frame. Their own description of the photo is the authority on the pose, the place, what they have on (or do not) and the framing. Draw exactly that, as a real phone photo:
@@ -41655,6 +41655,15 @@ function _selfieWhere(chat,p){
   if(loc&&loc.description)bits.push((sub?"the wider place: ":"")+String(loc.description).replace(/\s+/g," ").trim());
   return {loc,sub,line,facts:bits.filter(Boolean).join(", ")};
 }
+/* (!) v150.77 — AND WHETHER ANYONE IS AROUND. A live export: she was "at Iskenderun", a town with strangers and staff around
+   her, and the writer put the photo in "my sunlit room in İskenderun" — a bedroom she was not in. The place now says
+   whether it is someone's home or a public place, and the prompt says she stays in it. */
+function _selfieExposure(where){
+  const loc=where&&where.loc; if(!loc)return "";
+  if(loc.type==="home")return "\n(a home — "+(loc.name||"this place")+")";
+  let ex=""; try{ ex=exposureLabel(loc,(Array.isArray(loc.sublocations)&&loc.sublocations.length>1&&where.sub)?areaGossipChance(loc,where.sub.id):locGossipChance(loc)); }catch(e){ ex=""; }
+  return "\n(NOT a home: a public place, with people around"+(ex?" — "+ex:"")+". You are here, not in a bedroom or a home.)";
+}
 // What they have on right now: the scene's change or the outfit table, else what they usually wear.
 function _selfieWearing(chat,p){
   try{ const f=currentOutfit(p,chat); if(f&&f.text&&f.why!=="none")return briefDesc(subUser(String(f.text)),400); }catch(e){}
@@ -41737,7 +41746,7 @@ async function selfieWrite(chat,p,rule,req){
   const usr=`WHO YOU ARE: ${p.name}. ${memPayloadText(p.personality||"",500)}\n\n`
     +`THE POSE YOU CHOSE: ${rule.label||"(unnamed)"}${t?"\n"+t:""}\n\n`
     +`WHAT ${un.toUpperCase()} ASKED FOR: ${w?`"${w}"`:"a photo, with no words about what kind"}\n\n`
-    +`WHERE YOU ARE: ${where.line}${where.facts&&where.facts!==where.line?"\n"+where.facts:""}\n\n`
+    +`WHERE YOU ARE: ${where.line}${where.facts&&where.facts!==where.line?"\n"+where.facts:""}${_selfieExposure(where)}\n\n`
     +`WHAT YOU HAVE ON RIGHT NOW: ${_selfieWearing(chat,p)}\n\n`
     +`TIME: Day ${chat.gameDay||1}, ${chatPeriod(chat)}\n\n`
     +`HOW YOU FEEL: ${_selfieFeeling(chat,p)}\n\n`
@@ -41786,13 +41795,14 @@ async function selfieImage(chat,p,rule,desc){
   const _st=styleTail();
   if(_st&&!finalPrompt.toLowerCase().includes(_st.slice(0,18).toLowerCase()))finalPrompt=finalPrompt.replace(/[\s,]+$/,"")+", "+_st;
   const baseNeg="low quality, blurry, deformed, bad anatomy, extra limbs, watermark, text, signature";
-  const e=dbg("Selfie image · "+p.name,effImgProvider(),effImgModel()||"(provider default)",{sceneType:rule.label||"",prompt:finalPrompt,pictures:_pack?(_pack.urls||[]).length:0});
+  /* (!) v150.77 — ONE PICTURE, ONE ROW. A "Selfie image" row was written here around the provider call, and every
+     provider writes its own "Image generation (…) · <scene type>" row for the same request: a live export read as two
+     generations for one photo. The provider's row is the record (with the prompt and the pictures it was sent). */
   let url="";
   _frameOverride=null;
   try{ url=await _withRefPack(_pack,()=>genImageForRule(rule,finalPrompt,baseNeg)); }
-  catch(err){ dbgDone(e,"error",(err&&err.friendly)||String((err&&err.message)||err)); throw (err&&err.friendly)?err:{friendly:"The image could not be made."}; }
-  if(!url){ dbgDone(e,"error","No picture came back."); throw {friendly:"No picture came back."}; }
-  dbgDone(e,"ok",{url:String(url).slice(0,120)});
+  catch(err){ throw (err&&err.friendly)?err:{friendly:"The image could not be made."}; }
+  if(!url){ throw {friendly:"No picture came back."}; }
   return {url,prompt:finalPrompt,core:_core};
 }
 // The newest photo request in this thread that nothing has answered yet (null when none).

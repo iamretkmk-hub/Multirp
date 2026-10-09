@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.79</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.80</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1466,6 +1466,10 @@
             <button class="btn sec" id="refreshModelsBtn" style="padding:3px 10px" onclick="loadModels(true)"><svg class="ic"><use href="#i-refresh"/></svg> Refresh models</button></div>
           <div class="desc" style="margin:2px 0 0">Every model field on this screen shares this list. Entries are tagged with the service that serves them — set a NanoGPT key above and its catalogue is fetched too.</div>
           <div class="ovr" style="margin:6px 0"><div data-ovr="rp" data-kind="prov"></div></div>
+          <div style="margin-top:8px"><label><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment model <span class="desc" style="display:inline">(optional — while Heat of the moment is on, every roleplay reply uses this model; blank = the Model above)</span></label>
+            <input type="text" id="setHeatModel" list="modelList" placeholder="(the Model above)"></div>
+          <div style="margin-top:8px"><label><svg class="ic"><use href="#i-shield"/></svg> Fallback model <span class="desc" style="display:inline">(optional — when a roleplay or text reply is refused, comes back empty or the model says it cannot continue, that one reply is asked again once with this model; blank = off)</span></label>
+            <input type="text" id="setFallbackModel" list="modelList" placeholder="(off)"></div>
           <div style="margin-top:8px"><label><svg class="ic"><use href="#i-refresh"/></svg> Model rotation <span class="desc" style="display:inline">(optional — comma-separated; each reply uses the next one)</span></label>
             <input type="text" id="setRpRotation" placeholder="e.g. deepseek/deepseek-v4-pro, deepseek/deepseek-v4-flash, anthropic/claude-3.5-sonnet"></div>
           <div class="desc">Leave blank to always use the single Model above. With a list, each roleplay reply rotates to the next model and cycles back to the start — handy for mixing an expensive model with cheaper ones.</div>
@@ -3117,7 +3121,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Character bio generator + auto-character (Stages 5/6)
   bioModel:"sm_biomodel",bioPrompt:"sm_bioprompt",batchBioPrompt:"sm_batchbioprompt",univPrompt:"sm_univprompt",directorAuthor:"sm_directorauthor",genrePackAuthor:"sm_genrepackauthor",ruleCompiler:"sm_rulecompiler",questGen:"sm_questgen",questNext:"sm_questnext",originGen:"sm_origingen",chronicler:"sm_chronicler",styles:"sm_styles",authorModel:"sm_authormodel",promptTuner:"sm_prompttuner",autoCharOn:"sm_autocharon",autoCharDelay:"sm_autochardelay",
   // v21 — previously hidden model selections, all surfaced in Settings → LLM Selection / Image Settings
-  fallbackModel:"sm_fallbackmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
+  fallbackModel:"sm_fallbackmodel",heatModel:"sm_heatmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",   // v150.66 — with payloadLayouts and fragOn: no longer read; kept so an old backup's keys stay known
   payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",dbgView:"sm_dbgview",
@@ -8692,6 +8696,7 @@ function loadState(){
     authorModel:store.raw(K.authorModel,"deepseek/deepseek-v4-pro"),
     // v21 — previously hidden models, now selectable ("" = the fallback chain named in Settings)
     fallbackModel:store.raw(K.fallbackModel,""),
+    heatModel:store.raw(K.heatModel,""),   // v150.80 — the heat-of-the-moment roleplay model (blank: the roleplay model)
     sttFixModel:store.raw(K.sttFixModel,""),
     recapModel:store.raw(K.recapModel,""),
     portraitModel:store.raw(K.portraitModel,""),
@@ -41698,8 +41703,17 @@ async function _replyToText(chat,p,out){
     const msgs=inChatWorld(chat,()=>ptBuildMessages("text",_pl.blocks||{},_hist,{chat,npc:p,targetName:chatUserName(chat)},_pl.rawFn));
     // the newest player text this reply's history holds (built just above, nothing awaited since)
     const _histNewest=textThreadMsgs(chat,p.id).filter(m=>m.role==="user").slice(-1)[0];
-    let reply=await chatCompletion(msgs, rpModel(), {rp:true,dbg:"Text reply — "+p.name});
+    const _tModel=rpModel(), _tOpts={rp:true,dbg:"Text reply — "+p.name};
+    let reply="", _tErr=null;
+    try{ reply=await chatCompletion(msgs, _tModel, _tOpts); }catch(e){ _tErr=e; }
+    // v150.80 — a refused, empty or failed text is asked again once with the fallback model, when one is set
+    if(!(_tErr&&_tErr.stopped)&&(_tErr||!String(reply||"").trim()||looksLikeRefusal(reply))){
+      const fb=await _rpFallbackCall(msgs,_tModel,_tOpts,_tErr?"the request failed":(looksLikeRefusal(reply)?"refused":"empty"));
+      if(fb&&String(fb.text||"").trim()&&!looksLikeRefusal(fb.text)){ reply=fb.text; _tErr=null; }
+    }
+    if(_tErr)throw _tErr;
     _textTyping(p,false);
+    if(looksLikeRefusal(reply)){ toast(p.name+": the model refused this text (set a fallback model in Settings → LLM Selection, or try again)"); return; }
     reply=_cleanTextReply(reply,p.name);
     reply=_dropReprintedTurns({messages:textThreadMsgs(chat,p.id)},reply).trim();   // v150.24 — a text that copied the thread
     if(!reply){ toast(p.name+": no reply (try again)"); return; }
@@ -45562,7 +45576,10 @@ async function runHeatBursts(chat){
 async function generateCharacterReply(chat,p,messages,opts){
   opts=opts||{};
   const wasHeat=!!(chat&&chat._heatBeat);
-  const model=rpModel();
+  /* v150.80 — HEAT HAS ITS OWN MODEL. While Heat of the moment is on (or this is a heat beat), the reply goes to the heat
+     model when one is set (Settings → LLM Selection → Roleplay); rotation is left untouched for those turns. */
+  const _hm=String(state.heatModel||"").trim();
+  const model=(_hm&&(wasHeat||state.heatOn))?_hm:rpModel();
   const rpOpts={rp:true,dbg:opts.dbg||("Roleplay reply · "+p.name)};
   // v27.4 — heat beats are separate messages now, so each one only needs room for ONE
   // dialogue-dense reply, not for the whole run. Never LESS than the user's own setting.
@@ -45571,7 +45588,18 @@ async function generateCharacterReply(chat,p,messages,opts){
     rpOpts.max=Math.max(+state.tokens||4000,900);
     rpOpts.dbg=`Roleplay reply (heat ${bi}/${n}) · `+p.name;
   }
-  let reply=await chatCompletion(messages,model,rpOpts);
+  let reply="", _firstErr=null;
+  try{ reply=await chatCompletion(messages,model,rpOpts); }catch(e){ _firstErr=e; }
+  let _used=model;
+  /* v150.80 — THE FALLBACK MODEL, ASKED BY THE PLAYER. v148.7 took the automatic second call out; it comes back only as an
+     explicit setting: with a fallback model set, a reply that is refused, empty, or fails, is asked again ONCE with that
+     model, and its answer is the reply. Blank (the default) keeps v148.7: the reply is the reply. */
+  {const _bad=r=>!String(r||"").trim()||looksLikeRefusal(r)||_RETRY_META_TERMS.test(String(r||""));
+   if(!(_firstErr&&_firstErr.stopped)&&(_firstErr||_bad(reply))){   // a Stop is the player's, never a reason to ask again
+     const fb=await _rpFallbackCall(messages,model,rpOpts,_firstErr?"the request failed":(looksLikeRefusal(reply)?"refused":"empty"));
+     if(fb&&!_bad(fb.text)){ reply=fb.text; _used=fb.model; _firstErr=null; }
+   }}
+  if(_firstErr)throw _firstErr;
   /* (!) v148.6 — the first answer can be an empty-response RESCUE (chatCompletion's own retry), and a rescue
      can come back as talk about the instructions. There is no earlier reply to keep here, so an unmistakable
      instruction echo reads as empty — the player gets the notice with Retry, never the echo as a line. */
@@ -45583,7 +45611,7 @@ async function generateCharacterReply(chat,p,messages,opts){
      notice with the manual Retry button, which is the player's own choice. */
   try{ noteRumorRaise(chat,p,reply); }catch(e){}   // v28.9 — raising a rumor spends the move
   const refused=looksLikeRefusal(reply);
-  if(refused) return {text:"",raw:reply,refused:true,model};
+  if(refused) return {text:"",raw:reply,refused:true,model:_used};
   if(reply){ const r2=_dropReprintedTurns(chat,reply); if(r2!==reply){ try{ _alog("reply.reprint",p.name+": dropped text reprinted from earlier turns"); }catch(_){} reply=r2; } }
   // strip a leading "Name:" prefix if the model added one (regex-safe); v38.6 — a spoken line never
   // carries the transcript's "(text message)" tag; v62.1 — the channels are repaired before it is
@@ -45592,7 +45620,16 @@ async function generateCharacterReply(chat,p,messages,opts){
   const text=normalizeChannels(
     stripChannelLabel(stripChannelLabel(reply||"").replace(new RegExp("^\\s*"+prefix+"\\s*:\\s*","i"),"")).trim(),
     {heat:wasHeat});
-  return {text:text||"",raw:reply,refused:false,model};
+  return {text:text||"",raw:reply,refused:false,model:_used};
+}
+/* v150.80 — one call to the fallback model for a refused / empty / failed roleplay or text reply. Null when no fallback is set,
+   when it is the model that just answered, or when it fails too. */
+async function _rpFallbackCall(messages,firstModel,opts,why){
+  const fb=String(state.fallbackModel||"").trim();
+  if(!fb||fb===String(firstModel||"").trim())return null;
+  try{ _alog("reply.fallback",(opts&&opts.dbg||"reply")+": "+why+" with "+firstModel+" — asked again with the fallback model "+fb); }catch(_){}
+  try{ const t=await chatCompletion(messages,fb,Object.assign({},opts||{},{dbg:((opts&&opts.dbg)||"Roleplay reply")+" · fallback model"})); return {text:t,model:fb}; }
+  catch(e){ return null; }
 }
 /* v150.24 — a reply cut by the token limit, back to the end of its last finished sentence, beat or quote.
    Left whole when it already ends on one, or when the cut would lose more than half of it. */
@@ -61791,7 +61828,7 @@ function _embRejected(g){
 function embedModelLooksWrong(m){
   const v=String(m||"").trim().toLowerCase(); if(!v)return "";
   if(/-decisions\b|\/decisions\b/.test(v)||v===String(decisionsModel()).toLowerCase())return "it is a Decisions model";
-  const chat=["model","rewriter","memModel","gmModel","mcModel","routerModel","bioModel","recapModel","gossipModel","authorModel","bookModel","callModel","locModel","playerNarrateModel","fallbackModel","sttFixModel"]
+  const chat=["model","rewriter","memModel","gmModel","mcModel","routerModel","bioModel","recapModel","gossipModel","authorModel","bookModel","callModel","locModel","playerNarrateModel","fallbackModel","heatModel","sttFixModel"]
     .map(k=>String(state[k]||"").trim().toLowerCase()).filter(Boolean);
   if(chat.indexOf(v)>=0)return "it is a model you use for chat";
   return "";
@@ -64676,6 +64713,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setAuthorModel'); if(e)e.value=state.authorModel||"";}
   // v21 — surfaced hidden models
   {const e=document.getElementById('setFallbackModel'); if(e)e.value=state.fallbackModel||"";}
+  {const e=document.getElementById('setHeatModel'); if(e)e.value=state.heatModel||"";}
   {const e=document.getElementById('setSttFixModel'); if(e)e.value=state.sttFixModel||"";}
   {const e=document.getElementById('setRecapModel'); if(e)e.value=state.recapModel||"";}
   {const e=document.getElementById('setPortraitModel'); if(e)e.value=state.portraitModel||"";}
@@ -64932,13 +64970,14 @@ function saveSettings(notify){
   {const e=document.getElementById('setAuthorModel'); if(e)state.authorModel=e.value.trim();}
   // v21 — surfaced hidden models
   {const e=document.getElementById('setFallbackModel'); if(e)state.fallbackModel=e.value.trim();}
+  {const e=document.getElementById('setHeatModel'); if(e)state.heatModel=e.value.trim();}
   {const e=document.getElementById('setSttFixModel'); if(e)state.sttFixModel=e.value.trim();}
   {const e=document.getElementById('setRecapModel'); if(e)state.recapModel=e.value.trim();}
   {const e=document.getElementById('setPortraitModel'); if(e)state.portraitModel=e.value.trim();}
   {const e=document.getElementById('setMapImgModel'); if(e)state.mapImgModel=e.value.trim();}
   {const e=document.getElementById('setUniPicModel'); if(e)state.uniPicModel=e.value.trim();}
   {const e=document.getElementById('setUniPicLora'); if(e)state.uniPicLora=e.value.trim();}
-  store.setRaw(K.fallbackModel,state.fallbackModel||"");store.setRaw(K.sttFixModel,state.sttFixModel||"");store.setRaw(K.recapModel,state.recapModel||"");
+  store.setRaw(K.fallbackModel,state.fallbackModel||"");store.setRaw(K.heatModel,state.heatModel||"");store.setRaw(K.sttFixModel,state.sttFixModel||"");store.setRaw(K.recapModel,state.recapModel||"");
   store.setRaw(K.portraitModel,state.portraitModel||"");store.setRaw(K.mapImgModel,state.mapImgModel||"");store.setRaw(K.uniPicModel,state.uniPicModel||"");store.setRaw(K.uniPicLora,state.uniPicLora||"");
   state.autoCharOn=document.getElementById('setAutoCharOn').checked;
   state.autoCharDelay=Math.max(1,+document.getElementById('setAutoCharDelay').value||5);
@@ -65551,7 +65590,7 @@ const PROMPT_PACK_KEYS=[
   "model","rewriter","memModel","gmModel","mcModel","routerModel","bioModel","locModel",
   "authorModel","gossipModel","playerNarrateModel","callModel",
   // v21 — surfaced hidden models + payload placeholder removals
-  "fallbackModel","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
+  "fallbackModel","heatModel","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
   /* v150.66 — the reply fragments travel in a prompt pack (fragAdds with them, so the phone knows which shipped changes the
      list already has). payloadTemplates is the engine templates; payloadLayouts / payloadRemoved are gone (an older pack
      that carries them is imported without them). */

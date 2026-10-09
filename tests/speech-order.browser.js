@@ -18,6 +18,7 @@ const {chromium}=require('playwright');
   const R=await pg.evaluate(()=>{
     const jobs=[], calls=[];
     window._inworldFetchPcm=async(t,v)=>{ calls.push({t,v}); return new Float32Array(4); };
+    window._inworldStream=(t,v)=>{ calls.push({t,v}); return {chunks:[],done:true,wait:()=>Promise.resolve()}; };
     window._enqueueDub=j=>{ jobs.push({kind:j.kind,fx:j.fx}); };
     const ayla={id:"so_a",name:"Ayla",voiceId:"Olivia"};
     const run=(content,opts)=>{ jobs.length=0; calls.length=0;

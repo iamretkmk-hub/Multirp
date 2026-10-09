@@ -264,7 +264,7 @@ const path=require('path'), fs=require('fs');
     return (kind==="timeout"&&cancelled)?true:JSON.stringify({kind,cancelled});
   }));
   ok("Atlas upload, the TTS relay, audio fetch, model list, video download and the update check use fetchWithTimeout",
-    await pg.evaluate(()=>[atlasUpload,_inworldFetchPcm,_fetchDecodeAudio,_fetchCatalogue,toPlayableVideo,serverBuild,fetchMediaBlob]
+    await pg.evaluate(()=>[atlasUpload,_inworldFetchPcm,_inworldStream,_fetchDecodeAudio,_fetchCatalogue,toPlayableVideo,serverBuild,fetchMediaBlob]
       .every(f=>{ const s=String(f).replace(/await fetch\((url|dataUri)\)/g,"");   // (a same-origin blob: read needs no ceiling)
         return /fetchWithTimeout\(/.test(s)&&!/[^.\w]fetch\(/.test(s); })?true:"a raw fetch is left"));
 

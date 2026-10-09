@@ -290,6 +290,24 @@ speaking character (the player's turns: the player's voice) through `_narrSelfFx
 voice's dialogue. Off, the narrator voice reads narration through the existing `_narrFxInto` chain.
 
 What already made voicing faster: every piece is synthesized in parallel the moment the reply lands, and the queue
-only sequences playback. Not done: playback still waits for each clip's full stream (the relay sends PCM chunks, but
-they are collected before the clip plays), and voicing starts only when the whole reply has been written (replies are
-not streamed). Test: `tests/speech-order.browser.js`.
+only sequences playback. Voicing still starts only when the whole reply has been written (replies are not streamed).
+Test: `tests/speech-order.browser.js`.
+
+## v150.86 — a piece plays as it arrives
+
+The relay streams each line as small NDJSON chunks of PCM (each a standalone WAV). The dub queue used to collect the
+whole stream before playing a sample. Now the queue's pieces (narration, dialogue, a text read aloud, the player's
+turn) go through `_inworldStream(text, voiceId)`, which starts the request when the piece is queued and keeps chunks
+as they land (WAV header stripped per chunk; an odd trailing byte carried to the next chunk), and the queue plays them
+with `_playStreamAwait(stream, fx, alive)`:
+
+- the first chunk is scheduled at once; later chunks are gathered to at least 0.1 s and scheduled back to back on the
+  shared context, through the narrator / own-voice effect for narration;
+- a chunk that arrives after the scheduled audio ran out starts 50 ms ahead (`stream.underrun` in the voice log);
+- `_dubActive` holds from the first sample to the last, so the open mic stays gated through a slow chunk;
+- a `_dubKill` (generation bump) or any `_stopDub` (`_dubStopN`) ends a piece still streaming in, and a 250 ms poll
+  catches one waiting on a stalled relay; a failed relay resolves as "no-audio" with its reason, never a wedge;
+- the wall-clock failsafe of `_playBufAwait` (a suspended context never ends a source) applies once the stream is done.
+
+`_inworldFetchPcm` (whole clip) is unchanged for the paths that need the full clip: the storyteller, diary read-aloud,
+lip-sync audio, the voice-sample track and the relay re-voice fallback. Test: `tests/stream-playback.browser.js`.

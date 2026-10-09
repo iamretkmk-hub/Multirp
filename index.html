@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.85</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.86</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -14304,7 +14304,9 @@ function voiceDebugExport(){
     toast("Voice trail exported");
   }catch(e){ toast("Couldn't export"); }
 }
+let _dubStopN=0;   // v150.86 — bumped by every stop, so a piece still streaming in does not carry on after it
 function _stopDub(why){
+  _dubStopN++;
   _alog("stop",`${why||"?"} · ${_audioSnap()}`);
   if(_dubAudio){try{_dubAudio.pause();}catch(_){}_dubAudio.src="";}
   _dubSources.forEach(s=>{try{s.stop();}catch(_){}}); _dubSources=[];
@@ -14376,12 +14378,16 @@ function extractDialogue(s){
    RIFF header. The old code concatenated the chunks and stripped only the FIRST header, leaving
    the rest embedded in the PCM as periodic "clap" transients. The header is now stripped PER
    CHUNK (same as the live-call path). */
-async function _inworldFetchPcm(text,voiceId){
-  const relay=(state.ttsRelay||"").trim().replace(/\/+$/,''); if(!relay) throw{friendly:"No Inworld relay URL set (Settings → Voice Calls)."};
+function _inworldBody(text,voiceId){
   const voice=(voiceId&&voiceId.trim())||state.callVoice||"Ashley";
   const body={ text, voiceId:voice, modelId:(state.callTtsModel||"inworld-tts-2"),
     audioConfig:{audioEncoding:'LINEAR16',sampleRateHertz:24000,speakingRate:Math.max(0.5,Math.min(1.5,+state.ttsSpeed||1))} };
   if(state.callTtsLang) body.language=state.callTtsLang;
+  return body;
+}
+async function _inworldFetchPcm(text,voiceId){
+  const relay=(state.ttsRelay||"").trim().replace(/\/+$/,''); if(!relay) throw{friendly:"No Inworld relay URL set (Settings → Voice Calls)."};
+  const body=_inworldBody(text,voiceId);
   // v146.1 — bounded: 30 s for the relay to answer, 90 s for the whole stream (a stalled relay wedged the dub queue)
   let res;
   try{ res=await fetchWithTimeout(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)},{timeoutMs:30000}); }
@@ -14402,6 +14408,86 @@ async function _inworldFetchPcm(text,voiceId){
   const pcm=new Int16Array(all.buffer,0,all.length>>1);
   const f32=new Float32Array(pcm.length); for(let i=0;i<pcm.length;i++)f32[i]=pcm[i]/0x8000;
   return f32;
+}
+/* (!) v150.86 — PLAYS AS IT ARRIVES. The relay streams a line as a run of small PCM chunks, and the dub queue
+   used to wait for the last of them before a single sample played: a long narration was silent for as long as
+   the whole of it took to make. _inworldStream starts the request the moment a piece is queued (all pieces
+   still synthesize in parallel) and keeps the chunks as they land; _playStreamAwait schedules them back to back
+   on the shared context as they come, so a piece starts with its first chunk. Every chunk is its own WAV (the
+   header is stripped per chunk, as before); an odd trailing byte is carried to the next chunk so no sample is
+   split. After the first, chunks are gathered to at least 0.1 s before they are scheduled, and a chunk that
+   arrives after the scheduled audio ran out starts 50 ms ahead of now (logged as an underrun). */
+function _inworldStream(text,voiceId){
+  const st={chunks:[],done:false,err:null,_subs:[]};
+  const notify=()=>{ const q=st._subs.splice(0); q.forEach(f=>{ try{f();}catch(_){} }); };
+  st.wait=have=>new Promise(r=>{ if(st.done||st.chunks.length>(have||0))return r(); st._subs.push(r); });
+  (async()=>{
+    try{
+      const relay=(state.ttsRelay||"").trim().replace(/\/+$/,''); if(!relay) throw{friendly:"No Inworld relay URL set (Settings → Voice Calls)."};
+      let res;
+      try{ res=await fetchWithTimeout(relay,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_inworldBody(text,voiceId))},{timeoutMs:30000}); }
+      catch(e){ throw{friendly:(e&&e.kind==="timeout")?"The Inworld relay did not answer in time.":"Can't reach the Inworld relay."}; }
+      if(!res.ok) throw{friendly:"Inworld relay error (HTTP "+res.status+")."};
+      const reader=res.body.getReader(), dec=new TextDecoder(), _dl=Date.now()+90000; let buf='', carry=null;
+      const take=line=>{ let j; try{j=JSON.parse(line);}catch(e){return;} const r=j.result||j;
+        if(!(r&&r.audioContent))return;
+        const bin=atob(r.audioContent); let u=new Uint8Array(bin.length);
+        for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);
+        if(u.length>44 && u[0]===0x52&&u[1]===0x49&&u[2]===0x46&&u[3]===0x46) u=u.subarray(44);  // per-chunk WAV header strip
+        if(carry){ const m=new Uint8Array(carry.length+u.length); m.set(carry,0); m.set(u,carry.length); u=m; carry=null; }
+        if(u.length&1){ carry=u.slice(u.length-1); u=u.subarray(0,u.length-1); }
+        if(!u.length)return;
+        const pcm=new Int16Array(u.buffer.slice(u.byteOffset,u.byteOffset+u.length));
+        const f=new Float32Array(pcm.length); for(let i=0;i<pcm.length;i++)f[i]=pcm[i]/0x8000;
+        st.chunks.push(f); notify(); };
+      try{
+        while(true){ const {done,value}=await _readUntil(reader,_dl); if(done)break; buf+=dec.decode(value,{stream:true}); let nl; while((nl=buf.indexOf('\n'))>=0){ const ln=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(ln)take(ln); } }
+      }catch(e){ if(e&&e.kind==="timeout"&&!st.chunks.length) throw{friendly:"The Inworld relay stalled mid-stream."}; }   // a partial clip still plays
+      if(buf.trim())take(buf.trim());
+      if(!st.chunks.length) throw{friendly:"Inworld returned no audio."};
+    }catch(e){ st.err=e; }
+    finally{ st.done=true; notify(); }
+  })();
+  return st;
+}
+function _playStreamAwait(st,fx,alive){
+  if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const ctx=_dubCtx;
+  try{ if(ctx.state==="suspended") ctx.resume().catch(()=>{}); }catch(_){}
+  const out=_fxNode(ctx,fx);
+  const _ep=_dubStopN, _alive=alive||(()=>true);
+  alive=()=>_ep===_dubStopN&&_alive();
+  return new Promise(res=>{
+    let idx=0, at=0, live=0, fine=false, total=0, wall0=0, timer=null, poll=null, started=false;
+    const fin=why=>{ if(fine)return; fine=true; clearTimeout(timer); clearInterval(poll);
+      _alog("stream.done",`${why} · ${total.toFixed(1)}s`);
+      _dubActive=_dubSources.length>0; _dubTailUntil=performance.now()+350; res(why); };
+    const check=()=>{ if(fine)return; if(!alive()){ fin("killed"); return; }
+      if(st.done&&idx>=st.chunks.length&&live===0) fin(started?"ended":"no-audio"); };
+    // DURATION FAILSAFE (as _playBufAwait): a suspended context never ends a source; the wall clock bounds the wait
+    const arm=()=>{ clearTimeout(timer); if(!st.done||!wall0)return;
+      timer=setTimeout(()=>fin("failsafe"),Math.max(0,wall0+total*1000+2000-performance.now())); };
+    const schedule=()=>{
+      let n=0; for(let i=idx;i<st.chunks.length;i++)n+=st.chunks[i].length;
+      if(!n||(started&&n<2400&&!st.done))return;
+      const b=ctx.createBuffer(1,n,24000), d=b.getChannelData(0); let o=0;
+      for(;idx<st.chunks.length;idx++){ d.set(st.chunks[idx],o); o+=st.chunks[idx].length; }
+      const node=ctx.createBufferSource(); node.buffer=b; node.connect(out);
+      const now=ctx.currentTime;
+      if(at<now+0.02){ if(started)_alog("stream.underrun",`${(now-at).toFixed(2)}s`); at=now+0.05; }
+      node.onended=()=>{ live--; _dubSources=_dubSources.filter(x=>x!==node); _dubActive=_dubSources.length>0||!fine; check(); };
+      _dubSources.push(node); _dubActive=true; live++;
+      if(!started){ started=true; wall0=performance.now(); _alog("stream.start",`state=${ctx.state}`); }
+      node.start(at); at+=b.duration; total+=b.duration;
+      arm();
+    };
+    const pump=()=>{ if(fine)return; if(!alive()){ fin("killed"); return; }
+      schedule();
+      if(st.done){ schedule(); arm(); check(); return; }
+      st.wait(st.chunks.length).then(pump); };
+    poll=setInterval(check,250);    // a kill while waiting on a stalled relay still ends the piece
+    pump();
+  });
 }
 function _playBufAwait(buffer,fx){
   if(!_dubCtx) _dubCtx=new (window.AudioContext||window.webkitAudioContext)();
@@ -14637,7 +14723,7 @@ function _enqueueSpokenInOrder(content,who,m,label){
   const fx=(state.narrSelf&&who)?"self":true;
   segs.forEach(sg=>{
     _alog("speak.enqueue",`${sg.kind} · ${label||"?"} · ${sg.text.length}ch`);
-    if(sg.kind==='narr') _enqueueDub({kind:'narr',fx,prep:_inworldFetchPcm(sg.text,narrVoiceFor(who)).then(f32=>({f32})).catch(()=>null)});
+    if(sg.kind==='narr') _enqueueDub({kind:'narr',fx,prep:Promise.resolve({stream:_inworldStream(sg.text,narrVoiceFor(who))})});
     else _enqueueDub({kind:'dial',prep:_dialPrep(sg.text,who),m});
   });
   return segs;
@@ -14675,7 +14761,7 @@ function _dubKillCue(why){
 // Pre-synthesis for a dialogue segment on the CHOSEN engine — started the moment the job is
 // enqueued, so the audio is (usually) ready before its turn comes (kills the narr→dialogue gap).
 function _dialPrep(text,who){
-  return _inworldFetchPcm(text,voiceIdFor(who)).then(f32=>({f32})).catch(()=>null);
+  return Promise.resolve({stream:_inworldStream(text,voiceIdFor(who))});   // v150.86 — plays as it arrives
 }
 async function _pumpDub(){
   if(_dubQBusy) return; const job=_dubQ.shift(); if(!job) return;
@@ -14698,6 +14784,8 @@ async function _pumpDub(){
       // narrator, so car bluetooth treats it as the live call speaking. The <audio> element (media
       // channel — cars mute it during a call) is the LAST resort only.
       if(!gateOn()){ _alog("pump.skip",job.kind+" (voicing switched off mid-prep)"); }
+      else if(a&&a.stream){ const w=await _playStreamAwait(a.stream,job.kind==='narr'&&job.fx,gateOn);
+        if(w==="no-audio")_alog("pump.no-audio",job.kind+" ("+((a.stream.err&&a.stream.err.friendly)||"synthesis failed/empty")+")"); }
       else if(a&&a.buf){ await _playBufAwait(a.buf,job.kind==='narr'&&job.fx); }
       else if(a&&a.f32){ await _playPcmAwait(a.f32,job.fx||false); }
       else if(a&&a.url){

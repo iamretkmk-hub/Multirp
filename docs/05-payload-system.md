@@ -1869,3 +1869,18 @@ people there know about it). What the reply now says about the place:
   universe.
 - Tests: `tests/place-descriptions.browser.js`; `tests/payload-faithful.browser.js` builds each payload as v150.80 sent it
   and allows exactly these lines.
+
+## v150.88 — the closing line names how they feel
+
+The "Respond as" fragment (last in the tail) is mode `one` with two options:
+
+- **With the feeling** (`feeling`, condition `tone`, paths solo / multi / gm / text):
+  `- Respond as {{char}}, {{tone}} right now — it shows in how you speak, never in naming it.` — the intensity-graded word of
+  the emotion pick (`{{tone}}`, e.g. irritated / angry / furious), at the end where it weighs most, with the "never name it"
+  rule repeated so the character shows it rather than announcing it.
+- **Plain** (no condition, every path): `- Respond as {{char}}.` — used when no emotion is picked (the pick off or failed), and
+  always in heat (the heat payload carries the beat and the desire; a feeling repeated at the end kept heat from turning).
+
+Mode `one` sends only the feeling line when both apply; switching the feeling option off leaves the plain line. A saved
+"Respond as" still at its v150.87 default is upgraded (FRAG_SHIPPED_ADDS "v150.88.respond"); an edited one stays. Tests:
+`tests/respond-feeling.browser.js`; `payload-faithful` allows exactly this line's change.

@@ -210,6 +210,9 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
         try{ _fragCarryInto(oc); } finally{ Object.keys(keep).forEach(k=>{ BLOCK_TPL_DEFAULTS[k]=keep[k]; }); }
         return oc; }
       return JSON.parse(JSON.stringify(f)); });
+    // v150.88 — the same list with the v150.87 "Respond as" (the plain line on every path), where this build ships it unedited
+    window.__old88Frags=()=>fragList().map(f=>{ const d=FRAG_DEFAULTS.find(x=>x.id===f.id), o=FRAG_DEFAULTS_V150_87_RESPOND[f.id];
+      return JSON.parse(JSON.stringify((o&&d&&_fragCanon(d)===_fragCanon(f))?o:f)); });
     window.__build=(kind,o,dataOnly)=>{
       o=o||{}; const c=base();
       if(kind==="heat")S.heat(c); (o.s||[]).forEach(k=>S[k](c));
@@ -225,7 +228,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       const mk=window.__oldMem?()=>__oldMemBlocks(mk0()):mk0;
       const B=mk();
       if(dataOnly){ const r=dataOnly(B,mk); state.relScope=undefined; state.formatRules=undefined; return r; }
-      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:window.__old72?{fragments:__old72Frags()}:window.__old81?{fragments:__old81Frags()}:{}),mk)||[];
+      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:window.__old72?{fragments:__old72Frags()}:window.__old81?{fragments:__old81Frags()}:window.__old88?{fragments:__old88Frags()}:{}),mk)||[];
       state.relScope=undefined; state.formatRules=undefined;
       return m.map(x=>"<<"+x.role+">>\n"+x.content).join("\n\n");
     };
@@ -303,6 +306,12 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const all81={gone:new Set(),added:new Set()};
   const diff81=async(k,nm,text)=>{ const old=linesOf(await buildOld81(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
     const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all81.gone.add(l)); d.added.forEach(l=>all81.added.add(l)); return d; };
+  /* v150.88 — as v150.87 sent it: "Respond as" plain on every path */
+  const buildOld88=async(kind,name)=>pg.evaluate(([k,n])=>{ window.__old88=true;
+    try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.__old88=false; } },[kind,name]);
+  const all88={gone:new Set(),added:new Set(),addedOn:new Set()};
+  const diff88=async(k,nm,text)=>{ const old=linesOf(await buildOld88(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all88.gone.add(l)); d.added.forEach(l=>{ all88.added.add(l); all88.addedOn.add(k); }); return d; };
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
   const rm65=(l,classic,n)=>removed65(l,classic,TGT[n][0],TGT[n][1]);
@@ -338,6 +347,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     (await diff74(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.75 — the text path's outfit line (checked below)
     (await diff78(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.79 — goals and threads the scene does not touch (checked below)
     (await diff81(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.81 — the place and who-is-around lines (checked below)
+    (await diff88(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.88 — the plain "Respond as" where the feeling line replaces it (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
@@ -372,6 +382,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      { const d74=await diff74(k,nm,text); d74.gone.forEach(l=>gone68.add(h(l))); d74.added.forEach(l=>added68.add(l)); }   // v150.75 — no outfit in a text
      { const d78=await diff78(k,nm,text); d78.gone.forEach(l=>gone68.add(h(l))); d78.added.forEach(l=>added68.add(l)); }   // v150.79 — only what the scene touches
      { const d81=await diff81(k,nm,text); d81.gone.forEach(l=>gone68.add(h(l))); d81.added.forEach(l=>added68.add(l)); }   // v150.81 — the place lines
+     { const d88=await diff88(k,nm,text); d88.gone.forEach(l=>gone68.add(h(l))); d88.added.forEach(l=>added68.add(l)); }   // v150.88 — "Respond as" with the feeling
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
@@ -431,6 +442,15 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
    ok("the lines that come are who is around, the areas without the earshot sentence (an empty private one marked) and the same lines without 'can hear' ("+A.length+" distinct), and nothing else",
      A.length>0&&badAdd.length===0&&A.some(l=>/^There are no other people nearby\.$/.test(l))&&A.some(l=>/^There are a couple of people far in the distance\.$/.test(l))&&A.some(l=>/— empty, no one is there/.test(l)), badAdd.slice(0,8).join("\n        "));
    ok("no payload of any situation says who can hear, how exposed, or that talk gets out", A.every(l=>!/can hear|How exposed|gets out|word can get around|spreads/i.test(l)));}
+
+  /* v150.88 — what changes is the closing line, and nothing else: where an emotion is picked, on the standard paths, the plain
+     "Respond as {{char}}." becomes the line with the feeling; heat keeps the plain line. Listed exactly. */
+  console.log("\n[v150.88: only the closing line changes]");
+  {const G=[...all88.gone], A=[...all88.added];
+   const badGone=G.filter(l=>!/^- Respond as [^,.]+\.$/.test(l)), badAdd=A.filter(l=>!/^- Respond as [^,]+, [^—]+ right now — it shows in how you speak, never in naming it\.$/.test(l));
+   console.log("        gone ("+G.length+"): "+G.join(" | ")+"\n        added ("+A.length+"): "+A.join(" | "));
+   ok("the line that goes is the plain \"Respond as\" ("+G.length+" distinct), and nothing else", G.length>0&&badGone.length===0, badGone.join(" | "));
+   ok("the line that comes is \"Respond as\" with the feeling ("+A.length+" distinct), never on the heat path, and nothing else", A.length>0&&badAdd.length===0&&!all88.addedOn.has("heat"), JSON.stringify({badAdd,on:[...all88.addedOn]}));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};

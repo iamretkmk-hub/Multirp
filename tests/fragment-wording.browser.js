@@ -372,7 +372,7 @@ const {chromium}=require('playwright');
   ok("ticking leaves the screen where it was: the list's scroll and the page's scroll do not move", await pg.evaluate(async()=>{
       show('settings'); _fragDraft=null; _fragOpen=null; renderFragEditor();
       const card=document.getElementById('fragCard'); if(card&&card.tagName==="DETAILS")card.open=true;
-      const i=FRAG_DEFAULTS.findIndex(f=>f.id==="respond_as"); fragEdOpen(i);
+      const i=FRAG_DEFAULTS.findIndex(f=>f.id==="turkish_check"); fragEdOpen(i);   // v150.88 — a plain fragment near the end of the list (was "Respond as")
       const list=document.getElementById('fragList'); if(!list)return "no #fragList";
       list.scrollTop=Math.max(0,list.scrollHeight-list.clientHeight-200);
       document.getElementById('fragHost').scrollIntoView(); window.scrollBy(0,120);

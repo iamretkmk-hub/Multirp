@@ -67,7 +67,7 @@ const {chromium}=require('playwright');
   console.log("\n[the reproduction, through the editor: the text once on each of its paths]");
   const run=async(label,steps)=>{
     await pg.evaluate(()=>{ __setup(); __openEditor(); });
-    const i=await pg.evaluate(()=>{ const i=_fragDraftGet().findIndex(f=>f.id==="respond_as"); fragEdOpen(i); fragEdOptAdd(i); return i; });
+    const i=await pg.evaluate(()=>{ const i=_fragDraftGet().findIndex(f=>f.id==="decided"); fragEdOpen(i); fragEdOptAdd(i); return i; });   // v150.88 — "Respond as" now chooses one of its own options (mode one); a plain fragment carries the test option
     const fp=i+".o."+(await pg.evaluate(i=>_fragDraftGet()[i].options.length-1,i));
     const host=pg.locator('#fragHost');
     await host.locator(`textarea[data-fp="${fp}.text"]`).fill("ZEBRA RULE: keep it short.");

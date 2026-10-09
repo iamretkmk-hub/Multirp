@@ -193,33 +193,11 @@ const {chromium}=require('playwright');
       opt:(document.getElementById('bookDaySel').options[0]||{}).textContent};
     return r;
   });
-  ok("the menu's Video Book opens the book in video mode", O.open&&O.name==="Video Book"&&O.vb&&O.vidBtn==="none", JSON.stringify(O));
-  ok("prose and clips, no speeches: each passage, then the clip it leads into",
-     JSON.stringify(O.kids)==='["nvDay","nvScene","nvPass","nvFig","nvPass","nvFig","nvPass","nvFig","nvPass","nvScene","nvPass","nvFig","nvTail","nvEnd"]'&&O.clips===4&&O.speech===0&&/4 clips/.test(O.opt), JSON.stringify(O));
-
-  const PL=await pg.evaluate(async()=>{
-    _mcScale=0.02; const said=[], shown=[];
-    const rs=window._mcSay;
-    window._mcSay=async(f32,text,seq,fx)=>{ said.push(text); return rs(f32,text,seq,fx); };
-    openBookPlayer();
-    const t0=Date.now();
-    while(Date.now()-t0<20000){
-      const st=document.getElementById('mcStage'); const h=st?st.innerHTML:"";
-      const k=/<video/.test(h)?"clip":/mcPage/.test(h)?"text":/The end of Day/.test(h)?"end":/mcWhere/.test(h)?"scene":"";
-      if(k&&shown[shown.length-1]!==k)shown.push(k);
-      if(k==="end")break;
-      await new Promise(r=>setTimeout(r,30));
-    }
-    window._mcSay=rs;
-    const prog=document.getElementById('mcProg').textContent;
-    const r={said,shown,prog,vb:document.getElementById('bookPlayer').classList.contains('vb')};
-    closeBookPlayer(); _mcScale=1;
-    return r;
-  });
-  ok("Play reads each passage, then plays its clip: card, text, clip ×3, text, card, text, clip, the end",
-     JSON.stringify(PL.shown)==='["scene","text","clip","text","clip","text","clip","text","scene","text","clip","end"]', JSON.stringify(PL.shown));
-  ok("the passages are what is read", PL.said.length===5&&/^Passage 1:/.test(PL.said[0]), JSON.stringify(PL.said));
-  ok("the counter counts clips", /^4 \/ 4$/.test(PL.prog)&&PL.vb, PL.prog);
+  /* v150.91 — the Video Book is retired: one book. The menu has no Video Book, and anything that still opens it opens the
+     Story Book, where a video scene plays at the point it came on (tests/scene-by-place.browser.js). */
+  ok("v150.91: the Video Book is retired — opening it opens the Story Book", O.open&&O.name==="Story Book"&&!O.vb, JSON.stringify(O));
+  ok("v150.91: and the menu no longer offers it", await pg.evaluate(()=>![...document.querySelectorAll('#chatMenu button')].some(x=>/Video Book/.test(x.textContent))));
+  try{ await pg.evaluate(()=>closeStoryBook()); }catch(_){}
 
   const SB=await pg.evaluate(()=>{ closeStoryBook(); openStoryBook();
     const r={name:document.querySelector('#bookModal .bookName').textContent,vb:document.querySelector('#bookModal .bookWrap').classList.contains('vbMode')};
@@ -227,7 +205,7 @@ const {chromium}=require('playwright');
   ok("the Story Book still opens as the Story Book", SB.name==="Story Book"&&SB.vb===false, JSON.stringify(SB));
   ok("the writer is a registry prompt on the book's payload card", await pg.evaluate(()=>
       !!PROMPT_BY_KEY.x_book_writer&&!!K.x_book_writer&&ENGINE_PAYLOAD_DEFS.some(d=>d.key==="video_book"&&(d.blocks||[]).some(x=>x.promptKey==="x_book_writer"))));
-  ok("a finished clip is the Video Book's trigger", await pg.evaluate(()=>/bookOnMedia\(chat,"video"\)/.test(String(sceneVideo))));
+  ok("v150.91: a finished clip no longer writes a Video Book", await pg.evaluate(()=>/_bkKind\(kind\)==="video"\)return/.test(String(bookOnMedia))));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n  ${pass} passed, ${fail} failed`);

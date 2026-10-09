@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.88</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.89</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2019,6 +2019,10 @@
             <label class="switchLbl"><input type="checkbox" id="setEmbedOn"><span class="sl"></span></label></div>
           <div class="desc">Recall memories by MEANING, not just keywords — each memory is embedded and ranked by vector similarity, using your <b>OpenRouter key</b> (no separate key needed). Off, or if a call fails, retrieval falls back to lexical matching automatically.</div>
           <div class="desc">The embeddings model is picked in <b>2 · LLM Selection → Memory &amp; Daily Engines</b> (blank = openai/text-embedding-3-small). Every embeddings request — and each turn's weighted memory-retrieval ranking — is logged on the <b>Debug</b> page.</div>
+          <div style="height:1px;background:var(--border);margin:10px 0"></div>
+          <div class="kvline"><span>Arc judge (Decisions API)</span>
+            <label class="switchLbl"><input type="checkbox" id="setMemArcDec"><span class="sl"></span></label></div>
+          <div class="desc">After each turn, two yes/no questions decide whether the stretch being remembered has <b>completely ended</b>, or whether <b>something separate began</b>. A memory is cut only then — one for the whole encounter, not one per beat — and the part of the day's memories are merged from fewer, fuller pieces. Off (or when it has no answer): the chat arc tracker, which closes at every resting point.</div>
           <div style="height:1px;background:var(--border);margin:10px 0"></div>
           <div class="kvline"><span>Relevance judge (Decisions API)</span>
             <label class="switchLbl"><input type="checkbox" id="setMemJudgeOn"><span class="sl"></span></label></div>
@@ -3133,7 +3137,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Character bio generator + auto-character (Stages 5/6)
   bioModel:"sm_biomodel",bioPrompt:"sm_bioprompt",batchBioPrompt:"sm_batchbioprompt",univPrompt:"sm_univprompt",directorAuthor:"sm_directorauthor",genrePackAuthor:"sm_genrepackauthor",ruleCompiler:"sm_rulecompiler",questGen:"sm_questgen",questNext:"sm_questnext",originGen:"sm_origingen",chronicler:"sm_chronicler",styles:"sm_styles",authorModel:"sm_authormodel",promptTuner:"sm_prompttuner",autoCharOn:"sm_autocharon",autoCharDelay:"sm_autochardelay",
   // v21 — previously hidden model selections, all surfaced in Settings → LLM Selection / Image Settings
-  fallbackModel:"sm_fallbackmodel",heatModel:"sm_heatmodel",decSplit:"sm_decsplit",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
+  fallbackModel:"sm_fallbackmodel",heatModel:"sm_heatmodel",decSplit:"sm_decsplit",memArcDec:"sm_memarcdec",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",   // v150.66 — with payloadLayouts and fragOn: no longer read; kept so an old backup's keys stay known
   payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",dbgView:"sm_dbgview",
@@ -4282,6 +4286,19 @@ NO: It sounds like {{char}}, including {{char}} being surprised, changing their 
     def:`One of {{char}}'s goals is: "{{text}}". Judge from the scene in the state AND from {{char}}'s own memories in the state (memories_bearing_on_goals, oldest first; when two of them disagree, the newest one is what is true now): is this goal already done, settled or moot?
 YES: The scene or one of those memories shows it happened or was resolved (the thing was done, the call was made, the question was answered, the plan was dropped) — {{user}} saying earlier that it was done counts when {{char}} remembers it — or after what happened it no longer makes sense for {{char}} to want it.
 NO: It is still open: only talked about, promised, half done or not touched; a newer memory says it is open again; or you are unsure.`},
+  /* (!) v150.89 — WHEN A MEMORY ARC ENDS, judged by the Decisions API. The chat tracker was told to close at the first
+     resting point, so a night out became forty fragments and the reconciler glued them back together. An arc now closes only
+     when what was happening has completely ended, or something clearly separate began. */
+  x_mem_arc_over:{label:"Memory arc — has it completely ended?",json:false,
+    hint:"Asked after every turn about the stretch the memory tracker holds open (Settings → Memory → Arc judge). The question, then a YES: line and a NO: line. The stretch so far and the latest lines are in the state. Supports {{user}}.",
+    def:`Look at the stretch in the state (arc_so_far, then the latest lines). Has what was happening in it completely come to an end?
+YES: It is over: the people parted or left, the encounter, conversation or activity reached its end and nothing of it carries on in the latest lines, or the scene moved somewhere else entirely.
+NO: It is still going: a beat landed, a question was answered, there was a lull, a kiss or a climax, a change of position or of room, but the same encounter or conversation between the same people carries on — or you are unsure.`},
+  x_mem_arc_new:{label:"Memory arc — did something separate begin?",json:false,
+    hint:"Asked with the question above. The question, then a YES: line and a NO: line. Supports {{user}}.",
+    def:`Did the latest lines begin something clearly separate from the stretch so far (arc_so_far)?
+YES: A different activity or a different matter with its own weight, other people, or another place, that is not the same encounter or conversation going on.
+NO: The latest lines carry on the same encounter or conversation, react to it, or move it along — including a new topic raised inside the same talk, or a shift from talk to touch between the same people.`},
   /* v150.55 — THE STATUS CHECK. One typed question per open item: open, done, failed or called off. The item's own facts
      are in its question; the lines (or the stretch and its memories) are the state. */
   x_status_promise:{label:"Status check — a promise",json:false,
@@ -8738,7 +8755,8 @@ function loadState(){
     // v21 — previously hidden models, now selectable ("" = the fallback chain named in Settings)
     fallbackModel:store.raw(K.fallbackModel,""),
     heatModel:store.raw(K.heatModel,""),
-    decSplit:store.get(K.decSplit,true),   // v150.87 — the reply's decision topics as separate requests sent together   // v150.80 — the heat-of-the-moment roleplay model (blank: the roleplay model)
+    decSplit:store.get(K.decSplit,true),
+    memArcDec:store.get(K.memArcDec,true),   // v150.89 — memory arcs closed by the Decisions arc judge   // v150.87 — the reply's decision topics as separate requests sent together   // v150.80 — the heat-of-the-moment roleplay model (blank: the roleplay model)
     sttFixModel:store.raw(K.sttFixModel,""),
     recapModel:store.raw(K.recapModel,""),
     portraitModel:store.raw(K.portraitModel,""),
@@ -32077,7 +32095,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"presencePrompt"},
     {kind:"dyn",label:"Recent messages",scope:"chat",desc:"The last few exchanges scanned for entrance/exit language."}]},
   {key:"memory_builder",label:"Memory Builder",desc:"Tracks memory arcs each turn, builds a structured memory when an arc closes, and forms bystander gists for characters who were present but not in the conversation.",blocks:[
-    {kind:"prompt",promptKey:"memEval"},{kind:"prompt",promptKey:"memBuild"},{kind:"prompt",promptKey:"gistBuild"},
+    {kind:"prompt",promptKey:"memEval"},{kind:"prompt",promptKey:"x_mem_arc_over"},{kind:"prompt",promptKey:"x_mem_arc_new"},{kind:"prompt",promptKey:"memBuild"},{kind:"prompt",promptKey:"gistBuild"},
     {kind:"dyn",label:"Scene arc transcript + authoritative location",scope:"chat",desc:"The finished arc's messages; the memory's location is stamped by CODE from the chat's location/sub-area (not by the model)."}]},
   {key:"memory_retrieval",label:"Memory Retrieval",desc:"Per turn: an LLM writes a search query from the current moment and the code-side scorer shortlists candidates. With the relevance judge on (Settings → Memory, v150.29) one Decisions-API request then asks, for every shortlisted memory, whether it bears on this moment, and that probability decides what gets injected; the other facets only break ties. Off, or if the request fails, the scorer alone ranks, as before.",blocks:[
     {kind:"prompt",promptKey:"queryGen"},
@@ -42813,7 +42831,12 @@ async function rememberTextExchange(chat,p){
   const tracked=!!arc.summary;   // v148.4 — see "different" below
   const _closing=arc.summary||"";   // v150.59 — what the arc being closed was about, for the memory writer
   let progress="ongoing",topic="same",summary=arc.summary||"";
-  try{
+  // v150.89 — the Decisions arc judge first; the chat tracker when it is off or has no answer
+  let _dj=null;
+  try{ const tl=m=>`${m.role==="user"?_un:p.name}: ${(m.selfie||m.photoRequest)?textMsgBody(m):stripChannelLabel(String(m.content||""))}`;
+    const part=th.slice(arc.start); _dj=await memArcDecide(chat,part.slice(0,Math.max(0,part.length-6)).map(tl),th.slice(-6).map(tl),"text · "+p.name); }catch(_){ _dj=null; }
+  if(_dj){ progress=_dj.progress; topic=_dj.topic; if(!summary){ const f=th[arc.start]; summary=f?briefDesc(stripChannelLabel(String(f.content||"")),90):"(a text thread)"; } }
+  else try{
     const out=await chatCompletion(
       epSend("memEval",fillTpl(up("memEval"),{open_event:arc.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective()+"\n\n"+_textWhoSaidRule(_un,p.name),
              {}),
@@ -42840,7 +42863,7 @@ async function rememberTextExchange(chat,p){
     if(span.length>=2) await _commitTextArc(chat,p,span,null,{topic:_closing});
     return;
   }
-  if(progress==="finished" || open>=MEM_ARC_CAP){
+  if(progress==="finished" || open>=(_dj?MEM_ARC_CAP_DEC:MEM_ARC_CAP)){
     const span=th.slice(arc.start);
     chat._textArc[p.id]={start:th.length,summary:""}; markChatDirty(chat);
     if(span.length>=2) await _commitTextArc(chat,p,span,null,{topic:summary});
@@ -61571,6 +61594,7 @@ function _memFragKind(m){
   return "";
 }
 let _reconcileBusy={};
+const MEM_RECON_MAX_WORDS=160;   // v150.89 — a reconciled memory longer than this is sent back once (the prompt asks for ≤ ~120)
 async function reconcilePeriodFor(p,day,period,chat){
   if(!p||!state.mem||!state.key)return;
   const key=p.id+"|"+day+"|"+period+"|"+((chat&&chat.id)||"");
@@ -61625,6 +61649,30 @@ async function reconcilePeriodFor(p,day,period,chat){
       try{ console.warn("[memory] reconcile for",p&&p.name,"returned nothing usable — the fragments are kept as they are. Raw:",String(out||"").slice(0,300)); }catch(_){}
       return;                            // nothing usable — leave the originals untouched
     }
+    /* (!) v150.89 — A MERGE THAT KEPT THE TRANSCRIPT IS SENT BACK. A night out came back as one memory of 2,500 words: every
+       fragment, back to back, in order — the prompt's "at most about 120 words" was ignored, and five of those would fill a
+       payload. A memory over MEM_RECON_MAX_WORDS, or an answer as long as most of what went in, goes back once with its
+       length named and the limit; the shorter answer replaces it. If the retry fails, or is not shorter, the first stands. */
+    try{
+      const W=t=>(String(t||"").match(/\S+/g)||[]).length;
+      const inW=frag.reduce((n,m)=>n+W(memText(m)),0), outW=made.reduce((n,x)=>n+W(x&&x.content),0);
+      const glued=inW>=250&&outW>=inW*0.6;
+      const long=made.map((x,i)=>({x,i,w:W(x&&x.content)})).filter(o=>o.w>MEM_RECON_MAX_WORDS||(glued&&o.w>60));
+      if(long.length){
+        const listed2=long.map((o,k)=>`FRAGMENT ${k+1} (${o.x.location||"somewhere"}, ${o.w} words)\n${String(o.x.content||"").trim()}${o.x.feelings?"\nLeft them with: "+o.x.feelings:""}`).join("\n\n");
+        const note=`YOUR FIRST ANSWER KEPT THE TRANSCRIPT: ${long.map((o,k)=>`memory ${k+1} is ${o.w} words`).join(", ")}${glued?` — ${outW} words out of ${inW} that went in`:""}. A memory is what ${p.name} keeps, not the steps: the biggest thing that happened to them this week is at most about 120 words, an ordinary scene two or three sentences. Rewrite ${long.length>1?"each of these":"this"} as ONE memory${long.length>1?" each, in the same order":""}: cut every step, keep every fact (what happened and how it turned, a first time, what was agreed, refused or risked, a name or a line that crossed a line, how it ended, what it may cost).`;
+        const out2=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
+          {data:`WHEN: Day ${day}, ${period}.\n\n${note}\n\n${listed2}`,matters:""}),
+          state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:Math.min(2400,Math.max(fnTok("mem",700),300+260*long.length)),dbg:"Memory reconcile · too long, sent back · "+p.name+" · day "+day+" "+period});
+        const again=_memReconcileList(parseJSON(out2));
+        if(again.length===long.length){
+          long.forEach((o,k)=>{ const nx=again[k]; if(nx&&W(nx.content)>0&&W(nx.content)<o.w){
+            made[o.i]=Object.assign({},o.x,nx,{content:String(nx.content).trim(),people:(Array.isArray(nx.people)&&nx.people.length)?nx.people:o.x.people,tags:(Array.isArray(nx.tags)&&nx.tags.length)?nx.tags:o.x.tags,status:nx.status!==undefined&&nx.status!==""?nx.status:o.x.status}); } });
+        }else if(again.length&&long.length===made.length){
+          const tot=again.reduce((n,x)=>n+W(x&&x.content),0); if(tot>0&&tot<outW){ made.length=0; again.forEach(x=>made.push(x)); }
+        }
+      }
+    }catch(e){ try{ console.warn("[memory] the too-long retry failed — the first answer stands:",e&&e.message||e); }catch(_){} }
     const union=k=>[...new Set(frag.flatMap(m=>Array.isArray(m[k])?m[k]:[]))];
     const topImp=Math.max(...frag.map(m=>+m.importance||0));
     /* (!) v146.1 — and the source lines of the fragments, in the order they were written, like the
@@ -61940,6 +61988,9 @@ const MEM_ARC_CAP=12;   // BACKSTOP: an arc that never cleanly closes commits at
                         // never to split a live beat, tight enough that a stuck tracker costs a handful
                         // of lines rather than a whole scene. A fragment is merged later; a lost middle
                         // is not, so the cheap error is to cut early.
+/* (!) v150.89 — an arc the Decisions judge is holding closes when what was happening has ended, so its backstop is the old
+   40 again: it only catches a judge that never says "over". An arc the chat tracker judged keeps MEM_ARC_CAP. */
+const MEM_ARC_CAP_DEC=40;
 const MEM_ARC_MAX_FAILS=2;   // v144.1 — failed commits an arc is held open for before it is let go (v146.1 — the
                              // third failure lets it go; the check read `fails+1<MAX` and held it open only once)
 
@@ -61951,6 +62002,32 @@ const MEM_ARC_MAX_FAILS=2;   // v144.1 — failed commits an arc is held open fo
    that finds no new dialogue since the last judgement returns without asking the tracker again. */
 const _memBuildQueued=new Set();
 const _memBuildSeen=new WeakMap();   // chat → the dialogue it last judged
+/* (!) v150.89 — THE ARC JUDGE. Two yes/no questions to the Decisions API about the stretch the tracker holds open: has it
+   completely ended (x_mem_arc_over), and did the latest lines begin something separate (x_mem_arc_new). A yes needs
+   MEM_ARC_DEC_AT: unsure is "still going", so arcs are fewer and whole. Returns {progress, topic, p} or null (off, no key,
+   paused, failed) — the caller then asks the chat tracker as before. `arc` = the stretch's lines, `latest` = the last few. */
+const MEM_ARC_DEC_AT=0.7;
+const _memArcBreak=_decBreaker("Memory arc judge","The memory arcs are judged by the chat tracker meanwhile.");
+function memArcDecOn(){ return state.memArcDec!==false; }
+async function memArcDecide(chat,arcLines,latest,label){
+  if(!memArcDecOn()||!_decReady(_memArcBreak))return null;
+  const L=(arcLines||[]).filter(Boolean), lat=(latest||[]).filter(Boolean);
+  if(!lat.length)return null;
+  const cut=t=>String(t||"").replace(/\s+/g," ").trim().slice(0,400);
+  // the stretch so far: its opening and its latest stretch, with how much is left out between them
+  const so=L.length>34?L.slice(0,8).map(cut).concat([`(… ${L.length-34} lines …)`]).concat(L.slice(-26).map(cut)):L.map(cut);
+  const vars={user:chatUserName(chat)||"the player",char:""};
+  const body={model:trackDecModel(),state:{arc_so_far:so.length?so:["(nothing yet)"],arc_length_in_lines:L.length,latest_lines:lat.map(cut)},
+    questions:{arc_over:_decQuestionFrom(fillTpl(up("x_mem_arc_over",chat&&chat.universeId),vars)),arc_new:_decQuestionFrom(fillTpl(up("x_mem_arc_new",chat&&chat.universeId),vars))}};
+  const e=dbg("Memory arc judge"+(label?" · "+label:""),"OpenRouter Decisions",DECISIONS_URL,body);
+  const res=await decisionsCall(_memArcBreak,body,e,10000);
+  if(!res)return null;
+  const over=_decYes(res.answers.arc_over), nw=_decYes(res.answers.arc_new);
+  if(isNaN(over)&&isNaN(nw)){ dbgDone(e,"error",{note:"No usable answer — the chat tracker judges this one.",response:res.answers}); return null; }
+  const out={progress:(!isNaN(over)&&over>=MEM_ARC_DEC_AT)?"finished":"ongoing",topic:(!isNaN(nw)&&nw>=MEM_ARC_DEC_AT)?"different":"same",p:{over,new:nw}};
+  dbgDone(e,"ok",{over,separate:nw,threshold:MEM_ARC_DEC_AT,progress:out.progress,topic:out.topic,usage:res.usage});
+  return out;
+}
 async function maybeBuildMemory(chat){
   // Auto-character bio filling runs regardless of the memory toggle.
   if(state.autoCharOn){ try{ await fillPendingBios(chat); }catch(e){} }
@@ -62004,7 +62081,14 @@ async function _maybeBuildMemoryLocked(chat,q){
   const stampDay=moved?q.day:(chat.gameDay||1), stampPeriod=moved?q.period:chatPeriod(chat);
 
   let progress="ongoing", topic="same", summary=ev.summary||"";
-  try{
+  // v150.89 — the Decisions arc judge first; the chat tracker when it is off or has no answer
+  let _dj=null;
+  try{ const span=msgs.slice(Math.max(0,ev.startIdx||0),arcEnd+1).filter(m=>!(m.role==='system'||m.sysError||m.dayMarker||m.textMsg));
+    const ln=m=>`${m.role==='user'?_u:(m.speaker||(m.narratorEvent?"Narrator":"?"))}: ${m.content}`;
+    _dj=await memArcDecide(chat,span.slice(0,Math.max(0,span.length-recent.length)).map(ln),recent.map(ln)); }catch(_){ _dj=null; }
+  if(_dj){ progress=_dj.progress; topic=_dj.topic;
+    if(!summary){ const f=msgs[Math.max(0,ev.startIdx||0)]; summary=f?briefDesc(String(f.content||""),90):""; } }
+  else try{
     const out=await chatCompletion(inChatWorld(chat,()=>epSend("memEval",fillTpl(up("memEval"),{open_event:ev.summary||"(nothing tracked yet)",exchange})+"\n\n"+engineLangDirective(),{})),mcAgent().model,{fn:"mc",temp:fnTemp("mc",0.1),prov:mcAgent().prov,max:fnTok("mc",120),dbg:"Memory arc tracker"});
     const j=parseJSON(out)||{};
     if(j.progress==="finished"||j.progress==="paused"||j.progress==="ongoing")progress=j.progress;
@@ -62055,7 +62139,7 @@ async function _maybeBuildMemoryLocked(chat,q){
     await close(ev.startIdx||0, arcEnd, null);
     return;
   }
-  if(spanLen>=MEM_ARC_CAP){
+  if(spanLen>=(_dj?MEM_ARC_CAP_DEC:MEM_ARC_CAP)){   // v150.89 — the judge's arcs get the old 40; the chat tracker's stay at 12
     /* SAFETY VALVE: an arc that won't close on its own commits here, then a fresh one opens.
        v52.1 — a "paused" arc used to be exempt from this, which made "paused" the one verdict that
        could grow an arc without any limit at all: a tracker that parked on it held a whole chat in
@@ -65466,6 +65550,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setReplyCheckAt'); if(e)e.value=(state.replyCheckAt!=null?state.replyCheckAt:0.7);}
   {const e=document.getElementById('setReplyCheckModel'); if(e)e.value=state.replyCheckModel||"";}
   {const e=document.getElementById('setMemJudgeOn'); if(e)e.checked=!!state.memJudgeOn;}
+  {const e=document.getElementById('setMemArcDec'); if(e)e.checked=state.memArcDec!==false;}
   {const e=document.getElementById('setMemJudgeModel'); if(e)e.value=state.memJudgeModel||"";}
   {const e=document.getElementById('setMemJudgeMin'); if(e)e.value=(state.memJudgeMin!=null?state.memJudgeMin:0.15);}
   {const e=document.getElementById('setMemWSem'); if(e)e.value=(state.memWSem!=null?state.memWSem:1);}
@@ -65726,6 +65811,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setReplyCheckAt'); if(e){ const v=parseFloat(e.value); state.replyCheckAt=isNaN(v)?0.7:Math.max(0.05,Math.min(1,v)); }}
   {const e=document.getElementById('setReplyCheckModel'); if(e)state.replyCheckModel=e.value.trim();}
   {const e=document.getElementById('setMemJudgeOn'); if(e)state.memJudgeOn=e.checked;}
+  {const e=document.getElementById('setMemArcDec'); if(e){ state.memArcDec=!!e.checked; store.set(K.memArcDec,state.memArcDec); }}
   {const e=document.getElementById('setMemJudgeModel'); if(e)state.memJudgeModel=e.value.trim();}
   {const e=document.getElementById('setMemJudgeMin'); if(e){ const v=parseFloat(e.value); state.memJudgeMin=isNaN(v)?0.15:Math.max(0,Math.min(1,v)); }}
   {const e=document.getElementById('setMemWSem'); if(e)state.memWSem=Math.max(0,+e.value||0);}
@@ -66375,7 +66461,7 @@ const PROMPT_PACK_KEYS=[
   "model","rewriter","memModel","gmModel","mcModel","routerModel","bioModel","locModel",
   "authorModel","gossipModel","playerNarrateModel","callModel",
   // v21 — surfaced hidden models + payload placeholder removals
-  "fallbackModel","heatModel","decSplit","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
+  "fallbackModel","heatModel","decSplit","memArcDec","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
   /* v150.66 — the reply fragments travel in a prompt pack (fragAdds with them, so the phone knows which shipped changes the
      list already has). payloadTemplates is the engine templates; payloadLayouts / payloadRemoved are gone (an older pack
      that carries them is imported without them). */

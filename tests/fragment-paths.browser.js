@@ -45,8 +45,12 @@ const {chromium}=require('playwright');
       const mk=()=>Object.assign({},buildCharPromptBlocks(p,[],inj,null,{chat:c,targetName:"Emre",targetId:"__user__",payloadKind:kind,textMode:kind==="text"}),
         buildTailBlocks({chat:c,selfP:p,selfId:p.id,selfName:p.name,targetName:"Emre",targetId:"__user__",injected:inj,payloadKind:kind,textMode:kind==="text",multi:kind==="multi"}));
       if(kind==="heat")c._heatBeat={n:2,total:5}; else delete c._heatBeat;
-      try{ return (ptBuildMessages(kind,mk(),[{role:"user",content:"(history)"}],{chat:c,npc:p,targetName:"Emre",fragments:list||undefined},mk)||[]).map(m=>m.role+": "+m.content).join("\n"); }
+      try{ return __81((ptBuildMessages(kind,mk(),[{role:"user",content:"(history)"}],{chat:c,npc:p,targetName:"Emre",fragments:list||undefined},mk)||[]).map(m=>m.role+": "+m.content).join("\n")); }
       finally{ delete c._heatBeat; } };
+    /* v150.81 — the scene intro's last line says "Who is around you" where it said "Who can hear you" (what a place looks like, and
+       who is around): the one line of these payloads v150.81 rewords on purpose. Read the same in both, so the comparison is
+       still exactly the v150.69 one; every other line must match. (No place is set here, so nothing else of v150.81 fires.) */
+    window.__81=t=>String(t).split("Who can hear you is covered under PRIVACY below").join("Who is around you is covered under PRIVACY below");
     window.__openEditor=()=>{ _fragDraft=null; _fragOpen=null; show('settings'); renderFragEditor();
       let d=document.getElementById('fragHost'); while(d){ if(d.tagName==="DETAILS")d.open=true; d=d.parentElement; } };
     // the v150.67 shape: the four fragments v150.69 changed, as they were
@@ -56,14 +60,14 @@ const {chromium}=require('playwright');
       ["solo","multi","gm","text","heat"].forEach(k=>B.forEach(cont=>B.forEach(voi=>B.forEach(vm=>B.forEach(st=>B.forEach(hl=>{
         const fl=ptCondFlags({render_mode:k,continuing:cont,voicing:voi,voice_markup:vm,heat_narr:st?"physical":"superego",stalled:st,has_line:hl,has_target:true,heat_last_beat:hl,
           format_rules_raw:true,narr_active:voi,base_instruction_raw:true,emotion:st?"Anger":"Calm",ego:hl?"id_winning":"superego_holding",broke_character:cont,repeated:voi});
-        r[[k,cont,voi,vm,st,hl].join()]=fragCompile(k,fl,{},false,{list}); }))))));
+        r[[k,cont,voi,vm,st,hl].join()]=__81(fragCompile(k,fl,{},false,{list})); }))))));
       return r; };
   });
 
   console.log("\n[the reproduction, through the editor: the text once on each of its paths]");
   const run=async(label,steps)=>{
     await pg.evaluate(()=>{ __setup(); __openEditor(); });
-    const i=await pg.evaluate(()=>{ const i=_fragDraftGet().findIndex(f=>f.id==="respond_as"); fragEdOpen(i); fragEdOptAdd(i); return i; });
+    const i=await pg.evaluate(()=>{ const i=_fragDraftGet().findIndex(f=>f.id==="decided"); fragEdOpen(i); fragEdOptAdd(i); return i; });   // v150.88 — "Respond as" now chooses one of its own options (mode one); a plain fragment carries the test option
     const fp=i+".o."+(await pg.evaluate(i=>_fragDraftGet()[i].options.length-1,i));
     const host=pg.locator('#fragHost');
     await host.locator(`textarea[data-fp="${fp}.text"]`).fill("ZEBRA RULE: keep it short.");
@@ -168,7 +172,7 @@ const {chromium}=require('playwright');
       {id:"o4",name:"asked",code:"render_mode = text",ask:"Is {{char}} annoyed?",ctx:[],text:"MINE ASKED.",paths:[],byPath:{}},
       {id:"o5",name:"none",code:"render_mode = heat",ask:"",ctx:[],text:"MINE NONE.",paths:["solo"],byPath:{}}]});
     const before=JSON.parse(JSON.stringify(E)), gb=__grid(before);
-    const gbA={}; ["solo","multi","gm","text","heat"].forEach(k=>{ gbA[k]=fragCompile(k,ptCondFlags({render_mode:k}),{"q_f_mine__o4":0.9},false,{list:before}); });
+    const gbA={}; ["solo","multi","gm","text","heat"].forEach(k=>{ gbA[k]=__81(fragCompile(k,ptCondFlags({render_mode:k}),{"q_f_mine__o4":0.9},false,{list:before})); });
     state.fragments=E; store.setRaw(K.fragAdds,keys); _fragMigratedFor=null; const L2=fragList();
     const mine=L2.find(f=>f.id==="f_mine"), o=id=>mine.options.find(x=>x.id===id), s=x=>(x.code||"")+"|"+(x.paths||[]).join();
     r.mine=["o1","o2","o3","o4","o5"].map(id=>s(o(id))).join(" ; ");
@@ -176,7 +180,7 @@ const {chromium}=require('playwright');
     r.fmt=s(f2.options.find(x=>x.id==="spoken"))+" ; "+s(f2.options.find(x=>x.id==="texting"))+" ; "+s(f2.options.find(x=>x.id==="beat_end"));
     r.gr=s(g2.options.find(x=>x.id==="noecho"))+" ; kept "+/MY OWN GUARDRAIL/.test(g2.text);
     const ga=__grid(L2); r.gridSame=Object.keys(gb).filter(k=>gb[k]!==ga[k]);
-    r.askSame=["solo","multi","gm","text","heat"].filter(k=>gbA[k]!==fragCompile(k,ptCondFlags({render_mode:k}),{"q_f_mine__o4":0.9},false,{list:L2}));
+    r.askSame=["solo","multi","gm","text","heat"].filter(k=>gbA[k]!==__81(fragCompile(k,ptCondFlags({render_mode:k}),{"q_f_mine__o4":0.9},false,{list:L2})));
     r.asks=["solo","text"].map(k=>fragAskList(k,L2).filter(x=>x.f.id==="f_mine").length).join();
     r.stored=/"o1"[^}]*"code":""/.test(store.raw(K.fragments,""));
     // once: a condition typed back afterwards stays

@@ -26,6 +26,13 @@
    switched off (state.pursuitRelevantOn=false: what the build before sent); the lines that go are allowed in both comparisons
    and checked to be exactly the story threads and the one live goal ("Get the shop keys") no line of these scenes touches —
    "Avoid Berk's debt" stays, Berk being here (see "v150.79: the only lines that go…").
+   v150.81 — what a place looks like, and who is around. Each payload is also built as v150.80 sent it: the v150.80 "Scene right
+   now" and "Privacy" fragments (FRAG_DEFAULTS_V150_80_OLD), the exposure label where the crowd words go (exposureLabel), and the
+   areas by bare name. The lines that differ are allowed in both comparisons and checked to be exactly these (see "[v150.81:
+   only the place lines change]"): the scene intro's "Who can hear you" line, the PRIVACY heading, the areas' earshot
+   sentence, the "How exposed…" line (now who is around: crowded / a couple of people far off / nobody nearby), the
+   alone-at-home and alone-in-public lines and the someone-in-another-room line without "can hear", and an empty private
+   area marked "— empty, no one is there".
    Run: node tests/payload-faithful.browser.js   (needs playwright; see tests/README.md) */
 const {chromium}=require('playwright');
 const fs=require('fs'), path=require('path');
@@ -190,6 +197,22 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     window.__oldMemFrags=()=>fragList().map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_67_OLD[f.id]||f)));
     // v150.72 — the same list with the v150.71 compass and guidance
     window.__old72Frags=()=>fragList().map(f=>JSON.parse(JSON.stringify(FRAG_DEFAULTS_V150_71_OLD[f.id]||f)));
+    /* v150.81 — the same list with the v150.80 scene and privacy, where this build ships them unedited (a situation that carries
+       the user's own rewritten pieces into them keeps its own, as the upgrade does) */
+    window.__old81Frags=()=>fragList().map(f=>{ const d=FRAG_DEFAULTS.find(x=>x.id===f.id), o=FRAG_DEFAULTS_V150_80_OLD[f.id];
+      if(!o||!d)return JSON.parse(JSON.stringify(f));
+      if(_fragCanon(d)===_fragCanon(f))return JSON.parse(JSON.stringify(o));
+      // the user's rewritten pieces carried into the shipped one: v150.80 had them carried into its own
+      const dc=JSON.parse(JSON.stringify(d)); _fragCarryInto(dc);
+      if(_fragCanon(dc)===_fragCanon(f)){ const oc=JSON.parse(JSON.stringify(o)), keep={};
+        // carried as v150.80 carried it: against the v150.80 wording of the pieces v150.81 reworded
+        Object.keys(BLOCK_TPL_V150_80_OLD).forEach(k=>{ keep[k]=BLOCK_TPL_DEFAULTS[k]; BLOCK_TPL_DEFAULTS[k]=BLOCK_TPL_V150_80_OLD[k]; });
+        try{ _fragCarryInto(oc); } finally{ Object.keys(keep).forEach(k=>{ BLOCK_TPL_DEFAULTS[k]=keep[k]; }); }
+        return oc; }
+      return JSON.parse(JSON.stringify(f)); });
+    // v150.88 — the same list with the v150.87 "Respond as" (the plain line on every path), where this build ships it unedited
+    window.__old88Frags=()=>fragList().map(f=>{ const d=FRAG_DEFAULTS.find(x=>x.id===f.id), o=FRAG_DEFAULTS_V150_87_RESPOND[f.id];
+      return JSON.parse(JSON.stringify((o&&d&&_fragCanon(d)===_fragCanon(f))?o:f)); });
     window.__build=(kind,o,dataOnly)=>{
       o=o||{}; const c=base();
       if(kind==="heat")S.heat(c); (o.s||[]).forEach(k=>S[k](c));
@@ -205,7 +228,7 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       const mk=window.__oldMem?()=>__oldMemBlocks(mk0()):mk0;
       const B=mk();
       if(dataOnly){ const r=dataOnly(B,mk); state.relScope=undefined; state.formatRules=undefined; return r; }
-      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:window.__old72?{fragments:__old72Frags()}:{}),mk)||[];
+      const m=ptBuildMessages(kind,B,[{role:"user",content:"(history)"}],Object.assign({chat:c,npc:p,targetName:tName},window.__oldMem?{fragments:__oldMemFrags()}:window.__old72?{fragments:__old72Frags()}:window.__old81?{fragments:__old81Frags()}:window.__old88?{fragments:__old88Frags()}:{}),mk)||[];
       state.relScope=undefined; state.formatRules=undefined;
       return m.map(x=>"<<"+x.role+">>\n"+x.content).join("\n\n");
     };
@@ -273,6 +296,22 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
   const all78={gone:new Set(),added:new Set()};
   const diff78=async(k,nm,text)=>{ const old=linesOf(await buildOld78(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
     const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all78.gone.add(l)); d.added.forEach(l=>all78.added.add(l)); return d; };
+  /* v150.81 — as v150.80 sent it: the v150.80 scene and privacy fragments, the exposure label where privacy_exposure_raw now
+     carries who is around, and the areas by bare name (no "— empty, no one is there"). */
+  const buildOld81=async(kind,name)=>pg.evaluate(([k,n])=>{ const rk=window.crowdKey, ra=window.placeAreaNames;
+    window.crowdKey=(l,c)=>{ const x=exposureLabel(l,c); CROWD_WORDS[x]=x; return x; };
+    window.placeAreaNames=(c,l)=>((l&&l.sublocations)||[]).map(x=>x.name).join("; ");
+    window.__old81=true;
+    try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.crowdKey=rk; window.placeAreaNames=ra; window.__old81=false; } },[kind,name]);
+  const all81={gone:new Set(),added:new Set()};
+  const diff81=async(k,nm,text)=>{ const old=linesOf(await buildOld81(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all81.gone.add(l)); d.added.forEach(l=>all81.added.add(l)); return d; };
+  /* v150.88 — as v150.87 sent it: "Respond as" plain on every path */
+  const buildOld88=async(kind,name)=>pg.evaluate(([k,n])=>{ window.__old88=true;
+    try{ const o=(__SIT.find(x=>x[0]===n)||[0,{}])[1]; return __build(k,o); } finally{ window.__old88=false; } },[kind,name]);
+  const all88={gone:new Set(),added:new Set(),addedOn:new Set()};
+  const diff88=async(k,nm,text)=>{ const old=linesOf(await buildOld88(k,nm)), now=linesOf(text), O=new Set(old), N=new Set(now);
+    const d={gone:old.filter(l=>!N.has(l)),added:now.filter(l=>!O.has(l))}; d.gone.forEach(l=>all88.gone.add(l)); d.added.forEach(l=>{ all88.added.add(l); all88.addedOn.add(k); }); return d; };
   // who each situation answers (null when the target is nobody on record), for removed65
   const TGT=await pg.evaluate(()=>{ const r={}; __SIT.forEach(([n,o])=>{ r[n]=[("targetId" in o)?o.targetId:"__user__",o.targetName||"Emre"]; }); return r; });
   const rm65=(l,classic,n)=>removed65(l,classic,TGT[n][0],TGT[n][1]);
@@ -307,6 +346,8 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
     (await diff72(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.72 — the v150.71 compass / guidance lines (checked below)
     (await diff74(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.75 — the text path's outfit line (checked below)
     (await diff78(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.79 — goals and threads the scene does not touch (checked below)
+    (await diff81(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.81 — the place and who-is-around lines (checked below)
+    (await diff88(k,nm,text)).gone.forEach(l=>gone.add(h(l)));   // v150.88 — the plain "Respond as" where the feeling line replaces it (checked below)
     F.payloads[key].forEach(x=>{ if(!have.has(x)&&!gone.has(x))lost.push(key+" lost a line ("+x+")"); });
   }
   Object.keys(F.removed||{}).forEach(k=>{ removedSeen+=F.removed[k]; });
@@ -340,6 +381,8 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
      { const d72=await diff72(k,nm,text); d72.gone.forEach(l=>gone68.add(h(l))); d72.added.forEach(l=>added68.add(l)); }   // v150.72 — the words
      { const d74=await diff74(k,nm,text); d74.gone.forEach(l=>gone68.add(h(l))); d74.added.forEach(l=>added68.add(l)); }   // v150.75 — no outfit in a text
      { const d78=await diff78(k,nm,text); d78.gone.forEach(l=>gone68.add(h(l))); d78.added.forEach(l=>added68.add(l)); }   // v150.79 — only what the scene touches
+     { const d81=await diff81(k,nm,text); d81.gone.forEach(l=>gone68.add(h(l))); d81.added.forEach(l=>added68.add(l)); }   // v150.81 — the place lines
+     { const d88=await diff88(k,nm,text); d88.gone.forEach(l=>gone68.add(h(l))); d88.added.forEach(l=>added68.add(l)); }   // v150.88 — "Respond as" with the feeling
      G.payloads[key].all.forEach(x=>{ if(!drop.has(x)&&!have.has(x)&&!gone68.has(x))lost64.push(key+" lost a line ("+x+")"); });
      // a line v150.64 did not send is allowed only inside the one answered's <what_they_are_to_you>
      const block=new Set(); { const m=String(text).match(/<what_they_are_to_you>[\s\S]*?<\/what_they_are_to_you>/); if(m)linesOf(m[0]).forEach(l=>block.add(l)); }
@@ -369,6 +412,45 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
    const badAdd=[...all72.added].filter(l=>!(/^Right now your want (?:has won over|is ahead of) your conscience\..* does not hand over your words: you still speak as yourself\. A line someone dictates to you that you would never say, you do not recite — you answer in your own words, or not at all\.$/.test(l))&&!/^Your words stay your own\. Wanting it does not mean saying whatever you are handed: repeating the other's dictated phrasing back is not desire, it is losing yourself\. Choose your own words, or say nothing\.$/.test(l));
    ok("the lines that go are the v150.71 id_winning / id_ahead lines ("+all72.gone.size+" distinct), and nothing else", all72.gone.size>0&&badGone.length===0, badGone.slice(0,8).join("\n        "));
    ok("the lines that come are the same with her own words kept, and the heat guidance's ("+all72.added.size+" distinct), and nothing else", all72.added.size>0&&badAdd.length===0&&[...all72.added].some(l=>/^Your words stay your own\./.test(l)), badAdd.slice(0,8).join("\n        "));}
+
+  /* v150.81 — what changes is the place and who is around, and nothing else: every line the v150.80 scene and privacy sent and
+     the build now does not is one of its earshot / exposure / "can hear" lines; every line the build now adds is its new
+     wording. Listed exactly. */
+  console.log("\n[v150.81: only the place lines change]");
+  {const GONE=[/^- Who can hear you is covered under PRIVACY below, and it sets how freely you speak/,
+     /^# PRIVACY — WHO CAN HEAR YOU$/,
+     /^You are in the [^.]+\. Each sub-area is its own earshot — people in another sub-area cannot hear you here\.$/,
+     /^SUB-AREAS of [^:]+: [^—]+\.$/,
+     /^How exposed (?:the area you are standing in|this place) is: (?:private \(nothing said here gets out\)|fairly private \(talk here rarely spreads\)|semi-public \(word can get around\)|gossipy \(talk here often spreads\)|very public \(assume anything said here will spread\))\./,
+     /^PRIVACY: you are ALONE with \S+ — nobody else is in the room or within earshot, and nobody can hear a word of this\./,
+     /^PRIVACY: nobody you know is with you and \S+ — .* But this is a PUBLIC place\. There are strangers around: people who can see you/,
+     /^Not in this room, but elsewhere in .+\. They cannot hear what you say here — but they could come in at any moment\.$/];
+   const ADDED=[/^- Who is around you is covered under PRIVACY below, and it sets how freely you speak/,
+     /^# PRIVACY — WHO IS AROUND YOU$/,
+     /^You are in the [^.]+\.$/,
+     /^SUB-AREAS of [^:]+: .*— empty, no one is there.*\.$/,
+     /^(?:This is a crowded place\.|There are a couple of people far in the distance\.|There are no other people nearby\.)$/,
+     /^If you want somewhere with fewer people around, .+ is quieter — you can suggest moving there\.$/,
+     /^PRIVACY: you are ALONE with \S+ — nobody else is in the room or within earshot\. You can speak and act as freely as you would with no one watching\./,
+     /^PRIVACY: nobody you know is with you and \S+ — .* But this is a PUBLIC place, not somebody's home: what is safe here is what is said quietly and looks like nothing\./,
+     /^Not in this room, but elsewhere in .+\. They are out of earshot — but they could come in at any moment\.$/];
+   const G=[...all81.gone], A=[...all81.added];
+   const badGone=G.filter(l=>!GONE.some(r=>r.test(l))), badAdd=A.filter(l=>!ADDED.some(r=>r.test(l)));
+   console.log("        gone ("+G.length+"):\n          "+G.map(l=>l.slice(0,150)).join("\n          "));
+   console.log("        added ("+A.length+"):\n          "+A.map(l=>l.slice(0,150)).join("\n          "));
+   ok("the lines that go are the v150.80 earshot, exposure and 'can hear' lines ("+G.length+" distinct), and nothing else", G.length>0&&badGone.length===0, badGone.slice(0,8).join("\n        "));
+   ok("the lines that come are who is around, the areas without the earshot sentence (an empty private one marked) and the same lines without 'can hear' ("+A.length+" distinct), and nothing else",
+     A.length>0&&badAdd.length===0&&A.some(l=>/^There are no other people nearby\.$/.test(l))&&A.some(l=>/^There are a couple of people far in the distance\.$/.test(l))&&A.some(l=>/— empty, no one is there/.test(l)), badAdd.slice(0,8).join("\n        "));
+   ok("no payload of any situation says who can hear, how exposed, or that talk gets out", A.every(l=>!/can hear|How exposed|gets out|word can get around|spreads/i.test(l)));}
+
+  /* v150.88 — what changes is the closing line, and nothing else: where an emotion is picked, on the standard paths, the plain
+     "Respond as {{char}}." becomes the line with the feeling; heat keeps the plain line. Listed exactly. */
+  console.log("\n[v150.88: only the closing line changes]");
+  {const G=[...all88.gone], A=[...all88.added];
+   const badGone=G.filter(l=>!/^- Respond as [^,.]+\.$/.test(l)), badAdd=A.filter(l=>!/^- Respond as [^,]+, [^—]+ right now — it shows in how you speak, never in naming it\.$/.test(l));
+   console.log("        gone ("+G.length+"): "+G.join(" | ")+"\n        added ("+A.length+"): "+A.join(" | "));
+   ok("the line that goes is the plain \"Respond as\" ("+G.length+" distinct), and nothing else", G.length>0&&badGone.length===0, badGone.join(" | "));
+   ok("the line that comes is \"Respond as\" with the feeling ("+A.length+" distinct), never on the heat path, and nothing else", A.length>0&&badAdd.length===0&&!all88.addedOn.has("heat"), JSON.stringify({badAdd,on:[...all88.addedOn]}));}
 
   console.log("\n[what v150.64 removes]");
   const R=await pg.evaluate(()=>{ const r={};

@@ -56,6 +56,7 @@ const {chromium}=require('playwright');
   const VS=await pg.evaluate(()=>{
     const got=[]; const realQ=window._enqueueDub, realF=window._inworldFetchPcm;
     window._inworldFetchPcm=async(t,v)=>{ got.push({t,v}); return new Float32Array(4); };
+    const realS=window._inworldStream; window._inworldStream=(t,v)=>{ got.push({t,v}); return {chunks:[],done:true,wait:()=>Promise.resolve()}; };   // v150.86 — the queue streams
     window._enqueueDub=()=>{};
     const m={mid:"x",role:"user",content:'*Gülümser.* "Gel beraber bir şeyler içelim."'};
     const r={};
@@ -65,7 +66,7 @@ const {chromium}=require('playwright');
     got.length=0; state.narrMode=true; speakPlayerTurn(m); r.mic=got.length; state.narrMode=false;
     got.length=0; speakPlayerTurn({mid:"y",role:"user",content:"merhaba nasılsın"}); r.plain=got.slice();
     got.length=0; state.narrOn=true; speakPlayerTurn(m); r.narr=got.slice(); state.narrOn=false;
-    state.autoSpeak=false; window._enqueueDub=realQ; window._inworldFetchPcm=realF;
+    state.autoSpeak=false; window._enqueueDub=realQ; window._inworldFetchPcm=realF; window._inworldStream=realS;
     return r;
   });
   ok("with Speak replies off, the player's turn stays silent", VS.off===0, JSON.stringify(VS));

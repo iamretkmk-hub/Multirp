@@ -119,7 +119,8 @@ const {chromium}=require('playwright');
   ok("the previous picture still goes last", D.images[D.images.length-1]==="https://out/4.png"&&D.images.length===3, JSON.stringify(D.images));
   ok("the image model is told to keep the people and their clothes and replace the background",
      /it is the previous scene\. Keep the people in it and exactly the clothes they wear, and replace the whole background/.test(D.prompt), D.prompt.slice(0,500));
-  ok("the writer gets the move brief with the new area described, once", /THE PEOPLE HAVE MOVED TO ANOTHER AREA/.test(D.usr)&&/striped awning/.test(D.usr)&&/Outdoor Patio/.test(D.usr), D.usr.slice(0,900));
+  // v150.81 — described by what it looks like only: no place or area name reaches the writer
+  ok("the writer gets the move brief with the new area described, once, and no name", /THE PEOPLE HAVE MOVED TO ANOTHER AREA/.test(D.usr)&&/striped awning/.test(D.usr)&&!/Outdoor Patio/.test(D.usr), D.usr.slice(0,900));
   ok("and the clothes are still named (v150.51)", /cashmere crewneck/.test(D.usr)&&/SAY what they are/.test(D.usr), D.usr.slice(0,900));
   ok("recorded as a move", D.chain&&D.chain.mode==="move", JSON.stringify(D.chain));
   const E=await draw("*Sami sits down under the awning.*");

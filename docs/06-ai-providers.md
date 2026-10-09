@@ -267,3 +267,75 @@ While replies are voiced (`state.autoSpeak` or `state.narrMode`), the auto-RP pl
 standard spoken delivery appended to its system prompt (`_standardSpokenDelivery`): the "Voice delivery" fragment's
 `voiced` option as the player has it (filled with the player as speaker), else the `voice_delivery` block template. Heat on
 or off, it is always the standard wording — never `voiced_heat` / `heat_delivery`. Voicing off: nothing is added.
+
+## v150.85 — spoken in the order it is written
+
+With the narration voice on, `narrSplit` gathered all of a reply's *narration* into one clip and all its "quoted"
+lines into another, so the narrator read everything first and the character spoke afterwards. `autoSpeakMsg` and
+`speakPlayerTurn` now go through `_enqueueSpokenInOrder`:
+
+- `speechSegments(text)` cuts the text where it changes between narration and speech. A quoted span (`"…"`, `“…”`,
+  `«…»`) is dialogue wherever it stands, inside an *action* too; everything else is narration with its asterisks
+  dropped (`ttsCleanText`). Adjacent pieces of one kind are joined; a piece with no letters is skipped.
+- Every piece starts synthesizing at once and the dub queue plays them in order, so there is no gap between pieces
+  beyond the clip boundaries.
+- `_speechFastStart` cuts an opening piece over ~220 characters after its first sentence: synthesis returns a clip
+  only when the whole clip is made, so the first sentence comes back (and plays) while the rest is still being made.
+  The dialogue-only path (narration voice off) uses it too; otherwise that path is unchanged (one clip of the quotes).
+- A player's turn typed without any marks is still all speech.
+
+**Characters narrate in their own voice** (`narrSelf`, Settings → Dubbing, off by default): narration is read by the
+speaking character (the player's turns: the player's voice) through `_narrSelfFxInto` — a narrower dry path
+(high-pass 220 Hz, low-pass 4.2 kHz), a little quieter, with a short soft tail — so it reads apart from the same
+voice's dialogue. Off, the narrator voice reads narration through the existing `_narrFxInto` chain.
+
+What already made voicing faster: every piece is synthesized in parallel the moment the reply lands, and the queue
+only sequences playback. Voicing still starts only when the whole reply has been written (replies are not streamed).
+Test: `tests/speech-order.browser.js`.
+
+## v150.86 — a piece plays as it arrives
+
+The relay streams each line as small NDJSON chunks of PCM (each a standalone WAV). The dub queue used to collect the
+whole stream before playing a sample. Now the queue's pieces (narration, dialogue, a text read aloud, the player's
+turn) go through `_inworldStream(text, voiceId)`, which starts the request when the piece is queued and keeps chunks
+as they land (WAV header stripped per chunk; an odd trailing byte carried to the next chunk), and the queue plays them
+with `_playStreamAwait(stream, fx, alive)`:
+
+- the first chunk is scheduled at once; later chunks are gathered to at least 0.1 s and scheduled back to back on the
+  shared context, through the narrator / own-voice effect for narration;
+- a chunk that arrives after the scheduled audio ran out starts 50 ms ahead (`stream.underrun` in the voice log);
+- `_dubActive` holds from the first sample to the last, so the open mic stays gated through a slow chunk;
+- a `_dubKill` (generation bump) or any `_stopDub` (`_dubStopN`) ends a piece still streaming in, and a 250 ms poll
+  catches one waiting on a stalled relay; a failed relay resolves as "no-audio" with its reason, never a wedge;
+- the wall-clock failsafe of `_playBufAwait` (a suspended context never ends a source) applies once the stream is done.
+
+`_inworldFetchPcm` (whole clip) is unchanged for the paths that need the full clip: the storyteller, diary read-aloud,
+lip-sync audio, the voice-sample track and the relay re-voice fallback. Test: `tests/stream-playback.browser.js`.
+
+## v150.87 — the reply's decisions, one request per topic
+
+Before a reply, `emotionEnsure` asked the Decisions API about five topics in one request: the emotion pick (emotion,
+intensity, id/superego), the fragment options that ask the decision model, the character's spoken limits, who of the
+absent people is being talked about, and which goals are already done. The state was the union of every topic's material,
+and nothing told the model which part belonged to which question.
+
+With **One request per topic** on (Settings → Decisions, `decSplit`, on by default) each topic is its own request, sent
+together with `Promise.all`:
+
+| topic | questions | state |
+|---|---|---|
+| Emotion | `emotion`, `intensity`, `ego` | character, scene, earlier feeling, feelings toward the one answered, stakes, memories that weigh |
+| Reply asks | `q_*` | the emotion state plus the asks' own material (memories deduplicated as before) |
+| Spoken limits | `limit_*` | character, scene, the new lines, limits on record |
+| Who is talked about | `rel_*` | character, scene, the absent people with their ties |
+| Goals done | `goal_done_*` | character, scene, the goals, memories bearing on them, the player's lines — and only when another topic goes |
+
+- The wait is the slowest request, not the sum. Each topic has its own pause (`_emoBreak`, `_askDecBreak`,
+  `_limDecBreak`, `_relDecBreak`, `_goalDecBreak`): a failure or a paused topic loses that topic only, and a refused
+  question is retried inside its own topic (the v150.64 retry).
+- The answers are merged and applied exactly as before, so the same answers give the same result in either mode.
+- Debug: a "Reply decisions · {name} · N requests at once" row with the applied result, and one row per topic request.
+- Cost: the scene goes with every topic, so input tokens for this step rise (output is free on these models).
+
+Off, the one request carries everything as before. Test: `tests/decision-split.browser.js`; the bundle's own tests pin
+the switch off.

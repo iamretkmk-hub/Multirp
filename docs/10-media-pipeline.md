@@ -838,3 +838,21 @@ From a live export (two text photos):
   (`_selfieExposure`, with the place's exposure), and `x_selfie_writer` says she takes it exactly there — in a public place
   where she plausibly could (a restroom, a changing room, her car, a quiet corner), never in a home or room she is not in.
   An unedited stored copy of the prompt follows the shipped one (registry prompts are stored only when they differ).
+
+## v150.81 — what a place looks like, and who is around
+
+A picture is told what the area looks like and nothing else. `_imgLocationClause(chat)` returns `imgPlaceLook(loc, sub)`: the
+current area's `scene`, else its old `description`; a place with no areas of its own, the location's `description`; an area
+with nothing written at all, "the wider place this area is part of (much of it may not be visible from here): …" (v148.4's
+point stands: the venue's outside is not the room). Never a place or area name and never the location's `knowledge`. It used
+to send "Isdemir's Worker Canteen, this area: …, the wider place it is part of: …".
+
+Every image writer path reads it: the in-person frame (`illustrate`: WHERE THIS FRAME HAPPENS, the move brief
+`x_img_edit_move`, the scene selector's `LOCATION:` line), the wardrobe's dressing context (`_imgDressingPlace`: "a private
+home" / "a place other people can see them in", then the look), the scene video writer's "Where" (`_svWhenWhere`), the
+playground (`_pgLocationClause`), and a selfie (`_selfieWhere().look` → WHERE THIS PHOTO IS TAKEN). The selfie writer (her own
+words, a roleplay call) gets the names, the look and the knowledge. The derived prompt of a place's or an area's reference
+picture (no own `imgPrompt`) is its look, or the place's description, with a name only when nothing is written.
+
+Only what compares or titles pictures keeps the name — `_imgPlaceName(chat)` ("Ayla's Flat's Kitchen"): the visual director's
+"WHERE AND WHEN", the picture's stamp `imgMeta.place`, the scene movie's title bar. None of these is an image prompt.

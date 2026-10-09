@@ -199,11 +199,14 @@ const OLD=JSON.parse(fs.readFileSync(path.resolve(__dirname,'fixtures','img-writ
   /* ---------------------------------------------------------------- 5. the area */
   console.log("\n[5. the area is not described by the venue's outside]");
   const L=await draw(scene({loc:"L_mill",sub:"m2",present:["p_sami","p_berk"]})+push([{role:"assistant",speaker:"Sami Özüçak",speakerId:"p_sami",content:"*Tepsisini bırakıyor.*"}]));
-  ok("the writer is told this is an area with no description of its own, and what the wider place is",
-     /Isdemir's Worker Canteen, an area of Isdemir with no description of its own — picture it from its name, the wider place it is part of \(much of it may not be visible from this area\): A sprawling steel mill/.test(L.usr), L.usr.slice(L.usr.indexOf("WHERE THIS FRAME"),L.usr.indexOf("WHERE THIS FRAME")+500));
-  ok("and the router sees the area too", /LOCATION: Isdemir's Worker Canteen, an area of Isdemir/.test(L.route), L.route.slice(0,300));
-  ok("an area with its own description is described by it", await pg.evaluate(()=>{ const l=locById("L_mill"); l.sublocations[1].description="Long steel tables and a serving hatch.";
-      const t=_imgLocationClause(curChat()); l.sublocations[1].description=""; return /this area: Long steel tables and a serving hatch\./.test(t)?true:t; }));
+  /* v150.81 — a picture gets only what the area looks like: no place or area name. An area with nothing written still gets the
+     place it is part of, labelled as such (see tests/place-descriptions.browser.js). */
+  {const W=L.usr.slice(L.usr.indexOf("WHERE THIS FRAME"),L.usr.indexOf("WHERE THIS FRAME")+500);
+   ok("the writer is told what the wider place is, as the place this area is part of, and no name",
+     /the wider place this area is part of \(much of it may not be visible from here\): A sprawling steel mill/.test(W)&&!/Isdemir|Worker Canteen/.test(L.usr), W);}
+  ok("and the router sees the same, with no name", /LOCATION: the wider place this area is part of/.test(L.route)&&!/Isdemir|Worker Canteen/.test(L.route), L.route.slice(0,300));
+  ok("an area with its own description is described by it, and by nothing else", await pg.evaluate(()=>{ const l=locById("L_mill"); l.sublocations[1].description="Long steel tables and a serving hatch.";
+      const t=_imgLocationClause(curChat()); l.sublocations[1].description=""; return t==="Long steel tables and a serving hatch."?true:t; }));
 
   /* ---------------------------------------------------------------- 8. router */
   console.log("\n[8. the router does not read inner thoughts]");

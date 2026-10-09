@@ -40,7 +40,7 @@ const {chromium}=require('playwright');
       return (/_stepped\.has\(q\.holderId\)\|\|_withPlayerIn\(chat,q\.holderId/.test(q)&&/_stepped\.add\(q\.holderId\)/.test(q)&&/!_withPlayerIn\(chat,p\.id,nowPer\)/.test(g))?true:"not wired"; }));
   ok("a step with no memory of its own plants the English note, never the narrated event", await pg.evaluate(()=>{
       const q=String(runCharQuestPursuit); return (/if\(j\.note&&!mems\.some/.test(q)&&!/clipAtSentence\(j\.event/.test(q))?true:"still the event"; }));
-  ok("the reconcile's room grows with the fragments (34 → over 4000 tokens, capped at 6000)", await pg.evaluate(()=>/max:Math\.min\(6000,Math\.max\(fnTok\("mem",700\),300\+110\*frag\.length\)\)/.test(String(reconcilePeriodFor))?true:"flat cap"));
+  ok("the reconcile's room grows with the fragments (34 → over 4000 tokens, capped at 6000)", await pg.evaluate(()=>/max:Math\.min\(6000,Math\.max\(fnTok\("mem",700\),300\+110\*(?:frag|input)\.length\)\)/.test(String(reconcilePeriodFor))?true:"flat cap"));
 
   console.log("\n[a confrontation about someone else]");
   ok("its memory says where they went and what the player did, not 'I confronted', and stays moderate", await pg.evaluate(()=>{

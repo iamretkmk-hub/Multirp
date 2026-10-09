@@ -534,3 +534,29 @@ as something that happened.
   would re-file every plan after it.
 
 Test: `tests/edit-recut.browser.js`.
+
+## v150.89 — fewer arcs, and a merge that keeps the transcript is sent back
+
+Reported: a night out came back as one "reconciled" memory of ~2,500 words — every fragment, back to back. Two causes: the
+chat arc tracker is told to close at the first resting point ("an intimate encounter is recorded beat by beat"), so one
+encounter became dozens of fragments; and the reconciler, handed dozens of them, glued them together instead of keeping
+what mattered, past its own "at most about 120 words".
+
+**The arc judge (Decisions API).** `memArcDecide` asks two yes/no questions about the stretch the tracker holds open:
+`x_mem_arc_over` (has what was happening completely ended — people parted, the encounter or conversation is over, the scene
+went elsewhere; a landed beat, a lull, a kiss, a climax or a change of room is not the end) and `x_mem_arc_new` (did the
+latest lines begin something clearly separate). State: the stretch so far (its opening and its latest 26 lines when long)
+and the latest lines. A yes needs `MEM_ARC_DEC_AT` (0.7): unsure is "still going". It maps onto the tracker's own answer
+(over → finished, separate → different) and both the scene and the text paths use it. The chat tracker (`memEval`) is asked
+only when the judge is off (Settings → Memory → Arc judge, `memArcDec`, on by default), paused, or has no answer. An arc the
+judge holds open has the old backstop of `MEM_ARC_CAP_DEC` = 40 lines; an arc the chat tracker judged keeps 12.
+
+**A long stretch is merged in parts (v150.90).** v150.89 first sent an over-long merge back to be rewritten; that is gone —
+nothing is cut or sent back after the fact. Instead a stretch of more than `MEM_RECON_PART` (10) fragments is split, in order,
+into parts of about that many; each part is merged on its own (the same prompt, told it is part k of n and to keep every fact
+of it in about 100 words), all parts at once; then the stretch is merged from those few parts as before (the prior decisions
+and open matters go to that final pass). Each pass is small enough to be written within its length the first time, which a
+single pass over 68 fragments was not. If a part fails, the whole stretch goes through in one pass, as before. The final
+memories keep every fragment's source lines and the strongest status of what went in.
+
+Test: `tests/mem-arc-judge.browser.js`.

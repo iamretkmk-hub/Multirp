@@ -222,8 +222,8 @@ const {chromium}=require('playwright');
     &&/<what_they_are_to_you>What Emre is to you, in your own words: neighbour\.\nEmre lives across the hall\.\nThat, and what Emre shows and says in front of you/.test(P.solo), P.solo.slice(0,1800));
   ok("solo: the scene in her own home, privacy with Berk and Deniz nearby, plans by group, the limits, the four consistency notes",
     /# SCENE RIGHT NOW\n+This is your live situation\.[\s\S]*CURRENT DAY: Day 3, Evening\n\n⚠️ YOUR CURRENT LOCATION: Ayla's Flat — specifically the Kitchen\. THIS IS WHERE YOU ARE RIGHT NOW\. ⚠️\n\nThis place is YOUR home/.test(P.solo)
-    &&/SUB-AREAS of Ayla's Flat: Entrance; Kitchen; Balcony\./.test(P.solo)&&/# PRIVACY — WHO CAN HEAR YOU\n+PRIVACY: you are NOT alone with Emre\. Others are in the room[^\n]*: Berk — my older brother\./.test(P.solo)
-    &&/Not in this room, but elsewhere in Ayla's Flat: Deniz \(in the Balcony\)\./.test(P.solo)&&/How exposed the area you are standing in is: [^\n]+\./.test(P.solo)
+    &&/SUB-AREAS of Ayla's Flat: Entrance — empty, no one is there; Kitchen; Balcony\.\nYou are in the Kitchen\.(?:\n|$)/.test(P.solo)&&/# PRIVACY — WHO IS AROUND YOU\n+PRIVACY: you are NOT alone with Emre\. Others are in the room[^\n]*: Berk — my older brother\./.test(P.solo)
+    &&/Not in this room, but elsewhere in Ayla's Flat: Deniz \(in the Balcony\)\. They are out of earshot/.test(P.solo)&&/\n\nThere are no other people nearby\./.test(P.solo)&&!/How exposed|can hear|gets out/.test(P.solo.slice(P.solo.indexOf("# SCENE RIGHT NOW"),P.solo.indexOf("# YOUR FUTURE")))
     &&/# YOUR FUTURE ARRANGEMENTS\n[^\n]*\n\nUNKEPT — meetings that were planned but did NOT happen[^\n]*: Breakfast/.test(P.solo)&&/\n\nTODAY: Dinner/.test(P.solo)&&/\n\nFURTHER OFF: The wedding/.test(P.solo)
     &&/# WHAT YOU HAVE SAID ABOUT HOW FAR THIS GOES\n[^\n]*\n- limit: "Not tonight\."/.test(P.solo)
     &&/LAST TIME YOU SLIPPED OUT OF CHARACTER[\s\S]*LAST TIME YOU WROTE Emre'S PART[\s\S]*LAST TIME YOU REPEATED YOURSELF[\s\S]*LAST TIME YOU LOST TRACK/.test(P.solo), (P.solo.match(/# SCENE RIGHT NOW[\s\S]{0,1600}/)||[""])[0]);
@@ -234,7 +234,7 @@ const {chromium}=require('playwright');
     /This place is Emre's home — Emre lives here and you do not\. You are a GUEST/.test(P.gm)&&/PRIVACY: you are ALONE with Emre — nobody else/.test(P.gm)
     &&!/what_you_quietly_want|Privately, you are set on something|Privately, you want something out of|to borrow his van/.test(P.gm)&&/# THIS IS WHO YOU ARE/.test(P.gm), (P.gm.match(/<what_you_quietly_want>[\s\S]{0,500}/)||[""])[0]||P.gm.slice(0,400));
   ok("a public place, alone with the player; what just changed, item by item",
-    /But this is a PUBLIC place/.test(P.bar)&&/How exposed this place is: /.test(P.bar)&&/⚠️ WHAT JUST CHANGED[^\n]*\n\n- You have just MOVED\. You are now at Ayla's Flat — a moment ago you were at Harbour Bar\./.test(P.changed)
+    /But this is a PUBLIC place/.test(P.bar)&&/\n\nThere are a couple of people far in the distance\./.test(P.bar)&&!/How exposed/.test(P.bar)&&/⚠️ WHAT JUST CHANGED[^\n]*\n\n- You have just MOVED\. You are now at Ayla's Flat — a moment ago you were at Harbour Bar\./.test(P.changed)
     &&/- Time has just JUMPED forward — it is now Day 3, Evening \(the next day\)\./.test(P.changed)&&/- Just LEFT the scene: Deniz\./.test(P.changed)&&!/Just ARRIVED/.test(P.changed), (P.changed.match(/WHAT JUST CHANGED[\s\S]{0,900}/)||[""])[0]);
   ok("text: the texting format written out, the texter's own place, privacy of a text",
     /# FORMAT — YOU ARE TEXTING \(this reply only\)\nEmre has sent you a message on your phone/.test(P.text)&&/WHERE YOU ARE right now, while you type this: Ayla's Flat\./.test(P.text)
@@ -372,7 +372,7 @@ const {chromium}=require('playwright');
   ok("ticking leaves the screen where it was: the list's scroll and the page's scroll do not move", await pg.evaluate(async()=>{
       show('settings'); _fragDraft=null; _fragOpen=null; renderFragEditor();
       const card=document.getElementById('fragCard'); if(card&&card.tagName==="DETAILS")card.open=true;
-      const i=FRAG_DEFAULTS.findIndex(f=>f.id==="respond_as"); fragEdOpen(i);
+      const i=FRAG_DEFAULTS.findIndex(f=>f.id==="turkish_check"); fragEdOpen(i);   // v150.88 — a plain fragment near the end of the list (was "Respond as")
       const list=document.getElementById('fragList'); if(!list)return "no #fragList";
       list.scrollTop=Math.max(0,list.scrollHeight-list.clientHeight-200);
       document.getElementById('fragHost').scrollIntoView(); window.scrollBy(0,120);

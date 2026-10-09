@@ -260,3 +260,10 @@ Settings → LLM Selection → Roleplay has two new optional fields:
   (`_rpFallbackCall`; Debug row "… · fallback model") and its answer is used. Never after a Stop, never the model that just
   answered, never more than once. Blank (the default) keeps v148.7: no automatic second call. A refused text is no longer
   posted as the character's text; the player gets a toast.
+
+## v150.82 — the player's turn is read aloud too
+
+While replies are voiced (`state.autoSpeak` or `state.narrMode`), the auto-RP player narrator (`narratePlayerTurn`) gets the
+standard spoken delivery appended to its system prompt (`_standardSpokenDelivery`): the "Voice delivery" fragment's
+`voiced` option as the player has it (filled with the player as speaker), else the `voice_delivery` block template. Heat on
+or off, it is always the standard wording — never `voiced_heat` / `heat_delivery`. Voicing off: nothing is added.

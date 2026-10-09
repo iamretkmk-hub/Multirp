@@ -856,3 +856,43 @@ picture (no own `imgPrompt`) is its look, or the place's description, with a nam
 
 Only what compares or titles pictures keeps the name — `_imgPlaceName(chat)` ("Ayla's Flat's Kitchen"): the visual director's
 "WHERE AND WHEN", the picture's stamp `imgMeta.place`, the scene movie's title bar. None of these is an image prompt.
+
+## v150.91 — video scenes by place; one book
+
+**Plays at.** A video scene (Gallery → Videos → a character → a scene) has a list of the areas it was made for, `s.places`
+(`"locationId|subId"`, the key `_svPlaceKey` gives), ticked in the scene editor under **Plays at** (every area of the
+scene's world). Its "What this scene shows" text (`s.when`) and its clips' cue texts describe it to the pick.
+
+**After each reply** (`autoVisualize` → `sceneAutoThenVisual`), with Settings → Images → **Video scenes by place** on
+(`sceneAutoOn`, default on) and no scene the player started playing:
+- the candidates are the scenes ticked for the exact current area whose character is in the scene (`sceneAutoCandidates`),
+  minus one the player closed in this area (`chat.sceneAutoOff`);
+- with candidates, one Decisions choice (`x_scene_pick`, editable, under "What you see") over them and `none`, with where it
+  is, what the area looks like, what is on screen and the latest lines; a scene wins at ≥ 0.5;
+- a pick plays it over the story as the app's (`chat.sceneDockAuto`): heat of the moment is **not** raised, video cues run
+  no watch turns, `_heatLive` does not count it, and nothing is drawn while it plays (`sceneModeActive`, the still frame
+  hidden). The same pick keeps it; another switches;
+- `none`, or no candidates, takes an auto video off and the picture of that reply is drawn at once (`illustrate`); with
+  nothing auto playing, pictures go on as before (`_autoVisualizeImage`). No answer leaves what is on screen;
+- the story leaving the area while an auto video plays (`syncSceneDock`) takes it off and draws the newest reply;
+- a scene the player started ("Play over story", the Scene mode row) is never touched, and still raises heat as before.
+
+**One book.** The Video Book is retired: no menu entry, `openVideoBook` opens the Story Book, and clips no longer write
+Video Book passages. The reply an auto video came on with carries `m.sceneShown` `{id, name, clips, at}`; the Story Book
+treats it as that point's media (`_bkHasPic`) and plays the scene's clips there, in order and round again, and the book
+player plays it in place of a picture. Test: `tests/scene-by-place.browser.js`.
+
+## v150.92 — a vision model describes a pose picture
+
+Each pose picture's "what it shows" box (Settings › Image › a scene type › pose pictures) shows the picture beside it and a
+**Describe with the vision model** button. `poseDescribeWithVision` reads the picture (`_poseKey`), and `visionDescribe` sends
+it to the vision model (Settings → LLM Selection → **Vision model**, `visionModel`, blank = `x-ai/grok-4-fast`) as one
+OpenRouter chat request — the `x_img_describe` prompt as the system message, the picture as an `image_url` part. The answer
+fills the box (and is saved with the picture, as typing would), where it can be edited. The picture itself is never written
+into the Debug log.
+
+The prompt (`x_img_describe`, editable under the image writer's card) has the model write `{{user}}` for the man and
+`{{char}}` for the woman literally, so the box fills them per character as before (`poseDescFilled`), and describe the act
+plainly and explicitly — what they are doing, positions, where the hands are, faces, clothing — in one present-tense
+paragraph of 50–110 words, only what is visible, adults only. A refusal, "(not described)" or an error leaves the box as it
+was, with a note. Test: `tests/pose-vision.browser.js`.

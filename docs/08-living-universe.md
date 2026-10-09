@@ -1062,3 +1062,19 @@ Limits: key words are compared as written, so an English goal and a Turkish line
 shared source memory). A text thread does not touch a pursuit for fading; only the player's spoken scene does.
 
 Pinned by `tests/pursuit-weight.browser.js`.
+
+## v150.94 — a Gamemaster event elsewhere is the player's, not the room's
+
+Reported: the Gamemaster wrote "Özlem decided to act as if nothing happened and started deleting her messages with Emre"
+while Burcu and Emre were at the beach club. It was posted with `present` = everyone in the player's area, so Burcu's next
+payload carried Özlem's private decision as narration.
+
+`playGamemasterBeat` now asks one yes/no before posting (`gmEventHere`, prompt `x_gm_event_here` on the Gamemaster card,
+Decisions model = the gate model): does the event happen here, where the people in the scene can see or hear it?
+- **Yes** (≥ 0.5): posted to the scene as before — `present` = the player's area, a scene event, the arrival check and the
+  reactions.
+- **No**: posted for the player only — `present:[]`, `worldEvent`, `gmOffstage` — so `castHistory` keeps it out of every
+  character's history (as every world event), and there is no scene event, no arrival check and no reaction.
+- **No answer**: posted to the scene as before.
+
+Test: `tests/gm-offstage.browser.js`.

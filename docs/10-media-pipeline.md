@@ -896,3 +896,20 @@ The prompt (`x_img_describe`, editable on its own card, Settings → 3 · Payloa
 plainly and explicitly — what they are doing, positions, where the hands are, faces, clothing — in one present-tense
 paragraph of 50–110 words, only what is visible, adults only. A refusal, "(not described)" or an error leaves the box as it
 was, with a note. Test: `tests/pose-vision.browser.js`.
+
+## v150.96 — clothes do not change mid-scene
+
+Two ways the clothes changed between two lines of one scene:
+
+- **The wearing tracker waited for a cue word.** `runWearingTracker` only ran when the last lines held a word from
+  `CLOTHING_CUES` ("take off", "naked", "jacket"…). An undressing in words the list did not know ("lets the dress
+  fall", "pulls his shirt over his head") never reached it, so the table's outfit stayed on record and the next
+  picture (and the next reply's `<wearing>`) put the clothes back on. It now reads every response it has not read
+  yet (`chat._wearSeenMid`), as the presence tracker has since v148.5; the cue gate stays behind `state.wearCueGate`.
+- **The clock following the lines re-dressed people at home.** Since v150.53 `_clockApply` moves the hour on inside a
+  scene, and at home the held outfit gave way to the home table's next slot (`_outfitHeldFor`'s "the hour still
+  dresses them"). `_clockApply` now calls `_outfitCarryClock`, which stamps every hold made today in this place with
+  the new hour (`h.per`); a stamped hold is kept through that hour. A real jump (travel, Story mode's move on, End
+  Day) never stamps, so it dresses them from the table as before.
+
+Test: `tests/clothes-hold.browser.js`.

@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.95</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.96</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3832,7 +3832,7 @@ RULES
 - Everything in ENGLISH regardless of the card's language, because the image generator reads it too.`},
 
   x_wearing_tracker:{label:"Wearing tracker",json:true,
-    hint:"After a turn whose text mentions clothes, records what anybody present is now wearing \u2014 so the payload and the image writer follow the scene rather than the table. Only runs when the text actually hints at it.",
+    hint:"After every response, records what anybody present is now wearing \u2014 so the payload and the image writer follow the scene rather than the table. A response it has already read never runs it twice.",
     def:`You track CLOTHING across a roleplay scene. You are given where and when the scene is, who is present and what each of them had on, then the last few lines of the scene. Decide whether those lines CHANGED what anybody is wearing.
 
 Return ONLY:
@@ -24466,6 +24466,7 @@ function _clockApply(chat,v){
   if(!(v>=CLOCK_AT)||!chat||chatPeriodIndex(chat)>=PERIODS.length-1)return false;
   const per0=chatPeriod(chat);
   advanceTime(chat,1); chat._clockMovedTurn=_playerTurns(chat);
+  _outfitCarryClock(chat);   // v150.96 — the hour turned inside the scene: nobody is re-dressed by it
   const per=chatPeriod(chat);
   const TR={Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"};
   const DE={Morning:"Morgen",Midday:"Mittag",Afternoon:"Nachmittag",Evening:"Abend",Night:"Nacht"};
@@ -29580,7 +29581,10 @@ function _outfitHeldFor(p,c,fresh){
        build) is not held: the table answers again. There is no "into or out of an activity" change now. */
     const staleAct=!!(h&&/^activity:/.test(h.why||""));
     if(h&&h.text&&!staleAct&&h.day===day&&h.loc===loc&&!!h.atHome===atHome){
-      const homeHour=/^home:/.test(fresh.why)&&/^home:/.test(h.why||"")&&fresh.why!==h.why;   // at home the hour still dresses them
+      /* at home the hour still dresses them — (!) v150.96 — unless the hour turned INSIDE the scene (the clock following the
+         lines, _clockApply → _outfitCarryClock stamps h.per): an evening at home that the lines carried into Night put the
+         host into the table's night clothes between two lines of the same conversation. */
+      const homeHour=/^home:/.test(fresh.why)&&/^home:/.test(h.why||"")&&fresh.why!==h.why&&!(h.per&&h.per===chatPeriod(c));
       if(!homeHour) return {text:h.text,why:h.why||"scene",held:true};
     }
     if(staleAct&&!(fresh&&fresh.text&&fresh.why!=="wardrobe"&&fresh.why!=="none")){ try{ delete H[p.id]; markChatDirty(c); }catch(e){} }
@@ -29593,6 +29597,18 @@ function _outfitHeldFor(p,c,fresh){
     }
     return fresh;
   }catch(e){ return fresh; }
+}
+/* (!) v150.96 — THE CLOCK FOLLOWING THE SCENE IS NOT A NEW SCENE. _clockApply moves the hour on while the same people
+   carry on the same conversation; every hold made today in this place is stamped with the new hour, so the home table's
+   next slot does not dress anyone between two lines. A real jump (travel, Story mode's move on, End Day) never stamps,
+   so it dresses them as before. */
+function _outfitCarryClock(c){
+  try{
+    if(!c||!c.outfitHeld||typeof c.outfitHeld!=="object")return;
+    const per=chatPeriod(c), day=c.gameDay||1, loc=c.locationId||"";
+    for(const pid in c.outfitHeld){ const h=c.outfitHeld[pid]; if(h&&h.day===day&&h.loc===loc) h.per=per; }
+    try{ markChatDirty(c); }catch(e){}
+  }catch(e){}
 }
 /* ===== v140.1 — WHAT THE PLAYER WEARS ==========================================================
    Characters have had an outfit table since v48.2; the player had an appearance line and nothing
@@ -46919,7 +46935,19 @@ async function runWearingTracker(chat){
     // v140.1 — the player too, once they have clothes on record; stored under "__user__"
     if(playerHasClothes(chat)) cast.push(playerOutfitHolder(chat));
     if(!cast.length)return null;
-    if(!hasClothingCue(chat))return null;
+    /* (!) v150.96 — AFTER EVERY RESPONSE. The call waited for a cue word (the list above), so a scene that undressed in
+       words the list does not know — "lets the dress fall", "pulls his shirt over his head", "sütyenini açıyor" — never
+       reached the tracker, and the table's outfit stayed on record: the next picture (and the next reply's <wearing>)
+       put the clothes back on mid-scene. It now reads every response it has not read yet, as the presence tracker has
+       since v148.5; a line it has already read never runs it twice. The cue gate stays behind state.wearCueGate. */
+    if(state.wearCueGate===true){ if(!hasClothingCue(chat))return null; }
+    else{
+      const _ms=(chat.messages||[]).filter(m=>m&&m.role!=='system'&&!m.sysError);
+      const _seen=chat._wearSeenMid?_ms.findIndex(m=>m.mid===chat._wearSeenMid):-1;
+      const _fresh=(_seen>=0?_ms.slice(_seen+1):_ms.slice(-2)).filter(m=>m&&m.content&&!m.questNote&&!m.calNote&&!m.uiNote&&!m.textMsg&&!m.clockNote);
+      chat._wearSeenMid=_ms.length?_ms[_ms.length-1].mid:null;
+      if(!_fresh.length)return null;   // nothing said since the last read
+    }
     const now=cast.map(c=>{ const f=currentOutfit(c,chat);
       return `- ${c.name}: ${f.text||"(nothing recorded)"}`; }).join("\n");
     // v147.2 — this chat's prompt and player (the chain runs this after its awaits)

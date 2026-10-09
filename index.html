@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.93</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.94</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4383,6 +4383,14 @@ NO: It did not, it only might have, it was only talked about, or it happened in 
      easily: every future tense became a promise, every errand a task. Each new one is now checked by a yes/no
      question to the Decisions API and filed only at the gate's certainty (0.8 by default). The question, then
      a YES: line and a NO: line. */
+  /* (!) v150.94 — WHERE A GAMEMASTER EVENT HAPPENS. The Gamemaster can stage something in another place — "Özlem decided to act
+     as if nothing happened and started deleting her messages with Emre" — and it was posted to everyone in the player's area,
+     so Burcu read Özlem's private decision as if it had been said in front of her. */
+  x_gm_event_here:{label:"Gamemaster — does the event happen here?",json:false,
+    hint:"Asked about every event the Gamemaster writes, before it is posted. Yes: it is posted to the scene as before (the people here see it and react). No: it happens elsewhere or inside someone who is not here — you see it, the characters here do not. The question, then a YES: line and a NO: line. Supports {{user}}.",
+    def:`The event in the state was just written for the story. Does it happen HERE — in this place and this area, where the people listed in the state can see or hear it?
+YES: It happens in front of them or around them: something they see, hear or are part of — someone arriving, a sound, a phone ringing here, something said or done in this area.
+NO: It happens somewhere else, or only inside someone who is not here (a decision, a thought, a message they type or delete, something they do alone or in another place). The people here cannot see or hear it.`},
   x_gate_promise:{label:"Strict gate — is this a real promise?",json:false,
     hint:"Asked about each new promise the future tracker notices, before anything is written. The question, then a YES: line and a NO: line. Supports {{user}}, {{holder}}, {{about}} and {{line}} (its line number in the state).",
     def:`Line {{line}} was noted as a PROMISE: {{holder}} — {{about}}. The state is the conversation, numbered.
@@ -32239,7 +32247,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"sceneSetup"},{kind:"prompt",promptKey:"sceneWriter"},
     {kind:"dyn",label:"Event state + recent exchange + participant status",scope:"chat",desc:"{summary, turn, min, max}, the last lines, and whether the event character is in the room."}]},
   {key:"gamemaster_engine",label:"Gamemaster",desc:"Judges whether the scene has gone stale and authors the hidden nudge.",blocks:[
-    {kind:"prompt",promptKey:"gmJudge"},{kind:"prompt",promptKey:"x_gm_dec_stale"},{kind:"prompt",promptKey:"x_gm_dec_trigger"},{kind:"prompt",promptKey:"x_gm_dec_energy"},{kind:"prompt",promptKey:"x_gm_dec_kind"},{kind:"prompt",promptKey:"gmAuthor"},{kind:"prompt",promptKey:"x_move_pick"},{kind:"prompt",promptKey:"x_move_why"},{kind:"prompt",promptKey:"x_move_player"},
+    {kind:"prompt",promptKey:"gmJudge"},{kind:"prompt",promptKey:"x_gm_dec_stale"},{kind:"prompt",promptKey:"x_gm_dec_trigger"},{kind:"prompt",promptKey:"x_gm_dec_energy"},{kind:"prompt",promptKey:"x_gm_dec_kind"},{kind:"prompt",promptKey:"gmAuthor"},{kind:"prompt",promptKey:"x_gm_event_here"},{kind:"prompt",promptKey:"x_move_pick"},{kind:"prompt",promptKey:"x_move_why"},{kind:"prompt",promptKey:"x_move_player"},
     {kind:"dyn",label:"Director context (GM mode)",scope:"chat",desc:"Compact tie-only roster, scene & privacy lines, trackers, calendar, offstage positions — assembled by directorContext('gm')."}]},
   {key:"diaries",label:"Day Diaries",desc:"One diary per character at End Day, written from the day's experiential memories.",blocks:[
     {kind:"prompt",promptKey:"daySummaryPrompt"},
@@ -60260,6 +60268,28 @@ async function maybeGamemaster(chat,force){
   }catch(e){console.warn("[gm] gamemaster judge/author failed — no event this window:",e&&e.message||e);}
 }
 
+/* (!) v150.94 — DOES THE EVENT HAPPEN HERE? One yes/no to the Decisions API about each Gamemaster event before it is posted.
+   true: in this area (posted to the scene as before); false: somewhere else, or inside someone who is not here — posted for
+   the player only (present:[], worldEvent, gmOffstage), so no character's history carries it and nobody reacts to it;
+   null: no answer — posted as before. */
+const _gmPlaceBreak=_decBreaker("Gamemaster: where the event happens","Events are posted to the scene as before meanwhile.");
+const GM_HERE_AT=0.5;
+async function gmEventHere(chat,text){
+  if(!chat||!text||!_decReady(_gmPlaceBreak))return null;
+  const un=chatUserName(chat)||state.user||"the player";
+  let here=[]; try{ here=inSceneCast(chat).map(c=>c.name); }catch(_){}
+  let where=""; try{ const l=chatLocById(chat,chat.locationId), sb=l?subById(l,curSubId(chat)):null; where=[l&&l.name,sb&&sb.name].filter(Boolean).join(" — ")||String(chat.location||""); }catch(_){}
+  const body={model:gateModel(),state:{where:where||"(unknown)",people_here:[un+" (the player)"].concat(here),event:String(text).slice(0,1500),
+      latest_lines:String(recentExchangeText(chat,6,{scene:true})||"").slice(-2500)},
+    questions:{here:_decQuestionFrom(fillTpl(up("x_gm_event_here",chat.universeId),{user:un}))}};
+  const e=dbg("Gamemaster: does the event happen here? (Decisions)","OpenRouter Decisions",DECISIONS_URL,body);
+  const res=await decisionsCall(_gmPlaceBreak,body,e,10000);
+  if(!res)return null;
+  const v=_decYes(res.answers&&res.answers.here);
+  if(isNaN(v)){ dbgDone(e,"error",{note:"No usable answer — posted to the scene as before.",response:res.answers}); return null; }
+  dbgDone(e,"ok",{here:v,threshold:GM_HERE_AT,posted:v>=GM_HERE_AT?"to the scene":"for the player only",usage:res.usage});
+  return v>=GM_HERE_AT;
+}
 // Generate the event, then hand off to the Scene Writer (sets up an active event).
 async function playGamemasterBeat(chat,nudge){
   if(chat._gmBusy)return;chat._gmBusy=true;
@@ -60274,6 +60304,18 @@ async function playGamemasterBeat(chat,nudge){
     // (gamemasterReactions / playSingleReaction), so the image stays anchored to a character, and
     // there is never more than one auto-image per turn.
     // v147.2 — heard (and remembered) by who shares the player's area, not everyone at the place
+    // v150.94 — unless it happens somewhere else: then it is the player's to read, and nobody here's
+    let _here=null; try{ _here=await gmEventHere(chat,text); }catch(_){ _here=null; }
+    if(_here===false){
+      const om={mid:newMid(),role:"assistant",speaker:"Narrator",gmBeat:true,gmOffstage:true,narratorEvent:true,worldEvent:true,
+        present:[],whoIds:[],gday:chat.gameDay||1,gperiod:chatPeriod(chat),content:text,_reveal:true,
+        img:null,imgState:"idle",vidState:"idle",video:null};
+      stampStatus(chat,om);chat.messages.push(om);
+      logDirectorEvent(chat,text);
+      persistChats();
+      enqueuePresent(om.mid);
+      return;   // nothing happened here: no scene event, no arrival, nobody reacts
+    }
     const msg={mid:newMid(),role:"assistant",speaker:"Narrator",gmBeat:true,narratorEvent:true,
       present:inSceneIds(chat).slice(),content:text,_reveal:true,
       img:null,imgState:"idle",vidState:"idle",video:null};

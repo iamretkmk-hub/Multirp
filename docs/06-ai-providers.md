@@ -311,3 +311,31 @@ with `_playStreamAwait(stream, fx, alive)`:
 
 `_inworldFetchPcm` (whole clip) is unchanged for the paths that need the full clip: the storyteller, diary read-aloud,
 lip-sync audio, the voice-sample track and the relay re-voice fallback. Test: `tests/stream-playback.browser.js`.
+
+## v150.87 — the reply's decisions, one request per topic
+
+Before a reply, `emotionEnsure` asked the Decisions API about five topics in one request: the emotion pick (emotion,
+intensity, id/superego), the fragment options that ask the decision model, the character's spoken limits, who of the
+absent people is being talked about, and which goals are already done. The state was the union of every topic's material,
+and nothing told the model which part belonged to which question.
+
+With **One request per topic** on (Settings → Decisions, `decSplit`, on by default) each topic is its own request, sent
+together with `Promise.all`:
+
+| topic | questions | state |
+|---|---|---|
+| Emotion | `emotion`, `intensity`, `ego` | character, scene, earlier feeling, feelings toward the one answered, stakes, memories that weigh |
+| Reply asks | `q_*` | the emotion state plus the asks' own material (memories deduplicated as before) |
+| Spoken limits | `limit_*` | character, scene, the new lines, limits on record |
+| Who is talked about | `rel_*` | character, scene, the absent people with their ties |
+| Goals done | `goal_done_*` | character, scene, the goals, memories bearing on them, the player's lines — and only when another topic goes |
+
+- The wait is the slowest request, not the sum. Each topic has its own pause (`_emoBreak`, `_askDecBreak`,
+  `_limDecBreak`, `_relDecBreak`, `_goalDecBreak`): a failure or a paused topic loses that topic only, and a refused
+  question is retried inside its own topic (the v150.64 retry).
+- The answers are merged and applied exactly as before, so the same answers give the same result in either mode.
+- Debug: a "Reply decisions · {name} · N requests at once" row with the applied result, and one row per topic request.
+- Cost: the scene goes with every topic, so input tokens for this step rise (output is free on these models).
+
+Off, the one request carries everything as before. Test: `tests/decision-split.browser.js`; the bundle's own tests pin
+the switch off.

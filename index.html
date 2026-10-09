@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.86</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.87</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1546,6 +1546,10 @@
           <h3><svg class="ic"><use href="#i-brain"/></svg> Decision models</h3>
           <div class="desc">Every yes/no and pick-one decision the app asks before or after a reply goes to OpenRouter's <b>Decisions API</b>: the emotion pick and the reply's questions, the reply check, trackers, strict gates, the memory relevance judge, image decisions, the turn router, the Gamemaster judge, movement, status checks and the proactive text gate. <b>These boxes take Decisions-API models only</b> (such as openai/gpt-6-luna-decisions) — not a chat model, and not an embeddings model.</div>
           <div><label>Decisions model <span class="desc" style="display:inline">(used by every Decisions request; blank = openai/gpt-6-luna-decisions)</span></label><input type="text" id="setDecModel" placeholder="openai/gpt-6-luna-decisions"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0">
+            <label style="margin:0">One request per topic <span class="desc" style="display:block;font-weight:400">Before each reply, the emotion pick, the reply's asks, spoken limits, who is being talked about and goals already done go as separate requests, sent at the same time — each sees the scene and only its own material. More input tokens (the scene goes with each). OFF = one request carrying everything.</span></label>
+            <label class="switchLbl"><input type="checkbox" id="setDecSplit"><span class="sl"></span></label>
+          </div>
           <div class="desc" style="margin-top:4px">Optional overrides for one feature each — blank = the Decisions model above.</div>
           <div><label>Memory relevance judge <span class="desc" style="display:inline">(needs the toggle in Settings → Memory; blank = the Decisions model)</span></label><input type="text" id="setMemJudgeModel" placeholder="(the Decisions model)"></div>
           <div><label>Reply check <span class="desc" style="display:inline">(needs the toggle in Settings → Features; blank = the Decisions model)</span></label><input type="text" id="setReplyCheckModel" placeholder="(the Decisions model)"></div>
@@ -3129,7 +3133,7 @@ const K={key:"sm_key",segkey:"sm_segkey",atlasKey:"sm_atlaskey",model:"sm_model"
   // Character bio generator + auto-character (Stages 5/6)
   bioModel:"sm_biomodel",bioPrompt:"sm_bioprompt",batchBioPrompt:"sm_batchbioprompt",univPrompt:"sm_univprompt",directorAuthor:"sm_directorauthor",genrePackAuthor:"sm_genrepackauthor",ruleCompiler:"sm_rulecompiler",questGen:"sm_questgen",questNext:"sm_questnext",originGen:"sm_origingen",chronicler:"sm_chronicler",styles:"sm_styles",authorModel:"sm_authormodel",promptTuner:"sm_prompttuner",autoCharOn:"sm_autocharon",autoCharDelay:"sm_autochardelay",
   // v21 — previously hidden model selections, all surfaced in Settings → LLM Selection / Image Settings
-  fallbackModel:"sm_fallbackmodel",heatModel:"sm_heatmodel",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
+  fallbackModel:"sm_fallbackmodel",heatModel:"sm_heatmodel",decSplit:"sm_decsplit",sttFixModel:"sm_sttfixmodel",recapModel:"sm_recapmodel",
   portraitModel:"sm_portraitmodel",mapImgModel:"sm_mapimgmodel",uniPicModel:"sm_unipicmodel",uniPicLora:"sm_unipiclora",
   payloadRemoved:"sm_payloadremoved",   // v150.66 — with payloadLayouts and fragOn: no longer read; kept so an old backup's keys stay known
   payloadTemplates:"sm_payloadtemplates",payloadTplOn:"sm_payloadtplon",dbgView:"sm_dbgview",
@@ -8733,7 +8737,8 @@ function loadState(){
     authorModel:store.raw(K.authorModel,"deepseek/deepseek-v4-pro"),
     // v21 — previously hidden models, now selectable ("" = the fallback chain named in Settings)
     fallbackModel:store.raw(K.fallbackModel,""),
-    heatModel:store.raw(K.heatModel,""),   // v150.80 — the heat-of-the-moment roleplay model (blank: the roleplay model)
+    heatModel:store.raw(K.heatModel,""),
+    decSplit:store.get(K.decSplit,true),   // v150.87 — the reply's decision topics as separate requests sent together   // v150.80 — the heat-of-the-moment roleplay model (blank: the roleplay model)
     sttFixModel:store.raw(K.sttFixModel,""),
     recapModel:store.raw(K.recapModel,""),
     portraitModel:store.raw(K.portraitModel,""),
@@ -23696,6 +23701,12 @@ const EMOTIONS_DEFAULT=[
 ];
 const EMO_LEVELS=[{k:"mild",desc:"it is there but light, under the surface"},{k:"clear",desc:"plainly felt; it colors what they say and do"},{k:"intense",desc:"strong; it is driving them right now"}];
 const _emoBreak=_decBreaker("Emotion pick","Emotions are not updated meanwhile.");
+/* v150.87 — the reply's other decision topics, each with its own pause when they go as separate requests */
+const _askDecBreak=_decBreaker("Reply asks","The fragment options that ask the decision model are left out meanwhile.");
+const _limDecBreak=_decBreaker("Spoken limits check","Spoken limits are not read meanwhile.");
+const _relDecBreak=_decBreaker("Who-is-talked-about check","Absent people are not checked meanwhile.");
+const _goalDecBreak=_decBreaker("Goal-done check","Goals are not checked meanwhile.");
+function decSplitOn(){ return state.decSplit!==false; }
 function emotionList(){ const l=(Array.isArray(state.emotions)&&state.emotions.length)?state.emotions:EMOTIONS_DEFAULT;
   return l.filter(e=>e&&String(e.name||"").trim()); }
 function emotionModel(){ return String(state.emoModel||"").trim()||decisionsModel(); }
@@ -24158,7 +24169,7 @@ async function emotionEnsure(chat,p,line,tgt){
      per-line answers of the last one (the asks, who is being talked about) are dropped; the emotion and the id/superego
      answer stay until a new pick replaces them. */
   _emoDropLineAnswers(chat,p.id,sig);
-  if((!wantEmo&&!wantFrag&&!wantLim&&!wantRel)||!_decReady(_emoBreak))return null;
+  if((!wantEmo&&!wantFrag&&!wantLim&&!wantRel)||!(decSplitOn()?[_emoBreak,_askDecBreak,_limDecBreak,_relDecBreak].some(_decReady):_decReady(_emoBreak)))return null;
   if(chat.emo&&chat.emo[p.id]&&chat.emo[p.id].sig===sig)return chat.emo[p.id];
   if(_emoJobs.has(sig))return _emoJobs.get(sig);
   const job=(async()=>{
@@ -24180,20 +24191,23 @@ async function emotionEnsure(chat,p,line,tgt){
       if(feel)st.toward_the_one_they_answer=feel;
       Object.assign(st,_emoStakeState(chat,p,tgt.targetId||"__user__",kind));   // v150.36 — earlier today, the people they answer to, who can see
       const questions={};
+      const emoQ={};
       if(wantEmo&&list.length){
         const crit={}; list.forEach(e=>{ crit[_emoKey(e.name)]=`${e.name}: ${String(e.desc||"").trim()}`; });
         const lv={}; EMO_LEVELS.forEach(l=>{ lv[l.k]=l.desc; });
         const ev={}; EGO_LEVELS.forEach(l=>{ ev[l.k]=l.desc; });
-        questions.emotion={type:"choice",instructions:fillTpl(up("x_emotion_pick",chat.universeId),vars),criteria:crit};
-        questions.intensity={type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv};
-        questions.ego={type:"choice",instructions:fillTpl(up("x_ego_pick",chat.universeId),vars),criteria:ev};
+        emoQ.emotion={type:"choice",instructions:fillTpl(up("x_emotion_pick",chat.universeId),vars),criteria:crit};
+        emoQ.intensity={type:"choice",instructions:fillTpl(up("x_emotion_intensity",chat.universeId),vars),criteria:lv};
+        emoQ.ego={type:"choice",instructions:fillTpl(up("x_ego_pick",chat.universeId),vars),criteria:ev};
+        Object.assign(questions,emoQ);
       }
-      let fq=null;
-      if(wantFrag){ fq=fragAskQuestions(chat,p,kind,vars,tgt.targetId||"__user__"); Object.assign(questions,fq.questions); Object.assign(st,fq.state);
-        /* v150.70 — an ask's "latest memories" leave out what memories_that_weigh_now already carries: no memory twice */
-        try{ if(Array.isArray(st.memories)&&Array.isArray(st.memories_that_weigh_now)){
+      const emoSt=Object.assign({},st);   // v150.87 — the emotion pick's own state: the scene, the feelings, the stakes
+      // v150.70 — an ask's "latest memories" leave out what memories_that_weigh_now already carries: no memory twice
+      const dedupeMem=o=>{ try{ if(Array.isArray(o.memories)&&Array.isArray(o.memories_that_weigh_now)){
           const w=new Set(memWeighNow(chat,p).map(x=>memPayloadText(memText(x.m),400)));
-          st.memories=st.memories.filter(t=>!w.has(t)); if(!st.memories.length)st.memories=["(the latest are in memories_that_weigh_now)"]; } }catch(_){} }
+          o.memories=o.memories.filter(t=>!w.has(t)); if(!o.memories.length)o.memories=["(the latest are in memories_that_weigh_now)"]; } }catch(_){} };
+      let fq=null;
+      if(wantFrag){ fq=fragAskQuestions(chat,p,kind,vars,tgt.targetId||"__user__"); Object.assign(questions,fq.questions); Object.assign(st,fq.state); dedupeMem(st); }
       const lq=wantLim?limitAskQuestions(chat,p,vars):null;
       if(lq){ Object.assign(questions,lq.questions); Object.assign(st,lq.state); }
       const rq=wantRel?relAboutQuestions(chat,p,vars):null;
@@ -24201,9 +24215,44 @@ async function emotionEnsure(chat,p,line,tgt){
       const gq=Object.keys(questions).length?goalDoneQuestions(chat,p,vars):null;   // v150.49 — only riding a request that goes anyway
       if(gq){ Object.assign(questions,gq.questions); Object.assign(st,gq.state); }
       if(!Object.keys(questions).length)return null;
-      const body={model:emotionModel(),state:st,questions};
-      const e=dbg((wantEmo?"Emotion":lq&&!wantFrag&&!rq?"Spoken limits":"Reply decisions")+" · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,body);
-      const res=await decisionsCall(_emoBreak,body,e,10000);
+      let res=null, e=null;
+      if(decSplitOn()){
+        /* (!) v150.87 — ONE REQUEST PER TOPIC, ALL AT ONCE. The emotion pick, the reply's asks, the spoken limits, who is
+           being talked about and the goals already done went as one request over one state that held all of their
+           material, and nothing told the model which part belonged to which question: the emotion pick read the goal
+           check's memories, the goal check read the stakes. Each topic now goes as its own request with the scene and
+           only its own material, and they are sent together, so the wait is the slowest one, not their sum. A refusal or
+           a failure loses that topic only; each topic has its own pause. Off (Settings → Decisions) = the one request. */
+        const lite=Object.assign({character:st.character},{scene});
+        const groups=[];
+        if(Object.keys(emoQ).length)groups.push({k:"emotion",label:"Emotion",br:_emoBreak,questions:emoQ,state:emoSt});
+        if(fq&&Object.keys(fq.questions).length){ const fs=Object.assign({},emoSt,fq.state); dedupeMem(fs); groups.push({k:"asks",label:"Reply asks",br:_askDecBreak,questions:fq.questions,state:fs}); }
+        if(lq)groups.push({k:"limits",label:"Spoken limits",br:_limDecBreak,questions:lq.questions,state:Object.assign({},lite,lq.state)});
+        if(rq)groups.push({k:"relations",label:"Who is talked about",br:_relDecBreak,questions:rq.questions,state:Object.assign({},lite,rq.state)});
+        const live=groups.filter(g=>_decReady(g.br));
+        if(gq&&live.length&&_decReady(_goalDecBreak))live.push({k:"goals",label:"Goals done",br:_goalDecBreak,questions:gq.questions,state:Object.assign({},lite,gq.state)});
+        if(!live.length)return null;
+        e=dbg("Reply decisions · "+(p.name||"?")+" · "+live.length+" requests at once","OpenRouter Decisions",DECISIONS_URL,
+          {split:true,requests:live.map(g=>({topic:g.k,questions:Object.keys(g.questions),state:Object.keys(g.state)}))});
+        const outs=await Promise.all(live.map(g=>{
+          const b={model:emotionModel(),state:g.state,questions:g.questions};
+          const ge=dbg(g.label+" · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,b);
+          return decisionsCall(g.br,b,ge,10000).then(r=>{ if(r)dbgDone(ge,"ok",{answers:r.answers,usage:r.usage,refused:r.refused||undefined}); return {g,r}; }).catch(()=>({g,r:null}));
+        }));
+        const got=outs.filter(o=>o.r);
+        if(got.length){
+          res={answers:{},usage:{},refused:"",split:{}};
+          got.forEach(o=>{ Object.assign(res.answers,o.r.answers);
+            const u=o.r.usage||{}; Object.keys(u).forEach(k=>{ if(typeof u[k]==="number")res.usage[k]=(res.usage[k]||0)+u[k]; });
+            if(o.r.refused)res.refused=res.refused?res.refused+", "+o.r.refused:o.r.refused; });
+          outs.forEach(o=>{ res.split[o.g.k]=o.r?"answered":"no answer"; });
+          if(!res.refused)delete res.refused;
+        }else dbgDone(e,"error","No topic answered: "+outs.map(o=>o.g.k).join(", ")+" (each request's own row says why).");
+      }else{
+        const body={model:emotionModel(),state:st,questions};
+        e=dbg((wantEmo?"Emotion":lq&&!wantFrag&&!rq?"Spoken limits":"Reply decisions")+" · "+(p.name||"?"),"OpenRouter Decisions",DECISIONS_URL,body);
+        res=await decisionsCall(_emoBreak,body,e,10000);
+      }
       /* v150.70 — the first pick for this character also classifies their older memories that have no status yet, once and in
          the background (after this request, never ahead of it) */
       try{ memStatusBackfill(chat,p); }catch(_){}
@@ -24232,6 +24281,7 @@ async function emotionEnsure(chat,p,line,tgt){
       chat.emo=(chat.emo&&typeof chat.emo==="object")?chat.emo:{}; chat.emo[p.id]=out;
       try{ markChatDirty(chat); }catch(_){}
       dbgDone(e,"ok",Object.assign({emotion:out.emotion,intensity:out.intensity,tone:out.tone,ego:out.ego,fragmentAnswers:out.asks,spokenLimits:lim,beingTalkedAbout:out.relAbout,goalsDone,threshold:fragAt(),probabilities:out.p,egoProbabilities:out.egoP,usage:res.usage},
+        res.split?{requests:res.split}:{},
         res.refused?{refused:res.refused,note:`"${res.refused}" was refused and dropped on a retry; ${res.refused==="emotion"||res.refused==="intensity"?"the last emotion stands":"the rest arrived"}.`}:{}));
       return out;
     }catch(err){ return null; }
@@ -65406,6 +65456,7 @@ function syncSettingsUI(){
   // v21 — surfaced hidden models
   {const e=document.getElementById('setFallbackModel'); if(e)e.value=state.fallbackModel||"";}
   {const e=document.getElementById('setHeatModel'); if(e)e.value=state.heatModel||"";}
+  {const e=document.getElementById('setDecSplit'); if(e)e.checked=state.decSplit!==false;}
   {const e=document.getElementById('setSttFixModel'); if(e)e.value=state.sttFixModel||"";}
   {const e=document.getElementById('setRecapModel'); if(e)e.value=state.recapModel||"";}
   {const e=document.getElementById('setPortraitModel'); if(e)e.value=state.portraitModel||"";}
@@ -65664,6 +65715,7 @@ function saveSettings(notify){
   // v21 — surfaced hidden models
   {const e=document.getElementById('setFallbackModel'); if(e)state.fallbackModel=e.value.trim();}
   {const e=document.getElementById('setHeatModel'); if(e)state.heatModel=e.value.trim();}
+  {const e=document.getElementById('setDecSplit'); if(e){ state.decSplit=!!e.checked; store.set(K.decSplit,state.decSplit); }}
   {const e=document.getElementById('setSttFixModel'); if(e)state.sttFixModel=e.value.trim();}
   {const e=document.getElementById('setRecapModel'); if(e)state.recapModel=e.value.trim();}
   {const e=document.getElementById('setPortraitModel'); if(e)state.portraitModel=e.value.trim();}
@@ -66283,7 +66335,7 @@ const PROMPT_PACK_KEYS=[
   "model","rewriter","memModel","gmModel","mcModel","routerModel","bioModel","locModel",
   "authorModel","gossipModel","playerNarrateModel","callModel",
   // v21 — surfaced hidden models + payload placeholder removals
-  "fallbackModel","heatModel","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
+  "fallbackModel","heatModel","decSplit","sttFixModel","recapModel","portraitModel","mapImgModel","uniPicModel","uniPicLora",
   /* v150.66 — the reply fragments travel in a prompt pack (fragAdds with them, so the phone knows which shipped changes the
      list already has). payloadTemplates is the engine templates; payloadLayouts / payloadRemoved are gone (an older pack
      that carries them is imported without them). */

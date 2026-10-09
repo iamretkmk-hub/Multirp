@@ -267,3 +267,29 @@ While replies are voiced (`state.autoSpeak` or `state.narrMode`), the auto-RP pl
 standard spoken delivery appended to its system prompt (`_standardSpokenDelivery`): the "Voice delivery" fragment's
 `voiced` option as the player has it (filled with the player as speaker), else the `voice_delivery` block template. Heat on
 or off, it is always the standard wording — never `voiced_heat` / `heat_delivery`. Voicing off: nothing is added.
+
+## v150.85 — spoken in the order it is written
+
+With the narration voice on, `narrSplit` gathered all of a reply's *narration* into one clip and all its "quoted"
+lines into another, so the narrator read everything first and the character spoke afterwards. `autoSpeakMsg` and
+`speakPlayerTurn` now go through `_enqueueSpokenInOrder`:
+
+- `speechSegments(text)` cuts the text where it changes between narration and speech. A quoted span (`"…"`, `“…”`,
+  `«…»`) is dialogue wherever it stands, inside an *action* too; everything else is narration with its asterisks
+  dropped (`ttsCleanText`). Adjacent pieces of one kind are joined; a piece with no letters is skipped.
+- Every piece starts synthesizing at once and the dub queue plays them in order, so there is no gap between pieces
+  beyond the clip boundaries.
+- `_speechFastStart` cuts an opening piece over ~220 characters after its first sentence: synthesis returns a clip
+  only when the whole clip is made, so the first sentence comes back (and plays) while the rest is still being made.
+  The dialogue-only path (narration voice off) uses it too; otherwise that path is unchanged (one clip of the quotes).
+- A player's turn typed without any marks is still all speech.
+
+**Characters narrate in their own voice** (`narrSelf`, Settings → Dubbing, off by default): narration is read by the
+speaking character (the player's turns: the player's voice) through `_narrSelfFxInto` — a narrower dry path
+(high-pass 220 Hz, low-pass 4.2 kHz), a little quieter, with a short soft tail — so it reads apart from the same
+voice's dialogue. Off, the narrator voice reads narration through the existing `_narrFxInto` chain.
+
+What already made voicing faster: every piece is synthesized in parallel the moment the reply lands, and the queue
+only sequences playback. Not done: playback still waits for each clip's full stream (the relay sends PCM chunks, but
+they are collected before the clip plays), and voicing starts only when the whole reply has been written (replies are
+not streamed). Test: `tests/speech-order.browser.js`.

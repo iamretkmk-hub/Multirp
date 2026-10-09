@@ -70,7 +70,7 @@ const {chromium}=require('playwright');
       await maybeMoveDecision(c); return (c.subPos.p_b==="s_gar"&&c.subPos.p_c==="s_kit"&&c.subPos.p_a==="s_liv")?true:JSON.stringify(c.subPos); }));
   ok("someone who just moved is not asked again for three turns", await pg.evaluate(async()=>{ const c=__setup(); __plan={Berk:{to:"Living Room",p:0.9}};
       await maybeMoveDecision(c); __reqs=[]; c.messages.push({mid:"u2",role:"user",content:"x"}); await maybeMoveDecision(c);
-      const asked=Object.values((__reqs[0]||{questions:{}}).questions).some(q=>/^Berk /.test(q.instructions));
+      const asked=Object.values((__reqs[0]||{questions:{}}).questions).some(q=>/^Berk /.test(q.instructions)&&q.type==="choice");   // v150.96 — still asked whether he leaves
       return (__reqs.length===1&&!asked)?true:JSON.stringify({n:__reqs.length,asked}); }));
   ok("asked once per player turn", await pg.evaluate(async()=>{ const c=__setup(); await maybeMoveDecision(c); await maybeMoveDecision(c); return __reqs.length===1?true:__reqs.length+" requests"; }));
 
@@ -87,13 +87,19 @@ const {chromium}=require('playwright');
     const cem=Object.values(r.questions).find(q=>/^Cem /.test(q.instructions)&&q.criteria.stay);
     return {priv:r.state.private_moment,cem:cem&&Object.keys(cem.criteria)}; });
   ok("a private moment: the player's area is not an option, and the state says so", /nobody walks in/.test(P.priv)&&JSON.stringify(P.cem)==='["stay","to_s_kit"]', JSON.stringify(P));
-  ok("one area, an active event, heat, do-not-disturb, switched off: no request", await pg.evaluate(async()=>{ const r=[];
-      let c=__setup(); c.locationId="l_one"; await maybeMoveDecision(c); r.push(__reqs.length);
+  /* v150.96 — CHANGED ON PURPOSE: a place with one area used to send nothing. Every character is now also asked whether
+     they LEAVE the place (x_move_leave), so a one-area place sends a request with only those questions. */
+  ok("one area: only the leave questions are asked (no area picks, no player area)", await pg.evaluate(async()=>{
+      const c=__setup(); c.locationId="l_one"; c.subPos={p_a:"s_one",p_b:"s_one",p_c:"s_one"}; c.subId="s_one"; await maybeMoveDecision(c);
+      const q=Object.keys((__reqs[0]||{questions:{}}).questions);
+      return (__reqs.length===1&&q.length===3&&q.every(k=>/^leave_/.test(k)))?true:JSON.stringify(q); }));
+  ok("an active event, heat, do-not-disturb, switched off: no request", await pg.evaluate(async()=>{ const r=[];
+      let c;
       c=__setup(); c.activeEvent={resolved:false}; await maybeMoveDecision(c); r.push(__reqs.length);
       c=__setup(); c._heatBeat={n:1}; await maybeMoveDecision(c); r.push(__reqs.length);
       c=__setup(); c.dnd=true; await maybeMoveDecision(c); r.push(__reqs.length);
       c=__setup(); state.moveDecOn=false; await maybeMoveDecision(c); r.push(__reqs.length); state.moveDecOn=true;
-      return r.join(",")==="0,0,0,0,0"?true:r.join(","); }));
+      return r.join(",")==="0,0,0,0"?true:r.join(","); }));
   ok("someone who promised to come back is left to that path", await pg.evaluate(async()=>{ const c=__setup(); c.expected=[{id:"p_b",name:"Berk",turn:1}];
       await maybeMoveDecision(c); return Object.values(__reqs[0].questions).some(q=>/^Berk /.test(q.instructions))?"Berk was asked":true; }));
   ok("a failed request moves nobody", await pg.evaluate(async()=>{ const c=__setup(); __mode="500"; __plan={Berk:{to:"Living Room",p:0.9}}; const m=await maybeMoveDecision(c); return (m===false&&c.subPos.p_b==="s_kit")?true:JSON.stringify(c.subPos); }));

@@ -4,8 +4,8 @@
    1. The arc judge (Decisions API): two yes/no questions — has the stretch completely ended, did something separate begin.
       Unsure is "still going"; it closes only at MEM_ARC_DEC_AT. The chat tracker is asked only when the judge is off or has
       no answer. An arc the judge holds gets the old backstop of 40 lines; the chat tracker's keeps 12.
-   2. The reconciler's length guard: a memory over MEM_RECON_MAX_WORDS, or an answer as long as most of what went in, is
-      sent back once with its length named; the shorter answer replaces it; a failed or longer retry leaves the first.
+   2. A long stretch (more than MEM_RECON_PART fragments) is merged in parts first, in order and all at once, then the
+      stretch from its parts — each pass small enough to be written within its length. Nothing is cut or sent back after.
    Run: NODE_PATH=/path/to/node_modules node tests/mem-arc-judge.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -60,27 +60,38 @@ const {chromium}=require('playwright');
     __undec(); return {firstAt,commit:__commits[0]}; });
   ok("an arc the judge keeps open is cut by the backstop at 40 lines, not 12", CAP.firstAt>=40&&CAP.commit&&CAP.commit[1]-CAP.commit[0]+1>=40, JSON.stringify(CAP));
 
-  console.log("\n[2 — the reconciler sends a transcript back]");
-  const words=n=>Array.from({length:n},(_,i)=>"w"+i).join(" ")+".";
-  const R=await pg.evaluate(async(W)=>{ const r={};
-    const mk=()=>{ const uni=state.universes[0]; const c=curChat(); state.personas=state.personas.filter(p=>p.id!=="aj_d"); state.personas.push({id:"aj_d",name:"Duygu",universeId:uni.id,look:{},personality:"x",instructions:"x"});
+  console.log("\n[2 — a long stretch is merged in parts, each within its length]");
+  const R=await pg.evaluate(async()=>{ const r={};
+    const mk=(n)=>{ const uni=state.universes[0]; const c=curChat(); state.personas=state.personas.filter(p=>p.id!=="aj_d"); state.personas.push({id:"aj_d",name:"Duygu",universeId:uni.id,look:{},personality:"x",instructions:"x"});
       state.mem=true; state.key="sk-test"; state.memory=[]; c.universeId=uni.id;
       const base={ownerId:"aj_d",character:"Duygu",gameDay:2,gamePeriod:"Night",universeId:uni.id,chatId:c.id,importance:0.6,source:"auto",location:"Arsuz Night Club",type:"EXPERIENCE"};
-      for(let i=1;i<=12;i++)state.memory.push(Object.assign({id:"g"+i,content:"Beat "+i+" "+W.slice(0,140)},base));
+      for(let i=1;i<=n;i++)state.memory.push(Object.assign({id:"g"+i,content:"Beat "+i+" of the night.",srcMids:["m"+i]},base,i===14?{status:"secret",importance:0.95}:{}));
       return c; };
-    const run=async(first,second)=>{ const c=mk(); const calls=[];
-      window.chatCompletion=async(m,mo,o)=>{ const d=(o&&o.dbg)||""; calls.push(d); if(/too long, sent back/.test(d)){ calls.sent=JSON.stringify(m); return second; } return first; };
+    const run=async(n,partFail)=>{ const c=mk(n); const calls=[];
+      window.chatCompletion=async(m,mo,o)=>{ const d=(o&&o.dbg)||"", t=JSON.stringify(m); calls.push({d,t,at:performance.now()});
+        const pm=d.match(/part (\d+)\/(\d+)/);
+        if(pm){ await new Promise(r=>setTimeout(r,80)); if(partFail&&pm[1]==="2")return "not json";
+          return JSON.stringify({memories:[{content:"PART "+pm[1]+" kept: "+((t.match(/Beat \d+/g)||[]).join(", ")),importance_score:0.7,emotion:"aroused"}]}); }
+        return JSON.stringify({memories:[{content:"The night, merged.",importance_score:0.9,type:"INTIMACY",status:"secret"}]}); };
       await reconcilePeriodFor(state.personas.find(p=>p.id==="aj_d"),2,"Night",c);
-      const m=state.memory.filter(x=>x.ownerId==="aj_d"); return {n:m.length,words:m.map(x=>(x.content.match(/\S+/g)||[]).length),calls:calls.length,sent:calls.sent||"",frag:m.some(x=>/^Beat/.test(x.content))}; };
-    const longMem=JSON.stringify({memories:[{content:W,importance_score:0.9,type:"INTIMACY",feelings:"f",status:"secret"}]});
-    const shortMem=JSON.stringify({memories:[{content:"I met Emre at the club and we slept together in his lounge; I went home to my husband.",importance_score:0.9,type:"INTIMACY",status:"secret"}]});
-    r.fixed=await run(longMem,shortMem);
-    r.kept=await run(longMem,"not json");
-    r.ok=await run(shortMem,shortMem);
-    return r; },words(400));
-  ok("a 400-word merge is sent back once, with its length named, and the short answer replaces it", R.fixed.n===1&&R.fixed.words[0]<40&&R.fixed.calls===2&&/400 words/.test(R.fixed.sent)&&/at most about 120 words/.test(R.fixed.sent)&&!R.fixed.frag, JSON.stringify(Object.assign({},R.fixed,{sent:R.fixed.sent.slice(0,200)})));
-  ok("a retry that fails leaves the first answer (the fragments are never lost)", R.kept.n===1&&R.kept.words[0]===400&&R.kept.calls===2, JSON.stringify(R.kept));
-  ok("a short answer is not sent back", R.ok.n===1&&R.ok.calls===1, JSON.stringify(R.ok));
+      const mine=state.memory.filter(x=>x.ownerId==="aj_d"), parts=calls.filter(x=>/part \d+\//.test(x.d)), fin=calls.filter(x=>!/part \d+\//.test(x.d));
+      return {n:mine.length,content:mine.map(x=>x.content),src:(mine[0]&&mine[0].srcMids||[]).length,status:mine[0]&&mine[0].status,
+        parts:parts.map(x=>x.d.match(/part (\d+\/\d+)/)[1]),partBeats:parts.map(x=>(x.t.match(/Beat \d+/g)||[]).length),spread:parts.length?Math.max(...parts.map(x=>x.at))-Math.min(...parts.map(x=>x.at)):0,
+        finRaw:fin.length?(fin[0].t.match(/Beat \d+ of the night/g)||[]).length:-1,finParts:fin.length?(fin[0].t.match(/PART \d+ kept/g)||[]).length:-1,finNote:fin.length?/already merged part by part/.test(fin[0].t):false}; };
+    r.long=await run(25); r.failed=await run(25,true); r.short=await run(8);
+    return r; });
+  ok("25 fragments: merged in 3 parts of about 9, in order, all at once — each part sees only its own fragments", JSON.stringify(R.long.parts)==='["1/3","2/3","3/3"]'&&R.long.partBeats.join()==="9,9,7"&&R.long.spread<60, JSON.stringify(R.long));
+  ok("…then the stretch is merged from the parts, not the 25 fragments", R.long.finParts===3&&R.long.finRaw===0&&R.long.finNote, JSON.stringify(R.long));
+  ok("…and stored as the stretch's memory, with every fragment's source line and the strongest status", R.long.n===1&&R.long.content[0]==="The night, merged."&&R.long.src===25&&R.long.status==="secret", JSON.stringify(R.long));
+  ok("a part that fails: the whole stretch goes through in one pass, as before", R.failed.finRaw===25&&R.failed.finParts===0&&R.failed.n===1, JSON.stringify(R.failed));
+  ok("ten or fewer fragments: one pass, no parts", R.short.parts.length===0&&R.short.finRaw===8&&R.short.n===1, JSON.stringify(R.short));
+  const NC=await pg.evaluate(async(W)=>{ const uni=state.universes[0]; const c=curChat(); state.memory=[];
+      const base={ownerId:"aj_d",character:"Duygu",gameDay:2,gamePeriod:"Night",universeId:uni.id,chatId:c.id,importance:0.6,source:"auto",location:"x",type:"EXPERIENCE"};
+      for(let i=1;i<=4;i++)state.memory.push(Object.assign({id:"h"+i,content:"Beat "+i+"."},base));
+      let n=0; window.chatCompletion=async()=>{ n++; return JSON.stringify({memories:[{content:W,importance_score:0.8}]}); };
+      await reconcilePeriodFor(state.personas.find(p=>p.id==="aj_d"),2,"Night",c);
+      const m=state.memory.filter(x=>x.ownerId==="aj_d"); return {calls:n,words:m.map(x=>(x.content.match(/\S+/g)||[]).length)}; },Array.from({length:300},(_,i)=>"w"+i).join(" "));
+  ok("nothing is cut or sent back after the fact: what the merge wrote is what is kept", NC.calls===1&&NC.words[0]===300, JSON.stringify(NC));
 
   const S=await pg.evaluate(()=>{ show('settings'); const e=document.getElementById('setMemArcDec'); if(!e)return {box:false};
     e.checked=false; saveSettings(false); const off=state.memArcDec===false; e.checked=true; saveSettings(false);

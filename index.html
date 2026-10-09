@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.89</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.90</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -61594,7 +61594,7 @@ function _memFragKind(m){
   return "";
 }
 let _reconcileBusy={};
-const MEM_RECON_MAX_WORDS=160;   // v150.89 — a reconciled memory longer than this is sent back once (the prompt asks for ≤ ~120)
+const MEM_RECON_PART=10;   // v150.89 — a stretch of more fragments than this is merged in parts of about this many first
 async function reconcilePeriodFor(p,day,period,chat){
   if(!p||!state.mem||!state.key)return;
   const key=p.id+"|"+day+"|"+period+"|"+((chat&&chat.id)||"");
@@ -61610,7 +61610,31 @@ async function reconcilePeriodFor(p,day,period,chat){
   try{
     // v148.4 — with what each fragment left them carrying: the reconciler is asked for "feelings" and was shown none.
     // v150.70 — and its status, when it has one (open / secret / resolved)
-    const listed=frag.map((m,i)=>`FRAGMENT ${i+1} (${m.location||(m.source==="text"?"by text":"somewhere")}, importance ${(+m.importance||0).toFixed(2)}, ${m.emotion||"neutral"}${memStatusNorm(m.status)?", status: "+memStatusNorm(m.status):""})${_memFragKind(m)}:\n${memText(m)}${m.feelings?`\n— left with: ${String(m.feelings).trim()}`:""}`).join("\n\n");
+    const listOf=L=>L.map((m,i)=>`FRAGMENT ${i+1} (${m.location||(m.source==="text"?"by text":"somewhere")}, importance ${(+m.importance||0).toFixed(2)}, ${m.emotion||"neutral"}${memStatusNorm(m.status)?", status: "+memStatusNorm(m.status):""})${_memFragKind(m)}:\n${memText(m)}${m.feelings?`\n— left with: ${String(m.feelings).trim()}`:""}`).join("\n\n");
+    /* (!) v150.89 — A LONG STRETCH IS MERGED IN PARTS, SO IT CAN BE WRITTEN WITHIN ITS LENGTH. Handed 68 fragments of one night,
+       the reconciler wrote them back to back — 2,500 words — because nothing that long can be condensed in one pass without
+       either gluing or dropping. Past MEM_RECON_PART fragments, they are split in order into parts of about that many; each
+       part is merged on its own (same prompt, all parts at once) into what is kept of that part, every fact in it; then the
+       parts — a handful, in order — are merged as the stretch, as before. Each pass is small enough to be written within its
+       length the first time. A part that fails sends the whole stretch through in one pass instead, as before. */
+    let input=frag;
+    if(frag.length>MEM_RECON_PART){
+      const nParts=Math.ceil(frag.length/MEM_RECON_PART), size=Math.ceil(frag.length/nParts), groups=[];
+      for(let i=0;i<frag.length;i+=size)groups.push(frag.slice(i,i+size));
+      const parts=await Promise.all(groups.map((g,k)=>chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
+          {data:`WHEN: Day ${day}, ${period}.\n\nThis stretch of ${p.name}'s day is long, so it is merged in parts, in order. These are the memories of PART ${k+1} OF ${groups.length}. Rewrite THIS PART as what ${p.name} keeps of it — usually ONE memory, at most about 100 words: every fact the rules say to keep, none of the steps.\n\n${listOf(g)}`,matters:""}),
+          state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:Math.min(2400,Math.max(fnTok("mem",700),300+110*g.length)),dbg:"Memory reconcile · part "+(k+1)+"/"+groups.length+" · "+p.name+" · day "+day+" "+period})
+        .then(o=>({g,made:_memReconcileList(parseJSON(o))})).catch(()=>({g,made:[]}))));
+      if(parts.every(x=>x.made.length)){
+        const _strong=g=>["secret","open","resolved"].find(k=>g.some(m=>m&&m.status===k))||"";
+        input=[];
+        parts.forEach(({g,made:mm})=>mm.forEach(x=>input.push({content:String(x.content||"").trim(),location:x.location||g[0].location||"",
+          importance:Math.max(...g.map(m=>+m.importance||0),_memImp(x,1)||0),emotion:x.emotion||g[g.length-1].emotion||"",
+          status:memStatusNorm(x.status)||_strong(g),feelings:x.feelings?String(x.feelings).trim():(g.map(m=>m&&m.feelings).filter(Boolean).slice(-1)[0]||""),
+          listener:g.some(m=>m&&m.listener),observerOnly:g.every(m=>m&&m.observerOnly),source:g.every(m=>m&&m.source==="text")?"text":"part"})));
+      }else{ try{ console.warn("[memory] a part of the long stretch was not merged — merging it in one pass"); }catch(_){} }
+    }
+    const listed=listOf(input);
     /* (!) v44.3 — WHICH DAY AND WHICH PART OF IT. The day and period are on every fragment record
        (gameDay/gamePeriod — that is how memsOfPeriod selected them), and neither reached the model:
        the header said "one part of one day" without naming it. A prompt that asks the memory to
@@ -61631,11 +61655,11 @@ async function reconcilePeriodFor(p,day,period,chat){
     // v150.70 — the open and secret matters from before this stretch (the fragments themselves carry their own status)
     const _open=memOpenMatters(p.id,chat,8,new Set(frag.map(m=>m.id)));
     const out=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
-      {data:`WHEN: Day ${day}, ${period}.\n\nThese are ${p.name}'s memories from Day ${day}, ${period}, in the order they were written. Rewrite them as what ${p.name} keeps.\n\n${listed}${_priorBlock}`,
+      {data:`WHEN: Day ${day}, ${period}.\n\nThese are ${p.name}'s memories from Day ${day}, ${period}, in the order they were written${input!==frag?` (${frag.length} fragments, already merged part by part)`:""}. Rewrite them as what ${p.name} keeps.\n\n${listed}${_priorBlock}`,
        matters:_open.length?memOpenMattersLines(_open,day):""}),
       /* (!) v150.52 — room for the answer grows with what goes in: 34 fragments under a flat 1600 were cut off mid-memory,
          failed to parse, and the fragments stayed as they were. */
-      state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:Math.min(6000,Math.max(fnTok("mem",700),300+110*frag.length)),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
+      state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:Math.min(6000,Math.max(fnTok("mem",700),300+110*input.length)),dbg:"Memory reconcile · "+p.name+" · day "+day+" "+period});
     const j=parseJSON(out);
     /* (!) v56.1 — THE ANSWER WAS BEING THROWN AWAY FOR ITS WRAPPER. This read j.memories and
        nothing else, so a reconciler prompt that asks for a bare {"content": …} — which is what the
@@ -61649,30 +61673,6 @@ async function reconcilePeriodFor(p,day,period,chat){
       try{ console.warn("[memory] reconcile for",p&&p.name,"returned nothing usable — the fragments are kept as they are. Raw:",String(out||"").slice(0,300)); }catch(_){}
       return;                            // nothing usable — leave the originals untouched
     }
-    /* (!) v150.89 — A MERGE THAT KEPT THE TRANSCRIPT IS SENT BACK. A night out came back as one memory of 2,500 words: every
-       fragment, back to back, in order — the prompt's "at most about 120 words" was ignored, and five of those would fill a
-       payload. A memory over MEM_RECON_MAX_WORDS, or an answer as long as most of what went in, goes back once with its
-       length named and the limit; the shorter answer replaces it. If the retry fails, or is not shorter, the first stands. */
-    try{
-      const W=t=>(String(t||"").match(/\S+/g)||[]).length;
-      const inW=frag.reduce((n,m)=>n+W(memText(m)),0), outW=made.reduce((n,x)=>n+W(x&&x.content),0);
-      const glued=inW>=250&&outW>=inW*0.6;
-      const long=made.map((x,i)=>({x,i,w:W(x&&x.content)})).filter(o=>o.w>MEM_RECON_MAX_WORDS||(glued&&o.w>60));
-      if(long.length){
-        const listed2=long.map((o,k)=>`FRAGMENT ${k+1} (${o.x.location||"somewhere"}, ${o.w} words)\n${String(o.x.content||"").trim()}${o.x.feelings?"\nLeft them with: "+o.x.feelings:""}`).join("\n\n");
-        const note=`YOUR FIRST ANSWER KEPT THE TRANSCRIPT: ${long.map((o,k)=>`memory ${k+1} is ${o.w} words`).join(", ")}${glued?` — ${outW} words out of ${inW} that went in`:""}. A memory is what ${p.name} keeps, not the steps: the biggest thing that happened to them this week is at most about 120 words, an ordinary scene two or three sentences. Rewrite ${long.length>1?"each of these":"this"} as ONE memory${long.length>1?" each, in the same order":""}: cut every step, keep every fact (what happened and how it turned, a first time, what was agreed, refused or risked, a name or a line that crossed a line, how it ended, what it may cost).`;
-        const out2=await chatCompletion(epSend("memReconcile",up("memReconcile")+"\n\n"+engineLangDirective(),
-          {data:`WHEN: Day ${day}, ${period}.\n\n${note}\n\n${listed2}`,matters:""}),
-          state.memModel,{fn:"mem",temp:fnTemp("mem",0.2),max:Math.min(2400,Math.max(fnTok("mem",700),300+260*long.length)),dbg:"Memory reconcile · too long, sent back · "+p.name+" · day "+day+" "+period});
-        const again=_memReconcileList(parseJSON(out2));
-        if(again.length===long.length){
-          long.forEach((o,k)=>{ const nx=again[k]; if(nx&&W(nx.content)>0&&W(nx.content)<o.w){
-            made[o.i]=Object.assign({},o.x,nx,{content:String(nx.content).trim(),people:(Array.isArray(nx.people)&&nx.people.length)?nx.people:o.x.people,tags:(Array.isArray(nx.tags)&&nx.tags.length)?nx.tags:o.x.tags,status:nx.status!==undefined&&nx.status!==""?nx.status:o.x.status}); } });
-        }else if(again.length&&long.length===made.length){
-          const tot=again.reduce((n,x)=>n+W(x&&x.content),0); if(tot>0&&tot<outW){ made.length=0; again.forEach(x=>made.push(x)); }
-        }
-      }
-    }catch(e){ try{ console.warn("[memory] the too-long retry failed — the first answer stands:",e&&e.message||e); }catch(_){} }
     const union=k=>[...new Set(frag.flatMap(m=>Array.isArray(m[k])?m[k]:[]))];
     const topImp=Math.max(...frag.map(m=>+m.importance||0));
     /* (!) v146.1 — and the source lines of the fragments, in the order they were written, like the

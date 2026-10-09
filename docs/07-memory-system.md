@@ -551,9 +551,12 @@ and the latest lines. A yes needs `MEM_ARC_DEC_AT` (0.7): unsure is "still going
 only when the judge is off (Settings → Memory → Arc judge, `memArcDec`, on by default), paused, or has no answer. An arc the
 judge holds open has the old backstop of `MEM_ARC_CAP_DEC` = 40 lines; an arc the chat tracker judged keeps 12.
 
-**The reconciler's length guard.** After the answer is parsed, any memory over `MEM_RECON_MAX_WORDS` (160), or an answer as
-long as most of what went in (≥ 60% of ≥ 250 input words), goes back once through the same prompt, with its length and the
-limit named and the instruction to cut every step and keep every fact. The shorter answer replaces it; a failed or longer
-retry leaves the first answer (the fragments are only dropped once a replacement exists, as before).
+**A long stretch is merged in parts (v150.90).** v150.89 first sent an over-long merge back to be rewritten; that is gone —
+nothing is cut or sent back after the fact. Instead a stretch of more than `MEM_RECON_PART` (10) fragments is split, in order,
+into parts of about that many; each part is merged on its own (the same prompt, told it is part k of n and to keep every fact
+of it in about 100 words), all parts at once; then the stretch is merged from those few parts as before (the prior decisions
+and open matters go to that final pass). Each pass is small enough to be written within its length the first time, which a
+single pass over 68 fragments was not. If a part fails, the whole stretch goes through in one pass, as before. The final
+memories keep every fragment's source lines and the strongest status of what went in.
 
 Test: `tests/mem-arc-judge.browser.js`.

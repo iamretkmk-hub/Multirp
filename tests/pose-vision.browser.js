@@ -67,6 +67,11 @@ const {chromium}=require('playwright');
     e.value=""; saveSettings(false); return {box:true,saved,cleared:visionModel()==="x-ai/grok-4-fast"}; });
   ok("Settings → LLM Selection: the vision model saves, and blank means the default", S.box&&S.saved&&S.cleared, JSON.stringify(S));
 
+  const C=await pg.evaluate(()=>{ const d=ENGINE_PAYLOAD_DEFS.find(x=>x.key==="vision");
+    const inImg=(ENGINE_PAYLOAD_DEFS.find(x=>x.key==="image_writer")||{blocks:[]}).blocks.some(b=>b.promptKey==="x_img_describe");
+    return {card:!!d,label:d&&d.label,has:!!(d&&d.blocks.some(b=>b.promptKey==="x_img_describe")),inImg}; });
+  ok("v150.93: Payloads → Engine payloads has a \"Vision prompt\" card holding it (no longer inside the Image Prompt Writer)", C.card&&C.label==="Vision prompt"&&C.has&&!C.inImg, JSON.stringify(C));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);
   await b.close(); process.exit(fail?1:0);

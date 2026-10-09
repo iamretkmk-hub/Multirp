@@ -891,7 +891,7 @@ OpenRouter chat request — the `x_img_describe` prompt as the system message, t
 fills the box (and is saved with the picture, as typing would), where it can be edited. The picture itself is never written
 into the Debug log.
 
-The prompt (`x_img_describe`, editable under the image writer's card) has the model write `{{user}}` for the man and
+The prompt (`x_img_describe`, editable on its own card, Settings → 3 · Payloads → Engine payloads → **Vision prompt** — v150.93) has the model write `{{user}}` for the man and
 `{{char}}` for the woman literally, so the box fills them per character as before (`poseDescFilled`), and describe the act
 plainly and explicitly — what they are doing, positions, where the hands are, faces, clothing — in one present-tense
 paragraph of 50–110 words, only what is visible, adults only. A refusal, "(not described)" or an error leaves the box as it

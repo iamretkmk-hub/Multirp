@@ -246,3 +246,24 @@ Local, no-network entries are also logged (memory-retrieval ranking trace per tu
 
 **Rule: any new network call must be wrapped in `dbg`/`dbgDone`.** If it isn't in the Debug
 log, it doesn't exist for troubleshooting purposes.
+
+## v150.80 — a heat model and a fallback model
+
+Settings → LLM Selection → Roleplay has two new optional fields:
+
+- **Heat of the moment model** (`state.heatModel`, `sm_heatmodel`). While Heat of the moment is on (`state.heatOn`), or a
+  reply is a heat beat (`chat._heatBeat`), `generateCharacterReply` sends the reply to this model instead of `rpModel()`.
+  Blank: the roleplay model, as before. A heat turn does not advance the model rotation.
+- **Fallback model** (`state.fallbackModel`, `sm_fallbackmodel` — a key that existed without a field since v21). When a
+  roleplay reply (`generateCharacterReply`) or a text reply (`_replyToText`) is refused (`looksLikeRefusal`), comes back
+  empty or as instruction talk, or the request fails, that one reply is asked again ONCE with the fallback model
+  (`_rpFallbackCall`; Debug row "… · fallback model") and its answer is used. Never after a Stop, never the model that just
+  answered, never more than once. Blank (the default) keeps v148.7: no automatic second call. A refused text is no longer
+  posted as the character's text; the player gets a toast.
+
+## v150.82 — the player's turn is read aloud too
+
+While replies are voiced (`state.autoSpeak` or `state.narrMode`), the auto-RP player narrator (`narratePlayerTurn`) gets the
+standard spoken delivery appended to its system prompt (`_standardSpokenDelivery`): the "Voice delivery" fragment's
+`voiced` option as the player has it (filled with the player as speaker), else the `voice_delivery` block template. Heat on
+or off, it is always the standard wording — never `voiced_heat` / `heat_delivery`. Voicing off: nothing is added.

@@ -144,13 +144,13 @@ const {chromium}=require('playwright');
 
   // ---- a stored older router is refreshed, a hand-written one is not
   const rt=async v=>{ await pg.evaluate(t=>store.setRaw(K.routerPrompt,t),v);
-    await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.routerPrompt); };
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.routerPrompt); };
   ok("a stored older router picks up the fork",
      (await rt("You are a routing assistant for an image generator. Old body without the marker."))===router.d);
   ok("a router the user wrote themselves is left alone",
      (await rt("My own router. Return an index."))==="My own router. Return an index.");
   await pg.evaluate(()=>{ store.setRaw(K.routerPrompt,DEFAULT_ROUTER); });
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
 
   // ---- the migration adds the type to a customised set without touching it
   const mig=await pg.evaluate(async()=>{
@@ -159,7 +159,7 @@ const {chromium}=require('playwright');
     store.set(K.imgRules,mine); store.setRaw(K.imgPovMigration,null);
     return true;
   });
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
   const after=await pg.evaluate(()=>state.imgRules.map(r=>({id:r.id,pov:!!r.pov,style:r.promptStyle})));
   ok("a customised set gains BOTH paths, POV first and intimate behind it",
      after.length===4&&after[0].id==="r_pov_talk"&&after[0].pov===true
@@ -167,7 +167,7 @@ const {chromium}=require('playwright');
   ok("and nothing the user wrote is touched",
      after[2].id==="my_a"&&after[2].style==="A"&&after[3].id==="my_b"&&after[3].style==="B",
      JSON.stringify(after.map(r=>({id:r.id,style:String(r.style).slice(0,4)}))));
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
   const twice=await pg.evaluate(()=>state.imgRules.filter(r=>r.id==="r_pov_talk").length);
   ok("it never runs twice", twice===1, "found "+twice);
   ok("nor does the intimate insert",
@@ -176,7 +176,7 @@ const {chromium}=require('playwright');
     const mine=[{id:"my_pov",label:"My own POV",when:"w",cast:"player",pov:true,promptStyle:"P",enabled:true}];
     store.set(K.imgRules,mine); store.setRaw(K.imgPovMigration,null); return true;
   });
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
   ok("a POV rule the user built themselves is never replaced, and the intimate path lands after it",
      await pg.evaluate(()=>{ const r=state.imgRules;
        return r.length===2&&r[0].id==="my_pov"&&r[0].promptStyle==="P"&&r[1].id==="r_intimate_std"; }),
@@ -189,7 +189,7 @@ const {chromium}=require('playwright');
                              promptStyle:st,enabled:true}]);
       store.setRaw(K.imgPovMigration,"v1");
     },style);
-    await pg.reload(); await pg.waitForTimeout(2400);
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
     return pg.evaluate(()=>{ const r=state.imgRules.find(x=>x.id==="r_pov_talk");
       return {style:r.promptStyle,label:r.label,n:state.imgRules.length}; });
   };

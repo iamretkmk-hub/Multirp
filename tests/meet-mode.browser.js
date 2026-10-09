@@ -208,7 +208,7 @@ const {chromium}=require('playwright');
 
   // ---- stored older prompts are refreshed; hand-written ones are not
   const rt=async(key,v)=>{ await pg.evaluate(a=>store.setRaw(K[a.k],a.v),{k:key,v});
-    await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(a=>state[a],key); };
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(a=>state[a],key); };
   ok("an older stored travel prompt picks up the alone rule",
      /NOBODY TRAVELS TOGETHER/.test(await rt("travelPrompt","You are the GAMEMASTER narrating a journey in a roleplay. Old body.")));
   ok("and so does a copy that only has the v54.1 meeting rule",

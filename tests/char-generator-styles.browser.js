@@ -98,7 +98,7 @@ const {chromium}=require('playwright');
 
   // last: a reload runs the boot refreshes (and drops the stubs above)
   const old=await pg.evaluate(()=>DEFAULT_BATCH_BIO.replace(/"ties": \[[\s\S]*?\} \]/,'"socialGraph": "IN THE SECOND PERSON: your CONCRETE ties to the OTHER characters in this set, by name."'));
-  const rt=async(v)=>{ await pg.evaluate(v=>store.setRaw(K.batchBioPrompt,v),v); await pg.reload(); await pg.waitForTimeout(2200); return pg.evaluate(()=>state.batchBioPrompt); };
+  const rt=async(v)=>{ await pg.evaluate(v=>{ store.setRaw(K.batchBioPrompt,v); localStorage.removeItem("sm_pipesdone"); },v); await pg.reload(); await pg.waitForTimeout(2200); return pg.evaluate(()=>state.batchBioPrompt); };
   ok("a stored copy of the old shipped batch prompt is refreshed", old.indexOf('"socialGraph"')>=0&&(await rt(old))===(await pg.evaluate(()=>DEFAULT_BATCH_BIO)));
   ok("one the user wrote is left alone", (await rt("My own batch prompt."))==="My own batch prompt.");
   ok("no refresh pipe stood down", await pg.evaluate(()=>{ const sp=window.__stalePipes||[]; return sp.length===0?true:"stale: "+sp.join(", "); }));

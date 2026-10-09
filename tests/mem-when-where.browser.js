@@ -121,7 +121,7 @@ const {chromium}=require('playwright');
   ok("no refresh pipe was left pointing at a marker the default lost",
      !/memBuild/.test(pr.stale), pr.stale);
   const rt=async v=>{ await pg.evaluate(t=>store.setRaw(K.memBuild,t),v);
-    await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memBuild); };
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memBuild); };
   /* v92.1 — assert the REFRESH, not a marker string: an old copy comes back as the current
      default, whatever that default happens to say today. */
   ok("an older stored builder prompt picks the rule up", await (async()=>{

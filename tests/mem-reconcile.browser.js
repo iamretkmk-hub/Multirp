@@ -143,7 +143,7 @@ const {chromium}=require('playwright');
      &&/whichever the whole stretch actually was/.test(pr.d), pr.d.slice(0,400));
   ok("no refresh pipe was left pointing at a marker the default lost",
      !/memReconcile/.test(pr.stale), pr.stale);
-  const rt=async v=>{ await pg.evaluate(t=>store.setRaw(K.memReconcile,t),v);
+  const rt=async v=>{ await pg.evaluate(t=>{ store.setRaw(K.memReconcile,t); localStorage.removeItem("sm_pipesdone"); },v);
     await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memReconcile); };
   ok("an older stored reconciler prompt is refreshed to it",
      /- feelings: what the stretch left them carrying/.test(

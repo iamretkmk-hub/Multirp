@@ -173,7 +173,7 @@ const {chromium}=require('playwright');
     store.setRaw(K.imgFoundation,"# FOUNDATION (base rules for this image)\nWrite ONE image prompt as a single English comma-separated line of only what is physically VISIBLE in this one frame.\nNo square brackets, no \"|\", no line breaks — write the words you chose.");
     store.setRaw(K.imgFrameGuide,"## THIS REQUEST\n- x\n- If there is NO scene-type block above, write a single comma-separated English line of what is visible this frame.");
   });
-  await pg.reload(); await pg.waitForTimeout(2600);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2600);
   const UP=await pg.evaluate(()=>({f:state.imgFoundation===DEFAULT_IMG_FOUNDATION,g:state.imgFrameGuide===DEFAULT_IMG_FRAME_GUIDE}));
   ok("an old saved copy of either is upgraded to the new text", UP.f===true&&UP.g===true, JSON.stringify(UP));
 

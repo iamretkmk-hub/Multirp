@@ -153,7 +153,7 @@ const {chromium}=require('playwright');
   const LD=await (async()=>{
     await pg.evaluate(async()=>{ const p=JSON.parse(JSON.stringify(__OLD)); p.id="p_load"; p.universeId=state.universes[0].id;
       state.personas=state.personas.filter(x=>x.id!=="p_load").concat([p]); await _kvPersist("personas",()=>state.personas); });
-    await pg.reload(); await pg.waitForTimeout(2600);
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2600);
     return pg.evaluate(()=>{ const p=state.personas.find(x=>x.id==="p_load"); return p?{sp:p.speech,mig:p._speechMigrated,traits:p.traits,styleBy:p.styleBy}:null; }); })();
   ok("at load: an old character gets its groups once, and keeps its old fields", LD&&LD.mig==="v150.61"&&/^You speak in short/.test(LD.sp.spoken.main)&&/Clipped and cold/.test(LD.sp.text.emo.Anger)&&LD.traits===OLD.traits&&JSON.stringify(LD.styleBy)===JSON.stringify(OLD.styleBy), JSON.stringify(LD).slice(0,400));
 
@@ -217,7 +217,7 @@ const {chromium}=require('playwright');
   ok("the card writers ask for likes, not the behaviour profile", await pg.evaluate(()=>[DEFAULT_BIO,DEFAULT_BATCH_BIO,DEFAULT_UNIV].every(t=>/"likes":/.test(t)&&!/"traits":/.test(t)&&!/BEHAVIOR PROFILE/.test(t)&&/Pet peeves/.test(t))));
 
   console.log("\n[stored prompts]");
-  const rt=async(key,v)=>{ await pg.evaluate(a=>store.setRaw(K[a.key],a.v),{key,v}); await pg.reload(); await pg.waitForTimeout(2200); return pg.evaluate(k=>state[k],key); };
+  const rt=async(key,v)=>{ await pg.evaluate(a=>store.setRaw(K[a.key],a.v),{key,v}); await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2200); return pg.evaluate(k=>state[k],key); };
   const OLDW='You write how {{char}} SPEAKS, for a roleplay character card. ... Return ONLY this JSON:\n{"paths":{"multi":"…"},\n "emotions":{},\n "heat_emotions":{}}';
   ok("a stored copy of the old styles writer is refreshed", (await rt("x_style_writer",OLDW))===(await pg.evaluate(()=>X_ENGINE_PROMPTS.x_style_writer.def)));
   ok("a stored copy of the old card writer is refreshed", (await rt("bioPrompt","You are a character-card writer for an adult roleplay app. Given a short user brief … For \"traits\", write a compact BEHAVIOR PROFILE — ten lines"))===(await pg.evaluate(()=>DEFAULT_BIO)));

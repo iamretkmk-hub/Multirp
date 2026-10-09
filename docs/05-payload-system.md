@@ -1228,8 +1228,8 @@ v150.57. Code choices became options with code conditions.
 | `ties` | — | `ties` (`has_ties`): heading, intro, what you found out, the tie lines, everyone else | `rel_learned_raw`, `rel_notes_raw`, `rel_sheet_raw`, `rel_elsewhere_raw` (`_rl`) |
 | `format` | — (each path has its own box) | heat: `breaks_voiced` (`voicing`), `breaks_silent` (`not voicing`), `thought_superego` / `thought_physical` (`heat_narr`), `beat_end` (`render_mode = heat`, with `{{if heat_last_beat}}`) | — (text and heat formats written out) |
 | `already_said` | the box, each quoted line with its label (`{{if continuing}}`) | — | `said_line1_raw`, `said_line2_raw` (`_as`) |
-| `scene_now` | `# SCENE RIGHT NOW` | `changed` (`scene_changed`), `live` (`render_mode != text`), `yours` / `host` (`scene_home`), `subareas`, `live_text` (`render_mode = text`) | `scene_*_raw`, `subarea*_raw`, `moved_*`, `jump_*`, `period_*`, `arrived_raw`, `left_raw` (`_sc`) |
-| `privacy` | `# PRIVACY — WHO CAN HEAR YOU` | `with_others`, `others_only`, `alone`, `alone_public`, `apart`, `text` (`privacy = …`), `nearby`, `area_exposure` / `place_exposure` (`privacy_exposure`) | `privacy_*_raw` (`_sc`) |
+| `scene_now` | `# SCENE RIGHT NOW` | `changed` (`scene_changed`), `live` (`render_mode != text`), `yours` / `host` (`scene_home`), `subareas`, `live_text` (`render_mode = text`); v150.81: `live_text` after `live`, `knowledge` / `look` before `subareas` | `scene_*_raw`, `subarea*_raw`, `moved_*`, `jump_*`, `period_*`, `arrived_raw`, `left_raw` (`_sc`) |
+| `privacy` | `# PRIVACY — WHO CAN HEAR YOU` (v150.81: `WHO IS AROUND YOU`) | `with_others`, `others_only`, `alone`, `alone_public`, `apart`, `text` (`privacy = …`), `nearby`, `area_exposure` / `place_exposure` (`privacy_exposure`; v150.81: `crowd_high` / `crowd_low` / `crowd_none` by `privacy_crowd`, and `quieter`) | `privacy_*_raw` (`_sc`) |
 | `arrangements` | — | `plans` (`has_plans`): heading, intro, one paragraph per group (unkept, now, late, today, soon, further off) | `plans_*_raw` (`_cl`) |
 | `motive` | — | `bears` (as before): the wording per `motive` (warm / hostile), and the aside | `motive_target_raw`, `motive_aim_raw`, `motive_a_kind_raw`, `motive_kind_raw`, `motive_aside_raw` (`_pi`) |
 | `limits` | the heading and the lines | — | `limits_lines_raw` (`_drives`) |
@@ -1827,3 +1827,45 @@ here or named in the last lines, a key word of it is in the last six lines (the 
 character came (an active event or approach). With every live goal left out, the goals section is absent (the authored goals
 do not stand in). Switch: Settings → Features → Pursuits only when the scene touches them. Details: doc 08, "v150.79 — a
 topic earns its weight".
+
+## v150.81 — what a place looks like, and who is around
+
+Two new place fields (doc 09, "v150.81"): a sub-area's `scene` (what it looks like) and a location's `knowledge` (what the
+people there know about it). What the reply now says about the place:
+
+- **Scene right now** (`scene_now`). The location line is unchanged (`⚠️ YOUR CURRENT LOCATION: Ayla's Flat — specifically the
+  Kitchen…`). Two new options follow the home/host line: `knowledge` (condition `scene_knowledge_raw`) — "What people here
+  know about {{call//scene_place_raw}}: {{call//scene_knowledge_raw}}" — and `look` (condition `scene_look_raw`) — "What it
+  looks like here: {{call//scene_look_raw}}". The look is the viewer's own area's `scene`, else its old `description`; a place
+  with no areas of its own gives the location's `description` (`placeLook`). No other area's look or description is ever
+  sent. The areas option keeps the names only — "SUB-AREAS of {{place}}: {{areas}}.\nYou are in the {{area}}." — without the
+  earshot sentence; `subareas_raw` marks a private area (crowd `none`) that nobody present, not the player and not the viewer
+  is in: "Bedroom — empty, no one is there" (`placeAreaNames`; the mark is the piece `scene_area_empty`). `live_text` now
+  sits right after `live`, so on the text path the texter's place reads "WHERE YOU ARE…", then its knowledge and its look
+  (the texter's own area when they are in the player's place, else the location's description).
+- **Privacy** (`privacy`). The heading is "# PRIVACY — WHO IS AROUND YOU" (a text keeps "WHO CAN READ THIS"). "How exposed the
+  area you are standing in is: private (nothing said here gets out)" is gone; three options say who is around, by the new
+  flag `privacy_crowd` (`high` / `low` / `none`, from `crowdKey`): "This is a crowded place.", "There are a couple of people
+  far in the distance.", "There are no other people nearby." A quieter area is its own option (`quieter`): "If you want
+  somewhere with fewer people around, {{call//privacy_quieter_raw}} is quieter — you can suggest moving there." The alone,
+  alone-in-public and someone-in-another-room options lose "nobody can hear a word of this", the strangers who "hear you if
+  you raise your voice" and "They cannot hear what you say here" ("They are out of earshot"). `privacy_exposure_raw` is data
+  only now (`crowded` / `a couple of people, far off` / `nobody else around`) for a fragment someone wrote around it.
+- **The scene intro** says "Who is around you is covered under PRIVACY below" (was "Who can hear you").
+- **The bands** (`crowdKey`, on the exposure number `exposureLabel` read — a public place floored at 0.25): `none` = 0,
+  `low` above 0 and under 0.45 (gossipLabel's "fairly private" and "semi-public"), `high` from 0.45 ("gossipy", "very
+  public"). The gossip mechanic is unchanged.
+- **Elsewhere.** The Gamemaster's and the Scene Writer's scene block (`sceneStateBlock`): "Areas within X: names (an empty
+  private one marked). Emre is in the Kitchen.", "Who is around Emre's area: …", the place's knowledge, the player's area's
+  look, and the earshot rule without "can hear"; their list of places says who is around each. The ego question's
+  `who_else_can_see_or_hear`, the move pick's areas and a selfie's "NOT a home" note use the same three wordings
+  (`crowdLabel`, pieces `crowd_high` / `crowd_low` / `crowd_none` under Payloads → Other wording, "Who is around a place, and
+  an empty area").
+- **Upgrades.** "Scene right now" and "Privacy" are replaced in a saved list only while each is still its v150.80 default
+  (`FRAG_SHIPPED_ADDS` "v150.81.place", snapshot `FRAG_DEFAULTS_V150_80_OLD`); an edited one stays (it then gets the new
+  data: the marked area list, and the crowd words in `privacy_exposure_raw`). A stored reply piece override that is word for
+  word its v150.80 default (`BLOCK_TPL_V150_80_OLD`: scene_intro, scene_subareas, privacy_header, scene_privacy,
+  scene_area_privacy, scene_area_quieter, scene_alone, scene_alone_public, scene_nearby) is dropped at load, globally and per
+  universe.
+- Tests: `tests/place-descriptions.browser.js`; `tests/payload-faithful.browser.js` builds each payload as v150.80 sent it
+  and allows exactly these lines.

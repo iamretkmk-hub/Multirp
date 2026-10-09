@@ -73,7 +73,7 @@ bound to them (media, diaries, memories, relationships, quests).
 
 ## Locations, sub-areas, presence geometry
 
-- `universe.locations[]`: type `home`/`poi`, description (drives scene & image), travel time
+- `universe.locations[]`: type `home`/`poi`, description (what the place is; a picture uses it only where the area has no look of its own — v150.81), knowledge (roleplay only — v150.81), travel time
   override, **gossipChance** (leak-on-exit, doc 08), residents (present when you arrive;
   never auto-placed elsewhere; receive that place's leaks), picture (chat background via
   `applyLocationBackground`).
@@ -107,6 +107,29 @@ bound to them (media, diaries, memories, relationships, quests).
 - **World map** (`openWorldMap`): canvas hub — locations (drag-editable positions), character
   states (`_mapCharState`: place, feelings, intents, quests; bring/call/go), travel, calendar
   section, End Day button, map background image editor.
+
+
+### v150.81 — what a place looks like, and who is around
+
+- **`sublocations[].scene`** — "What it looks like — sent to pictures and the roleplay". Edited under each area in the
+  location editor (kept on the area as it is typed). The only place text a picture gets (doc 10), and the roleplay reads the
+  scene of the area the character stands in (doc 05). An area without one falls back to its old `description` wherever the
+  look is read (`subScene`); a place with no areas of its own uses the location's `description` (`placeLook`).
+- **`locations[].knowledge`** — "What people here know about this place — roleplay only, never pictures". Its history, its
+  reputation, its routines, who uses it. Sent to the reply ("What people here know about X: …"), the Gamemaster's and the
+  Scene Writer's scene block and the selfie writer; never to an image writer. No knowledge, nothing sent.
+- Both are plain fields of the location objects, so they are saved with the universe and go with every backup, roleplay
+  export and universes export as they are.
+- **Created by a model.** The place builders (`x_location_homes`, `x_location_quest`, `x_location_pois` — the universe editor's
+  Generate locations, and the universe generator's fallback) and the universe generator (`univPrompt`) ask for `knowledge`
+  per place and areas as `{"name","scene"}` (concrete visual detail: surfaces, light, objects; no people, no names).
+  `generateLocations` and `generateUniverse` / `runUniverseGenerator` store both (a bare area name is still taken). A stored
+  copy of those prompts is upgraded only while it is still exactly the v150.80 default (`LOC_GEN_SWAPS_V150_81`). Places
+  made by name only (`_ensureLocationByName` from a quest or a plan) have no model writing them and get neither.
+- **Who is around** replaces the privacy labels in everything a model reads (`crowdKey` / `crowdLabel`): none = 0 (private),
+  low = above 0 and under 0.45, high = 0.45 and up, on the exposure number (a public place is floored at 0.25, so it is
+  never "none"). The gossip mechanic (`locGossipChance`, `areaGossipChance`, the leak rolls) is unchanged. A list of a place's
+  areas is names only, a private one nobody is in marked "— empty, no one is there" (`placeAreaNames`).
 
 ## Time
 

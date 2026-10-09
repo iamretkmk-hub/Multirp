@@ -119,8 +119,10 @@ const {chromium}=require('playwright');
   ok("the pictures go up in exactly that order, one per person", R.body&&JSON.stringify(R.body.reference_images)==='["https://host/A1","https://host/S1","https://host/E1"]', JSON.stringify(R.body&&R.body.reference_images));
   ok("no first frame on a reference-only model", R.body&&!("image" in R.body), JSON.stringify(R.body));
   ok("the clip lasts the configured seconds", R.body&&R.body.duration===5, R.body&&R.body.duration);
-  ok("the writer gets where and when — the day and time the stretch runs across",
-     /WHERE AND WHEN:/.test(R.usr)&&/from Day 2, Afternoon to Day 2, Evening/.test(R.usr)&&/Cafe Derya/.test(R.usr), R.usr);
+  /* v150.81 — "Where" is what the area looks like, never a place name: a place with no location on record (only its name)
+     gives no "Where" at all (see tests/place-descriptions.browser.js) */
+  ok("the writer gets where and when — the day and time the stretch runs across, and no place name",
+     /WHERE AND WHEN:/.test(R.usr)&&/from Day 2, Afternoon to Day 2, Evening/.test(R.usr)&&!/Cafe Derya/.test(R.usr), R.usr);
   ok("and what everyone is wearing when it begins, under their token",
      /WHAT EVERYONE IS WEARING WHEN THE STRETCH BEGINS:/.test(R.usr)&&/FOR @image1 \(Ayla\):[\s\S]*red wrap dress/.test(R.usr)&&/FOR @image2 \(Selin\):[\s\S]*green hoodie/.test(R.usr), R.usr);
   ok("and the lines, oldest first", /THE LINES[^\n]*\n[\s\S]*Ayla: "Old reply one\."[\s\S]*Emre \(the player\): \*I sit down\.\*[\s\S]*Ayla: \*She leans in\.\*/.test(R.usr)&&!/Old line one/.test(R.usr), R.usr);

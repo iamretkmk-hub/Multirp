@@ -881,3 +881,18 @@ scene's world). Its "What this scene shows" text (`s.when`) and its clips' cue t
 Video Book passages. The reply an auto video came on with carries `m.sceneShown` `{id, name, clips, at}`; the Story Book
 treats it as that point's media (`_bkHasPic`) and plays the scene's clips there, in order and round again, and the book
 player plays it in place of a picture. Test: `tests/scene-by-place.browser.js`.
+
+## v150.92 — a vision model describes a pose picture
+
+Each pose picture's "what it shows" box (Settings › Image › a scene type › pose pictures) shows the picture beside it and a
+**Describe with the vision model** button. `poseDescribeWithVision` reads the picture (`_poseKey`), and `visionDescribe` sends
+it to the vision model (Settings → LLM Selection → **Vision model**, `visionModel`, blank = `x-ai/grok-4-fast`) as one
+OpenRouter chat request — the `x_img_describe` prompt as the system message, the picture as an `image_url` part. The answer
+fills the box (and is saved with the picture, as typing would), where it can be edited. The picture itself is never written
+into the Debug log.
+
+The prompt (`x_img_describe`, editable under the image writer's card) has the model write `{{user}}` for the man and
+`{{char}}` for the woman literally, so the box fills them per character as before (`poseDescFilled`), and describe the act
+plainly and explicitly — what they are doing, positions, where the hands are, faces, clothing — in one present-tense
+paragraph of 50–110 words, only what is visible, adults only. A refusal, "(not described)" or an error leaves the box as it
+was, with a note. Test: `tests/pose-vision.browser.js`.

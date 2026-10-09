@@ -1426,7 +1426,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.82</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.83</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -40221,9 +40221,10 @@ function editMessage(mid){
 function saveEditMessage(){
   const m=findMsg(_editMsgMid); if(!m){closeModal('editMsgModal');return;}
   const val=document.getElementById('editMsgText').value;
+  const was=String(m.content||"");
   m.content=val;
   // Find the owning chat to invalidate caches and re-render just this bubble.
-  let owner=null; for(const id in state.chats){ if(state.chats[id].messages.some(x=>x.mid===_editMsgMid)){owner=state.chats[id];break;} }
+  let owner=null, at=-1; for(const id in state.chats){ const i=state.chats[id].messages.findIndex(x=>x.mid===_editMsgMid); if(i>=0){owner=state.chats[id];at=i;break;} }
   if(owner) markChatDirty(owner);
   closeModal('editMsgModal');
   // Re-render the single bubble in place (cheap) and persist.
@@ -40232,6 +40233,74 @@ function saveEditMessage(){
   else renderChat();
   persistChats();
   toast("Edited");
+  if(owner&&was.trim()!==String(val||"").trim()){ const mid=_editMsgMid;
+    _editRecut(owner,mid,at).catch(e=>{ try{ console.warn("[edit] re-cut failed:",e&&e.message||e); }catch(_){} }); }
+}
+/* (!) v150.83 — AN EDITED LINE IS REMEMBERED AS IT NOW READS. The transcript every payload reads is the live
+   message list, so an edit reached the next reply at once — but the memories already cut from the line, the
+   player's memory of it, the plans filed from it and the relationship read it moved all kept the old words, and
+   the old version came back as something that happened. Delete has taken those back since v148.6; an edit now
+   re-cuts them: the arc memories (characters' and the player's) that cite the line are removed and that same
+   span is cut again from the edited text, stamped with the day and part of the day it was first filed under.
+   Plans and the relationship read are rolled back only when the edited line is the last one their engines
+   read (the next turn reads it again); an older line's plans stay, since re-reading would re-file every plan
+   after it. Merged memories (reconciled, condensed, diaries) are summaries of a whole stretch and stay as written. */
+async function _editRecut(chat,mid,at){
+  if(!chat||!mid)return 0;
+  let n=0;
+  const ms=chat.messages||[];
+  const idx=i=>ms.findIndex(y=>y&&y.mid===i);
+  if(state.mem&&state.key){
+    await withChatLock(chat,"memBuild",async()=>{
+      const merged=x=>x.source==="reconciled"||x.reconciledFrom||x.source==="condensed"||x.type==="CONSOLIDATED";
+      const gone=(state.memory||[]).filter(x=>x&&Array.isArray(x.srcMids)&&x.srcMids.includes(mid)&&!memSpansTime(x)&&!merged(x));
+      const pGone=Array.isArray(chat.playerMem)?chat.playerMem.filter(x=>x&&Array.isArray(x.srcMids)&&x.srcMids.includes(mid)&&x.source!=="condensed"):[];
+      if(!gone.length&&!pGone.length)return;          // not cut yet: the open arc reads the new words on its own
+      let lo=Infinity, hi=-1;
+      gone.concat(pGone).forEach(x=>x.srcMids.forEach(s=>{ const i=idx(s); if(i>=0){ if(i<lo)lo=i; if(i>hi)hi=i; } }));
+      if(!isFinite(lo)||hi<lo)return;
+      const src=gone[0]||pGone[0];
+      const day=(typeof src.gameDay==="number")?src.gameDay:(typeof src.day==="number"?src.day:(chat.gameDay||1));
+      const period=String(src.gamePeriod||src.period||"")||undefined;
+      const ids=new Set(gone.map(x=>x.id)), pIds=new Set(pGone);
+      const keepMem=state.memory.slice(), keepP=Array.isArray(chat.playerMem)?chat.playerMem.slice():null;
+      state.memory=state.memory.filter(x=>!ids.has(x.id));
+      if(pGone.length)chat.playerMem=chat.playerMem.filter(x=>!pIds.has(x));
+      n+=gone.length+pGone.length;
+      const carry=chat.memCarry&&typeof chat.memCarry==="object"?Object.assign({},chat.memCarry):null;   // the live scene's remainder is not this span's
+      let r=null;
+      try{ r=await commitMemoryArc(chat,lo,hi,day,period); }catch(e){ r={failed:1,wrote:0}; }
+      if(carry)chat.memCarry=carry;
+      if(r&&r.failed&&!r.wrote){
+        // nothing landed: the old memories are better than none (they come back as they were)
+        const have=new Set((state.memory||[]).map(x=>x&&x.id));
+        keepMem.forEach(x=>{ if(ids.has(x.id)&&!have.has(x.id))state.memory.push(x); });
+        if(keepP&&pGone.length&&!(chat.playerMem||[]).some(x=>Array.isArray(x&&x.srcMids)&&x.srcMids.includes(mid)))chat.playerMem=keepP;
+        n=0;
+      }
+      try{ persistMemory(); }catch(e){}
+    });
+  }
+  // the engines that read up to this very line read it again on the next turn
+  const last=chat._ftReadMid===mid||(chat.trkRead&&typeof chat.trkRead==="object"&&Object.keys(chat.trkRead).some(k=>chat.trkRead[k]===mid))||(chat._stUndo&&chat._stUndo.mid===mid);
+  if(last){
+    n+=_retryRollbackPlans(chat,mid);
+    let prev=null; for(let i=Math.min(at,ms.length)-1;i>=0;i--){ const x=ms[i]; if(x&&x.mid&&x.mid!==mid&&x.role!=='system'&&!x.sysError&&!x.textMsg&&!x.worldEvent&&!x.questNote&&!x.calNote&&!x.dayMarker){ prev=x.mid; break; } }
+    if(chat._ftReadMid===mid)chat._ftReadMid=prev;
+    if(chat.trkRead&&typeof chat.trkRead==="object")Object.keys(chat.trkRead).forEach(k=>{ if(chat.trkRead[k]===mid)chat.trkRead[k]=prev; });
+    const su=chat._stUndo;
+    if(su&&su.mid===mid){
+      Object.keys(su.rows||{}).forEach(k=>{ const o=chat.rel&&chat.rel[k], r=su.rows[k]; if(!o||!r)return;
+        o.st=Object.assign({},r.st); o.stNote=r.stNote; o.stNoteDay=r.stNoteDay; o.stNoteAt=r.stNoteAt;
+        if(Array.isArray(o.episodes))o.episodes.length=Math.min(o.episodes.length,r.ep);
+        if(Array.isArray(o.dayOpinions))o.dayOpinions.length=Math.min(o.dayOpinions.length,r.op); n++; });
+      chat._stUndo=null;
+      chat._stCount=Math.max(0,(state.stInterval||3)-1);   // the next turn reads the edited line afresh
+    }
+  }
+  markChatDirty(chat); persistChats();
+  try{ if(document.getElementById('screen-memory')&&document.getElementById('screen-memory').classList.contains('active'))renderMemory(); }catch(_){}
+  return n;
 }
 async function deleteMessage(mid){
   if(!(await uiConfirm("This can't be undone.",{title:"Delete this message?",ok:"Delete",danger:true}))) return;

@@ -514,3 +514,23 @@ Berker's wife sat in the player's lap left one ordinary memory. Importance now f
 
 These reach `memories_that_weigh_now` (importance 4–5 weighs for 90 days; open and secret ones until resolved), recall and
 the pursuit weight check's `{{source}}` (doc 08, "v150.79 — a topic earns its weight"). Test: `tests/pursuit-weight.browser.js`.
+
+## v150.83 — an edited line is remembered as it now reads
+
+Every payload reads the live message list, so an edit (or a delete) reaches the next reply's transcript at once. A
+delete has also taken back what was built from the line since v148.6 (`_retryRollback`). An edit did not: the memories
+cut from it, the player's memory of it and the plans filed from it kept the old words, and the old version came back
+as something that happened.
+
+`saveEditMessage` now calls `_editRecut(chat,mid,at)` when the text actually changed:
+
+- **Memories.** The arc memories (characters' and the player's) that cite the line in `srcMids` are removed, and the
+  span they covered is cut again with `commitMemoryArc`, stamped with the day and part of the day it was first filed
+  under. `memDoneIdx`, the open arc and the live scene's `memCarry` are untouched. A re-cut that writes nothing (the
+  model fails) puts the old memories back. A line no memory was cut from yet is left to the open arc.
+- **Merged memories** (reconciled, condensed, diaries) are summaries of a whole stretch and stay as written.
+- **Plans and the relationship read** are rolled back only when the edited line is the last one their engines read
+  (`_ftReadMid`, `trkRead`, `_stUndo`), so the next turn reads it again. An older line's plans stay: re-reading from it
+  would re-file every plan after it.
+
+Test: `tests/edit-recut.browser.js`.

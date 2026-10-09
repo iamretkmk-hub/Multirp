@@ -282,7 +282,7 @@ const {chromium}=require('playwright');
         seen.push(msgs.map(m=>String(m.content)).join("\n"));
         await new Promise(r=>setTimeout(r,250)); inflight--; return "reply number "+k; };
       const a=sendTextMessage(chat,p,"first text");
-      for(let i=0;i<40&&!inflight;i++) await new Promise(r=>setTimeout(r,25));
+      for(let i=0;i<200&&!inflight;i++) await new Promise(r=>setTimeout(r,25));   // up to 5s: a slow CI runner took over 1s to start the first reply
       const b2=sendTextMessage(chat,p,"second text");
       await Promise.all([a,b2]);
       const th=textThreadMsgs(chat,"q_a").map(m=>m.role[0]+":"+m.content);

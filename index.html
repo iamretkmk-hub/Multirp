@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.97</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.98</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -9568,6 +9568,8 @@ function loadState(){
     const id=key+"|"+newMarker;
     if(_pipesDone.has(id))return;
     _pipesDone.add(id); _pipesNew=true;
+    // v150.98 — written as it runs: a later step of this load that throws must not leave it to run again next time
+    try{ localStorage.setItem("sm_pipesdone",JSON.stringify([..._pipesDone])); }catch(_){}
     if(hits(state[key])){ state[key]=def; store.setRaw(K[key],def); }
     (state.universes||[]).forEach(u=>{ if(u&&u.prompts&&hits(u.prompts[key])) delete u.prompts[key]; });
   };
@@ -25408,7 +25410,9 @@ function openPromptEdit(key,scope){
   document.getElementById('peEditHint').textContent=(reg.hint||"")+(reg.json?" This prompt must return structured JSON.":"");
   let cur;
   if(_promptEditScope==="universe"){
-    cur=(typeof _uePrompts[key]==="string"&&_uePrompts[key].trim()!=="")?_uePrompts[key]:(reg.def?reg.def():"");
+    /* (!) v150.98 — with no override of its own the universe uses the GLOBAL prompt — the player's edit when there is one. This
+       opened the shipped default instead, so a prompt edited in Settings looked "reverted to the original" here. */
+    cur=(typeof _uePrompts[key]==="string"&&_uePrompts[key].trim()!=="")?_uePrompts[key]:globalPromptValue(key);
     const nm=(document.getElementById('ueName')&&document.getElementById('ueName').value.trim())||"this universe";
     document.getElementById('peEditScope').textContent=`Editing for ${nm}. Leaving it identical to the default keeps it inheriting your global prompt.`;
   }else{
@@ -64576,6 +64580,26 @@ function _plqUsedIn(promptKey){
   ENGINE_PAYLOAD_DEFS.forEach(d=>{ if(d.blocks.some(b=>b.promptKey===promptKey))out.push(d.label); });
   return out;
 }
+/* (!) v150.98 — A UNIVERSE'S OWN COPY WINS. up() reads the open universe's copy of a prompt before the global one, so an
+   edit made here never reached a universe that keeps its own (tuned, imported, or set in its editor): "I edit the
+   suggestions prompt and it is back to the original". Say so where the edit is made, with the way out. */
+function _plqUniShadowHtml(key){
+  try{
+    const u=curUniverseObj(); const ov=u&&u.prompts&&typeof u.prompts[key]==="string"&&u.prompts[key].trim()!==""?u.prompts[key]:null;
+    if(ov==null||ov===state[key])return "";
+    return `<div class="plqShared plqUniShadow" style="border-color:var(--accent)">${icon("warn")} <b>${esc(u.name||"This universe")}</b> uses its own copy of this prompt, so edits here do not reach it. `+
+      `<button class="btn sec small" type="button" style="width:auto;padding:4px 8px;margin-top:4px" onclick="plqUseGlobalHere('${escJs(key)}')">Use this text in ${esc(u.name||"this universe")}</button></div>`;
+  }catch(e){ return ""; }
+}
+function plqUseGlobalHere(key){
+  try{
+    const u=curUniverseObj(); if(!u||!u.prompts)return;
+    delete u.prompts[key];
+    if(typeof persistUniverses==="function")persistUniverses();
+    document.querySelectorAll(`textarea[data-pkey="${CSS.escape(key)}"]`).forEach(t=>{ const d=t.closest("details"); const w=d&&d.querySelector(".plqUniShadow"); if(w)w.remove(); });
+    toast((u.name||"This universe")+" now uses this prompt");
+  }catch(e){}
+}
 /* Shared renderer for one block's editable/read-only body. */
 function _plqBlockInner(pKey,b){
   if(b.kind==="prompt"){
@@ -64585,6 +64609,7 @@ function _plqBlockInner(pKey,b){
       <textarea class="fld" id="${taId}" data-pkey="${key}" oninput="plqInput(this)">
 ${esc(state[key]||"")}</textarea>
       <div class="plqWarnHost">${_phWarnHtml(state[key]||"",promptPlaceholders(key))}</div>
+      ${_plqUniShadowHtml(key)}
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="plqReset('${escJs(key)}')">Reset to default</button>
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" onclick="writeAiForTextarea('${escJs(taId)}','${escJs(key)}')">${icon("sparkle")} Write with AI</button>
       <button class="btn sec small" style="width:auto;padding:6px 10px;margin-top:6px" title="Insert a placeholder this prompt supports" onclick="phMenuForPrompt('${escJs(taId)}','${escJs(key)}',event)">{{&nbsp;}} Placeholder</button>

@@ -34,6 +34,29 @@ const {chromium}=require('playwright');
   const up1=await pg.evaluate(()=>({now:state.x_reply_suggest,def:X_ENGINE_PROMPTS.x_reply_suggest.def}));
   ok("an old stored default is still upgraded the first time", up1.now===up1.def, String(up1.now).slice(0,120));
 
+  /* v150.98 — the other ways an edit looked reverted */
+  console.log("\n[v150.98 — a universe's own copy]");
+  const U=await pg.evaluate(()=>{
+    const key="x_reply_suggest_woman", mine="1. FUNNY: mine.\n2. WARM: mine.\n3. BOLD: mine.";
+    state[key]=mine; store.setRaw(K[key],mine);
+    const u=curUniverseObj(); u.prompts=u.prompts||{}; delete u.prompts[key];
+    const r={};
+    // the universe editor opens the prompt actually in use (the global edit), not the shipped default
+    _uePrompts={}; openPromptEdit(key,"universe"); r.ueShows=document.getElementById('peEditText').value===mine; try{ closeModal('promptEditModal'); }catch(_){}
+    // a universe with its own copy: Settings says so and offers to use the edit there
+    u.prompts[key]="1. OLD: the universe's own copy."; r.upBefore=up(key)===u.prompts[key];
+    const html=_plqBlockInner("e_test",{kind:"prompt",promptKey:key}); r.warn=/uses its own copy of this prompt/.test(html)&&/plqUseGlobalHere/.test(html);
+    plqUseGlobalHere(key); r.upAfter=up(key)===mine&&!(key in u.prompts);
+    r.noWarn=!/uses its own copy/.test(_plqBlockInner("e_test",{kind:"prompt",promptKey:key}));
+    return r; });
+  ok("the universe editor opens the edited global prompt when the universe has no copy of its own", U.ueShows===true, JSON.stringify(U));
+  ok("a universe's own copy is what it uses", U.upBefore===true, JSON.stringify(U));
+  ok("Settings says the open universe uses its own copy, with a button to use the edit there", U.warn===true, JSON.stringify(U));
+  ok("the button drops the universe's copy: the edit reaches it, and the note goes", U.upAfter===true&&U.noWarn===true, JSON.stringify(U));
+  ok("each upgrade's record is written the moment it runs", await pg.evaluate(()=>{
+      localStorage.removeItem("sm_pipesdone"); loadState(); const n=JSON.parse(localStorage.getItem("sm_pipesdone")||"[]").length; const src=loadState.toString(); const writes=(src.match(/localStorage\.setItem\("sm_pipesdone"/g)||[]).length;
+      return (n>20&&writes>=2)?true:JSON.stringify({n,writes}); }));
+
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);
   await b.close(); process.exit(fail?1:0);

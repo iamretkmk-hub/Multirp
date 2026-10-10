@@ -1151,6 +1151,11 @@
 #cmdPalette .cmdRow code{color:var(--accent);font-size:12px}
 #cmdPalette .cmdArg{opacity:.55;font-size:11px;margin-left:4px}
 #cmdPalette .cmdDesc{opacity:.7;font-size:10.5px;line-height:1.35;margin-top:2px}
+/* v150.107 — Reply fragments: where the conversation history goes, and a fragment that just moved across it */
+.fragHistLine{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border);color:var(--accent);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.fragHistLine::before,.fragHistLine::after{content:"";flex:1;border-top:2px dashed var(--accent);opacity:.7}
+#fragList [id^="fragRow_"]{transition:background .6s}
+#fragList .fragMoved{background:color-mix(in srgb,var(--accent) 18%,transparent)}
 </style>
 </head>
 <body data-theme="dark">
@@ -1425,7 +1430,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.106</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.107</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -65535,7 +65540,27 @@ function fragEdCtx(fp,c,on){
   const r=_fragAt(fp+".ctx"); if(!r.obj)return; let a=Array.isArray(r.obj.ctx)?r.obj.ctx.slice():[];
   a=a.filter(x=>x!==c); if(on)a.push(c); r.obj.ctx=a; renderFragEditor();
 }
-function fragEdMove(i,d){ const L=_fragDraftGet(); const j=i+d; if(j<0||j>=L.length)return; const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
+/* (!) v150.107 — THE LIST SHOWS WHERE THE HISTORY GOES. A reply is every "before the history" fragment in list order, then
+   the conversation history, then every "after the history" fragment in list order (fragCompile) — but the list mixed the
+   two, so changing "Placed" moved nothing on screen and the order you saw was not the order sent. The list is now kept
+   in that order (_fragPartition: before, then after, each keeping its own order — what is sent does not change) with a
+   "Dialogue history" line between them. Changing "Placed" moves the fragment to the line's other side, next to it (the
+   last one above, or the first one below), and ↑ / ↓ across the line changes its placing. */
+function _fragPartition(L){
+  if(!Array.isArray(L))return L;
+  const open=_fragOpen!=null?L[_fragOpen]:null;
+  const out=L.filter(f=>f&&f.seg!=="tail").concat(L.filter(f=>f&&f.seg==="tail"));
+  L.splice(0,L.length,...out);
+  if(open)_fragOpen=L.indexOf(open);
+  return L;
+}
+function _fragHeadCount(L){ return L.filter(f=>f&&f.seg!=="tail").length; }
+function _fragFlash(i){ _fragRowIntoView(i);
+  try{ const row=document.getElementById('fragRow_'+i); if(row){ row.classList.add('fragMoved'); setTimeout(()=>row.classList.remove('fragMoved'),1400); } }catch(e){} }
+function fragEdMove(i,d){ const L=_fragPartition(_fragDraftGet()); const j=i+d; if(j<0||j>=L.length)return;
+  if((L[i].seg==="tail")!==(L[j].seg==="tail")){   // across the history line: the same spot, the other side of it
+    L[i].seg=L[i].seg==="tail"?"head":"tail"; renderFragEditor(); _fragFlash(i); return; }
+  const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
 function fragEdOpen(i){ _fragOpen=(_fragOpen===i)?null:i; renderFragEditor(); _fragRowIntoView(i); }
 /* v150.59 — the opened fragment's row, brought into view inside the list only when it is not already showing (by hand:
    scrollIntoView did not move this list) */
@@ -65546,10 +65571,17 @@ async function fragEdDel(i){ const L=_fragDraftGet(); if(!(await uiConfirm(`Dele
 function fragEdAdd(){ const L=_fragDraftGet(); L.push({id:"f_"+Date.now().toString(36),name:"New fragment",seg:"tail",paths:FRAG_PATHS.slice(),text:"",byPath:{},mode:"any",options:[]}); _fragOpen=L.length-1; renderFragEditor(); _fragRowIntoView(_fragOpen); }
 function fragEdOptAdd(i){ const f=_fragDraftGet()[i]; f.options=f.options||[]; f.options.push({id:"o_"+Date.now().toString(36),name:"New condition",code:"",ask:"",ctx:[],text:"",paths:[],byPath:{}}); renderFragEditor(); }
 async function fragEdOptDel(i,j){ const f=_fragDraftGet()[i]; if(!(await uiConfirm(`Delete the condition "${(f.options[j]||{}).name||""}"?`,{title:"Delete condition?",ok:"Delete",danger:true})))return; f.options.splice(j,1); renderFragEditor(); }
-function fragEdSet(fp,v){ const r=_fragAt(fp); if(r.obj){ r.obj[r.key]=v; renderFragEditor(); } }
+function fragEdSet(fp,v){ const r=_fragAt(fp); if(!r.obj)return;
+  const f=r.obj, L=_fragDraftGet(), moving=r.key==="seg"&&L.indexOf(f)>=0&&(f.seg==="tail")!==(v==="tail");
+  if(moving){ const open=_fragOpen!=null?L[_fragOpen]:null, i=L.indexOf(f); L.splice(i,1);
+    L.splice(_fragHeadCount(L),0,f);   // next to the line, on its new side: the last one above it, or the first one below
+    if(open)_fragOpen=L.indexOf(open); }
+  f[r.key]=v; renderFragEditor();
+  if(moving)_fragFlash(L.indexOf(f)); }
 function fragEdSave(){
   const L=_fragDraftGet();
-  const same=JSON.stringify(L)===JSON.stringify(FRAG_DEFAULTS);
+  _fragPartition(L);   // v150.107 — the order shown is the order kept (what is sent is the same either way)
+  const same=JSON.stringify(L)===JSON.stringify(_fragPartition(JSON.parse(JSON.stringify(FRAG_DEFAULTS))));
   state.fragments=same?null:JSON.parse(JSON.stringify(L));
   store.setRaw(K.fragments,same?"":JSON.stringify(L));
   store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(",")); _fragMigratedFor=state.fragments;   // v150.48 — what you saved is what you meant
@@ -65596,16 +65628,18 @@ function renderFragEditor(){
      top (and the page could jump with it), so ticking a path far down the list lost your place. Both scroll positions are
      read before and put back after. */
   const _lst0=document.getElementById('fragList'), _lt=_lst0?_lst0.scrollTop:0, _wy=window.scrollY;
-  const L=_fragDraftGet();
+  const L=_fragPartition(_fragDraftGet()), nHead=_fragHeadCount(L);
+  const histLine=`<div id="fragHistLine" class="fragHistLine" title="The conversation so far is sent here: the fragments above this line go before it, the ones below it after it"><span>Dialogue history</span></div>`;
   const rows=L.map((f,i)=>{
     const open=_fragOpen===i, paths=f.paths||FRAG_PATHS;
     const head=`<div id="fragRow_${i}" style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid var(--border)">
       <span style="flex:1;min-width:0"><b>${esc(f.name||f.id)}</b> <span class="desc" style="display:inline">${f.seg==="tail"?"after the history":"before the history"} · ${paths.map(p=>FRAG_PATH_LABEL[p]).join(", ")}${(f.options||[]).length?` · ${f.options.length} choose-when`:""}${(f.options||[]).some(o=>o&&_fragCodeNamesPath(o.code))?` · <span class="fragPathFlag" style="color:var(--warn,var(--danger))">a condition names a path</span>`:""}</span></span>
-      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move up" onclick="fragEdMove(${i},-1)">↑</button>
-      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move down" onclick="fragEdMove(${i},1)">↓</button>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="${i===nHead?"Move above the dialogue history":"Move up"}" onclick="fragEdMove(${i},-1)">↑</button>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="${i===nHead-1?"Move below the dialogue history":"Move down"}" onclick="fragEdMove(${i},1)">↓</button>
       <button class="btn sec small" style="width:auto;padding:4px 9px" onclick="fragEdOpen(${i})">${open?"Close":"Edit"}</button></div>`;
-    if(!open)return head;
-    return head+`<div style="padding:8px;background:var(--panel,transparent)">
+    const pre=i===nHead?histLine:"";
+    if(!open)return pre+head;
+    return pre+head+`<div style="padding:8px;background:var(--panel,transparent)">
       <div style="display:flex;gap:6px"><input class="fld" data-fp="${i}.name" oninput="fragEdInput(this)" value="${esc(f.name||"")}" style="flex:1">
         <button class="btn sec small" style="width:auto" title="Delete this fragment" onclick="fragEdDel(${i})">${icon("trash")}</button></div>
       <div class="desc" style="margin-top:6px">Paths: ${_fragChips(String(i),paths)}</div>
@@ -65618,7 +65652,7 @@ function renderFragEditor(){
       ${(f.options||[]).map((o,j)=>_fragOptForm(i,j,f,o)).join("")}
       <button class="btn sec small" style="width:auto;margin-top:8px" onclick="fragEdOptAdd(${i})">+ Add a choose-when condition</button>
     </div>`;
-  }).join("");
+  }).join("")+(nHead===L.length?histLine:"");
   host.innerHTML=`<div class="desc" style="margin-bottom:6px">Every reply (solo, multi, gamemaster, text, heat) is built from these fragments, and only from them: each fragment's main body on its paths, plus the choose-when parts that apply this turn — by code, or by the decision model's answer before the reply. Open one to see everything it sends.</div>
     <div class="desc" data-help style="margin-bottom:6px"><b>Separate your own wording from a call with a BLANK LINE, not <code>{{gap}}</code>.</b> A paragraph — everything between two blank lines — is dropped whole when every call inside it comes back empty, and <code>{{gap}}</code> is a blank line that deliberately does <i>not</i> end the paragraph. That is right for a heading that should vanish with its data, and wrong for your own prose: written next to <code>{{gap}}</code>, it disappears on every turn that call has nothing to say.</div>
     <div class="desc">Inject an asked condition when the model is at least this sure: <input type="number" min="0.5" max="0.99" step="0.05" value="${fragAt()}" style="width:70px" onchange="fragAtSet(this.value)"></div>

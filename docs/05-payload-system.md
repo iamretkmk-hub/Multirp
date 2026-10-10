@@ -1065,7 +1065,11 @@ parity holds).
 A fragment (`FRAG_DEFAULTS`, 38 shipped, built from the user's own layouts) has:
 
 - **paths**: which reply paths it appears on: `solo`, `multi`, `gm`, `text`, `heat`.
-- **seg**: before the conversation history (`head`) or after it (`tail`).
+- **seg**: before the conversation history (`head`) or after it (`tail`). The editor list is kept in the order the
+  reply is sent (v150.107, `_fragPartition`: every `head` fragment in list order, then every `tail` one — the order
+  `fragCompile` already used, so nothing sent changes), with a **Dialogue history** line between the two. Changing
+  "Placed" moves the fragment to the other side of the line, next to it (last above / first below), and ↑ / ↓ across the
+  line changes its `seg`. Saving keeps that order.
 - **text**: its main body, always injected on its paths. `byPath[path]` is added under it on one path (v150.59; it used
   to replace it).
 - **options**: the *choose when* parts, injected only when they apply. An option has:

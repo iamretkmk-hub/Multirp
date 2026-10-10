@@ -242,6 +242,14 @@ self-check above still runs on every load (it never marks a pipe done). Tests th
 `sm_pipesdone` first (`tests/prompt-edits-stick.browser.js`). A full backup carries `sm_pipesdone` with the rest of
 localStorage, so restoring an older backup (which lacks the newer ids) upgrades its stored prompts once, as before.
 
+**(!) v150.98 — the other ways an edit looked reverted.** (1) The universe editor's prompt list opened the SHIPPED default for
+a prompt the universe has no copy of, though the universe uses the global prompt — the player's edit — so an edit made in
+Settings looked gone there; it now opens `globalPromptValue(key)`. (2) `up()` reads the open universe's own copy before the
+global one, so a Settings edit never reached a universe that keeps its own (tuned, imported, set in its editor); the
+Settings editor now says so under the prompt (`_plqUniShadowHtml`) with "Use this text in …" (`plqUseGlobalHere` drops
+the universe's copy). (3) `sm_pipesdone` is written as each pipe runs, so a later step of the load that throws cannot
+leave the pipes to run again on the next load.
+
 There are no hand-written copies of this pattern left. Three base-instruction guards and one
 format-rules guard used to be inline `if(state.x.indexOf(...))` blocks; two of them had gone stale
 exactly this way, so they are pipes now and inherit the self-guard.

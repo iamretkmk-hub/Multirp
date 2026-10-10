@@ -339,3 +339,17 @@ together with `Promise.all`:
 
 Off, the one request carries everything as before. Test: `tests/decision-split.browser.js`; the bundle's own tests pin
 the switch off.
+
+## v150.99 — a refusal the reply check sees is written again by the fallback model
+
+`looksLikeRefusal` catches the usual refusal wordings and sends them to the fallback model before anything is posted
+(v150.80). A refusal it does not know ("Bu konuda yardımcı olamam.", a polite dodge of the whole turn) was posted, and
+the reply check's `refusal` flag only put a pill on the bubble. Now, when the reply check flags `refusal` (at
+`replyCheckAt`) and a fallback model is set, `_refusalFallback` sends the SAME payload the reply was written from to the
+fallback model (dbg "· fallback model (refusal)") and its answer, cleaned like any reply (`_cleanReplyText`), overwrites
+the refused text in the same message. Nothing is removed or rolled back — the user's rule: "do not remove anything, just
+send the same payload to the fallback model". `generateCharacterReply` returns the payload it sent; the solo, group and
+Gamemaster-reaction paths keep it beside the message in memory (`_replyPayloads`, a WeakMap, never persisted) and record
+the model that wrote the reply (`genModel`). Not when the fallback model wrote it, not twice for one line, not when the
+line was edited meanwhile, not after a reload (no payload kept), and not when the fallback model refuses too.
+No fallback model set: the line stays, flagged, as before. Test: `tests/refusal-fallback.browser.js`.

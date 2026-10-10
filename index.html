@@ -1151,6 +1151,11 @@
 #cmdPalette .cmdRow code{color:var(--accent);font-size:12px}
 #cmdPalette .cmdArg{opacity:.55;font-size:11px;margin-left:4px}
 #cmdPalette .cmdDesc{opacity:.7;font-size:10.5px;line-height:1.35;margin-top:2px}
+/* v150.107 — Reply fragments: where the conversation history goes, and a fragment that just moved across it */
+.fragHistLine{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--border);color:var(--accent);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.fragHistLine::before,.fragHistLine::after{content:"";flex:1;border-top:2px dashed var(--accent);opacity:.7}
+#fragList [id^="fragRow_"]{transition:background .6s}
+#fragList .fragMoved{background:color-mix(in srgb,var(--accent) 18%,transparent)}
 </style>
 </head>
 <body data-theme="dark">
@@ -1425,7 +1430,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.102</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.108</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2787,7 +2792,7 @@
     <div class="card" id="peVoiceBox" style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <div style="min-width:0"><b>The voice of this card</b>
-          <div class="desc" style="margin:2px 0 0">This card is read to the character as “You are …”, so their own fields belong in the second person. Fixing the voice changes only the PERSON — “I grew up…” or “She grew up…” becomes “You grew up…” — and leaves the facts, the language and the length exactly as they are. Their live pursuits are repaired with it, since they print on this card too. The director notes are not touched: they are third person on purpose.</div>
+          <div class="desc" style="margin:2px 0 0">This card is read to the character as “You are …”, so their own fields belong in the second person. Fixing the voice changes only the PERSON — “I grew up…” or “She grew up…” becomes “You grew up…” — and leaves the facts, the language and the length exactly as they are. Their live pursuits are repaired with it, since they print on this card too. The roleplay instructions are repaired with them, since they print on this card as “How you play it”; the interject notes are not touched.</div>
         </div>
         <button class="btn sec small" type="button" id="peVoiceFix" onclick="repairCardVoice()">Fix the voice</button>
       </div>
@@ -3401,12 +3406,15 @@ async function preloadCollections(){
 }
 /* One place for every persist* to ask before it writes. A read-only session still plays — it
    just never commits, and says so once rather than silently discarding the turn. */
-let _roWarned=false;
+let _roWarned=false, _roWarnT=0;
 function canPersistCollections(){
   if(collectionsSafe) return true;
-  if(!_roWarned){
-    _roWarned=true;
-    try{ toast(_tabReadOnly?"Read-only: StoryMind is open in another tab — close it and reload to save here."
+  // v150.108 — said again on a later refused save (at most every 20 s), not only the first: an edit that looks saved is the worst kind
+  if(!_roWarned||Date.now()-_roWarnT>20000){
+    _roWarned=true; _roWarnT=Date.now();
+    try{ const b=document.getElementById('tabRoBar'); if(b&&_tabReadOnly)b.classList.add('show'); }catch(_){}
+    try{ toast(_wlLost?"NOT saved — StoryMind is saving in another window. Tap “Use this window” to save here."
+              :_tabReadOnly?"Read-only: StoryMind is open in another tab — close it and reload to save here."
                           :"Storage unreadable — NOT saving. Close other tabs and reload before playing."); }catch(_){}
   }
   return false;
@@ -3416,7 +3424,9 @@ function canPersistCollections(){
    next save put back the state it loaded, over twenty turns played in the first. The first tab takes
    a lock at boot; a later tab runs read-only (the same collectionsSafe=false the unreadable-storage
    path uses) and says so. The lock goes with the tab, so after the first tab closes a reload of the
-   second takes over — and the second is told when that happens. Web Locks where available, else a
+   second takes over — and the second is told when that happens.
+   (!) v150.108 — reversed: the tab opened LAST takes the lock (the writer saves and hands over, or has it
+   stolen when frozen), and the one that lost it is read-only until it is shown again. See acquireWriterLock. Web Locks where available, else a
    BroadcastChannel handshake; with neither, every tab writes, as before. */
 let _tabReadOnly=false;
 /* (!) v146.1 — THE TAB THAT INHERITS THE LOCK BECOMES THE WRITER. A read-only tab queued for the lock
@@ -3432,18 +3442,31 @@ function acquireWriterLock(){
     let settled=false; const done=v=>{ if(!settled){ settled=true; resolve(v); } };
     try{
       if(navigator.locks&&navigator.locks.request){
-        let handoff=false; try{ handoff=sessionStorage.getItem(_WL_HANDOFF)==="1"; sessionStorage.removeItem(_WL_HANDOFF); }catch(_){}
+        try{ sessionStorage.removeItem(_WL_HANDOFF); }catch(_){}
         const hold=lock=>{
           if(!lock){ done(false); return; }
-          done(true); return new Promise(()=>{});   // held for the life of the page
+          done(true); return new Promise(r=>{ _wlRelease=r; });   // held until another window takes over
         };
-        if(handoff&&typeof AbortController!=="undefined"){
-          const ctl=new AbortController(); const t=setTimeout(()=>{ try{ ctl.abort(); }catch(_){} },_WL_WAIT_MS);
-          navigator.locks.request("storymind-writer",{signal:ctl.signal},lock=>{ clearTimeout(t); return hold(lock); })
-            .catch(e=>{ clearTimeout(t); done(!(e&&e.name==="AbortError")); });   // waited it out → read-only
-        }else{
-          navigator.locks.request("storymind-writer",{ifAvailable:true},hold).catch(()=>done(true));
-        }
+        /* (!) v150.108 — THE WINDOW YOU OPEN IS THE ONE THAT SAVES. It used to be the window opened FIRST: a later one
+           ran read-only, said so once in a bar, and saved nothing, while every edit still showed on its screen. On a
+           phone the first window is easy to leave behind (a browser tab kept alive beside the installed app, an app
+           instance still in memory), so prompts, bios and pictures edited in the window being used were never saved,
+           and when the old window died this one reloaded and showed them gone. Now a window opening asks the writer
+           to save what it has and hand over (_WL_CTL "yield"), takes the lock when it does, and takes it anyway
+           (steal) after _WL_YIELD_MS when the writer cannot answer (a frozen background page cannot save anything).
+           The window that lost the lock becomes read-only at once (_wlOnLost) and takes over again, by reloading
+           with the saved state, the moment it is shown again. */
+        if(!_wlCanSteal()){ navigator.locks.request("storymind-writer",{ifAvailable:true},hold).catch(()=>done(true)); return; }
+        navigator.locks.request("storymind-writer",{ifAvailable:true},lock=>{
+          if(lock) return hold(lock);
+          try{ _wlCtl().postMessage({t:"yield"}); }catch(_){}
+          const ctl=new AbortController(); const t=setTimeout(()=>{ try{ ctl.abort(); }catch(_){} },_WL_YIELD_MS);
+          navigator.locks.request("storymind-writer",{signal:ctl.signal},l=>{ clearTimeout(t); return hold(l); })
+            .catch(e=>{ clearTimeout(t);
+              if(settled){ _wlOnLost(); return; }
+              if(e&&e.name==="AbortError") navigator.locks.request("storymind-writer",{steal:true},hold).catch(()=>{ if(settled)_wlOnLost(); else done(true); });
+              else done(true); });
+        }).catch(()=>{ if(settled)_wlOnLost(); else done(true); });
         return;
       }
     }catch(e){}
@@ -3463,6 +3486,33 @@ function acquireWriterLock(){
   });
 }
 let _wlPromoting=false;
+const _WL_YIELD_MS=1500;
+let _wlRelease=null, _wlLost=false, _wlCtlCh=null;
+function _wlCanSteal(){ return typeof AbortController!=="undefined"&&typeof BroadcastChannel!=="undefined"; }
+function _wlCtl(){
+  if(!_wlCtlCh){ _wlCtlCh=new BroadcastChannel("storymind-writer-ctl"); _wlCtlCh.onmessage=ev=>{ if(ev&&ev.data&&ev.data.t==="yield")_wlYield(); }; }
+  return _wlCtlCh;
+}
+try{ if(typeof BroadcastChannel!=="undefined"&&navigator.locks)_wlCtl(); }catch(_){}
+// Another window is opening: save what is pending, stop writing, and hand the lock over.
+async function _wlYield(){
+  if(!_wlRelease||_tabReadOnly)return;
+  try{ if(typeof flushPersistChats==="function")await Promise.race([Promise.resolve(flushPersistChats()),new Promise(r=>setTimeout(r,1000))]); }catch(_){}
+  _wlOnLost();
+  const r=_wlRelease; _wlRelease=null; try{ r&&r(); }catch(_){}
+}
+// This window no longer holds the lock: read-only from now on, and said so where it cannot be missed.
+function _wlOnLost(){
+  if(_wlLost)return; _wlLost=true;
+  _tabReadOnly=true; _storageRO=true; collectionsSafe=false; collectionsError="StoryMind was opened in another window";
+  const b=document.getElementById('tabRoBar');
+  if(b){ const t=b.querySelector('.updTxt'); if(t)t.innerHTML="StoryMind was opened in another window, and that window saves now. <b>Nothing you change here is saved.</b> Switching back to this window takes over again.";
+    const btn=b.querySelector('button'); if(btn)btn.textContent="Use this window"; b.classList.add('show'); }
+  _wlAwaitWriter(b);
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==="visible"&&_wlLost&&!_wlPromoting){ _wlPromoting=true; try{ location.reload(); }catch(_){} }   // take over with the saved state
+});
 function _showTabReadOnly(){
   const b=document.getElementById('tabRoBar'); if(b)b.classList.add('show');
   _wlAwaitWriter(b);
@@ -3769,7 +3819,7 @@ THE FORMAT (follow it exactly):
 - The instructions are in English, as markdown: a heading, a sentence or two, then bullets.
 - After each bullet, 1-3 short example lines IN {{story_language}}, in double quotes, the way {{char}} would really say or type them. Examples show the shape, they are not lines to repeat: keep them short and varied.
 - A "main" entry opens with a heading that names the group: "## SPEECH: HOW YOU TALK", "## TEXTING: HOW YOU WRITE MESSAGES", "## IN THE HEAT OF THE MOMENT". Then one or two sentences on the voice, then two to four "### " sub-headings (the baseline, and the situations that change it: in a group, reacting to news, with someone you trust…), each with 1-3 bullets. 120-220 words.
-- An emotion entry opens with "### When you mainly feel <emotion>", then 2-3 bullets, each with its examples. 40-90 words. Scale it with the tones given: at mild it barely shows; at intense it drives the line.
+- An emotion entry opens with a heading that tells {{char}} they ARE feeling it, in the word they would use for it: "### You are feeling <how they feel> — this is how you respond when you are <how they feel>:" ("### You are feeling guilty — this is how you respond when you are guilty:"), then 2-3 bullets, each with its examples. 40-90 words. Scale it with the tones given: at mild it barely shows; at intense it drives the line.
 - Describe the shape of the speech: sentence length, rhythm, register, the words they reach for or avoid, what they stop saying, how they ask and answer.
 - Never tell them to name the emotion out loud.
 
@@ -3783,7 +3833,7 @@ You speak clean, plain Turkish. Short declarative sentences, practical words, no
 - You let others talk and come in with the one practical line: "Tamam, ben hallederim."
 
 And an emotion entry:
-### When you mainly feel Anger
+### You are feeling angry — this is how you respond when you are angry:
 - Your sentences get even shorter and you stop asking: "Yeter." "Bunu konuşmayacağım."
 - You turn to a task instead of the person, and say so: "Ben mutfağa geçiyorum."
 
@@ -4820,7 +4870,10 @@ This is where the two of you left off. Carry on from it — do not start over, a
     hint:"Rewrites a character's own fields into the card voice — \u201cYou are…\u201d — changing the person and nothing else. Behind “Fix the voice” in the character editor.",
     def:`You repair the VOICE of a roleplay character's identity card. The card is injected into the model that plays them under a heading that opens "You are <name>", so every field that is the character's OWN must address them directly as "you" / "your". A card written as "I" or as "she/he" teaches the model to speak as a narrator about the character instead of as the character, which is the single thing the card exists to prevent.
 
-You are given some of these fields: personality, backstory, likes, goals, spoken_style, text_style, heat_style. Return the same fields, in the SECOND PERSON.
+You are given some of these fields: personality, backstory, likes, goals, instructions, spoken_style, text_style, heat_style. Return the same fields, in the SECOND PERSON.
+
+# THE ROLEPLAY INSTRUCTIONS
+"instructions" are notes on how the character is played, often written about them as a director would ("Petra is a married woman and a mother. Her bluntness is not cruelty… Show her friendship with other women"). They are printed on the character's own card as "How you play it: …", so they are addressed to the character like everything else: "You are a married woman and a mother. Your bluntness is not cruelty… Show your friendship with other women." Keep every rule, boundary and instruction exactly as it is; only the person changes.
 
 # CHANGE THE PERSON. CHANGE NOTHING ELSE.
 This is the whole job, and the hardest part is leaving everything alone.
@@ -4857,7 +4910,7 @@ Returning an "ask" byte-for-byte as you received it is a failure of this job. If
 "their night", "their secret", "the affair they had" — where the third person covered the character AND somebody else, the character half becomes yours and the other half stays theirs: "the night the two of you spent", "what the two of you did". Never leave a bare "their" standing for something you were part of.
 
 Return ONLY strict JSON with the fields you were given, and nothing else:
-{"personality":"…","backstory":"…","likes":"…","goals":"…","spoken_style":"…","text_style":"…","heat_style":"…","goals_live":["…","…"],"pursuits":[{"id":"…","desc":"…","ask":"…","motive":"…"}]}`},
+{"personality":"…","backstory":"…","likes":"…","goals":"…","instructions":"…","spoken_style":"…","text_style":"…","heat_style":"…","goals_live":["…","…"],"pursuits":[{"id":"…","desc":"…","ask":"…","motive":"…"}]}`},
 
   x_prompt_reviser:{label:"Prompt reviser (image / video)",json:false,
     hint:"Behind the “revise this prompt” box in the playground and in image→video.",
@@ -6349,6 +6402,24 @@ function relReadings(o,opts){
   return rows.map(r=>_relReadFill(r.line,opts));
 }
 
+/* (!) v150.103 — HOW A RELATIONSHIP ENTRY IS WRITTEN. The daily read was told to "add what was learned" and its example was a
+   remembered line, so each update appended a scene, a quotation and a mood: "At a window table he named İskender as the man he
+   handed the vekalet to … asked only for 'ben de' back; you refused it and went to your daughter. … He is easier to be near
+   than he has any right to be." That is a badly written memory, not a relationship. One rule for every writer of an entry
+   (the daily read, its batched form, the generator): the standing state between the two, as settled fact. */
+const REL_ENTRY_STYLE=`HOW A RELATIONSHIP ENTRY IS WRITTEN — the standing state between the two of them, as settled fact, never a record of what happened:
+- who they are to each other: kinship or role, how they are connected, what they call each other;
+- the history that made it, summed up in a clause — never told scene by scene;
+- what now stands between them because of what happened: what was offered, asked or confessed and where it stands, what each knows about the other, secrets kept, debts, promises, boundaries;
+- the facts about the other person that matter here: their work, their family, their situation.
+NEVER in an entry:
+- a quotation or anyone's exact words — no quotation marks at all; give the substance ("he has asked you to say it back"), not the words;
+- a scene: where it happened, who sat where, who walked out, what came next;
+- the day retold in order, or a list of what happened;
+- a feeling or a mood ("he is easier to be near than he has any right to be") — that is the "description", not the relationship.
+When something new is learned, fold it into the sentence it belongs to and drop what it replaces: the entry does not grow by a sentence a day.
+BAD: "At the bar by the window he told you 'I never stopped thinking about you', said sorry for disappearing, and you left to fetch your son. Being near him is easy and dangerous at once."
+GOOD: "He has told you he never stopped wanting you and has apologised for the years he stayed away; you have not answered him."`;
 const DEFAULT_REL=`You are the RELATIONSHIP TRACKER for an ongoing roleplay. You track, for one character at a time, HOW THAT CHARACTER FEELS about another person (usually the player), across nine independent axes. Each axis runs from -100 to +100.
 
 ---
@@ -6460,13 +6531,13 @@ Given the character's CURRENT axis values and the full day's interaction, you wi
 
 (!) NOTHING DATED. It is how they feel, not what is planned: never a plan, an invitation, an appointment or anything tied to a time ("tomorrow evening", "tonight", "on Friday", "last night"). Those are kept on the calendar, which knows when they happen; written here they stay "tomorrow" long after it has passed.
 
-3. WHAT THEY LEARNED GOES INTO THE RELATIONSHIP. When the day taught this character something DURABLE about the target — a fact, a history, something the target did or told them — write **relationship**: the complete, updated text of this character's relationship entry for the target (the FOUNDATION you are shown), which REPLACES that entry.
+3. WHAT CHANGED BETWEEN THEM GOES INTO THE RELATIONSHIP. When the day changed something DURABLE between this character and the target — a fact learned, something offered, asked or confessed, a line crossed, a secret now shared — write **relationship**: the complete, updated text of this character's relationship entry for the target (the FOUNDATION you are shown), which REPLACES that entry.
 - Keep the foundation: the kinship or role, the shared history, everything the author wrote that is still true. Never drop something only because today did not mention it.
-- Add what was learned and will be carried from now on (e.g. "she told you her sister only ever says 'I'm fine' before the line goes dead").
+- ${REL_ENTRY_STYLE}
 - Leave out anything tied to a time: an invitation, a plan, an appointment, "next week", "tomorrow", "tonight". Those live on the calendar; written into a relationship they never expire.
-- It is who they are to each other, not a mood: today's feeling belongs in "description".
 - SECOND PERSON, from this character's side ("your wife", "you grew up together"); one paragraph, at most about 700 characters.
-- If nothing durable changed, LEAVE THE FIELD OUT: the entry is kept exactly as it is. Do not rewrite it in other words.
+- If the FOUNDATION itself is written as a story (quotations, a scene, the day retold, a mood), rewrite it in this form even when nothing new was learned.
+- Otherwise, if nothing durable changed, LEAVE THE FIELD OUT: the entry is kept exactly as it is. Do not rewrite it in other words.
 
 Return **only** this strict JSON:
 
@@ -7316,8 +7387,9 @@ const DEFAULT_RELGEN=`You define {{char}}'s RELATIONSHIPS — who every other pe
 
 For EACH other character (and for {{user}}, the player), produce two things:
 - "tie": the concrete relationship in a few words — e.g. wife, husband, father, mother, daughter, son, sibling, cousin, best friend, friend, rival, enemy, ally, boss, employee, mentor, ex, neighbour, stranger, acquaintance. If the cards give no basis for a tie, say so honestly ("stranger", "acquaintance from the same circle").
-  WRITE THE TIE AS A BARE LABEL — a noun phrase and nothing else. It is printed after a name ("Hugo Lind — husband") and read by several different parts of the app, each of which would have to mean a different person by "my" or "her", so it carries NO pronoun and NO possessive: not "my husband", not "the son of her friends", not "the daughter of my friends" — "husband", "son of the Brandts", "daughter of the Brandts". One clause, no semicolons, no sentence. Everything you want to say from {{char}}'s point of view, in {{char}}'s own first-person voice, goes in "relationship" below, where it belongs.
-- "relationship": a short, vivid PROSE description, IN THE SECOND PERSON, of who this person is to {{char}} and how they relate. Write it TO {{char}} as "you" — "he is the man you married, and the whole argument you keep having with yourself" — never "she married him" or "{{char}} keeps having". This lands on {{char}}'s own card, which is written to them as "you" throughout, and a line about themselves in the third person is a push toward writing ABOUT the character instead of AS them. The OTHER person stays in the third person; only {{char}} is "you". Decide what's worth including — it may cover how they address each other (names, titles, nicknames, pet names), whether and where they live together (use ONLY the provided locations), shared history, and {{char}}'s baseline feeling/stance (warmth, wariness, loyalty, resentment, attraction, duty, indifference). Keep it to the settled baseline their history would produce, not a momentary mood. Be specific and grounded; never contradict the world setting. NOTHING DATED: a plan, an invitation, an appointment, or anything that happens or happened at a time ("he is invited to dinner tomorrow evening", "tonight", "on Friday", "last week") is not who someone is to {{char}} — it belongs to the calendar, which keeps it current. Leave it out: written into a relationship it stays "tomorrow" long after the day has passed.
+  WRITE THE TIE AS A BARE LABEL — a noun phrase and nothing else, naming the role or kinship only: never a feeling, a stance or a mood ("the man you are careful around", "someone you can't trust" are not ties). It is printed after a name ("Hugo Lind — husband") and read by several different parts of the app, each of which would have to mean a different person by "my" or "her", so it carries NO pronoun and NO possessive: not "my husband", not "the son of her friends", not "the daughter of my friends" — "husband", "son of the Brandts", "daughter of the Brandts". One clause, no semicolons, no sentence. Everything you want to say from {{char}}'s point of view, in {{char}}'s own first-person voice, goes in "relationship" below, where it belongs.
+- "relationship": a short, vivid PROSE description, IN THE SECOND PERSON, of who this person is to {{char}} and how they relate. Write it TO {{char}} as "you" — "he is the man you married, and the whole argument you keep having with yourself" — never "she married him" or "{{char}} keeps having". This lands on {{char}}'s own card, which is written to them as "you" throughout, and a line about themselves in the third person is a push toward writing ABOUT the character instead of AS them. The OTHER person stays in the third person; only {{char}} is "you". Decide what's worth including — it may cover how they address each other (names, titles, nicknames, pet names), whether and where they live together (use ONLY the provided locations), shared history, and {{char}}'s baseline feeling/stance (warmth, wariness, loyalty, resentment, attraction, duty, indifference). Keep it to the settled baseline their history would produce, not a momentary mood. Be specific and grounded; never contradict the world setting.
+${REL_ENTRY_STYLE} NOTHING DATED: a plan, an invitation, an appointment, or anything that happens or happened at a time ("he is invited to dinner tomorrow evening", "tonight", "on Friday", "last week") is not who someone is to {{char}} — it belongs to the calendar, which keeps it current. Leave it out: written into a relationship it stays "tomorrow" long after the day has passed.
 
 SPECIAL CASE — {{user}} (the player): {{char}}'s OWN cards (personality, backstory, their own notes) and the world setting are the AUTHORITATIVE source for who {{user}} is to them, together with any PLAYER INSTRUCTION you are given below. If ANY of those establish a bond — spouse, lover, parent, child, sibling, friend, rival, enemy, ally, boss, protégé, patron — you MUST use that exact relationship and write it from {{char}}'s point of view. Do NOT downgrade a described bond to "stranger". Only if truly NOTHING anywhere — not the cards, not the setting, not the instruction — suggests they have ever met should you OMIT the {{user}} key entirely from your output. Never emit a bare "stranger" entry for {{user}}.
 
@@ -10325,8 +10397,7 @@ function loadState(){
   // ---- v150.64 refresh: no dated items (plans, invitations, "tomorrow") in a relationship ----
   _refreshPipe("relGenPrompt","You define {{char}}'s RELATIONSHIPS","NOTHING DATED: a plan, an invitation",DEFAULT_RELGEN);
   _refreshPipe("relPrompt","You are the RELATIONSHIP TRACKER for an ongoing roleplay","NOTHING DATED. It is how they feel",DEFAULT_REL);
-  // ---- v150.65 refresh: what the daily read learns updates the relationship entry ("relationship"; no social_fact) ----
-  _refreshPipe("relPrompt",["You are the RELATIONSHIP TRACKER for an ongoing roleplay","NOTHING DATED. It is how they feel"],"WHAT THEY LEARNED GOES INTO THE RELATIONSHIP",DEFAULT_REL);
+  // ---- v150.65 refresh (what the daily read learns updates the entry) — superseded by the v150.103 pipe ("HOW A RELATIONSHIP ENTRY IS WRITTEN"), whose marker the default keeps ----
   // ---- v150.64 refresh: the ego question weighs a spouse or partner and today's plans ----
   _refreshPipe("x_reply_check_repeat","Does the reply repeat what {{char}} already said, did or thought earlier in this scene","the same closing move as their earlier replies",X_ENGINE_PROMPTS.x_reply_check_repeat.def);
   _refreshPipe("x_ego_pick","which is winning in {{char}}: what {{char}} wants (the id)","a spouse or partner on record is a real weight",X_ENGINE_PROMPTS.x_ego_pick.def);
@@ -10483,6 +10554,13 @@ function loadState(){
    _refreshPipe("x_ego_pick","which is winning in {{char}}: what {{char}} wants (the id)","HOW A PAST FEELING LASTS",X_ENGINE_PROMPTS.x_ego_pick.def);
    /* v150.96 — a stored copy of the old wearing tracker (values in the scene's language, sunglasses as an outfit) gets the new one */
    _refreshPipe("x_wearing_tracker","Write the value in the same language the scene is in.","Write the value in plain English",X_ENGINE_PROMPTS.x_wearing_tracker.def);
+   /* v150.103 — the relationship tracker and the generator write an entry as the standing state between two people (REL_ENTRY_STYLE) */
+   _refreshPipe("relPrompt","You are the RELATIONSHIP TRACKER for an ongoing roleplay","HOW A RELATIONSHIP ENTRY IS WRITTEN",DEFAULT_REL);
+   _refreshPipe("relGenPrompt","You define {{char}}'s RELATIONSHIPS","HOW A RELATIONSHIP ENTRY IS WRITTEN",DEFAULT_RELGEN);
+   /* v150.104 — an emotion entry tells them what they are feeling ("### You are feeling guilty — …") */
+   _refreshPipe("x_style_writer",["You write how {{char}} SPEAKS AND BEHAVES","### When you mainly feel"],"this is how you respond when you are",X_ENGINE_PROMPTS.x_style_writer.def);
+   /* v150.105 — Fix the voice repairs the roleplay instructions too */
+   _refreshPipe("x_card_voice","You repair the VOICE of a roleplay character's identity card","# THE ROLEPLAY INSTRUCTIONS",X_ENGINE_PROMPTS.x_card_voice.def);
    /* a saved emotion list whose Calm or Guilt still has the shipped v150.67 description gets the new one (Calm is not a
       character with an open or secret memory weighing on them; Guilt holds even when nobody knows) */
    try{ if(Array.isArray(state.emotions)){ let ch=false;
@@ -22685,7 +22763,7 @@ async function evalRelationshipsBatch(chat,fromP,targets,exchange,dayMems,day){
   const blocks=live.map((t,i)=>`### ${i+1}. ${t.parts.tName}\n${t.parts.foundBlock}${t.parts.learnedBlock||""}${t.parts.fastBlock?t.parts.fastBlock.replace(/^\n+/,"")+"\n\n":""}${t.parts.curLine}`).join("\n\n");
   const names=live.map(t=>t.parts.tName);
   const userMsg=`${P0.bioBlock}${memBlock}\n\nThis read covers ${live.length} people, one block each:\n\n${blocks}\n\n`+
-    `For EACH person above, judge the LASTING relationship ${fromP.name} has with them as a whole, reasoning from the MEMORIES above (only the ones that concern that person move that bond), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. For each person output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence "description" of how ${fromP.name} feels about them now — written TO ${fromP.name} as "you", never as "${fromP.name}" or "she" or "he". ALSO, per person: "relationship" — ${fromP.name}'s whole relationship entry for them (the block's FOUNDATION), rewritten ONLY when there is something LEARNED EARLIER in that block to fold in, or when today taught ${fromP.name} something DURABLE about them: a fact, a history, something they did or told them. Keep the foundation (the kinship or role, the shared history, everything already written that is still true), add what was learned, and leave out anything tied to a time — an invitation, a plan, an appointment, "next week", "tomorrow", "tonight": those are kept on the calendar. One paragraph, at most about 700 characters; it REPLACES the entry, so anything left out is forgotten. If nothing durable changed, omit the field and the entry is kept exactly as it is. Never put a feeling there. BOTH fields are in the SECOND PERSON, from ${fromP.name}'s side ("your husband", "you had to ask him for help"), never "${fromP.name} had to" or "she had to" — they are read by the actor playing ${fromP.name}, in a card that opens "You are ${fromP.name}". Never open either one with ${fromP.name}'s own name.\n\n`+
+    `For EACH person above, judge the LASTING relationship ${fromP.name} has with them as a whole, reasoning from the MEMORIES above (only the ones that concern that person move that bond), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. For each person output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence "description" of how ${fromP.name} feels about them now — written TO ${fromP.name} as "you", never as "${fromP.name}" or "she" or "he". ALSO, per person: "relationship" — ${fromP.name}'s whole relationship entry for them (the block's FOUNDATION), rewritten ONLY when there is something LEARNED EARLIER in that block to fold in, when today changed something DURABLE between ${fromP.name} and them (a fact learned, something offered, asked or confessed, a line crossed), or when the entry itself is written as a story. It is the STANDING STATE between them as settled fact — who they are to each other, the history summed up in a clause, what now stands between them and where it stands — never a scene, never anyone's exact words (no quotation marks), never the day retold, never a mood; fold the new into the sentence it belongs to. Keep the foundation (the kinship or role, the shared history, everything already written that is still true), and leave out anything tied to a time — an invitation, a plan, an appointment, "next week", "tomorrow", "tonight": those are kept on the calendar. One paragraph, at most about 700 characters; it REPLACES the entry, so anything left out is forgotten. If nothing durable changed, omit the field and the entry is kept exactly as it is. Never put a feeling there. BOTH fields are in the SECOND PERSON, from ${fromP.name}'s side ("your husband", "you had to ask him for help"), never "${fromP.name} had to" or "she had to" — they are read by the actor playing ${fromP.name}, in a card that opens "You are ${fromP.name}". Never open either one with ${fromP.name}'s own name.\n\n`+
     `THIS CALL COVERS SEVERAL PEOPLE: the JSON format in your instructions is the shape of ONE entry. Return ONLY {"targets":[{"target":"<exact name from the heading>", …that entry's fields…}, …]} — one entry per person, in this order: ${names.join(", ")}.`;
   let j=null;
   try{
@@ -23052,7 +23130,7 @@ async function evalRelationship(chat,fromP,toId,toName,exchangeMsgs,dayMems,day,
     (o.desc?`\nCurrent description: ${o.desc}`:"");
 
   const userMsg=`${bioBlock}${foundBlock}${learnedBlock}${memBlock}${fastBlock}\n\n${curLine}\n\n`+
-    `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence "description" of how ${fromP.name} feels about ${tName} now — written TO ${fromP.name} as "you", never as "${fromP.name}" or "she" or "he". ALSO: "relationship" — ${fromP.name}'s whole relationship entry for ${tName}${found?" (the FOUNDATION above)":" (there is none on record yet)"}, rewritten ONLY when ${_learnedEarlier?"there is something LEARNED EARLIER to fold in, or when ":""}today taught ${fromP.name} something DURABLE about ${tName}: a fact, a history, something ${tName} did or told them. Keep the foundation (the kinship or role, the shared history, everything already written that is still true), add what was learned, and leave out anything tied to a time — an invitation, a plan, an appointment, "next week", "tomorrow", "tonight": those are kept on the calendar. One paragraph, at most about 700 characters. It REPLACES the entry, so anything you leave out is forgotten. If nothing durable changed, omit the field entirely and the entry is kept exactly as it is. Never put a feeling there; feelings belong in "description". BOTH of those fields are written in the SECOND PERSON, from ${fromP.name}'s side — "your husband", "you had to ask him for help", never "${fromP.name} had to" or "she had to": both are read by the actor playing ${fromP.name}, in a card that opens "You are ${fromP.name}". THIS IS THE COMMONEST MISTAKE, so check it before you answer: each one is about ${tName}, but every reference to ${fromP.name} in either is "you". "She has cut him off" is WRONG when the "she" is ${fromP.name} — it is "You have cut him off". Never open either one with ${fromP.name}'s own name.`;
+    `Judge the LASTING relationship as a whole, reasoning from the MEMORIES above (the facts ${fromP.name} would actually carry forward), filtered through who ${fromP.name} is. Weigh all axes HOLISTICALLY (they constrain each other; familiarity gates how deep trust/affection/respect can go). The fleeting feelings are LOW WEIGHT — let them tint, not decide. Output a SINGLE, measured per-axis delta reflecting the whole day (not an overreaction to any one event) and a fresh 1-2 sentence "description" of how ${fromP.name} feels about ${tName} now — written TO ${fromP.name} as "you", never as "${fromP.name}" or "she" or "he". ALSO: "relationship" — ${fromP.name}'s whole relationship entry for ${tName}${found?" (the FOUNDATION above)":" (there is none on record yet)"}, rewritten ONLY when ${_learnedEarlier?"there is something LEARNED EARLIER to fold in, when ":""}today changed something DURABLE between ${fromP.name} and ${tName} (a fact learned, something offered, asked or confessed, a line crossed), or when the entry itself is written as a story. It is the STANDING STATE between them as settled fact — who they are to each other, the history summed up in a clause, what now stands between them and where it stands — never a scene, never anyone's exact words (no quotation marks), never the day retold, never a mood; fold the new into the sentence it belongs to. Keep the foundation (the kinship or role, the shared history, everything already written that is still true), and leave out anything tied to a time — an invitation, a plan, an appointment, "next week", "tomorrow", "tonight": those are kept on the calendar. One paragraph, at most about 700 characters. It REPLACES the entry, so anything you leave out is forgotten. If nothing durable changed, omit the field entirely and the entry is kept exactly as it is. Never put a feeling there; feelings belong in "description". BOTH of those fields are written in the SECOND PERSON, from ${fromP.name}'s side — "your husband", "you had to ask him for help", never "${fromP.name} had to" or "she had to": both are read by the actor playing ${fromP.name}, in a card that opens "You are ${fromP.name}". THIS IS THE COMMONEST MISTAKE, so check it before you answer: each one is about ${tName}, but every reference to ${fromP.name} in either is "you". "She has cut him off" is WRONG when the "she" is ${fromP.name} — it is "You have cut him off". Never open either one with ${fromP.name}'s own name.`;
 
   /* v148.4 — the batched daily read (evalRelationshipsBatch) borrows this pair's blocks (opts.parts) and
      hands the pair its own entry of the one answer back (opts.answer), so what is shown and what is
@@ -24077,6 +24155,29 @@ function speechHas(s,emoOnly){
 // An emotion's name as Settings → Emotions writes it, matched without case; null when it is not in the list.
 function speechEmoCanon(n,list){ const k=String(n||"").trim().toLowerCase(); if(!k)return null;
   const e=(list||emotionList()).find(x=>String(x.name||"").trim().toLowerCase()===k); return e?e.name:null; }
+/* (!) v150.104 — AN EMOTION BOX SAYS WHAT THEY FEEL. Each emotion box opened "### When you mainly feel Guilt": the character
+   was never told they ARE feeling it, only handed a condition to check. It reads "### You are feeling guilty — this is how
+   you respond when you are guilty:" — said to them, in the words they would use for it. The writer is asked for that
+   heading (x_style_writer); a box with the old heading is rewritten on load and, as a net, when it goes into a payload. */
+const EMO_ADJ={calm:"calm",joy:"happy",affection:"affectionate",desire:"full of desire",sadness:"sad",anger:"angry",fear:"afraid",
+  disgust:"disgusted",surprise:"surprised",shame:"ashamed",guilt:"guilty",jealousy:"jealous",pride:"proud"};
+function emoFeelHeading(name){
+  const n=String(name||"").trim(), adj=EMO_ADJ[n.toLowerCase()];
+  return adj?`### You are feeling ${adj} — this is how you respond when you are ${adj}:`
+            :`### You are feeling ${n.toLowerCase()} — this is how you respond when you feel ${n.toLowerCase()}:`;
+}
+const _EMO_OLD_HEAD=/^#{2,4}[ \t]*When you (?:mainly )?feel[ \t]+([^\n:]+?)[ \t]*:?[ \t]*$/gim;
+function emoHeadingFix(text,name){
+  const t=String(text||"");
+  return t.replace(_EMO_OLD_HEAD,(m,who)=>emoFeelHeading(name||who));
+}
+// Every emotion box of a speech object, old headings rewritten. Returns whether anything changed.
+function speechHeadingsFix(sp){
+  let ch=false;
+  try{ SPEECH_GROUPS.forEach(g=>{ const em=sp&&sp[g]&&sp[g].emo; if(!em)return;
+    Object.keys(em).forEach(k=>{ const v=em[k]; if(typeof v!=="string")return; const f=emoHeadingFix(v,k); if(f!==v){ em[k]=f; ch=true; } }); }); }catch(e){}
+  return ch;
+}
 // The states of the old behaviour profile that are emotions, by the emotion's name.
 const TRAIT_STATE_EMO={angry:"anger",joyful:"joy",afraid:"fear",guilty:"guilt",ashamed:"shame",jealous:"jealousy"};
 const _spAdd=(a,b)=>{ a=String(a||"").trim(); b=String(b||"").trim(); return !a?b:(!b?a:a+"\n\n"+b); };
@@ -24134,7 +24235,7 @@ function speechMigrate(p,list){
 }
 // The character's speech groups (migrated on first use, for a card made by code that still writes the old fields).
 function charSpeech(p){ if(!p||typeof p!=="object")return speechBlank(); speechMigrate(p); return p.speech; }
-function speechMigrateAll(){ let n=0; (state.personas||[]).forEach(p=>{ try{ if(speechMigrate(p))n++; }catch(e){} });
+function speechMigrateAll(){ let n=0; (state.personas||[]).forEach(p=>{ try{ if(speechMigrate(p))n++; if(p&&p.speech&&speechHeadingsFix(p.speech))n++; }catch(e){} });   // v150.104 — old emotion headings
   if(n){ try{ persistPersonas(); }catch(e){} } return n; }
 // A generated card's speech: the groups it wrote, or its old "style" / "traits" read the way speechMigrate reads them.
 function speechFromCard(c,list){
@@ -28206,9 +28307,9 @@ async function generateBatchBios(brief,count,opts){
    written in, and no prompt pack can reach it: it is the author's own data. A live payload had
    "What follows is you, seen from the inside" sitting directly above "I grew up in a lively,
    crowded household", with one sentence switching person mid-clause. This repairs that in place.
-   It touches only the fields that are the character's OWN. The director notes (instructions,
-   interject) are third person BY DESIGN — they are notes to the app about the character — so they
-   are not sent and cannot be damaged. The look stays out for the same reason: it is an English
+   It touches only the fields that are the character's OWN. (v150.105 — the roleplay instructions too: they print on the
+   character's own card as "How you play it: …", so they are theirs. The interject notes stay third person — notes to the
+   router about the character, not sent and not damaged.) The look stays out for the same reason: it is an English
    visual sheet for the image layer, not prose anyone reads as the character.
    The curated want-list has no editor field of its own, so it is repaired alongside and stashed;
    savePersona applies it after the rule that drops a stale list, which would otherwise throw the
@@ -28219,8 +28320,11 @@ async function repairCardVoice(){
   const gv=id=>{const el=document.getElementById(id);return el?el.value.trim():"";};
   // v150.61 — likes, and the main box of each speech group (the emotion boxes are written by the styles writer, in the voice)
   const _sp=(()=>{ try{ return peSpeechRead(); }catch(e){ return speechBlank(); } })();
+  /* (!) v150.105 — AND THE ROLEPLAY INSTRUCTIONS. They were left out as third-person notes to the app, but they reach the
+     character on their own card, beside the voice ("How you play it: Duygu is a married woman… Her bluntness…"), so they
+     are repaired with the rest: "You are a married woman… Your bluntness…". */
   const fields={personality:gv('pePersonality'),backstory:gv('peBackstory'),
-                likes:gv('peLikes'),goals:gv('peGoals'),
+                likes:gv('peLikes'),goals:gv('peGoals'),instructions:gv('peInstructions'),
                 spoken_style:_sp.spoken.main,text_style:_sp.text.main,heat_style:_sp.heat.main};
   const present=Object.keys(fields).filter(k=>fields[k]);
   if(!present.length){ toast("Nothing to fix — the card is empty"); return; }
@@ -28258,6 +28362,7 @@ async function repairCardVoice(){
     if(present.includes("backstory"))   set('peBackstory',j.backstory);
     if(present.includes("likes"))       set('peLikes',j.likes);
     if(present.includes("goals"))       set('peGoals',j.goals);
+    if(present.includes("instructions")) set('peInstructions',j.instructions);   // v150.105
     {const back={}; SPEECH_GROUPS.forEach(g=>{ const k=g+"_style", v=j[k];
        if(present.includes(k)&&typeof v==="string"&&v.trim()){ back[g]={main:v.trim(),emo:{}}; n++; } });
      if(Object.keys(back).length)peSpeechApply(back);}
@@ -28359,6 +28464,7 @@ async function writeStyleSet(card,opts){
 function speechMerge(base,set){
   const o=speechNorm(base), n=speechNorm(set);
   SPEECH_GROUPS.forEach(g=>{ if(n[g].main)o[g].main=n[g].main; Object.keys(n[g].emo).forEach(k=>{ o[g].emo[k]=n[g].emo[k]; }); });
+  speechHeadingsFix(o);   // v150.104
   return o;
 }
 function _peCardFromEditor(){
@@ -38744,7 +38850,7 @@ function buildTailBlocks(opts){
   const _styleMain=String(_sg.main||"").trim();
   const _styleEmo=(()=>{ try{ const e=charEmotion(chat,selfP&&selfP.id); if(!e||!e.emotion)return "";
     const em=_sg.emo||{}, k=Object.keys(em).find(x=>x.toLowerCase()===String(e.emotion).trim().toLowerCase());
-    return k?String(em[k]||"").trim():""; }catch(x){ return ""; } })();
+    return k?emoHeadingFix(String(em[k]||""),k).trim():""; }catch(x){ return ""; } })();   // v150.104 — "You are feeling …"
   if(selfP&&((_styleMain&&String(_styleMain).trim())||_styleEmo)){
     const _ss={style_body:subUser(String(_styleMain||"")).trim()};
     if(_styleEmo)_ss.style_emotion=subUser(String(_styleEmo)).trim();
@@ -41639,17 +41745,31 @@ function _staticImgSlots(){
 }
 // Store a static image's bytes under its stable key. Base64 goes straight in; a hosted URL is
 // fetched to a data URL best-effort (harmless if CORS blocks it — the URL keeps rendering live).
+/* (!) v150.106 — WHICH LINK THE STORED BYTES CAME FROM. A hosted link whose download failed (CORS, an
+   expired host) left the PREVIOUS picture's bytes under the key, and the next boot put those back over
+   the new link. Now the source is recorded beside the bytes ("simgsrc:<key>"): "pending:<url>" while a
+   download runs, the url once its bytes are in. Bytes whose source is a different link are older than
+   the link, so the boot keeps the link. */
+const _simgSrcKey=key=>"simgsrc:"+key;
 function saveStaticImage(key,url){
   if(!key||!url||typeof url!=="string")return;
   try{
-    if(url.startsWith("data:")){ mediaDB.kvSet(key,url); return; }
+    if(url.startsWith("data:")){ mediaDB.kvSet(key,url); try{ mediaDB.kvSet(_simgSrcKey(key),"data"); }catch(_){} return; }
     if(/^https?:/.test(url)){
+      try{ mediaDB.kvSet(_simgSrcKey(key),"pending:"+url); }catch(_){}
       fetchMediaBlob(url).then(b=>{ if(!b)return;
-        const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet(key,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
+        const fr=new FileReader();
+        fr.onload=async()=>{ try{ if(await mediaDB.kvSet(key,String(fr.result)))mediaDB.kvSet(_simgSrcKey(key),url); }catch(e){} };
+        fr.readAsDataURL(b);
       }).catch(()=>{});
     }
   }catch(e){}
 }
+/* v150.106 — the bytes behind each object URL made below. A slot keyed by position (a character's extra
+   reference views) can end up holding another slot's object URL — remove view 1 and view 2 moves into
+   its place — and its stored bytes were still view 1's, which the next boot put back. Capture now
+   stores the bytes an object URL stands for under the slot that holds it. */
+const _simgBlobData=new Map();
 function _dataURLtoObjectURL(d){
   try{
     const m=/^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(d); if(!m)return null;
@@ -41657,24 +41777,35 @@ function _dataURLtoObjectURL(d){
     let bytes;
     if(m[2]){ const bin=atob(m[3]); bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i); }
     else bytes=new TextEncoder().encode(decodeURIComponent(m[3]));
-    return URL.createObjectURL(new Blob([bytes],{type:mime}));
+    const ourl=URL.createObjectURL(new Blob([bytes],{type:mime}));
+    _simgBlobData.set(ourl,d);
+    return ourl;
   }catch(e){ return null; }
 }
 // Capture pass, hooked into persistPersonas/persistUniverses — the funnel EVERY static-image
 // assignment already flows through, so any current or future set-site is covered automatically.
-// Each (key, value) pair is captured once per session; blob:/object URLs are session-local refs
-// whose bytes are already stored, so they're skipped.
-const _simgCaptured=new Set();
+// Each (key, value) pair is captured once per session; a blob:/object URL made from stored bytes is
+// captured only when it sits in a slot whose stored bytes are different (above).
+/* (!) v150.106 — the WHOLE value is compared, not its first 200 characters. Every picture the app
+   resizes comes out of the same canvas JPEG encoder, so its first 200 characters (the data: prefix,
+   the JPEG header and quantisation tables) are the same for all of them: a new portrait looked
+   "already captured", its bytes were never stored, and the next boot put the old portrait back.
+   key → the value last stored under it (the string is held by reference, not copied). */
+const _simgCaptured=new Map();
 function captureStaticImages(coll){
   try{
     for(const s of _staticImgSlots()){
       if(coll&&s.coll!==coll)continue;
       const v=s.obj[s.field];
       if(!v||typeof v!=="string")continue;
+      if(v.startsWith("blob:")){
+        const d=_simgBlobData.get(v);
+        if(d&&_simgCaptured.get(s.key)!==d){ _simgCaptured.set(s.key,d); saveStaticImage(s.key,d); }
+        continue;
+      }
       if(!(v.startsWith("data:")||/^https?:/.test(v)))continue;
-      const sig=s.key+"|"+v.slice(0,200);
-      if(_simgCaptured.has(sig))continue;
-      _simgCaptured.add(sig);
+      if(_simgCaptured.get(s.key)===v)continue;
+      _simgCaptured.set(s.key,v);
       saveStaticImage(s.key,v);
     }
   }catch(e){}
@@ -41683,30 +41814,47 @@ function captureStaticImages(coll){
 // base64 out of the collections, and capture legacy remote URLs that were never stored. A blob:
 // value with no stored bytes is a dead pointer from before this feature — left alone (renders
 // empty exactly as it already did).
+/* (!) v150.106 — THE PICTURE ON THE ENTITY IS THE NEWEST ONE. The boot pass used to swap in the stored
+   bytes whenever there were any, so a portrait changed since its last capture came back as the old one
+   on every launch. A data: value on the entity is always newer than the store (this pass turns stored
+   values into blob: links, so a data: one was set since): it is stored and used. A hosted link is
+   swapped for stored bytes only when they were downloaded FROM that link, or when the store predates
+   the source record; otherwise the link stays and is captured again. */
+async function _simgCachedFor(key,v){
+  let cached=null; try{ cached=await mediaDB.kvGet(key); }catch(e){}
+  if(!cached)return null;
+  if(typeof v==="string"&&v.startsWith("data:"))return v===cached?cached:null;
+  if(typeof v==="string"&&/^https?:/.test(v)){
+    let src=null; try{ src=await mediaDB.kvGet(_simgSrcKey(key)); }catch(e){}
+    if(src&&src!==v)return null;
+  }
+  return cached;
+}
 async function rehydrateStaticImages(){
   let changedP=false,changedU=false,swapped=0;
   for(const s of _staticImgSlots()){
     const v=s.obj[s.field];
     if(!v||typeof v!=="string")continue;
-    let cached=null; try{ cached=await mediaDB.kvGet(s.key); }catch(e){}
+    const cached=await _simgCachedFor(s.key,v);
     if(cached){
       const ourl=_dataURLtoObjectURL(cached);
       if(ourl){
         if(v!==ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; }
-        _simgCaptured.add(s.key+"|"+String(cached).slice(0,200));
+        _simgCaptured.set(s.key,cached);
         continue;
       }
     }
     if(v.startsWith("data:")){
-      // Legacy inline base64 → move the bytes into the store FIRST, then slim the entity.
+      // Inline base64 (legacy, or a picture set since the last boot) → move the bytes into the store
+      // FIRST, then slim the entity.
       const ok=await mediaDB.kvSet(s.key,v);
-      if(ok){ const ourl=_dataURLtoObjectURL(v);
+      if(ok){ try{ await mediaDB.kvSet(_simgSrcKey(s.key),"data"); }catch(_){}
+        const ourl=_dataURLtoObjectURL(v);
         if(ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; } }
-      _simgCaptured.add(s.key+"|"+v.slice(0,200));
+      _simgCaptured.set(s.key,v);
     }else if(/^https?:/.test(v)){
-      // Legacy hosted link with no stored bytes yet → capture in the background; keep the link live.
-      const sig=s.key+"|"+v.slice(0,200);
-      if(!_simgCaptured.has(sig)){ _simgCaptured.add(sig); saveStaticImage(s.key,v); }
+      // Hosted link with no stored bytes of its own yet → capture in the background; keep the link live.
+      if(_simgCaptured.get(s.key)!==v){ _simgCaptured.set(s.key,v); saveStaticImage(s.key,v); }
     }
   }
   if(changedP)persistPersonas();
@@ -41735,7 +41883,7 @@ async function inlineStaticImages(universes,personas){
   const fill=async(obj,field,key)=>{
     const v=obj&&obj[field];
     if(!v||typeof v!=="string"||v.startsWith("data:"))return;
-    let cached=null; try{ cached=await mediaDB.kvGet(key); }catch(e){}
+    const cached=await _simgCachedFor(key,v);   // v150.106 — never an older picture over a newer link
     if(cached)obj[field]=cached;
     else if(v.startsWith("blob:"))obj[field]=null;
   };
@@ -41758,7 +41906,7 @@ async function deleteStaticImagesFor(heads){
     const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("simg:")===0);
     for(const k of keys){
       const body=k.slice(5);
-      if(heads.some(h=>body===h||body.indexOf(h+":")===0)) await mediaDB.kvDelete(k);
+      if(heads.some(h=>body===h||body.indexOf(h+":")===0)){ await mediaDB.kvDelete(k); try{ await mediaDB.kvDelete(_simgSrcKey(k)); }catch(_){} }
     }
   }catch(e){}
 }
@@ -47544,7 +47692,9 @@ function _imgOutfitSplit(t){
 function _imgSubjectOf(o){
   const s=_refSubject(o); if(s)return s;
   try{
-    const m=String((o&&o.personality)||"").match(/\byou are (?:an? )?(?:[\w,'-]+\s+){0,5}?(woman|girl|lady|man|boy|guy)\b/i);
+    // v150.105 — the roleplay instructions too: once in the card voice they say "You are a married woman", not "she"
+    const m=String((o&&o.personality)||"").match(/\byou are (?:an? )?(?:[\w,'-]+\s+){0,5}?(woman|girl|lady|man|boy|guy)\b/i)
+          ||String((o&&o.instructions)||"").match(/\byou are (?:an? )?(?:[\w,'-]+\s+){0,5}?(woman|girl|lady|man|boy|guy)\b/i);
     if(m)return /^(woman|lady)$/i.test(m[1])?"Woman":/^girl$/i.test(m[1])?"Girl":/^boy$/i.test(m[1])?"Boy":"Man";
     const n=String((o&&o.instructions)||"");
     const f=(n.match(/\bshe\b/gi)||[]).length, h=(n.match(/\bhe\b/gi)||[]).length;
@@ -65435,7 +65585,27 @@ function fragEdCtx(fp,c,on){
   const r=_fragAt(fp+".ctx"); if(!r.obj)return; let a=Array.isArray(r.obj.ctx)?r.obj.ctx.slice():[];
   a=a.filter(x=>x!==c); if(on)a.push(c); r.obj.ctx=a; renderFragEditor();
 }
-function fragEdMove(i,d){ const L=_fragDraftGet(); const j=i+d; if(j<0||j>=L.length)return; const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
+/* (!) v150.107 — THE LIST SHOWS WHERE THE HISTORY GOES. A reply is every "before the history" fragment in list order, then
+   the conversation history, then every "after the history" fragment in list order (fragCompile) — but the list mixed the
+   two, so changing "Placed" moved nothing on screen and the order you saw was not the order sent. The list is now kept
+   in that order (_fragPartition: before, then after, each keeping its own order — what is sent does not change) with a
+   "Dialogue history" line between them. Changing "Placed" moves the fragment to the line's other side, next to it (the
+   last one above, or the first one below), and ↑ / ↓ across the line changes its placing. */
+function _fragPartition(L){
+  if(!Array.isArray(L))return L;
+  const open=_fragOpen!=null?L[_fragOpen]:null;
+  const out=L.filter(f=>f&&f.seg!=="tail").concat(L.filter(f=>f&&f.seg==="tail"));
+  L.splice(0,L.length,...out);
+  if(open)_fragOpen=L.indexOf(open);
+  return L;
+}
+function _fragHeadCount(L){ return L.filter(f=>f&&f.seg!=="tail").length; }
+function _fragFlash(i){ _fragRowIntoView(i);
+  try{ const row=document.getElementById('fragRow_'+i); if(row){ row.classList.add('fragMoved'); setTimeout(()=>row.classList.remove('fragMoved'),1400); } }catch(e){} }
+function fragEdMove(i,d){ const L=_fragPartition(_fragDraftGet()); const j=i+d; if(j<0||j>=L.length)return;
+  if((L[i].seg==="tail")!==(L[j].seg==="tail")){   // across the history line: the same spot, the other side of it
+    L[i].seg=L[i].seg==="tail"?"head":"tail"; renderFragEditor(); _fragFlash(i); return; }
+  const t=L[i]; L[i]=L[j]; L[j]=t; if(_fragOpen===i)_fragOpen=j; else if(_fragOpen===j)_fragOpen=i; renderFragEditor(); }
 function fragEdOpen(i){ _fragOpen=(_fragOpen===i)?null:i; renderFragEditor(); _fragRowIntoView(i); }
 /* v150.59 — the opened fragment's row, brought into view inside the list only when it is not already showing (by hand:
    scrollIntoView did not move this list) */
@@ -65446,10 +65616,17 @@ async function fragEdDel(i){ const L=_fragDraftGet(); if(!(await uiConfirm(`Dele
 function fragEdAdd(){ const L=_fragDraftGet(); L.push({id:"f_"+Date.now().toString(36),name:"New fragment",seg:"tail",paths:FRAG_PATHS.slice(),text:"",byPath:{},mode:"any",options:[]}); _fragOpen=L.length-1; renderFragEditor(); _fragRowIntoView(_fragOpen); }
 function fragEdOptAdd(i){ const f=_fragDraftGet()[i]; f.options=f.options||[]; f.options.push({id:"o_"+Date.now().toString(36),name:"New condition",code:"",ask:"",ctx:[],text:"",paths:[],byPath:{}}); renderFragEditor(); }
 async function fragEdOptDel(i,j){ const f=_fragDraftGet()[i]; if(!(await uiConfirm(`Delete the condition "${(f.options[j]||{}).name||""}"?`,{title:"Delete condition?",ok:"Delete",danger:true})))return; f.options.splice(j,1); renderFragEditor(); }
-function fragEdSet(fp,v){ const r=_fragAt(fp); if(r.obj){ r.obj[r.key]=v; renderFragEditor(); } }
+function fragEdSet(fp,v){ const r=_fragAt(fp); if(!r.obj)return;
+  const f=r.obj, L=_fragDraftGet(), moving=r.key==="seg"&&L.indexOf(f)>=0&&(f.seg==="tail")!==(v==="tail");
+  if(moving){ const open=_fragOpen!=null?L[_fragOpen]:null, i=L.indexOf(f); L.splice(i,1);
+    L.splice(_fragHeadCount(L),0,f);   // next to the line, on its new side: the last one above it, or the first one below
+    if(open)_fragOpen=L.indexOf(open); }
+  f[r.key]=v; renderFragEditor();
+  if(moving)_fragFlash(L.indexOf(f)); }
 function fragEdSave(){
   const L=_fragDraftGet();
-  const same=JSON.stringify(L)===JSON.stringify(FRAG_DEFAULTS);
+  _fragPartition(L);   // v150.107 — the order shown is the order kept (what is sent is the same either way)
+  const same=JSON.stringify(L)===JSON.stringify(_fragPartition(JSON.parse(JSON.stringify(FRAG_DEFAULTS))));
   state.fragments=same?null:JSON.parse(JSON.stringify(L));
   store.setRaw(K.fragments,same?"":JSON.stringify(L));
   store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(",")); _fragMigratedFor=state.fragments;   // v150.48 — what you saved is what you meant
@@ -65496,16 +65673,18 @@ function renderFragEditor(){
      top (and the page could jump with it), so ticking a path far down the list lost your place. Both scroll positions are
      read before and put back after. */
   const _lst0=document.getElementById('fragList'), _lt=_lst0?_lst0.scrollTop:0, _wy=window.scrollY;
-  const L=_fragDraftGet();
+  const L=_fragPartition(_fragDraftGet()), nHead=_fragHeadCount(L);
+  const histLine=`<div id="fragHistLine" class="fragHistLine" title="The conversation so far is sent here: the fragments above this line go before it, the ones below it after it"><span>Dialogue history</span></div>`;
   const rows=L.map((f,i)=>{
     const open=_fragOpen===i, paths=f.paths||FRAG_PATHS;
     const head=`<div id="fragRow_${i}" style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid var(--border)">
       <span style="flex:1;min-width:0"><b>${esc(f.name||f.id)}</b> <span class="desc" style="display:inline">${f.seg==="tail"?"after the history":"before the history"} · ${paths.map(p=>FRAG_PATH_LABEL[p]).join(", ")}${(f.options||[]).length?` · ${f.options.length} choose-when`:""}${(f.options||[]).some(o=>o&&_fragCodeNamesPath(o.code))?` · <span class="fragPathFlag" style="color:var(--warn,var(--danger))">a condition names a path</span>`:""}</span></span>
-      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move up" onclick="fragEdMove(${i},-1)">↑</button>
-      <button class="btn sec small" style="width:auto;padding:4px 7px" title="Move down" onclick="fragEdMove(${i},1)">↓</button>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="${i===nHead?"Move above the dialogue history":"Move up"}" onclick="fragEdMove(${i},-1)">↑</button>
+      <button class="btn sec small" style="width:auto;padding:4px 7px" title="${i===nHead-1?"Move below the dialogue history":"Move down"}" onclick="fragEdMove(${i},1)">↓</button>
       <button class="btn sec small" style="width:auto;padding:4px 9px" onclick="fragEdOpen(${i})">${open?"Close":"Edit"}</button></div>`;
-    if(!open)return head;
-    return head+`<div style="padding:8px;background:var(--panel,transparent)">
+    const pre=i===nHead?histLine:"";
+    if(!open)return pre+head;
+    return pre+head+`<div style="padding:8px;background:var(--panel,transparent)">
       <div style="display:flex;gap:6px"><input class="fld" data-fp="${i}.name" oninput="fragEdInput(this)" value="${esc(f.name||"")}" style="flex:1">
         <button class="btn sec small" style="width:auto" title="Delete this fragment" onclick="fragEdDel(${i})">${icon("trash")}</button></div>
       <div class="desc" style="margin-top:6px">Paths: ${_fragChips(String(i),paths)}</div>
@@ -65518,7 +65697,7 @@ function renderFragEditor(){
       ${(f.options||[]).map((o,j)=>_fragOptForm(i,j,f,o)).join("")}
       <button class="btn sec small" style="width:auto;margin-top:8px" onclick="fragEdOptAdd(${i})">+ Add a choose-when condition</button>
     </div>`;
-  }).join("");
+  }).join("")+(nHead===L.length?histLine:"");
   host.innerHTML=`<div class="desc" style="margin-bottom:6px">Every reply (solo, multi, gamemaster, text, heat) is built from these fragments, and only from them: each fragment's main body on its paths, plus the choose-when parts that apply this turn — by code, or by the decision model's answer before the reply. Open one to see everything it sends.</div>
     <div class="desc" data-help style="margin-bottom:6px"><b>Separate your own wording from a call with a BLANK LINE, not <code>{{gap}}</code>.</b> A paragraph — everything between two blank lines — is dropped whole when every call inside it comes back empty, and <code>{{gap}}</code> is a blank line that deliberately does <i>not</i> end the paragraph. That is right for a heading that should vanish with its data, and wrong for your own prose: written next to <code>{{gap}}</code>, it disappears on every turn that call has nothing to say.</div>
     <div class="desc">Inject an asked condition when the model is at least this sure: <input type="number" min="0.5" max="0.99" step="0.05" value="${fragAt()}" style="width:70px" onchange="fragAtSet(this.value)"></div>

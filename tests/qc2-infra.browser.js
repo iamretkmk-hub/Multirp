@@ -46,6 +46,10 @@ const path=require('path'), fs=require('fs');
   },PNG));
   {
     const pg2=await openIn(ctx,"tab2: ");
+    /* (!) v150.108 — CHANGED ON PURPOSE: the window opened last saves now (tests/newest-window-saves). Showing the first
+       window again makes it take back over (it reloads), which leaves this one the read-only tab these checks need. */
+    await pg.evaluate(()=>{ Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>"visible"}); document.dispatchEvent(new Event('visibilitychange')); });
+    await pg.waitForTimeout(5000);
     const r=await pg2.evaluate(async P=>{
       window.toast=()=>{};
       const ro=_tabReadOnly, safe=collectionsSafe;
@@ -122,18 +126,20 @@ const path=require('path'), fs=require('fs');
 
   console.log("\n[the tab lock always ends with exactly one writer]");
   const role=async p=>{ try{ return await p.evaluate(()=>(!_tabReadOnly&&collectionsSafe)?"W":"RO"); }catch(e){ return "ERR"; } };
+  /* (!) v150.108 — CHANGED ON PURPOSE: the window opened last is the writer now (tests/newest-window-saves); the same
+     "exactly one writer" checks, with the writer being the newest window. */
   {
     const c2=await b.newContext();
     const A=await openIn(c2,"A: "), B=await openIn(c2,"B: "), C=await openIn(c2,"C: ");
     const r0=[await role(A),await role(B),await role(C)].join("");
-    await A.close(); await B.waitForTimeout(6000);
-    const r1=[await role(B),await role(C)];
-    ok("3 tabs: close the writer → exactly one of the other two becomes the writer", (r0==="WRORO"&&r1.filter(x=>x==="W").length===1&&r1.filter(x=>x==="RO").length===1)?true:JSON.stringify({r0,r1}));
+    await C.close(); await B.waitForTimeout(6000);
+    const r1=[await role(A),await role(B)];
+    ok("3 tabs: the newest writes; close it → exactly one of the other two becomes the writer", (r0==="ROROW"&&r1.filter(x=>x==="W").length===1&&r1.filter(x=>x==="RO").length===1)?true:JSON.stringify({r0,r1}));
     const D=await openIn(c2,"D: ");
-    ok("…and a tab opened after that is read-only", (await role(D))==="RO"?true:await role(D));
-    const w=r1[0]==="W"?B:C, other=w===B?C:B;
-    await w.close(); await other.waitForTimeout(6000);
-    const r2=[await role(other),await role(D)];
+    const r1b=[await role(A),await role(B),await role(D)];
+    ok("…and a tab opened after that is the writer, the others read-only", (r1b.join("")==="ROROW")?true:JSON.stringify(r1b));
+    await D.close(); await A.waitForTimeout(6000);
+    const r2=[await role(A),await role(B)];
     ok("close that writer too → again exactly one writer", r2.filter(x=>x==="W").length===1?true:JSON.stringify(r2));
     await c2.close();
   }
@@ -141,10 +147,10 @@ const path=require('path'), fs=require('fs');
     const c3=await b.newContext();
     const A=await openIn(c3,"A2: "), B=await openIn(c3,"B2: ");
     const r0=(await role(A))+(await role(B));
-    await A.close(); const C=await c3.newPage(); C.on('pageerror',e=>errs.push("C2: "+e.message)); await C.goto(url);
-    await B.waitForTimeout(7000);
-    const r1=[await role(B),await role(C)];
-    ok("close A and open C at once → exactly one writer between B and C", (r0==="WRO"&&r1.filter(x=>x==="W").length===1&&r1.filter(x=>x==="RO").length===1)?true:JSON.stringify({r0,r1}));
+    await B.close(); const C=await c3.newPage(); C.on('pageerror',e=>errs.push("C2: "+e.message)); await C.goto(url);
+    await A.waitForTimeout(7000);
+    const r1=[await role(A),await role(C)];
+    ok("close the writer and open C at once → exactly one writer between A and C", (r0==="ROW"&&r1.filter(x=>x==="W").length===1&&r1.filter(x=>x==="RO").length===1)?true:JSON.stringify({r0,r1}));
     await c3.close();
   }
 

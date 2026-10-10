@@ -199,6 +199,14 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
    reload. Don't put durable data in `_` keys; don't put transient flags in normal keys.
 4. `persistPersonas`/`persistUniverses` also run `captureStaticImages()` — portrait/cover/map
    bytes are copied into IDB (`simg:*`) so blob URLs survive reload (`rehydrateStaticImages`).
+   (v150.106) Capture compares the WHOLE value per key (`_simgCaptured`: key → value last stored);
+   comparing the first 200 characters made every canvas-resized JPEG look already stored (same
+   header), so a changed portrait was never stored and the old one came back on relaunch. A hosted
+   link records where its bytes came from (`simgsrc:<key>`: `pending:<url>` while downloading, the
+   url once stored); boot (`_simgCachedFor`) never puts older bytes over a newer picture on the
+   entity — a `data:` value always wins, a link wins over bytes from another link. An object URL in
+   a position-keyed slot (reference views after one is removed) stores the bytes it stands for
+   (`_simgBlobData`).
 5. **Media caps**: in-memory heavy (base64) images are capped at 24 (older ones get
    `evicted:true` + empty url); persisted base64 images cap at 60; videos keep the newest 20
    *plus every clip referenced by a scene*. Remote-URL records are never evicted.

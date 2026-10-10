@@ -145,9 +145,10 @@ const path=require('path');
     r.fresh=p.relationships.p_c;
     return r; });
   ok("the stored prompt (relPrompt) asks for the whole updated entry, the foundation kept, nothing tied to a time, at most ~700 characters, omitted when nothing durable changed",
-    /WHAT THEY LEARNED GOES INTO THE RELATIONSHIP/.test(D.sys)&&/Keep the foundation: the kinship or role, the shared history, everything the author wrote/.test(D.sys)
+    /WHAT CHANGED BETWEEN THEM GOES INTO THE RELATIONSHIP/.test(D.sys)&&   // v150.103 — CHANGED ON PURPOSE: was "WHAT THEY LEARNED …" (see relationship-style)
+    /Keep the foundation: the kinship or role, the shared history, everything the author wrote/.test(D.sys)
     &&/Leave out anything tied to a time: an invitation, a plan, an appointment, "next week"/.test(D.sys)&&/at most about 700 characters/.test(D.sys)
-    &&/If nothing durable changed, LEAVE THE FIELD OUT/.test(D.sys)&&/"relationship": "<the whole updated relationship entry/.test(D.sys)&&!/social_fact/.test(D.sys), D.sys.slice(-2200));
+    &&/[Ii]f nothing durable changed, LEAVE THE FIELD OUT/.test(D.sys)&&/"relationship": "<the whole updated relationship entry/.test(D.sys)&&!/social_fact/.test(D.sys), D.sys.slice(-2200));
   ok("the read's message asks for it too, with the foundation, and no social_fact", /ALSO: "relationship" — Ayla's whole relationship entry for Berk \(the FOUNDATION above\)/.test(D.umsg)
     &&/FOUNDATION — who Berk already is to Ayla[^\n]*my older brother — Berk raised you after your father left\./.test(D.umsg)&&/"next week", "tomorrow", "tonight": those are kept on the calendar/.test(D.umsg)
     &&!/social_fact/.test(D.umsg), D.umsg.slice(-1500));

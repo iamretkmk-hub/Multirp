@@ -1065,7 +1065,11 @@ parity holds).
 A fragment (`FRAG_DEFAULTS`, 38 shipped, built from the user's own layouts) has:
 
 - **paths**: which reply paths it appears on: `solo`, `multi`, `gm`, `text`, `heat`.
-- **seg**: before the conversation history (`head`) or after it (`tail`).
+- **seg**: before the conversation history (`head`) or after it (`tail`). The editor list is kept in the order the
+  reply is sent (v150.107, `_fragPartition`: every `head` fragment in list order, then every `tail` one — the order
+  `fragCompile` already used, so nothing sent changes), with a **Dialogue history** line between the two. Changing
+  "Placed" moves the fragment to the other side of the line, next to it (last above / first below), and ↑ / ↓ across the
+  line changes its `seg`. Saving keeps that order.
 - **text**: its main body, always injected on its paths. `byPath[path]` is added under it on one path (v150.59; it used
   to replace it).
 - **options**: the *choose when* parts, injected only when they apply. An option has:
@@ -1884,3 +1888,13 @@ The "Respond as" fragment (last in the tail) is mode `one` with two options:
 Mode `one` sends only the feeling line when both apply; switching the feeling option off leaves the plain line. A saved
 "Respond as" still at its v150.87 default is upgraded (FRAG_SHIPPED_ADDS "v150.88.respond"); an edited one stays. Tests:
 `tests/respond-feeling.browser.js`; `payload-faithful` allows exactly this line's change.
+
+## v150.104 — an emotion box says what they feel
+
+Each emotion box of a character's speech & behaviour opened "### When you mainly feel Guilt": a condition to check, and
+the character was never told they ARE feeling it. It now reads "### You are feeling guilty — this is how you respond
+when you are guilty:" (`emoFeelHeading`, with the word they would use from `EMO_ADJ`; an emotion of the player's own is
+said plainly: "You are feeling nostalgia — … when you feel nostalgia:"). The writer (`x_style_writer`) is asked for that
+heading, its example rewritten, and a stored copy of its old prompt is refreshed once; every stored box with the old
+heading is rewritten on load (`speechMigrateAll` → `speechHeadingsFix`) and in what the writer returns (`speechMerge`);
+the payload rewrites any old heading it is handed (`emoHeadingFix` on `style_emotion`). Test: `tests/emotion-heading.browser.js`.

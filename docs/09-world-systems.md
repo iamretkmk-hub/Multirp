@@ -259,3 +259,17 @@ places the dice weigh (a schedule entry for any other place is shown faded and s
 as an average one already there. An edited schedule is marked `scheduleEdited`, so saving with new places ticked no longer
 throws it away; "Generate / refresh whereabouts" replaces it and clears the mark. Changes apply from the next time of day
 (the placement for the current one is already rolled). Test: `tests/whereabouts-edit.browser.js`.
+
+## v150.103 — a relationship entry is the standing state between two people, not a memory
+
+The daily read was told to "add what was learned", and its example was a remembered line, so updates read like a badly
+written memory: a scene ("at a window table"), quotations ("asked only for 'ben de' back"), the day retold, and a mood
+("easier to be near than he has any right to be"). One rule, `REL_ENTRY_STYLE`, now reaches every writer of an entry —
+the tracker prompt (`DEFAULT_REL`), both requests the daily read sends (one pair, and the batched read) and the
+generator (`DEFAULT_RELGEN`): the entry is the standing state as settled fact — who they are to each other, the history
+summed up in a clause, what now stands between them and where it stands, the facts about the other that matter — never
+a quotation (no quotation marks), a scene, the day retold or a mood (that is the "description"). New facts are folded
+into the sentence they belong to, so an entry does not grow by a sentence a day; an entry already written as a story is
+rewritten into this form at the next daily read. The generator's tie names the role or kinship only, never a stance
+("the man you are careful around"). Stored copies of the two prompts are refreshed once; the v150.65 relPrompt pipe,
+whose marker the default no longer carries, is retired. Test: `tests/relationship-style.browser.js`.

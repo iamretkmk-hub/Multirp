@@ -248,3 +248,14 @@ later "Go alone", so `resolveWorldPositions` kept placing them wherever the play
 - A due meeting with them, `/bring`, or taking them along still works — those are the player's
   choice. Covered by `tests/left-behind.browser.js`.
 
+
+## v150.102 — the player sets a character's whereabouts
+
+The daily whereabouts (the `schedule` the placement dice weigh, `placementWeights`) were generated from the routine and
+shown read-only in the character editor. They are now the player's to change: each part of the day lists its places
+with a weight (the % beside it is its share), a × to take one out (a weight of 0 does the same) and "+ place" to add one
+of the places this character can be at — their home and the places ticked under "Places they usually visit", the only
+places the dice weigh (a schedule entry for any other place is shown faded and skipped). An added place starts as likely
+as an average one already there. An edited schedule is marked `scheduleEdited`, so saving with new places ticked no longer
+throws it away; "Generate / refresh whereabouts" replaces it and clears the mark. Changes apply from the next time of day
+(the placement for the current one is already rolled). Test: `tests/whereabouts-edit.browser.js`.

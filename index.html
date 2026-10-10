@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.101</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.102</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -2880,7 +2880,7 @@
     <div><label><svg class="ic"><use href="#i-map"/></svg> Places they usually visit <span class="desc" style="display:inline">(tick the public places this character frequents — each day a dice roll picks where they actually are)</span></label>
       <div id="peVisitLocs" style="display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px;max-height:220px;overflow:auto"></div>
     </div>
-    <div><label><svg class="ic"><use href="#i-map"/></svg> Daily whereabouts <span class="desc" style="display:inline">(auto-generated from their routine — where they tend to be each part of the day)</span></label>
+    <div><label><svg class="ic"><use href="#i-map"/></svg> Daily whereabouts <span class="desc" style="display:inline">(where they tend to be each part of the day — generated from their routine, and yours to change)</span></label>
       <div id="peWhereabouts" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px"></div>
       <div class="row" style="margin-top:4px">
         <button class="btn sec small" type="button" id="peSchedBtn" onclick="genScheduleForCharacter(this)"><svg class="ic"><use href="#i-calendar"/></svg> Generate / refresh whereabouts</button>
@@ -26472,35 +26472,76 @@ function renderPeVisitLocs(p){
     const tag=l.type==='home'?' <span class="desc">(home)</span>':'';
     const note=isHome?' <span class="desc">— always (lives here)</span>':'';
     return `<label class="peVisitRow">
-      <input type="checkbox" class="peVisitChk" value="${esc(l.id)}" ${checked?'checked':''} ${isHome?'disabled':''}>
+      <input type="checkbox" class="peVisitChk" value="${esc(l.id)}" ${checked?'checked':''} ${isHome?'disabled':''} onchange="renderPeLocations(editingPersona||{})">
       <span>${esc(l.name)}${tag}${note}</span></label>`;
   }).join("");
   el.innerHTML=rows;
 }
-// Render the character's auto-generated daily whereabouts (their schedule) as a read-only,
-// human-readable panel: for each period, the locations they're most likely to be, by weight.
+/* (!) v150.102 — THE PLAYER SETS THE WHEREABOUTS. The daily whereabouts (the schedule the placement dice weigh, see
+   placementWeights) were generated and shown read-only: "make character whereabouts adjustable by me". Each part of the
+   day now lists its places with a weight the player can change, a ✕ to take a place out, and "+ place" to add one of the
+   places this character can be at (their home and the places ticked above — the dice only ever weigh those). An edited
+   schedule is marked (scheduleEdited) so ticking places no longer throws it away; Generate / refresh replaces it. */
+function _peSchedPlaces(p){
+  const uni=universeById(p&&p.universeId)||curUniverseObj();
+  const locs=(uni&&Array.isArray(uni.locations))?uni.locations:[];
+  const ids=new Set();
+  locs.forEach(l=>{ if(p&&p.id&&Array.isArray(l.residents)&&l.residents.includes(p.id))ids.add(l.id); });
+  const chks=document.querySelectorAll('#peVisitLocs .peVisitChk');
+  if(chks&&chks.length)chks.forEach(c=>{ if(c.checked)ids.add(c.value); });
+  else if(p&&Array.isArray(p.locations))p.locations.forEach(id=>ids.add(id));
+  return locs.filter(l=>ids.has(l.id));
+}
 function renderPeLocations(p){
   const el=document.getElementById('peWhereabouts'); if(!el)return;
   const uni=universeById(p&&p.universeId)||curUniverseObj();
   const locs=(uni&&Array.isArray(uni.locations))?uni.locations:[];
   const idToName={}; locs.forEach(l=>idToName[l.id]=l.name);
-  const sched=p&&p.schedule;
-  if(!sched||typeof sched!=="object"||!Object.keys(sched).length){
-    el.innerHTML=`<div class="desc">No whereabouts yet. ${locs.length?'Press “Generate / refresh whereabouts”, or use “Generate schedules for cast” in the Universe editor.':'Add locations to this universe first (Universe → Locations).'}</div>`;
-    return;
-  }
-  const rows=[];
-  for(const period of PERIODS){
-    const row=sched[period]; if(!row||typeof row!=="object")continue;
-    // sort locations by weight desc, show top few with their share
-    const entries=Object.keys(row).map(id=>({name:idToName[id]||"(somewhere)",w:+row[id]||0}))
-      .filter(e=>e.w>0).sort((a,b)=>b.w-a.w);
-    if(!entries.length)continue;
-    const total=entries.reduce((s,e)=>s+e.w,0)||1;
-    const top=entries.slice(0,3).map(e=>`${esc(e.name)} <span class="desc">${Math.round(e.w/total*100)}%</span>`).join(" · ");
-    rows.push(`<div class="kvline" style="padding:3px 0"><span style="min-width:78px;color:var(--muted);font-size:12px">${period}</span><span style="flex:1;text-align:right">${top}</span></div>`);
-  }
-  el.innerHTML=rows.length?rows.join(""):`<div class="desc">Schedule is empty — try regenerating.</div>`;
+  const sched=(p&&p.schedule&&typeof p.schedule==="object")?p.schedule:{};
+  const places=_peSchedPlaces(p);
+  if(!p||!p.id){ el.innerHTML=`<div class="desc">Save the character first, then set where they tend to be.</div>`; return; }
+  if(!locs.length){ el.innerHTML=`<div class="desc">Add locations to this universe first (Universe → Locations).</div>`; return; }
+  const allowed=new Set(places.map(l=>l.id));
+  const rows=PERIODS.map(period=>{
+    const row=(sched[period]&&typeof sched[period]==="object")?sched[period]:{};
+    const entries=Object.keys(row).map(id=>({id,name:idToName[id]||"(a place that is gone)",w:Math.max(0,Math.round(+row[id]||0))})).filter(e=>e.w>0).sort((x,y)=>y.w-x.w);
+    const total=entries.reduce((n,e)=>n+e.w,0)||1;
+    const chips=entries.map(e=>`<span class="peSchedChip" style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);border-radius:8px;padding:2px 6px;margin:2px 4px 2px 0;font-size:12px${allowed.has(e.id)?"":";opacity:.55"}" title="${allowed.has(e.id)?"":"Not one of their places (tick it above) — the dice skip it"}">
+        ${esc(e.name)} <input type="number" min="0" max="100" step="1" value="${e.w}" data-per="${esc(period)}" data-loc="${esc(e.id)}" style="width:52px;padding:2px 4px" onchange="peSchedSet('${escJs(period)}','${escJs(e.id)}',this.value)">
+        <span class="desc">${Math.round(e.w/total*100)}%</span>
+        <button type="button" class="btn sec small" style="width:auto;padding:0 6px" title="Take this place out of ${esc(period)}" onclick="peSchedDel('${escJs(period)}','${escJs(e.id)}')">×</button></span>`).join("");
+    const add=places.filter(l=>!entries.some(e=>e.id===l.id));
+    const addSel=add.length?`<select class="fld" style="width:auto;display:inline-block;padding:2px 6px;font-size:12px" onchange="peSchedAdd('${escJs(period)}',this)"><option value="">+ place</option>${add.map(l=>`<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("")}</select>`:"";
+    return `<div class="peSchedRow" data-per="${esc(period)}" style="padding:4px 0;border-bottom:1px solid var(--border)"><div style="color:var(--muted);font-size:12px;margin-bottom:2px">${period}</div>${chips||'<span class="desc">anywhere they can be (even)</span> '}${addSel}</div>`;
+  });
+  el.innerHTML=`<div class="desc" style="margin-bottom:4px">Each part of the day: the places they tend to be and how likely (a weight — the % is its share). ${p.scheduleEdited?"<b>Set by you.</b> ":""}Changes apply from the next time of day.</div>`+rows.join("");
+}
+function _peSchedTouch(){
+  const p=editingPersona; if(!p||!p.id){ toast("Save the character first"); return null; }
+  if(!p.schedule||typeof p.schedule!=="object")p.schedule={};
+  return p;
+}
+function _peSchedSave(p){ p.scheduleEdited=true; try{ persistPersonas(); }catch(_){} renderPeLocations(p); }
+function peSchedSet(period,locId,val){
+  const p=_peSchedTouch(); if(!p)return;
+  const v=Math.max(0,Math.min(100,Math.round(+val||0)));
+  p.schedule[period]=Object.assign({},p.schedule[period]||{});
+  if(v>0)p.schedule[period][locId]=v; else delete p.schedule[period][locId];
+  _peSchedSave(p);
+}
+function peSchedDel(period,locId){
+  const p=_peSchedTouch(); if(!p)return;
+  if(p.schedule[period]){ p.schedule[period]=Object.assign({},p.schedule[period]); delete p.schedule[period][locId]; }
+  _peSchedSave(p);
+}
+function peSchedAdd(period,sel){
+  const id=sel&&sel.value; if(!id)return;
+  const p=_peSchedTouch(); if(!p)return;
+  const row=Object.assign({},p.schedule[period]||{});
+  const vals=Object.values(row).map(x=>+x||0).filter(x=>x>0);
+  row[id]=vals.length?Math.max(1,Math.round(vals.reduce((a,b)=>a+b,0)/vals.length)):50;   // as likely as an average one there
+  p.schedule[period]=row;
+  _peSchedSave(p);
 }
 // Generate (or refresh) THIS character's schedule on demand from the editor, with feedback.
 async function genScheduleForCharacter(btn){
@@ -26512,7 +26553,7 @@ async function genScheduleForCharacter(btn){
   const old=btn?btn.innerHTML:""; if(btn){btn.disabled=true;btn.innerHTML="Generating…";}
   try{
     const sc=await generateSchedule(p,p.routine,uni);
-    if(sc){ p.schedule=sc; persistPersonas(); renderPeLocations(p); toast("Whereabouts generated"); }
+    if(sc){ p.schedule=sc; delete p.scheduleEdited; persistPersonas(); renderPeLocations(p); toast("Whereabouts generated"); }
     else toast("Couldn't generate — the model returned nothing usable");
   }catch(e){ toast(""+(e&&e.friendly||"Couldn't generate")); }
   finally{ if(btn){btn.disabled=false;btn.innerHTML=old;} }
@@ -28834,7 +28875,7 @@ function savePersona(){
   // hand-picked spread (varied weighting) takes effect immediately.
   if(editingPersona && obj.locations.length){
     const prev=(editingPersona.locations||[]).slice().sort().join(",");
-    if(prev!==obj.locations.slice().sort().join(","))delete editingPersona.schedule;
+    if(prev!==obj.locations.slice().sort().join(",")&&!editingPersona.scheduleEdited)delete editingPersona.schedule;   // v150.102 — one the player set stays
   }
   _peRoutine="";
   /* v147.2 — the player wrote into this card (its text, look or picture): a universe reset then keeps a

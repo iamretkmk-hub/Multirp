@@ -240,14 +240,15 @@ const path=require('path');
     const B=await ctx.newPage(); B.on('pageerror',e=>errs.push("B: "+e.message)); B.on('load',()=>loads.B++);
     await B.goto(url); await B.waitForTimeout(2500);
     const role=async p=>{ try{ return await p.evaluate(()=>(!_tabReadOnly&&collectionsSafe)?"W":"RO"); }catch(e){ return "ERR"; } };
+    /* (!) v150.108 — CHANGED ON PURPOSE: the window opened last saves now (tests/newest-window-saves), so B is the writer
+       and A the read-only tab; the checks are the same with the roles swapped. */
     const before=[await role(A),await role(B)].join("/");
-    const lb=loads.B;
-    await A.reload(); await A.waitForTimeout(4500);
+    const la=loads.A;
+    await B.reload(); await B.waitForTimeout(4500);
     const after=[await role(A),await role(B)].join("/");
-    ok("the writer reloads and stays the writer; the read-only tab is not reloaded",before==="W/RO"&&after==="W/RO"&&loads.B===lb,JSON.stringify({before,after,loads}));
-    await A.close(); await B.waitForTimeout(6500);
-    ok("…and when the writer really closes, the read-only tab takes over",(await role(B))==="W"&&loads.B===lb+1,JSON.stringify({role:await role(B),loads}));
-    await B.close();
+    ok("the writer reloads and stays the writer; the read-only tab is not reloaded",before==="RO/W"&&after==="RO/W"&&loads.A===la,JSON.stringify({before,after,loads}));
+    await B.close(); await A.waitForTimeout(6500);
+    ok("…and when the writer really closes, the read-only tab takes over",(await role(A))==="W"&&loads.A===la+1,JSON.stringify({role:await role(A),loads}));
   }
 
   ok("no page errors",errs.length===0,JSON.stringify(errs.slice(0,5)));

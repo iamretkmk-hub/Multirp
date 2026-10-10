@@ -78,7 +78,10 @@ window load
      ├─ acquireWriterLock()         v144.1 — first tab writes; a later tab runs read-only
      │                              (collectionsSafe=false, #tabRoBar) so tabs can't overwrite;
      │                              v146.1 — a read-only tab writes nothing (_storageRO: settings,
-     │                              IndexedDB), and the one that inherits the lock reloads as writer
+     │                              IndexedDB), and the one that inherits the lock reloads as writer;
+     │                              v150.108 — the window opened LAST writes: the writer saves and
+     │                              hands over (or has the lock stolen when frozen); the old one is
+     │                              read-only until shown again, then reloads and takes over
      ├─ preloadCollections()        hydrate chats/memory/universes/personas/gossip from IndexedDB kv
      │                              (strict reads; unreadable → read-only session; one-time
      │                              migration from legacy localStorage only for absent keys)

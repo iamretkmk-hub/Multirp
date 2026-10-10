@@ -278,19 +278,22 @@ const path=require('path'), fs=require('fs');
       (/res\.ok/.test(sw)&&/mode === "navigate"/.test(sw)&&!/addAll\(APP_SHELL\)\.catch/.test(sw)&&/c\.match\("\.\/index\.html"\)/.test(sw))?true:"sw.js unchanged");
   }
 
-  console.log("\n[a second tab is read-only]");
+  console.log("\n[a second tab takes over; the first is read-only]");
+  /* (!) v150.108 — CHANGED ON PURPOSE: the window opened LAST saves now (tests/newest-window-saves). It was the first one,
+     and a second window behind it saved nothing while showing every edit — the "my changes revert" reports. */
   {
     const pg2=await ctx.newPage(); pg2.on('pageerror',e=>errs.push("tab2: "+e.message));
     await pg2.goto(url); await pg2.waitForTimeout(2000);
-    const r=await pg2.evaluate(()=>({ro:_tabReadOnly,safe:collectionsSafe,bar:document.getElementById('tabRoBar').classList.contains('show')}));
-    ok("the second tab does not save, and says why", (r.ro&&!r.safe&&r.bar)?true:JSON.stringify(r));
-    const w=await pg2.evaluate(async()=>{ const real=mediaDB.kvSet; let n=0; mediaDB.kvSet=async()=>{ n++; return true; };
+    const r=await pg.evaluate(()=>({ro:_tabReadOnly,safe:collectionsSafe,bar:document.getElementById('tabRoBar').classList.contains('show')}));
+    ok("the first tab does not save any more, and says why", (r.ro&&!r.safe&&r.bar)?true:JSON.stringify(r));
+    const w=await pg.evaluate(async()=>{ const real=mediaDB.kvSet; let n=0; mediaDB.kvSet=async()=>{ n++; return true; };
       const rt=window.toast; let t=""; window.toast=m=>t=m; _roWarned=false;
       persistMemory(); persistUniverses(); flushPersistChats(); await doAutoBackup();
       mediaDB.kvSet=real; window.toast=rt; return {n,t}; });
-    ok("…and its writes are refused, with the other-tab reason", (w.n===0&&/another tab/.test(w.t))?true:JSON.stringify(w));
-    await pg2.close();
-    ok("the first tab still saves", await pg.evaluate(()=>collectionsSafe===true&&_tabReadOnly===false));
+    ok("…and its writes are refused, with the other-window reason", (w.n===0&&/another (tab|window)/.test(w.t))?true:JSON.stringify(w));
+    ok("the second tab saves", await pg2.evaluate(()=>collectionsSafe===true&&_tabReadOnly===false));
+    await pg2.close(); await pg.waitForTimeout(5500);
+    ok("close it → the first tab takes over again", await pg.evaluate(()=>collectionsSafe===true&&_tabReadOnly===false));
   }
 
   console.log("\n[boot failure and uncaught errors]");

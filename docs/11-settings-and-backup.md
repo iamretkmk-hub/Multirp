@@ -54,6 +54,16 @@ share; a full backup is only safe to share when exported "without API keys".
   (v146.1) `_storageRO` makes those refuse as well, and Save Settings says it did not save. When
   the writer tab closes, the read-only tab that is granted the lock reloads itself and becomes the
   writer (a flagged reload waits briefly for the lock), so exactly one tab ends up writing.
+- **The window you open saves (v150.108).** It used to be the window opened first: a window opened
+  later ran read-only and said so once, while every edit still showed on its screen — on a phone the
+  first window is easy to leave alive behind the one in use (a browser tab beside the installed app),
+  so prompts, bios and pictures "reverted". Now an opening window posts `yield` on the
+  `storymind-writer-ctl` channel; the writer flushes the pending chat write, goes read-only
+  (`_wlOnLost`) and releases the lock; after `_WL_YIELD_MS` (1.5 s) without an answer the lock is
+  taken with `steal:true` (a frozen page cannot save anyway). The old window shows "opened in another
+  window … Nothing you change here is saved" with **Use this window**, repeats the "NOT saved" toast
+  on a refused save (at most every 20 s), and reloads to take over when it is shown again
+  (`visibilitychange`). Exactly one window writes at any time.
 - **Checked writes.** Collection writes go through `_kvPersist`: the `kvSet` result is checked,
   a failure toasts once, a run of failures warns once more, and the write is retried with backoff
   (`_retryWriteLater`, reading the current value). v146.1: the counters are **per key**, so a

@@ -1430,7 +1430,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.107</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.108</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3406,12 +3406,15 @@ async function preloadCollections(){
 }
 /* One place for every persist* to ask before it writes. A read-only session still plays — it
    just never commits, and says so once rather than silently discarding the turn. */
-let _roWarned=false;
+let _roWarned=false, _roWarnT=0;
 function canPersistCollections(){
   if(collectionsSafe) return true;
-  if(!_roWarned){
-    _roWarned=true;
-    try{ toast(_tabReadOnly?"Read-only: StoryMind is open in another tab — close it and reload to save here."
+  // v150.108 — said again on a later refused save (at most every 20 s), not only the first: an edit that looks saved is the worst kind
+  if(!_roWarned||Date.now()-_roWarnT>20000){
+    _roWarned=true; _roWarnT=Date.now();
+    try{ const b=document.getElementById('tabRoBar'); if(b&&_tabReadOnly)b.classList.add('show'); }catch(_){}
+    try{ toast(_wlLost?"NOT saved — StoryMind is saving in another window. Tap “Use this window” to save here."
+              :_tabReadOnly?"Read-only: StoryMind is open in another tab — close it and reload to save here."
                           :"Storage unreadable — NOT saving. Close other tabs and reload before playing."); }catch(_){}
   }
   return false;
@@ -3421,7 +3424,9 @@ function canPersistCollections(){
    next save put back the state it loaded, over twenty turns played in the first. The first tab takes
    a lock at boot; a later tab runs read-only (the same collectionsSafe=false the unreadable-storage
    path uses) and says so. The lock goes with the tab, so after the first tab closes a reload of the
-   second takes over — and the second is told when that happens. Web Locks where available, else a
+   second takes over — and the second is told when that happens.
+   (!) v150.108 — reversed: the tab opened LAST takes the lock (the writer saves and hands over, or has it
+   stolen when frozen), and the one that lost it is read-only until it is shown again. See acquireWriterLock. Web Locks where available, else a
    BroadcastChannel handshake; with neither, every tab writes, as before. */
 let _tabReadOnly=false;
 /* (!) v146.1 — THE TAB THAT INHERITS THE LOCK BECOMES THE WRITER. A read-only tab queued for the lock
@@ -3437,18 +3442,31 @@ function acquireWriterLock(){
     let settled=false; const done=v=>{ if(!settled){ settled=true; resolve(v); } };
     try{
       if(navigator.locks&&navigator.locks.request){
-        let handoff=false; try{ handoff=sessionStorage.getItem(_WL_HANDOFF)==="1"; sessionStorage.removeItem(_WL_HANDOFF); }catch(_){}
+        try{ sessionStorage.removeItem(_WL_HANDOFF); }catch(_){}
         const hold=lock=>{
           if(!lock){ done(false); return; }
-          done(true); return new Promise(()=>{});   // held for the life of the page
+          done(true); return new Promise(r=>{ _wlRelease=r; });   // held until another window takes over
         };
-        if(handoff&&typeof AbortController!=="undefined"){
-          const ctl=new AbortController(); const t=setTimeout(()=>{ try{ ctl.abort(); }catch(_){} },_WL_WAIT_MS);
-          navigator.locks.request("storymind-writer",{signal:ctl.signal},lock=>{ clearTimeout(t); return hold(lock); })
-            .catch(e=>{ clearTimeout(t); done(!(e&&e.name==="AbortError")); });   // waited it out → read-only
-        }else{
-          navigator.locks.request("storymind-writer",{ifAvailable:true},hold).catch(()=>done(true));
-        }
+        /* (!) v150.108 — THE WINDOW YOU OPEN IS THE ONE THAT SAVES. It used to be the window opened FIRST: a later one
+           ran read-only, said so once in a bar, and saved nothing, while every edit still showed on its screen. On a
+           phone the first window is easy to leave behind (a browser tab kept alive beside the installed app, an app
+           instance still in memory), so prompts, bios and pictures edited in the window being used were never saved,
+           and when the old window died this one reloaded and showed them gone. Now a window opening asks the writer
+           to save what it has and hand over (_WL_CTL "yield"), takes the lock when it does, and takes it anyway
+           (steal) after _WL_YIELD_MS when the writer cannot answer (a frozen background page cannot save anything).
+           The window that lost the lock becomes read-only at once (_wlOnLost) and takes over again, by reloading
+           with the saved state, the moment it is shown again. */
+        if(!_wlCanSteal()){ navigator.locks.request("storymind-writer",{ifAvailable:true},hold).catch(()=>done(true)); return; }
+        navigator.locks.request("storymind-writer",{ifAvailable:true},lock=>{
+          if(lock) return hold(lock);
+          try{ _wlCtl().postMessage({t:"yield"}); }catch(_){}
+          const ctl=new AbortController(); const t=setTimeout(()=>{ try{ ctl.abort(); }catch(_){} },_WL_YIELD_MS);
+          navigator.locks.request("storymind-writer",{signal:ctl.signal},l=>{ clearTimeout(t); return hold(l); })
+            .catch(e=>{ clearTimeout(t);
+              if(settled){ _wlOnLost(); return; }
+              if(e&&e.name==="AbortError") navigator.locks.request("storymind-writer",{steal:true},hold).catch(()=>{ if(settled)_wlOnLost(); else done(true); });
+              else done(true); });
+        }).catch(()=>{ if(settled)_wlOnLost(); else done(true); });
         return;
       }
     }catch(e){}
@@ -3468,6 +3486,33 @@ function acquireWriterLock(){
   });
 }
 let _wlPromoting=false;
+const _WL_YIELD_MS=1500;
+let _wlRelease=null, _wlLost=false, _wlCtlCh=null;
+function _wlCanSteal(){ return typeof AbortController!=="undefined"&&typeof BroadcastChannel!=="undefined"; }
+function _wlCtl(){
+  if(!_wlCtlCh){ _wlCtlCh=new BroadcastChannel("storymind-writer-ctl"); _wlCtlCh.onmessage=ev=>{ if(ev&&ev.data&&ev.data.t==="yield")_wlYield(); }; }
+  return _wlCtlCh;
+}
+try{ if(typeof BroadcastChannel!=="undefined"&&navigator.locks)_wlCtl(); }catch(_){}
+// Another window is opening: save what is pending, stop writing, and hand the lock over.
+async function _wlYield(){
+  if(!_wlRelease||_tabReadOnly)return;
+  try{ if(typeof flushPersistChats==="function")await Promise.race([Promise.resolve(flushPersistChats()),new Promise(r=>setTimeout(r,1000))]); }catch(_){}
+  _wlOnLost();
+  const r=_wlRelease; _wlRelease=null; try{ r&&r(); }catch(_){}
+}
+// This window no longer holds the lock: read-only from now on, and said so where it cannot be missed.
+function _wlOnLost(){
+  if(_wlLost)return; _wlLost=true;
+  _tabReadOnly=true; _storageRO=true; collectionsSafe=false; collectionsError="StoryMind was opened in another window";
+  const b=document.getElementById('tabRoBar');
+  if(b){ const t=b.querySelector('.updTxt'); if(t)t.innerHTML="StoryMind was opened in another window, and that window saves now. <b>Nothing you change here is saved.</b> Switching back to this window takes over again.";
+    const btn=b.querySelector('button'); if(btn)btn.textContent="Use this window"; b.classList.add('show'); }
+  _wlAwaitWriter(b);
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==="visible"&&_wlLost&&!_wlPromoting){ _wlPromoting=true; try{ location.reload(); }catch(_){} }   // take over with the saved state
+});
 function _showTabReadOnly(){
   const b=document.getElementById('tabRoBar'); if(b)b.classList.add('show');
   _wlAwaitWriter(b);

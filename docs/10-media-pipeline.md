@@ -913,3 +913,12 @@ Two ways the clothes changed between two lines of one scene:
   Day) never stamps, so it dresses them from the table as before.
 
 Test: `tests/clothes-hold.browser.js`.
+
+## v150.101 — an inner thought is never spoken
+
+`ttsCleanText` stripped `_` as markdown noise but kept the words, so a thought ("_Bu özgüven beni delirtiyor…_") was
+read aloud with the narration. Only narration and dialogue are voiced now: `speechSegments` drops thought spans before
+it splits a reply into spoken pieces, and `ttsCleanText` (every other speaking path: manual dub, text messages, the
+book player, dubbed clips) drops them first too, by `dropThoughtSpans`, the rule every other reader of a reply uses
+(underscores inside quotes stay speech). The player's own thoughts are not spoken either.
+Test: `tests/speech-thoughts.browser.js`.

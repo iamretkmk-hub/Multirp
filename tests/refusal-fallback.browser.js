@@ -1,8 +1,8 @@
 /* v150.99 — A REFUSAL THE REPLY CHECK SEES IS WRITTEN AGAIN BY THE FALLBACK MODEL. looksLikeRefusal sends the usual
    refusal wordings to the fallback model before anything is posted; one it does not know ("Bu konuda yardımcı olamam.")
-   was posted, and the reply check's "refusal" flag only put a pill on it. With a fallback model set, a flagged refusal is
-   retried once with it as soon as the turn has finished, through the Retry path: the refused line goes, the fallback
-   model's reply takes its place.
+   was posted, and the reply check's "refusal" flag only put a pill on it. With a fallback model set, the SAME payload the
+   reply was written from goes to the fallback model and its answer overwrites the refused text in the same message.
+   Nothing is removed or rolled back.
    Run: node tests/refusal-fallback.browser.js */
 const {chromium}=require('playwright');
 (async()=>{
@@ -28,8 +28,9 @@ const {chromium}=require('playwright');
       }
       return realFetch(url,opts);
     };
-    window.chatCompletion=async(msgs,model,o)=>{ const d=(o&&o.dbg)||""; __calls.push({d,model});
-      if(/^Roleplay reply/.test(d)) return model==="fb/model"?'*Burcu fincanı alır.* "Olur, bir kahve iyi gelir."':REF;
+    window.__REF=REF; window.__fbRefuses=false; window.__PAYLOAD={messages:[{role:"system",content:"You are Burcu."},{role:"user",content:"Emre: Kahve ister misin?"}],opts:{rp:true,dbg:"Roleplay reply"},heat:false};
+    window.chatCompletion=async(msgs,model,o)=>{ const d=(o&&o.dbg)||""; __calls.push({d,model,msgs});
+      if(/^Roleplay reply/.test(d)) return (model==="fb/model"&&!window.__fbRefuses)?'*Burcu fincanı alır.* "Olur, bir kahve iyi gelir."':REF;
       return "{}"; };
     const uni=state.universes[0];
     state.personas=state.personas.filter(p=>p.id!=="p_b");
@@ -38,42 +39,46 @@ const {chromium}=require('playwright');
     window.__setup=()=>{ const chat=curChat(); chat.presentIds=["p_b"]; chat.universeId=uni.id; state.curUniverse=uni.id;
       chat.messages=[{mid:"u1",role:"user",content:"Kahve ister misin?",speaker:"Emre"},
         {mid:"a1",role:"assistant",speaker:"Burcu",speakerId:"p_b",toId:"__user__",content:REF,genModel:"main/model",img:null,imgState:"idle",vidState:"idle",video:null}];
+      _replyPayloads.set(chat.messages[1],__PAYLOAD);
       window.__calls=[]; return chat; };
   },REF);
 
   console.log("\n[a refusal the check sees]");
   const R=await pg.evaluate(async()=>{ const c=__setup(); const p=state.personas.find(x=>x.id==="p_b");
-    looksLikeRefusal(c.messages[1].content);
     const regex=looksLikeRefusal(c.messages[1].content);
+    const before=JSON.stringify(c.messages.map(m=>m.mid));
     await runReplyCheck(c,c.messages[1],p);
-    for(let i=0;i<100&&(c.messages.some(m=>m.mid==="a1")||!c.messages.some(m=>m.role==="assistant"&&/Olur/.test(m.content||"")));i++) await new Promise(r=>setTimeout(r,100));
-    const last=[...c.messages].reverse().find(m=>m.role==="assistant"&&!m.sysError&&!m.uiNote);
-    return {regex,old:c.messages.some(m=>m.mid==="a1"),last:last&&{content:last.content,model:last.genModel},fb:__calls.filter(x=>/^Roleplay reply/.test(x.d)).map(x=>x.model+" | "+x.d)}; });
+    for(let i=0;i<60&&!/Olur/.test(c.messages[1].content);i++) await new Promise(r=>setTimeout(r,100));
+    const rp=__calls.filter(x=>/^Roleplay reply/.test(x.d));
+    return {regex,mids:JSON.stringify(c.messages.map(m=>m.mid))===before,m:c.messages[1],rp:rp.map(x=>({model:x.model,d:x.d,same:JSON.stringify(x.msgs)===JSON.stringify(__PAYLOAD.messages)}))}; });
   ok("the wording is one the pattern check does not know (so only the decision model can see it)", R.regex===false, JSON.stringify(R));
-  ok("the fallback model is asked for the reply again", R.fb.length===1&&/^fb\/model \| Roleplay reply.*fallback model \(refusal\)/.test(R.fb[0]), JSON.stringify(R.fb));
-  ok("the refused line is gone and the fallback model's reply takes its place", R.old===false&&R.last&&/Olur, bir kahve/.test(R.last.content)&&R.last.model==="fb/model", JSON.stringify(R));
+  ok("the same payload goes to the fallback model, once", R.rp.length===1&&R.rp[0].model==="fb/model"&&R.rp[0].same===true&&/fallback model \(refusal\)/.test(R.rp[0].d), JSON.stringify(R.rp));
+  ok("its answer overwrites the refused text in the same message", R.m.mid==="a1"&&/Olur, bir kahve/.test(R.m.content)&&R.m.genModel==="fb/model"&&R.m.fbReplaced===true, JSON.stringify(R.m));
+  ok("nothing is removed: every message is still there, in place", R.mids===true, JSON.stringify(R));
+  ok("the refusal pill goes with the refusal", !(R.m.replyFlags||[]).includes("refusal"), JSON.stringify(R.m.replyFlags));
+  ok("after the player answered it is still overwritten in place", await pg.evaluate(async()=>{ const c=__setup();
+      c.messages.push({mid:"u2",role:"user",content:"Peki.",speaker:"Emre"});
+      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b"));
+      for(let i=0;i<60&&!/Olur/.test(c.messages[1].content);i++) await new Promise(r=>setTimeout(r,100));
+      return (c.messages.length===3&&c.messages[1].mid==="a1"&&/Olur/.test(c.messages[1].content))?true:JSON.stringify(c.messages); }));
 
   console.log("\n[when it does not]");
-  ok("no fallback model set: the line stays, flagged, and nothing is asked again", await pg.evaluate(async()=>{ const c=__setup(); state.fallbackModel="";
-      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500)); state.fallbackModel="fb/model";
-      return (c.messages.some(m=>m.mid==="a1")&&(c.messages[1].replyFlags||[]).includes("refusal")&&!__calls.some(x=>/^Roleplay reply/.test(x.d)))?true:JSON.stringify(__calls); }));
-  ok("below the threshold: nothing is asked again", await pg.evaluate(async()=>{ const c=__setup(); __p={refusal:0.3};
-      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500)); __p={refusal:0.95};
-      return (c.messages.some(m=>m.mid==="a1")&&!__calls.some(x=>/^Roleplay reply/.test(x.d)))?true:JSON.stringify(__calls); }));
-  ok("the fallback model's own refusal is not retried again", await pg.evaluate(async()=>{ const c=__setup(); c.messages[1].genModel="fb/model";
+  const none=async(fn)=>pg.evaluate(async src=>{ const c=__setup(); const restore=(new Function("c",src))(c);
       await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500));
-      return (c.messages.some(m=>m.mid==="a1")&&!__calls.some(x=>/^Roleplay reply/.test(x.d)))?true:JSON.stringify(__calls); }));
-  ok("once the player has answered, the old line is left as it is", await pg.evaluate(async()=>{ const c=__setup();
-      c.messages.push({mid:"u2",role:"user",content:"Peki.",speaker:"Emre"});
-      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500));
-      return (c.messages.some(m=>m.mid==="a1")&&!__calls.some(x=>/^Roleplay reply/.test(x.d)))?true:JSON.stringify(__calls); }));
-  ok("it waits for the turn to finish before it asks", await pg.evaluate(async()=>{ const c=__setup(); const un=holdChatLock(c,"turn");
-      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,600));
-      const before=__calls.filter(x=>/^Roleplay reply/.test(x.d)).length; un();
-      for(let i=0;i<100&&c.messages.some(m=>m.mid==="a1");i++) await new Promise(r=>setTimeout(r,100));
-      const after=__calls.filter(x=>/^Roleplay reply/.test(x.d)).length;
-      return (before===0&&after===1&&!c.messages.some(m=>m.mid==="a1"))?true:JSON.stringify({before,after}); }));
-  ok("a reply records the model that wrote it", await pg.evaluate(()=>/genModel:g\.model/.test(document.documentElement.innerHTML)));
+      try{ if(typeof restore==="function")restore(); }catch(_){}
+      return (c.messages[1].content===__REF&&!__calls.some(x=>/^Roleplay reply/.test(x.d)))?true:JSON.stringify({c:c.messages[1].content,calls:__calls.map(x=>x.d)}); },fn);
+  ok("no fallback model set: the line stays, flagged, and nothing is asked", await none('state.fallbackModel=""; return ()=>{ state.fallbackModel="fb/model"; };'));
+  ok("below the threshold: nothing is asked", await none('__p={refusal:0.3}; return ()=>{ __p={refusal:0.95}; };'));
+  ok("the fallback model's own refusal is not asked again", await none('c.messages[1].genModel="fb/model";'));
+  ok("no payload kept for it (after a reload): nothing is asked", await none('_replyPayloads.delete(c.messages[1]);'));
+  ok("if the fallback model refuses too, the line stays as it was", await pg.evaluate(async()=>{ const c=__setup(); __fbRefuses=true;
+      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500)); __fbRefuses=false;
+      return (c.messages[1].content===__REF&&__calls.filter(x=>/^Roleplay reply/.test(x.d)).length===1)?true:JSON.stringify(c.messages[1]); }));
+  ok("every reply path keeps its payload and model (solo, group, Gamemaster reaction)", await pg.evaluate(()=>{
+      const src=document.documentElement.innerHTML; return ((src.match(/_replyPayloads\.set\(msg,g\.payload\)/g)||[]).length===3&&(src.match(/genModel:g\.model/g)||[]).length===3)?true:"missing"; }));
+  ok("the generator returns the payload it sent", await pg.evaluate(async()=>{ const c=__setup(); const p=state.personas.find(x=>x.id==="p_b");
+      const msgs=[{role:"system",content:"S"},{role:"user",content:"U"}];
+      const g=await generateCharacterReply(c,p,msgs); return (g.payload&&g.payload.messages===msgs&&g.payload.opts&&g.payload.opts.rp===true)?true:JSON.stringify(g); }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);

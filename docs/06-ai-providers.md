@@ -345,10 +345,11 @@ the switch off.
 `looksLikeRefusal` catches the usual refusal wordings and sends them to the fallback model before anything is posted
 (v150.80). A refusal it does not know ("Bu konuda yardımcı olamam.", a polite dodge of the whole turn) was posted, and
 the reply check's `refusal` flag only put a pill on the bubble. Now, when the reply check flags `refusal` (at
-`replyCheckAt`) and a fallback model is set, `_refusalFallback` waits for the turn to finish (up to 90 s), checks the
-line is still the one Retry would take and unchanged, and runs `retryLastReply` with `chat._fallbackRetry` set:
-`generateCharacterReply` sends that one retry straight to the fallback model (dbg "· fallback model (refusal)"). The
-Retry path removes the refused line and what it set off (memories, relationship read, plans) and posts the new reply in
-its place. Every posted reply records the model that wrote it (`genModel`), so a refusal by the fallback model itself is
-never retried again, and a line is retried at most once. No fallback model set: the line stays, flagged, as before.
-Test: `tests/refusal-fallback.browser.js`.
+`replyCheckAt`) and a fallback model is set, `_refusalFallback` sends the SAME payload the reply was written from to the
+fallback model (dbg "· fallback model (refusal)") and its answer, cleaned like any reply (`_cleanReplyText`), overwrites
+the refused text in the same message. Nothing is removed or rolled back — the user's rule: "do not remove anything, just
+send the same payload to the fallback model". `generateCharacterReply` returns the payload it sent; the solo, group and
+Gamemaster-reaction paths keep it beside the message in memory (`_replyPayloads`, a WeakMap, never persisted) and record
+the model that wrote the reply (`genModel`). Not when the fallback model wrote it, not twice for one line, not when the
+line was edited meanwhile, not after a reload (no payload kept), and not when the fallback model refuses too.
+No fallback model set: the line stays, flagged, as before. Test: `tests/refusal-fallback.browser.js`.

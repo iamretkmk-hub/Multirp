@@ -157,8 +157,9 @@ const {chromium}=require('playwright');
       if(!/generateCharacterReply\(/.test(String(sendMessage))) miss.push("solo");
       if(!/generateCharacterReply\(/.test(String(playCharacterTurn))) miss.push("multi/heat");
       if(!/generateCharacterReply\(/.test(String(playSingleReaction))) miss.push("gm reaction");
-      if(!/normalizeChannels\(/.test(String(generateCharacterReply))) miss.push("generator");
-      if(!/\{heat:wasHeat\}/.test(String(generateCharacterReply))) miss.push("heat-exempt");
+      // v150.99 — the clean-up is _cleanReplyText, shared with the refusal fallback's overwrite
+      if(!/_cleanReplyText\(p,reply,wasHeat\)/.test(String(generateCharacterReply))||!/normalizeChannels\(/.test(String(_cleanReplyText))) miss.push("generator");
+      if(!/\{heat:wasHeat\}/.test(String(_cleanReplyText))) miss.push("heat-exempt");
       return miss.length?miss.join(", "):true; }));
 
   console.log("\n[exposure is not leak-chance]");

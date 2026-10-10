@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.105</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.106</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -41695,17 +41695,31 @@ function _staticImgSlots(){
 }
 // Store a static image's bytes under its stable key. Base64 goes straight in; a hosted URL is
 // fetched to a data URL best-effort (harmless if CORS blocks it — the URL keeps rendering live).
+/* (!) v150.106 — WHICH LINK THE STORED BYTES CAME FROM. A hosted link whose download failed (CORS, an
+   expired host) left the PREVIOUS picture's bytes under the key, and the next boot put those back over
+   the new link. Now the source is recorded beside the bytes ("simgsrc:<key>"): "pending:<url>" while a
+   download runs, the url once its bytes are in. Bytes whose source is a different link are older than
+   the link, so the boot keeps the link. */
+const _simgSrcKey=key=>"simgsrc:"+key;
 function saveStaticImage(key,url){
   if(!key||!url||typeof url!=="string")return;
   try{
-    if(url.startsWith("data:")){ mediaDB.kvSet(key,url); return; }
+    if(url.startsWith("data:")){ mediaDB.kvSet(key,url); try{ mediaDB.kvSet(_simgSrcKey(key),"data"); }catch(_){} return; }
     if(/^https?:/.test(url)){
+      try{ mediaDB.kvSet(_simgSrcKey(key),"pending:"+url); }catch(_){}
       fetchMediaBlob(url).then(b=>{ if(!b)return;
-        const fr=new FileReader(); fr.onload=()=>{ try{ mediaDB.kvSet(key,String(fr.result)); }catch(e){} }; fr.readAsDataURL(b);
+        const fr=new FileReader();
+        fr.onload=async()=>{ try{ if(await mediaDB.kvSet(key,String(fr.result)))mediaDB.kvSet(_simgSrcKey(key),url); }catch(e){} };
+        fr.readAsDataURL(b);
       }).catch(()=>{});
     }
   }catch(e){}
 }
+/* v150.106 — the bytes behind each object URL made below. A slot keyed by position (a character's extra
+   reference views) can end up holding another slot's object URL — remove view 1 and view 2 moves into
+   its place — and its stored bytes were still view 1's, which the next boot put back. Capture now
+   stores the bytes an object URL stands for under the slot that holds it. */
+const _simgBlobData=new Map();
 function _dataURLtoObjectURL(d){
   try{
     const m=/^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(d); if(!m)return null;
@@ -41713,24 +41727,35 @@ function _dataURLtoObjectURL(d){
     let bytes;
     if(m[2]){ const bin=atob(m[3]); bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i); }
     else bytes=new TextEncoder().encode(decodeURIComponent(m[3]));
-    return URL.createObjectURL(new Blob([bytes],{type:mime}));
+    const ourl=URL.createObjectURL(new Blob([bytes],{type:mime}));
+    _simgBlobData.set(ourl,d);
+    return ourl;
   }catch(e){ return null; }
 }
 // Capture pass, hooked into persistPersonas/persistUniverses — the funnel EVERY static-image
 // assignment already flows through, so any current or future set-site is covered automatically.
-// Each (key, value) pair is captured once per session; blob:/object URLs are session-local refs
-// whose bytes are already stored, so they're skipped.
-const _simgCaptured=new Set();
+// Each (key, value) pair is captured once per session; a blob:/object URL made from stored bytes is
+// captured only when it sits in a slot whose stored bytes are different (above).
+/* (!) v150.106 — the WHOLE value is compared, not its first 200 characters. Every picture the app
+   resizes comes out of the same canvas JPEG encoder, so its first 200 characters (the data: prefix,
+   the JPEG header and quantisation tables) are the same for all of them: a new portrait looked
+   "already captured", its bytes were never stored, and the next boot put the old portrait back.
+   key → the value last stored under it (the string is held by reference, not copied). */
+const _simgCaptured=new Map();
 function captureStaticImages(coll){
   try{
     for(const s of _staticImgSlots()){
       if(coll&&s.coll!==coll)continue;
       const v=s.obj[s.field];
       if(!v||typeof v!=="string")continue;
+      if(v.startsWith("blob:")){
+        const d=_simgBlobData.get(v);
+        if(d&&_simgCaptured.get(s.key)!==d){ _simgCaptured.set(s.key,d); saveStaticImage(s.key,d); }
+        continue;
+      }
       if(!(v.startsWith("data:")||/^https?:/.test(v)))continue;
-      const sig=s.key+"|"+v.slice(0,200);
-      if(_simgCaptured.has(sig))continue;
-      _simgCaptured.add(sig);
+      if(_simgCaptured.get(s.key)===v)continue;
+      _simgCaptured.set(s.key,v);
       saveStaticImage(s.key,v);
     }
   }catch(e){}
@@ -41739,30 +41764,47 @@ function captureStaticImages(coll){
 // base64 out of the collections, and capture legacy remote URLs that were never stored. A blob:
 // value with no stored bytes is a dead pointer from before this feature — left alone (renders
 // empty exactly as it already did).
+/* (!) v150.106 — THE PICTURE ON THE ENTITY IS THE NEWEST ONE. The boot pass used to swap in the stored
+   bytes whenever there were any, so a portrait changed since its last capture came back as the old one
+   on every launch. A data: value on the entity is always newer than the store (this pass turns stored
+   values into blob: links, so a data: one was set since): it is stored and used. A hosted link is
+   swapped for stored bytes only when they were downloaded FROM that link, or when the store predates
+   the source record; otherwise the link stays and is captured again. */
+async function _simgCachedFor(key,v){
+  let cached=null; try{ cached=await mediaDB.kvGet(key); }catch(e){}
+  if(!cached)return null;
+  if(typeof v==="string"&&v.startsWith("data:"))return v===cached?cached:null;
+  if(typeof v==="string"&&/^https?:/.test(v)){
+    let src=null; try{ src=await mediaDB.kvGet(_simgSrcKey(key)); }catch(e){}
+    if(src&&src!==v)return null;
+  }
+  return cached;
+}
 async function rehydrateStaticImages(){
   let changedP=false,changedU=false,swapped=0;
   for(const s of _staticImgSlots()){
     const v=s.obj[s.field];
     if(!v||typeof v!=="string")continue;
-    let cached=null; try{ cached=await mediaDB.kvGet(s.key); }catch(e){}
+    const cached=await _simgCachedFor(s.key,v);
     if(cached){
       const ourl=_dataURLtoObjectURL(cached);
       if(ourl){
         if(v!==ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; }
-        _simgCaptured.add(s.key+"|"+String(cached).slice(0,200));
+        _simgCaptured.set(s.key,cached);
         continue;
       }
     }
     if(v.startsWith("data:")){
-      // Legacy inline base64 → move the bytes into the store FIRST, then slim the entity.
+      // Inline base64 (legacy, or a picture set since the last boot) → move the bytes into the store
+      // FIRST, then slim the entity.
       const ok=await mediaDB.kvSet(s.key,v);
-      if(ok){ const ourl=_dataURLtoObjectURL(v);
+      if(ok){ try{ await mediaDB.kvSet(_simgSrcKey(s.key),"data"); }catch(_){}
+        const ourl=_dataURLtoObjectURL(v);
         if(ourl){ s.obj[s.field]=ourl; if(s.coll==="p")changedP=true;else changedU=true; swapped++; } }
-      _simgCaptured.add(s.key+"|"+v.slice(0,200));
+      _simgCaptured.set(s.key,v);
     }else if(/^https?:/.test(v)){
-      // Legacy hosted link with no stored bytes yet → capture in the background; keep the link live.
-      const sig=s.key+"|"+v.slice(0,200);
-      if(!_simgCaptured.has(sig)){ _simgCaptured.add(sig); saveStaticImage(s.key,v); }
+      // Hosted link with no stored bytes of its own yet → capture in the background; keep the link live.
+      if(_simgCaptured.get(s.key)!==v){ _simgCaptured.set(s.key,v); saveStaticImage(s.key,v); }
     }
   }
   if(changedP)persistPersonas();
@@ -41791,7 +41833,7 @@ async function inlineStaticImages(universes,personas){
   const fill=async(obj,field,key)=>{
     const v=obj&&obj[field];
     if(!v||typeof v!=="string"||v.startsWith("data:"))return;
-    let cached=null; try{ cached=await mediaDB.kvGet(key); }catch(e){}
+    const cached=await _simgCachedFor(key,v);   // v150.106 — never an older picture over a newer link
     if(cached)obj[field]=cached;
     else if(v.startsWith("blob:"))obj[field]=null;
   };
@@ -41814,7 +41856,7 @@ async function deleteStaticImagesFor(heads){
     const keys=(await mediaDB.kvKeys()).filter(k=>typeof k==="string"&&k.indexOf("simg:")===0);
     for(const k of keys){
       const body=k.slice(5);
-      if(heads.some(h=>body===h||body.indexOf(h+":")===0)) await mediaDB.kvDelete(k);
+      if(heads.some(h=>body===h||body.indexOf(h+":")===0)){ await mediaDB.kvDelete(k); try{ await mediaDB.kvDelete(_simgSrcKey(k)); }catch(_){} }
     }
   }catch(e){}
 }

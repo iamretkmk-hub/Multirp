@@ -629,7 +629,9 @@ Portraits, universe pictures, diary covers, map backgrounds and location images 
 images": generated via special-purpose models (`portraitModel`, `uniPicModel`+`uniPicLora`,
 `mapImgModel`, `locModel` — all optional overrides), stored as bytes in IDB
 (`captureStaticImages`/`rehydrateStaticImages`, keys `simg:*`) so blob URLs survive reload,
-and inlined into exports (`inlineStaticImages`).
+and inlined into exports (`inlineStaticImages`). Since v150.106 the picture on the entity is the
+newest: boot and export use stored bytes only when they belong to it (`_simgCachedFor`, source
+records `simgsrc:*`), and capture compares whole values — see doc 02, persistence rule 4.
 
 ## Warnings
 

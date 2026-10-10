@@ -1078,3 +1078,19 @@ Decisions model = the gate model): does the event happen here, where the people 
 - **No answer**: posted to the scene as before.
 
 Test: `tests/gm-offstage.browser.js`.
+
+## v150.97 — a character who says goodbye and sets off leaves
+
+Burcu said "Ben kalkayım artık", stood, said her goodbye and turned for the boardwalk exit, and stayed in the scene. The
+movement request (`maybeMoveDecision`) offered only the other areas of the place, and the presence tracker counts only a
+completed departure. Every character here (not someone expected back, not an event's participant) is now also asked
+`x_move_leave` in the same request: yes/no, "is {{char}} leaving {{place}} now?". A goodbye followed by setting off is
+leaving; leaving with the player, a plan for later, or a refusal not yet given is not. A yes at `moveAt()` (0.75) runs
+`_moveDecLeave`: the exit is narrated (`narrateCharMove`, dir "exit"), `applyPresence`/`notePresence` take them out, and
+they do not speak again (their line was the goodbye). Leaving wins over an area move for the same person, it is asked
+outside the area-move cooldown, and a place with only one area now sends a request with just these questions.
+The prompt is on the Gamemaster card after "why they go". Test: `tests/move-leave.browser.js`.
+
+The same build's wearing tracker default writes its value in plain English (it goes to the image writer), never records
+an accessory (sunglasses, jewellery, a bag) as an outfit, and reports someone with "(nothing recorded)" only with the
+garments on the body; a stored copy of the old default is refreshed once.

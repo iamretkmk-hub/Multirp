@@ -233,6 +233,15 @@ when it matches, pushing the pipe onto `_stalePipes`; the list is `console.warn`
 you rewrite a default, either keep its pipes' markers in the text or delete those pipes in the same
 commit.
 
+**(!) v150.95 — each pipe runs ONCE per install.** Before it, every pipe ran on every load, so a player who edited a
+prompt and kept its old opening (the fingerprint) without the newest sentence (the marker) got the shipped default
+back each time the app opened ("I change suggested replies but it reverts"). Now `key|marker` goes into localStorage
+`sm_pipesdone` the first time the pipe runs; the copy stored when the upgrade shipped is upgraded, and anything the
+player writes later is theirs. A new marker is a new id, so a later rewrite still upgrades once. The stale-default
+self-check above still runs on every load (it never marks a pipe done). Tests that seed an old copy and reload clear
+`sm_pipesdone` first (`tests/prompt-edits-stick.browser.js`). A full backup carries `sm_pipesdone` with the rest of
+localStorage, so restoring an older backup (which lacks the newer ids) upgrades its stored prompts once, as before.
+
 There are no hand-written copies of this pattern left. Three base-instruction guards and one
 format-rules guard used to be inline `if(state.x.indexOf(...))` blocks; two of them had gone stale
 exactly this way, so they are pipes now and inherit the self-guard.

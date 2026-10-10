@@ -116,9 +116,9 @@ const {chromium}=require('playwright');
       const st=window.__b&&window.__b.state; return (st&&/steady harbour/.test(JSON.stringify(st.people_they_answer_to))&&/Dinner at home/.test(JSON.stringify(st.plans_that_put_them_at_risk))&&/real weight/.test(window.__b.questions.ego.instructions))?true:JSON.stringify(st||{}).slice(0,500); }));
   ok("a stored copy of the old ego prompt is refreshed; one the user rewrote is kept", await pg.evaluate(()=>{
       const OLD="In this moment with {{target}}, which is winning in {{char}}: what {{char}} wants (the id), or what {{char}} owes and who they want to be (the superego)? Weigh it from the state. Do not lean on conscience by default.";
-      store.setRaw(K.x_ego_pick||"sm_x_ego_pick",OLD); state.x_ego_pick=OLD; loadState(); const a=up("x_ego_pick")===X_ENGINE_PROMPTS.x_ego_pick.def;
-      const MINE="My own ego question about {{char}}."; state.x_ego_pick=MINE; store.setRaw(K.x_ego_pick||"sm_x_ego_pick",MINE); loadState(); const b2=up("x_ego_pick")===MINE;
-      state.x_ego_pick=undefined; store.setRaw(K.x_ego_pick||"sm_x_ego_pick",""); loadState();
+      store.setRaw(K.x_ego_pick||"sm_x_ego_pick",OLD); state.x_ego_pick=OLD; localStorage.removeItem("sm_pipesdone"); loadState(); const a=up("x_ego_pick")===X_ENGINE_PROMPTS.x_ego_pick.def;
+      const MINE="My own ego question about {{char}}."; state.x_ego_pick=MINE; store.setRaw(K.x_ego_pick||"sm_x_ego_pick",MINE); localStorage.removeItem("sm_pipesdone"); loadState(); const b2=up("x_ego_pick")===MINE;
+      state.x_ego_pick=undefined; store.setRaw(K.x_ego_pick||"sm_x_ego_pick",""); localStorage.removeItem("sm_pipesdone"); loadState();
       return (a&&b2)?true:JSON.stringify({a,b2,now:String(up("x_ego_pick")).slice(0,80)}); }));
 
   console.log("\n[the reply check sees who she is to them]");
@@ -132,8 +132,8 @@ const {chromium}=require('playwright');
   ok("the repeat question counts the same closing move reply after reply (a dare, a tag question)", /ends with the same closing move as their earlier replies — the same dare or challenge, the same tag question/.test(RC.rep), RC.rep);
   ok("a stored copy of the old repeat question is refreshed", await pg.evaluate(()=>{
       const OLD="Does the reply repeat what {{char}} already said, did or thought earlier in this scene (their earlier lines are in the state)?\nYES: It makes the same point.\nNO: It moves on.";
-      state.x_reply_check_repeat=OLD; store.setRaw(K.x_reply_check_repeat||"sm_x_reply_check_repeat",OLD); loadState(); const a=up("x_reply_check_repeat")===X_ENGINE_PROMPTS.x_reply_check_repeat.def;
-      state.x_reply_check_repeat=undefined; store.setRaw(K.x_reply_check_repeat||"sm_x_reply_check_repeat",""); loadState(); return a?true:String(up("x_reply_check_repeat")).slice(0,120); }));
+      state.x_reply_check_repeat=OLD; store.setRaw(K.x_reply_check_repeat||"sm_x_reply_check_repeat",OLD); localStorage.removeItem("sm_pipesdone"); loadState(); const a=up("x_reply_check_repeat")===X_ENGINE_PROMPTS.x_reply_check_repeat.def;
+      state.x_reply_check_repeat=undefined; store.setRaw(K.x_reply_check_repeat||"sm_x_reply_check_repeat",""); localStorage.removeItem("sm_pipesdone"); loadState(); return a?true:String(up("x_reply_check_repeat")).slice(0,120); }));
 
   console.log("\n[a relationship is not a calendar]");
   const DT=await pg.evaluate(async()=>{

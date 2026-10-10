@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.94</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.97</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -3832,7 +3832,7 @@ RULES
 - Everything in ENGLISH regardless of the card's language, because the image generator reads it too.`},
 
   x_wearing_tracker:{label:"Wearing tracker",json:true,
-    hint:"After a turn whose text mentions clothes, records what anybody present is now wearing \u2014 so the payload and the image writer follow the scene rather than the table. Only runs when the text actually hints at it.",
+    hint:"After every response, records what anybody present is now wearing \u2014 so the payload and the image writer follow the scene rather than the table. A response it has already read never runs it twice.",
     def:`You track CLOTHING across a roleplay scene. You are given where and when the scene is, who is present and what each of them had on, then the last few lines of the scene. Decide whether those lines CHANGED what anybody is wearing.
 
 Return ONLY:
@@ -3843,8 +3843,10 @@ RULES
 - Return the FULL state after the change, not the difference: "bare from the waist up, jeans still on", not "took his shirt off".
 - If they are wearing nothing, say so plainly.
 - Only people in the list. Never invent a person, and never guess at somebody the lines do not mention.
+- Glasses, sunglasses, jewellery, a watch, a hat in the hand, a bag or a phone are NOT clothes: putting them on, taking them off or carrying them is NOT a change. Never return a value that is only an accessory.
+- Where what someone had on is "(nothing recorded)", report them only when the lines say which garments they now have on the body.
 - Nothing changed for anybody → {"changed":[]}. That is the normal answer; return it without hesitation.
-- Write the value in the same language the scene is in.`},
+- Write the value in plain English, whatever language the scene is in: it goes to the image writer, which draws from English.`},
 
   x_look_split:{label:"Appearance splitter",json:true,
     hint:"One-off migration: turns an old freeform appearance string into the structured fields.",
@@ -4489,6 +4491,11 @@ NO: An intimate or private moment is happening (that is the scene working); it i
     def:`{{char}} is in the {{area}} of {{place}}. The state is everyone at this place, which area each of them is in, what each area is, and the latest exchange. Would {{char}} now go to another area of {{place}} on their own, or stay where they are?
 Pick an area only for a clear reason in this moment: they are done with what they were doing here; someone they want, need or are responsible for is in another area; they were asked or sent; they want privacy for something; they are avoiding someone; a host or friend would plausibly go to see why {{user}} is alone.
 Pick stay when they are in the middle of a conversation or an activity here, when they just arrived, when nothing gives them a reason, or when you are unsure. Most turns, most people stay. Never walk in on a private or intimate moment.`},
+  x_move_leave:{label:"Movement — does this character leave the place?",json:false,
+    hint:"Asked after each turn in the same movement request, for every character at the player's place (Settings → Gamemaster → Characters move around). Yes: they leave the place — their exit is narrated and they are gone from the scene. The question, then a YES: line and a NO: line. Supports {{char}}, {{user}} and {{place}}.",
+    def:`{{char}} is at {{place}} with {{user}}. The state is everyone here and the latest exchange. Is {{char}} leaving {{place}} now — going home or on somewhere else, away from {{user}}?
+YES: {{char}}'s own lines say they are going and they are setting off now: they said goodbye or that they are off, got up, picked up their things, turned for the exit or the door. A goodbye followed by setting off is leaving, even when the last step out is not written.
+NO: They stay; or they only talk about leaving later, or threaten to; or they leave together with {{user}}; or {{user}} has just asked them to stay and they have not refused; or they have just arrived.`},
   x_move_player:{label:"Movement — does the player go to another area?",json:false,
     hint:"Asked in the same movement request after each turn (Settings → Gamemaster → Characters move around a place). The options are staying and each other area, with who is there. Supports {{user}}, {{area}} and {{place}}.",
     def:`{{user}} is in the {{area}} of {{place}}. Judging from the latest exchange, has {{user}} gone — or clearly set off — to another area of this place?
@@ -9545,13 +9552,26 @@ function loadState(){
         if(any&&typeof persistUniverses==="function")persistUniverses(); }catch(e){}
   }
   const _stalePipes=[];
+  /* (!) v150.95 — AN UPGRADE RUNS ONCE. A pipe replaced a stored prompt that still had the old default's fingerprint and lacked
+     the new marker — on EVERY load. So a prompt the player edited, keeping the old opening ("1. FUNNY:", "You write the three
+     options {{user}} can tap next") and not the newest sentence, was put back to the shipped default each time the app opened:
+     "I am changing suggested replies but it reverts back." Each pipe now runs once per install (localStorage "sm_pipesdone" remembers it): the
+     copy that was stored when the upgrade shipped is upgraded, and anything edited after that is the player's and stays. */
+  let _pipesDone=null; try{ _pipesDone=new Set(JSON.parse(localStorage.getItem("sm_pipesdone")||"[]")); }catch(_){ _pipesDone=new Set(); }
+  let _pipesNew=false;
   const _refreshPipe=(key,fingerprint,newMarker,def)=>{
     const marks=Array.isArray(fingerprint)?fingerprint:[fingerprint];
     const hits=t=>typeof t==="string" && marks.every(m=>t.indexOf(m)!==-1) && t.indexOf(newMarker)===-1;
     if(hits(def)){ _stalePipes.push(key+" \u2192 "+newMarker); return; }
+    // v150.95 — each upgrade runs once per install: after it, the stored text is the user's own,
+    // even when an edit took the marker out or kept the old wording the fingerprint looks for.
+    const id=key+"|"+newMarker;
+    if(_pipesDone.has(id))return;
+    _pipesDone.add(id); _pipesNew=true;
     if(hits(state[key])){ state[key]=def; store.setRaw(K[key],def); }
     (state.universes||[]).forEach(u=>{ if(u&&u.prompts&&hits(u.prompts[key])) delete u.prompts[key]; });
   };
+  const _pipesSave=()=>{ if(!_pipesNew)return; try{ localStorage.setItem("sm_pipesdone",JSON.stringify([..._pipesDone])); }catch(_){} };
   // v25 — sm_style historically stored a style NAME; resolve it to the style's id (or first style).
   { const cur=state.style;
     if(cur && !state.styles.some(s=>s.id===cur)){
@@ -10459,6 +10479,8 @@ function loadState(){
    /* the emotion and ego questions read the memories that still weigh (memories_that_weigh_now) by the fading rules */
    _refreshPipe("x_emotion_pick","Which emotion is {{char}} mainly feeling right now","HOW A PAST FEELING LASTS",X_ENGINE_PROMPTS.x_emotion_pick.def);
    _refreshPipe("x_ego_pick","which is winning in {{char}}: what {{char}} wants (the id)","HOW A PAST FEELING LASTS",X_ENGINE_PROMPTS.x_ego_pick.def);
+   /* v150.96 — a stored copy of the old wearing tracker (values in the scene's language, sunglasses as an outfit) gets the new one */
+   _refreshPipe("x_wearing_tracker","Write the value in the same language the scene is in.","Write the value in plain English",X_ENGINE_PROMPTS.x_wearing_tracker.def);
    /* a saved emotion list whose Calm or Guilt still has the shipped v150.67 description gets the new one (Calm is not a
       character with an open or secret memory weighing on them; Guilt holds even when nobody knows) */
    try{ if(Array.isArray(state.emotions)){ let ch=false;
@@ -10594,6 +10616,7 @@ function loadState(){
   /* v37.2 — also readable, not just logged. A pipe that stands down means its migration never
      runs: everyone who edited that prompt (or is carrying an old stored default) silently keeps
      the old text forever. That is worth being able to assert, so the list is exposed. */
+  _pipesSave();   // v150.95 — the upgrades that ran this load are not run again
   try{ window.__stalePipes=_stalePipes.slice(); }catch(_){}
   if(_stalePipes.length) console.warn("[StoryMind] stale refresh pipes stood down (their marker is gone from the current default):\n  "+_stalePipes.join("\n  "));
   // Repair any existing temp characters that were saved with a placeholder name like
@@ -24452,6 +24475,7 @@ function _clockApply(chat,v){
   if(!(v>=CLOCK_AT)||!chat||chatPeriodIndex(chat)>=PERIODS.length-1)return false;
   const per0=chatPeriod(chat);
   advanceTime(chat,1); chat._clockMovedTurn=_playerTurns(chat);
+  _outfitCarryClock(chat);   // v150.96 — the hour turned inside the scene: nobody is re-dressed by it
   const per=chatPeriod(chat);
   const TR={Morning:"sabah",Midday:"öğle",Afternoon:"öğleden sonra",Evening:"akşam",Night:"gece"};
   const DE={Morning:"Morgen",Midday:"Mittag",Afternoon:"Nachmittag",Evening:"Abend",Night:"Nacht"};
@@ -29566,7 +29590,10 @@ function _outfitHeldFor(p,c,fresh){
        build) is not held: the table answers again. There is no "into or out of an activity" change now. */
     const staleAct=!!(h&&/^activity:/.test(h.why||""));
     if(h&&h.text&&!staleAct&&h.day===day&&h.loc===loc&&!!h.atHome===atHome){
-      const homeHour=/^home:/.test(fresh.why)&&/^home:/.test(h.why||"")&&fresh.why!==h.why;   // at home the hour still dresses them
+      /* at home the hour still dresses them — (!) v150.96 — unless the hour turned INSIDE the scene (the clock following the
+         lines, _clockApply → _outfitCarryClock stamps h.per): an evening at home that the lines carried into Night put the
+         host into the table's night clothes between two lines of the same conversation. */
+      const homeHour=/^home:/.test(fresh.why)&&/^home:/.test(h.why||"")&&fresh.why!==h.why&&!(h.per&&h.per===chatPeriod(c));
       if(!homeHour) return {text:h.text,why:h.why||"scene",held:true};
     }
     if(staleAct&&!(fresh&&fresh.text&&fresh.why!=="wardrobe"&&fresh.why!=="none")){ try{ delete H[p.id]; markChatDirty(c); }catch(e){} }
@@ -29579,6 +29606,18 @@ function _outfitHeldFor(p,c,fresh){
     }
     return fresh;
   }catch(e){ return fresh; }
+}
+/* (!) v150.96 — THE CLOCK FOLLOWING THE SCENE IS NOT A NEW SCENE. _clockApply moves the hour on while the same people
+   carry on the same conversation; every hold made today in this place is stamped with the new hour, so the home table's
+   next slot does not dress anyone between two lines. A real jump (travel, Story mode's move on, End Day) never stamps,
+   so it dresses them as before. */
+function _outfitCarryClock(c){
+  try{
+    if(!c||!c.outfitHeld||typeof c.outfitHeld!=="object")return;
+    const per=chatPeriod(c), day=c.gameDay||1, loc=c.locationId||"";
+    for(const pid in c.outfitHeld){ const h=c.outfitHeld[pid]; if(h&&h.day===day&&h.loc===loc) h.per=per; }
+    try{ markChatDirty(c); }catch(e){}
+  }catch(e){}
 }
 /* ===== v140.1 — WHAT THE PLAYER WEARS ==========================================================
    Characters have had an outfit table since v48.2; the player had an appearance line and nothing
@@ -32247,7 +32286,7 @@ const ENGINE_PAYLOAD_DEFS=[
     {kind:"prompt",promptKey:"sceneSetup"},{kind:"prompt",promptKey:"sceneWriter"},
     {kind:"dyn",label:"Event state + recent exchange + participant status",scope:"chat",desc:"{summary, turn, min, max}, the last lines, and whether the event character is in the room."}]},
   {key:"gamemaster_engine",label:"Gamemaster",desc:"Judges whether the scene has gone stale and authors the hidden nudge.",blocks:[
-    {kind:"prompt",promptKey:"gmJudge"},{kind:"prompt",promptKey:"x_gm_dec_stale"},{kind:"prompt",promptKey:"x_gm_dec_trigger"},{kind:"prompt",promptKey:"x_gm_dec_energy"},{kind:"prompt",promptKey:"x_gm_dec_kind"},{kind:"prompt",promptKey:"gmAuthor"},{kind:"prompt",promptKey:"x_gm_event_here"},{kind:"prompt",promptKey:"x_move_pick"},{kind:"prompt",promptKey:"x_move_why"},{kind:"prompt",promptKey:"x_move_player"},
+    {kind:"prompt",promptKey:"gmJudge"},{kind:"prompt",promptKey:"x_gm_dec_stale"},{kind:"prompt",promptKey:"x_gm_dec_trigger"},{kind:"prompt",promptKey:"x_gm_dec_energy"},{kind:"prompt",promptKey:"x_gm_dec_kind"},{kind:"prompt",promptKey:"gmAuthor"},{kind:"prompt",promptKey:"x_gm_event_here"},{kind:"prompt",promptKey:"x_move_pick"},{kind:"prompt",promptKey:"x_move_why"},{kind:"prompt",promptKey:"x_move_leave"},{kind:"prompt",promptKey:"x_move_player"},
     {kind:"dyn",label:"Director context (GM mode)",scope:"chat",desc:"Compact tie-only roster, scene & privacy lines, trackers, calendar, offstage positions — assembled by directorContext('gm')."}]},
   {key:"diaries",label:"Day Diaries",desc:"One diary per character at End Day, written from the day's experiential memories.",blocks:[
     {kind:"prompt",promptKey:"daySummaryPrompt"},
@@ -46905,7 +46944,19 @@ async function runWearingTracker(chat){
     // v140.1 — the player too, once they have clothes on record; stored under "__user__"
     if(playerHasClothes(chat)) cast.push(playerOutfitHolder(chat));
     if(!cast.length)return null;
-    if(!hasClothingCue(chat))return null;
+    /* (!) v150.96 — AFTER EVERY RESPONSE. The call waited for a cue word (the list above), so a scene that undressed in
+       words the list does not know — "lets the dress fall", "pulls his shirt over his head", "sütyenini açıyor" — never
+       reached the tracker, and the table's outfit stayed on record: the next picture (and the next reply's <wearing>)
+       put the clothes back on mid-scene. It now reads every response it has not read yet, as the presence tracker has
+       since v148.5; a line it has already read never runs it twice. The cue gate stays behind state.wearCueGate. */
+    if(state.wearCueGate===true){ if(!hasClothingCue(chat))return null; }
+    else{
+      const _ms=(chat.messages||[]).filter(m=>m&&m.role!=='system'&&!m.sysError);
+      const _seen=chat._wearSeenMid?_ms.findIndex(m=>m.mid===chat._wearSeenMid):-1;
+      const _fresh=(_seen>=0?_ms.slice(_seen+1):_ms.slice(-2)).filter(m=>m&&m.content&&!m.questNote&&!m.calNote&&!m.uiNote&&!m.textMsg&&!m.clockNote);
+      chat._wearSeenMid=_ms.length?_ms[_ms.length-1].mid:null;
+      if(!_fresh.length)return null;   // nothing said since the last read
+    }
     const now=cast.map(c=>{ const f=currentOutfit(c,chat);
       return `- ${c.name}: ${f.text||"(nothing recorded)"}`; }).join("\n");
     // v147.2 — this chat's prompt and player (the chain runs this after its awaits)
@@ -59931,13 +59982,32 @@ async function router2Decision(chat,o){
     return {next};
   }catch(err){ return null; }
 }
+/* v150.96 — a character the movement request says is leaving the place: their own lines were the goodbye, so they do not
+   speak again; the exit is narrated and they are taken out of the scene, as the presence tracker's exit does. */
+async function _moveDecLeave(chat,p){
+  if(!chat||!p||!(chat.presentIds||[]).includes(p.id))return false;
+  const narr=await narrateCharMove(chat,p,{dir:"exit",fromName:(chat&&chat.location)||"",why:_moveWhy(chat,[p]).ctx});
+  applyPresence(chat,[],[p.name]);
+  notePresence(chat,[],[p.name],narr);
+  if(chat.worldPositions)chat.worldPositions[p.id]=null;
+  if(!Array.isArray(chat._exitedIds))chat._exitedIds=[];
+  if(chat._exitedIds.indexOf(p.id)<0)chat._exitedIds.push(p.id);
+  try{ markChatDirty(chat); }catch(_){}
+  persistChats(); try{ appendNewBubbles(); updateChatHeader(); }catch(_){}
+  return true;
+}
 async function maybeMoveDecision(chat){
   try{
     if(!chat||!moveDecOn()||state.presenceOff||!_decReady(_moveDecBreak))return false;
     if(chat.dnd||chat._heatBeat||(chat.activeEvent&&!chat.activeEvent.resolved))return false;
     const loc=chat.locationId?chatLocById(chat,chat.locationId):null; if(!loc)return false;
     ensureSublocations(loc);
-    const subs=(loc.sublocations||[]).filter(Boolean); if(subs.length<2)return false;
+    const subs=(loc.sublocations||[]).filter(Boolean);
+    /* (!) v150.96 — AND WHETHER THEY LEAVE THE PLACE. Burcu said "Ben kalkayım artık", stood, said her goodbye and turned for
+       the boardwalk exit — and stayed in the scene: this request offered only the other areas of the beach club, and the
+       presence tracker counts only a completed departure. Every character here is now also asked x_move_leave (yes/no);
+       a yes at moveAt() takes them out of the scene. A place with one area asks only that. */
+    const areaMode=subs.length>=2;
     const present=presentCast(chat); if(!present.length)return false;
     const turn=_playerTurns(chat);
     chat._moveDecAt=(chat._moveDecAt&&typeof chat._moveDecAt==="object")?chat._moveDecAt:{};
@@ -59945,12 +60015,13 @@ async function maybeMoveDecision(chat){
     const expected=new Set((Array.isArray(chat.expected)?chat.expected:[]).map(e=>e&&e.id).filter(Boolean));
     const reserved=(chat.activeEvent&&chat.activeEvent.participant&&chat.activeEvent.participant.charId)||null;
     const cands=present.filter(p=>!expected.has(p.id)&&p.id!==reserved&&!((turn-(chat._moveDecAt[p.id]||-99))<MOVE_COOLDOWN)).slice(0,6);
+    const leavers=present.filter(p=>!expected.has(p.id)&&p.id!==reserved).slice(0,6);
     /* (!) v150.53 — THE PLAYER MOVES TOO. "Let's go before the sun goes" … "we stand side by side on the sand": nothing
        moved the player between areas unless they used the area picker, so the area, the payload, the pictures and the
        memories stayed at the bar. Not asked when the player already changed area this turn. */
     const _lastU=(()=>{ const ms=chat.messages||[]; for(let i=ms.length-1;i>=0;i--)if(ms[i]&&ms[i].role==="user")return i; return -1; })();
-    const askPlayer=state.moveDecPlayer!==false&&_lastU>=0&&!(chat.messages||[]).slice(_lastU).some(m=>m&&m.subTo);
-    if(!cands.length&&!askPlayer)return false;
+    const askPlayer=areaMode&&state.moveDecPlayer!==false&&_lastU>=0&&!(chat.messages||[]).slice(_lastU).some(m=>m&&m.subTo);
+    if(!(areaMode&&cands.length)&&!askPlayer&&!leavers.length)return false;
     const un=chatUserName(chat)||state.user||"the player", here=curSubId(chat);
     const who=sid=>{ const n=present.filter(p=>charSubId(chat,p.id)===sid).map(p=>p.name); if(sid===here)n.unshift(un+" (the player)"); return n; };
     // v150.81 — the area's look (its scene, else its description) and who is around it (crowdLabel), in place of the exposure label
@@ -59959,7 +60030,7 @@ async function maybeMoveDecision(chat){
     const key=sb=>"to_"+String(sb.id).replace(/[^A-Za-z0-9_]/g,"_");
     const privateNow=(()=>{ try{ return sceneIsPrivateMoment(chat); }catch(e){ return false; } })();
     const playerAlone=!present.some(p=>charSubId(chat,p.id)===here);
-    const people=cands.map(p=>{ const sid=charSubId(chat,p.id), e=relSheetEntry(p,"__user__");
+    const people=[...new Set(cands.concat(leavers))].map(p=>{ const sid=charSubId(chat,p.id), e=relSheetEntry(p,"__user__");
       const last=[...(chat.messages||[])].reverse().find(m=>m&&m.speakerId===p.id&&m.content&&!m.sysError);
       return `${p.name} — in ${(subById(loc,sid)||{}).name||"?"}${e&&e.tie?"; to "+un+": "+_relTieLabel(e.tie):""}${spokeSincePlayer(chat,p.id)?"; answered "+un+" this turn":""}${last?"; their last line: "+briefDesc(stripDeliveryTags(String(last.content)),160):""}`; });
     const st={place:`${loc.name}${loc.description?" — "+briefDesc(String(loc.description).replace(/\s+/g," "),240):""}`,
@@ -59968,9 +60039,11 @@ async function maybeMoveDecision(chat){
       people:people,
       latest_exchange:String(recentExchangeText(chat,8,{scene:true})||"").slice(-3500),
       private_moment:privateNow?`yes — an intimate or private moment in ${(subById(loc,here)||{}).name||"the player's area"}: nobody walks in on it`:"no"};
-    const questions={}, keyed={};
+    const questions={}, keyed={}, leaveKeyed={};
+    leavers.forEach((p,i)=>{ const t=fillTpl(up("x_move_leave",chat.universeId),{char:p.name,user:un,place:loc.name});
+      if(t.trim()){ questions["leave_"+i]=_decQuestionFrom(t); leaveKeyed[i]=p; } });
     const wc={}; MOVE_WHY.forEach(w=>{ wc[w.k]=w.desc; });
-    cands.forEach((p,i)=>{ const sid=charSubId(chat,p.id), crit={stay:"stays where they are"};
+    if(areaMode)cands.forEach((p,i)=>{ const sid=charSubId(chat,p.id), crit={stay:"stays where they are"};
       subs.filter(sb=>sb.id!==sid).forEach(sb=>{ if(privateNow&&sb.id===here)return; crit[key(sb)]=areaLine(sb); });
       if(Object.keys(crit).length<2)return;
       const vars={char:p.name,user:un,area:(subById(loc,sid)||{}).name||"area",place:loc.name};
@@ -59980,7 +60053,7 @@ async function maybeMoveDecision(chat){
     if(askPlayer){ const crit={stay:`${un} stays where they are`};
       subs.filter(sb=>sb.id!==here).forEach(sb=>{ crit[key(sb)]=areaLine(sb); });
       if(Object.keys(crit).length>1)questions.player_area={type:"choice",instructions:fillTpl(up("x_move_player",chat.universeId),{user:un,area:(subById(loc,here)||{}).name||"area",place:loc.name}),criteria:crit}; }
-    if(!Object.keys(keyed).length&&!questions.player_area)return false;
+    if(!Object.keys(keyed).length&&!questions.player_area&&!Object.keys(leaveKeyed).length)return false;
     const _seq=_dirSeq;
     const body={model:decisionsModel(),state:st,questions};
     const e=dbg("Movement · "+loc.name,"OpenRouter Decisions",DECISIONS_URL,body);
@@ -59988,7 +60061,9 @@ async function maybeMoveDecision(chat){
     if(!res)return false;
     if(turnSuperseded(chat,_seq)){ dbgDone(e,"ok",{note:"the player moved on — no move applied",response:res.answers}); return false; }
     const at=moveAt(), picks=[];
-    Object.keys(keyed).forEach(i=>{ const a=res.answers["move_"+i]; if(!a)return; const p=keyed[i];
+    const leaving=[]; Object.keys(leaveKeyed).forEach(i=>{ const v=_decYes(res.answers["leave_"+i]); if(v>=at)leaving.push({p:leaveKeyed[i],v}); });
+    const _goneIds=new Set(leaving.map(l=>l.p.id));
+    Object.keys(keyed).forEach(i=>{ const a=res.answers["move_"+i]; if(!a)return; const p=keyed[i]; if(_goneIds.has(p.id))return;
       const pr=(a.probabilities&&typeof a.probabilities==="object")?a.probabilities:null;
       let dest=null, pMove=0;
       if(pr){ pMove=1-(+pr.stay||0); Object.keys(pr).forEach(k=>{ if(k!=="stay"&&(dest==null||(+pr[k]||0)>(+pr[dest]||0)))dest=k; }); }
@@ -60003,7 +60078,8 @@ async function maybeMoveDecision(chat){
         if(pr){ pP=1-(+pr.stay||0); Object.keys(pr).forEach(k=>{ if(k!=="stay"&&(dest==null||(+pr[k]||0)>(+pr[dest]||0)))dest=k; }); }
         else if(typeof a.choice==="string"&&a.choice!=="stay"){ dest=a.choice; pP=1; }
         const sb=dest&&subs.find(x=>key(x)===dest); if(sb&&pP>=at)pTo=sb; } }
-    dbgDone(e,"ok",{moves:go.map(m=>`${m.p.name} → ${m.sb.name} (${Math.round(m.pMove*100)}%${m.why?", "+m.why.k:""})`),player:pTo?`${un} → ${pTo.name} (${Math.round(pP*100)}%)`:"stays",threshold:at,usage:res.usage});
+    dbgDone(e,"ok",{moves:go.map(m=>`${m.p.name} → ${m.sb.name} (${Math.round(m.pMove*100)}%${m.why?", "+m.why.k:""})`),leaves:leaving.map(l=>`${l.p.name} leaves ${loc.name} (${Math.round(l.v*100)}%)`),player:pTo?`${un} → ${pTo.name} (${Math.round(pP*100)}%)`:"stays",threshold:at,usage:res.usage});
+    for(const l of leaving){ try{ await _moveDecLeave(chat,l.p); }catch(_){} }
     if(pTo){
       // whoever the picks send to the same area goes with the player, in the player's own move note
       const withIds=go.filter(m=>m.sb.id===pTo.id).map(m=>m.p.id);
@@ -60012,7 +60088,7 @@ async function maybeMoveDecision(chat){
       try{ moveToSub(pTo.id,withIds,{chat,quiet:true}); }catch(_){}
       go=go.filter(m=>m.sb.id!==pTo.id);
     }
-    if(!go.length)return !!pTo;
+    if(!go.length)return !!pTo||leaving.length>0;
     chat.subPos=chat.subPos||{};
     chat._movedAtTurn=turn;   // v150.47 — the Gamemaster can stand down on this before the narration is back
     const movers=go.map(m=>{ const prev=charSubId(chat,m.p.id); chat.subPos[m.p.id]=m.sb.id; chat._moveDecAt[m.p.id]=turn;

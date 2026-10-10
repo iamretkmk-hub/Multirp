@@ -356,7 +356,7 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
     window.__mbOld=MB_OLD;
   });
   const oldMB=await pg.evaluate(()=>window.__mbOld);
-  await pg.reload(); await pg.waitForTimeout(2600);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2600);
   const U=await pg.evaluate(()=>({emo:state.x_emotion_pick===X_ENGINE_PROMPTS.x_emotion_pick.def, ego:state.x_ego_pick===X_ENGINE_PROMPTS.x_ego_pick.def,
     calm:(state.emotions||[]).find(e=>e.name==="Calm").desc, guilt:(state.emotions||[]).find(e=>e.name==="Guilt").desc, boredom:!!(state.emotions||[]).find(e=>e.name==="Boredom"),
     mb:state.memBuild, off:state.offstageEvent, stale:(window.__stalePipes||[]).slice()}));

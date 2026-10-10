@@ -324,7 +324,7 @@ const {chromium}=require('playwright');
     store.setRaw(K.x_reply_suggest,oldSug);
     return old!==cur&&oldSug!==X_ENGINE_PROMPTS.x_reply_suggest.def;
   });
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
   const RF2=await pg.evaluate(()=>({sheet:state.x_player_sheet===X_ENGINE_PROMPTS.x_player_sheet.def,sug:state.x_reply_suggest===X_ENGINE_PROMPTS.x_reply_suggest.def,
     mem:/THREADS STILL OPEN FROM BEFORE/.test(X_ENGINE_PROMPTS.x_player_memory.def)&&/"closed"/.test(X_ENGINE_PROMPTS.x_player_memory.def),
     story:/"whisper_to"/.test(X_ENGINE_PROMPTS.x_story_player.def)}));

@@ -51,14 +51,14 @@ const {chromium}=require('playwright');
   ok("no refresh pipe was left pointing at a marker a default lost",
      !/relShortPrompt/.test(relp.stale), relp.stale);
   const rt=async(key,v)=>{ await pg.evaluate(a=>store.setRaw(K[a.k],a.v),{k:key,v});
-    await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(a=>state[a],key); };
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(a=>state[a],key); };
   ok("an older stored feelings prompt picks up the rule",
      /YOU DO NOT DECIDE THE TURN/.test(await rt("relShortPrompt",
        "You read the IMMEDIATE emotional reaction of one character to a recent moment. Old body.")));
   ok("one the user wrote themselves is left alone",
      (await rt("relShortPrompt","My own feelings reader."))==="My own feelings reader.");
   await pg.evaluate(()=>store.setRaw(K.relShortPrompt,DEFAULT_REL_SHORT));
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
 
   // ---------- F: (v150.38) the drives cache and its body signature went with the drives writer
 

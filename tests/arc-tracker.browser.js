@@ -59,7 +59,7 @@ Your DEFAULT is always "ongoing" + "same".`;
 - **A continuous physical or intimate encounter is ONE arc, not a new thread per beat.**`;
   const MINE=`I wrote this myself. Judge the arc: {{open_event}} / {{exchange}}. Return JSON.`;
   const stored=async v=>{ await pg.evaluate(t=>store.setRaw(K.memEval,t),v);
-    await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memEval); };
+    await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400); return pg.evaluate(()=>state.memEval); };
   ok("a stored v21-era prompt is refreshed to the new default",
      (await stored(OLD_V21))===t);
   ok("a stored v44-era prompt is refreshed too",
@@ -72,7 +72,7 @@ Your DEFAULT is always "ongoing" + "same".`;
 
   // ---- the arithmetic the prompt promises: closing early skips no message
   await pg.evaluate(()=>store.setRaw(K.memEval,DEFAULT_MEMEVAL));
-  await pg.reload(); await pg.waitForTimeout(2400);
+  await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2400);
   const cover=await pg.evaluate(async()=>{
     // Drive maybeBuildMemory with a scripted tracker verdict per turn and record which message
     // range each commit covered. No network: memEval and the builder are both stubbed.

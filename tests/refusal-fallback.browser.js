@@ -62,6 +62,29 @@ const {chromium}=require('playwright');
       for(let i=0;i<60&&!/Olur/.test(c.messages[1].content);i++) await new Promise(r=>setTimeout(r,100));
       return (c.messages.length===3&&c.messages[1].mid==="a1"&&/Olur/.test(c.messages[1].content))?true:JSON.stringify(c.messages); }));
 
+  console.log("\n[v150.100 — on screen]");
+  const S=await pg.evaluate(async()=>{ const c=__setup(); const p=state.personas.find(x=>x.id==="p_b");
+    try{ closeSettings&&closeSettings(); }catch(_){} renderChat();
+    const node=()=>document.querySelector('.bubble[data-mid="a1"]');
+    const r={drawn:!!node(), before:node()&&node().querySelector('.body').textContent};
+    await runReplyCheck(c,c.messages[1],p);
+    r.pillBefore=!!(node()&&node().querySelector('.replyFlag[data-flag="refusal"]'));
+    for(let i=0;i<60&&!/Olur/.test((node()&&node().querySelector('.body').textContent)||"");i++) await new Promise(r=>setTimeout(r,100));
+    r.after=node()&&node().querySelector('.body').textContent;
+    r.pillAfter=!!(node()&&node().querySelector('.replyFlag[data-flag="refusal"]'));
+    return r; });
+  ok("the bubble shows the refusal before", S.drawn===true&&/yardımcı olamam/.test(S.before||""), JSON.stringify(S));
+  ok("the bubble on screen shows the fallback model's reply after", /Olur, bir kahve/.test(S.after||"")&&!/yardımcı olamam/.test(S.after||""), JSON.stringify(S));
+  ok("and the refusal pill is gone from it", S.pillAfter===false, JSON.stringify(S));
+  ok("a line still typing out is drawn again once it has finished", await pg.evaluate(async()=>{ const c=__setup(); renderChat();
+      _revealTimers["a1"]=12345;   // the typewriter is still on it
+      await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b"));
+      for(let i=0;i<30&&!/Olur/.test(c.messages[1].content);i++) await new Promise(r=>setTimeout(r,100));
+      const body=()=>document.querySelector('.bubble[data-mid="a1"] .body').textContent;
+      const during=body(); delete _revealTimers["a1"];
+      for(let i=0;i<20&&!/Olur/.test(body());i++) await new Promise(r=>setTimeout(r,100));
+      return (/yardımcı olamam/.test(during)&&/Olur/.test(body()))?true:JSON.stringify({during,after:body()}); }));
+
   console.log("\n[when it does not]");
   const none=async(fn)=>pg.evaluate(async src=>{ const c=__setup(); const restore=(new Function("c",src))(c);
       await runReplyCheck(c,c.messages[1],state.personas.find(x=>x.id==="p_b")); await new Promise(r=>setTimeout(r,500));

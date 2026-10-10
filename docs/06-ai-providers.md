@@ -353,3 +353,12 @@ Gamemaster-reaction paths keep it beside the message in memory (`_replyPayloads`
 the model that wrote the reply (`genModel`). Not when the fallback model wrote it, not twice for one line, not when the
 line was edited meanwhile, not after a reload (no payload kept), and not when the fallback model refuses too.
 No fallback model set: the line stays, flagged, as before. Test: `tests/refusal-fallback.browser.js`.
+
+## v150.100 — the fallback model's reply shows on screen
+
+v150.99 overwrote the message, but called `refreshBubble`, which redraws a line's picture or clip and never its words:
+the new text was stored and the bubble kept showing the refusal ("the fallback model replied but on the screen nothing
+changed"). `_redrawMsgText` now draws the bubble's text again the way an edit does (`msgBodyHTML(_dispText(…))`) and
+drops the refusal pill; a line still typing out (the typewriter holds its own copy of the old words) is drawn again once
+it has finished. The live copy of the line is found by id (`findMsg`), so a rebuilt message list is overwritten too.
+Test: `tests/refusal-fallback.browser.js` (on screen).

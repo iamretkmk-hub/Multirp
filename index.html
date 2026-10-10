@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.99</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.100</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -24534,14 +24534,37 @@ async function _refusalFallback(chat,msg,p){
     try{ raw=await chatCompletion(pl.messages,fb,Object.assign({},pl.opts||{},{dbg:((pl.opts&&pl.opts.dbg)||"Roleplay reply")+" · fallback model (refusal)"})); }catch(e){ return false; }
     if(!String(raw||"").trim()||looksLikeRefusal(raw)||_RETRY_META_TERMS.test(String(raw)))return false;
     const text=_cleanReplyText(p,raw,!!pl.heat); if(!text)return false;
-    if(msg.content!==before||!(chat.messages||[]).includes(msg))return false;   // edited or deleted meanwhile
-    msg.content=text; msg.genModel=fb; msg.fbReplaced=true;
-    if(Array.isArray(msg.replyFlags))msg.replyFlags=msg.replyFlags.filter(k=>k!=="refusal");
+    // the live copy of the line, by id (the chat's list may have been rebuilt meanwhile); not if it was edited or deleted
+    const live=(typeof findMsg==="function"&&findMsg(msg.mid))||((chat.messages||[]).includes(msg)?msg:null);
+    if(!live||live.content!==before)return false;
+    [live,msg].forEach(m=>{ m.content=text; m.genModel=fb; m.fbReplaced=true;
+      if(Array.isArray(m.replyFlags))m.replyFlags=m.replyFlags.filter(k=>k!=="refusal"); });
     try{ markChatDirty(chat); }catch(_){}
     persistChats();
-    try{ refreshBubble(msg.mid); }catch(_){}
+    /* (!) v150.100 — ON SCREEN TOO. refreshBubble redraws a line's picture or clip, never its words, so the new text was
+       stored and the bubble still showed the refusal ("the fallback model replied but on the screen nothing changed").
+       The bubble's text is drawn again as an edit draws it, and the refusal pill goes. */
+    _redrawMsgText(live);
+    try{ _alog("reply.refusal",who+": the fallback model's reply replaced the refusal"); }catch(_){}
     return true;
   }catch(e){ return false; }
+}
+/* v150.100 — draw a line's words again in place (an edit, a fallback overwrite); a line not on screen is drawn from the
+   message when it is reached. */
+function _redrawMsgText(m,tries){
+  try{
+    if(!m||!m.mid)return;
+    if(typeof _presentPendingMids!=="undefined"&&_presentPendingMids.has(m.mid))return;   // presented later, from the message
+    // still typing out its old words: the typewriter holds its own copy, so wait for it to finish, then draw
+    if((_revealTimers&&_revealTimers[m.mid])||_presentingMid===m.mid){
+      if((tries||0)<240)setTimeout(()=>_redrawMsgText(m,(tries||0)+1),250);
+      return;
+    }
+    const node=document.querySelector('.bubble[data-mid="'+cssq(m.mid)+'"]');
+    if(!node)return;
+    const body=node.querySelector('.body'); if(body)body.innerHTML=msgBodyHTML(_dispText(String(m.content||"")),node);
+    node.querySelectorAll('.replyFlag').forEach(x=>{ const k=x.dataset&&x.dataset.flag; if(!(m.replyFlags||[]).includes(k))x.remove(); });
+  }catch(e){}
 }
 function replyCheckPills(m){
   const fl=Array.isArray(m&&m.replyFlags)?m.replyFlags:[];

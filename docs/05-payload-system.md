@@ -1884,3 +1884,13 @@ The "Respond as" fragment (last in the tail) is mode `one` with two options:
 Mode `one` sends only the feeling line when both apply; switching the feeling option off leaves the plain line. A saved
 "Respond as" still at its v150.87 default is upgraded (FRAG_SHIPPED_ADDS "v150.88.respond"); an edited one stays. Tests:
 `tests/respond-feeling.browser.js`; `payload-faithful` allows exactly this line's change.
+
+## v150.104 — an emotion box says what they feel
+
+Each emotion box of a character's speech & behaviour opened "### When you mainly feel Guilt": a condition to check, and
+the character was never told they ARE feeling it. It now reads "### You are feeling guilty — this is how you respond
+when you are guilty:" (`emoFeelHeading`, with the word they would use from `EMO_ADJ`; an emotion of the player's own is
+said plainly: "You are feeling nostalgia — … when you feel nostalgia:"). The writer (`x_style_writer`) is asked for that
+heading, its example rewritten, and a stored copy of its old prompt is refreshed once; every stored box with the old
+heading is rewritten on load (`speechMigrateAll` → `speechHeadingsFix`) and in what the writer returns (`speechMerge`);
+the payload rewrites any old heading it is handed (`emoHeadingFix` on `style_emotion`). Test: `tests/emotion-heading.browser.js`.

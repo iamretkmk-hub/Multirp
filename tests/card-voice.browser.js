@@ -162,12 +162,27 @@ const {chromium}=require('playwright');
       if(r.width<40||r.height<20) return "the button measures "+Math.round(r.width)+"x"+Math.round(r.height)+" — it is inside something collapsed";
       if(r.left<0||r.right>window.innerWidth) return "the button overflows the viewport";
       return true; }));
-  ok("the director notes are never sent, so they cannot be rewritten", (()=>{
+  /* v150.105 — CHANGED ON PURPOSE: the roleplay instructions print on the character's own card ("How you play it: …"), so
+     they are repaired with the rest; only the interject notes (for the router) are still never sent. */
+  ok("the roleplay instructions are sent; the interject notes never are", (()=>{
       const src=require('fs').readFileSync(require('path').resolve(__dirname,'..','index.html'),'utf8');
       const i=src.indexOf("async function repairCardVoice");
-      const fn=src.slice(i,i+3200);
-      return (!/peInstructions/.test(fn) && !/peInterject/.test(fn))
-        ? true : "repairCardVoice reads a director-note field"; })());
+      const fn=src.slice(i,i+3600);
+      return (/instructions:gv\('peInstructions'\)/.test(fn) && !/peInterject/.test(fn))
+        ? true : "repairCardVoice does not send the instructions, or reads the interject notes"; })());
+  ok("the roleplay instructions come back in the second person, into their box", await pg.evaluate(async()=>{
+      const el=id=>document.getElementById(id);
+      const hadKey=state.key; state.key=state.key||"test-key";
+      el("peName").value="Duygu"; el("pePersonality").value=""; el("peBackstory").value=""; el("peLikes").value=""; el("peGoals").value=""; peSpeechLoad({});
+      el("peInstructions").value="Duygu is a married woman and a mother. Her bluntness is not cruelty. Show her friendship with other women.";
+      const real=window.chatCompletion; let sent="";
+      window.chatCompletion=async(m)=>{ sent=m.map(x=>x.content).join("\n"); return JSON.stringify({instructions:"You are a married woman and a mother. Your bluntness is not cruelty. Show your friendship with other women."}); };
+      try{ await repairCardVoice(); } finally { window.chatCompletion=real; }
+      const got=el("peInstructions").value; el("peInstructions").value=""; state.key=hadKey;
+      return (/## instructions\nDuygu is a married woman/.test(sent)&&/# THE ROLEPLAY INSTRUCTIONS/.test(sent)&&got==="You are a married woman and a mother. Your bluntness is not cruelty. Show your friendship with other women.")
+        ? true : JSON.stringify({sent:sent.slice(-300),got}); }));
+  ok("a card with no look still reads as a woman once her instructions say 'You are a married woman'", await pg.evaluate(()=>
+      _imgSubjectOf({look:{},personality:"",instructions:"You are a married woman and a mother."})==="Woman"?true:_imgSubjectOf({look:{},instructions:"You are a married woman and a mother."})));
   ok("a repaired card lands in the editor fields", await pg.evaluate(async()=>{
       const ids=["pePersonality","peBackstory","peLikes","peGoals","peName"];
       const had={}; ids.forEach(i=>{const el=document.getElementById(i); had[i]=el?el.value:null;});

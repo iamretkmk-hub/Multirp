@@ -273,3 +273,14 @@ into the sentence they belong to, so an entry does not grow by a sentence a day;
 rewritten into this form at the next daily read. The generator's tie names the role or kinship only, never a stance
 ("the man you are careful around"). Stored copies of the two prompts are refreshed once; the v150.65 relPrompt pipe,
 whose marker the default no longer carries, is retired. Test: `tests/relationship-style.browser.js`.
+
+## v150.105 — Fix the voice repairs the roleplay instructions too
+
+The character editor's "Fix the voice" (`repairCardVoice`, prompt `x_card_voice`) turned the character's own fields
+into the second person but left the roleplay instructions out, as third-person notes to the app. They are printed on the
+character's own card, beside the voice ("How you play it: Duygu is a married woman… Her bluntness…"), so they are now
+sent and repaired with the rest ("You are a married woman… Your bluntness… Show your friendship…"), every rule and
+boundary kept. The interject notes (for the router) are still never sent. `_imgSubjectOf` reads "You are a … woman" in
+the instructions as well, since a repaired note no longer says "she". A stored copy of the old `x_card_voice` prompt is
+refreshed once. Note: the character generators still write new instructions as third-person director notes; this button
+converts them. Test: `tests/card-voice.browser.js`.

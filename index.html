@@ -1425,7 +1425,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.98</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.99</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1467,7 +1467,7 @@
           <div class="ovr" style="margin:6px 0"><div data-ovr="rp" data-kind="prov"></div></div>
           <div style="margin-top:8px"><label><svg class="ic"><use href="#i-flame"/></svg> Heat of the moment model <span class="desc" style="display:inline">(optional — while Heat of the moment is on, every roleplay reply uses this model; blank = the Model above)</span></label>
             <input type="text" id="setHeatModel" list="modelList" placeholder="(the Model above)"></div>
-          <div style="margin-top:8px"><label><svg class="ic"><use href="#i-shield"/></svg> Fallback model <span class="desc" style="display:inline">(optional — when a roleplay or text reply is refused, comes back empty or the model says it cannot continue, that one reply is asked again once with this model; blank = off)</span></label>
+          <div style="margin-top:8px"><label><svg class="ic"><use href="#i-shield"/></svg> Fallback model <span class="desc" style="display:inline">(optional — when a roleplay or text reply is refused, comes back empty or the model says it cannot continue, that one reply is asked again once with this model; a reply the reply check reads as a refusal is written again by it and replaces the refused one; blank = off)</span></label>
             <input type="text" id="setFallbackModel" list="modelList" placeholder="(off)"></div>
           <div style="margin-top:8px"><label><svg class="ic"><use href="#i-image"/></svg> Vision model <span class="desc" style="display:inline">(a model that can see pictures — used by the Describe button under each pose picture in Settings › Image; blank = x-ai/grok-4-fast)</span></label>
             <input type="text" id="setVisionModel" list="modelList" placeholder="x-ai/grok-4-fast"></div>
@@ -24507,9 +24507,36 @@ async function runReplyCheck(chat,msg,p){
     if(!Object.keys(got).length){ dbgDone(e,"error",{note:"The answer carried no probabilities — the reply is left unmarked.",response:res.answers}); return; }
     dbgDone(e,"ok",{probabilities:got,flagged:flags,threshold:at,usage:res.usage});
     msg.replyCheck=got; msg.replyFlags=flags;
+    if(flags.includes("refusal")){ _refusalFallback(chat,msg,p); }   // v150.99 — not awaited: it waits for the turn to end
     if(_clk){ try{ _clockApply(chat,_decYes(res.answers.time_moved)); }catch(_){} }
     if(flags.length){ try{ markChatDirty(chat); }catch(_){} persistChats(); try{ refreshBubble(msg.mid); }catch(_){} }
   }catch(e){/* best-effort */}
+}
+/* (!) v150.99 — A REFUSAL THE REPLY CHECK SEES IS WRITTEN AGAIN BY THE FALLBACK MODEL. looksLikeRefusal catches the usual
+   wordings and sends those to the fallback model before anything is posted; a refusal it does not know ("Bu konuda
+   yardımcı olamam", a polite in-character dodge of the whole turn) was posted, and the reply check's "refusal" flag only
+   put a pill on it. When that flag is raised and a fallback model is set (Settings → LLM Selection), the reply is
+   retried once with the fallback model as soon as the turn has finished: the Retry path, so the refused line and what it
+   set off (memories, relationship read, plans) go, and the new reply takes its place. Not when the fallback model wrote
+   it, not twice for one line, and not once the scene moved on (it must still be the reply Retry would take). */
+const REFUSAL_FB_WAIT=90000;
+async function _refusalFallback(chat,msg,p){
+  try{
+    const fb=String(state.fallbackModel||"").trim();
+    if(!fb||!chat||!msg||msg._fbTried)return false;
+    if(String(msg.genModel||"").trim()===fb)return false;   // the fallback model itself wrote it
+    msg._fbTried=true;
+    const content=msg.content, t0=Date.now();
+    while(chatBusy(chat,"turn")&&Date.now()-t0<REFUSAL_FB_WAIT) await new Promise(r=>setTimeout(r,300));
+    if(chatBusy(chat,"turn")||curChat()!==chat)return false;
+    const t=_retryTarget(chat);
+    if(!t||t.m!==msg||msg.content!==content||!(chat.messages||[]).includes(msg))return false;
+    try{ _alog("reply.refusal",((p&&p.name)||msg.speaker||"reply")+": the reply check read a refusal — written again with the fallback model "+fb); }catch(_){}
+    try{ toast(((p&&p.name)||msg.speaker||"The reply")+": that was a refusal — asking the fallback model"); }catch(_){}
+    chat._fallbackRetry=fb;
+    try{ await retryLastReply(msg.mid); }finally{ delete chat._fallbackRetry; }
+    return true;
+  }catch(e){ try{ delete chat._fallbackRetry; }catch(_){} return false; }
 }
 function replyCheckPills(m){
   const fl=Array.isArray(m&&m.replyFlags)?m.replyFlags:[];
@@ -42261,7 +42288,7 @@ async function sendMessage(opts){
         return;
       }
       const reply=g.text;
-      const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:_heardWith(chat,solo.id),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,
+      const msg={mid:newMid(),role:"assistant",speaker:solo.name,speakerId:solo.id,present:_heardWith(chat,solo.id),content:reply,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,genModel:g.model||"",
         // v44.5 — a solo reply is always to {{user}}; recorded so that if someone walks in mid-scene,
         // the line they find waiting is already marked as somebody else's to answer.
         // v146.1 — `present` by earshot, and the player frozen at the start of the turn.
@@ -46532,8 +46559,11 @@ async function generateCharacterReply(chat,p,messages,opts){
   /* v150.80 — HEAT HAS ITS OWN MODEL. While Heat of the moment is on (or this is a heat beat), the reply goes to the heat
      model when one is set (Settings → LLM Selection → Roleplay); rotation is left untouched for those turns. */
   const _hm=String(state.heatModel||"").trim();
-  const model=(_hm&&(wasHeat||state.heatOn))?_hm:rpModel();
-  const rpOpts={rp:true,dbg:opts.dbg||("Roleplay reply · "+p.name)};
+  /* v150.99 — a reply the reply check read as a refusal is asked again with the fallback model (_refusalFallback): that one
+     retry goes straight to it. */
+  const _fbForce=String((chat&&chat._fallbackRetry)||"").trim();
+  const model=_fbForce||((_hm&&(wasHeat||state.heatOn))?_hm:rpModel());
+  const rpOpts={rp:true,dbg:(opts.dbg||("Roleplay reply · "+p.name))+(_fbForce?" · fallback model (refusal)":"")};
   // v27.4 — heat beats are separate messages now, so each one only needs room for ONE
   // dialogue-dense reply, not for the whole run. Never LESS than the user's own setting.
   if(wasHeat){
@@ -46768,7 +46798,7 @@ async function playCharacterTurn(chat,p,addressed,opts){
        back room does not learn what was said at the counter. castHistory and the memory builders read it.
        (!) v147.2 — and ALWAYS the speaker: an arrival stands at the entrance, outside the player's area,
        so their own entrance line was left out of their history and memory, and they greeted again. */
-    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:_heardWith(chat,p.id),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true};
+    const msg={mid:newMid(),role:"assistant",speaker:p.name,speakerId:p.id,present:_heardWith(chat,p.id),content:cleaned,img:null,imgState:"idle",vidState:"idle",video:null,_reveal:true,genModel:g.model||""};
     /* v44.5 — WHO THIS LINE WAS SAID TO, recorded on the line itself. Everyone in the room hears
        it, but only one person was asked. Without this the next speaker sees "Merhaba Emre, Nil'le
        mi karsilastiniz?" as simply the newest thing said and answers it — as Emre. Read back by

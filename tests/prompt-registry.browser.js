@@ -161,6 +161,7 @@ const {chromium}=require('playwright');
         "thoughts",               // v150.1 — x_book_writer_redo: the thoughts a draft copied, filled by bookWriteRun
         "n",
         "feeling","signal","event",   // v150.110 — the feeling system's questions, filled by fsQuestions
+        "a","b",                  // v150.112 — x_offscreen_encounter: the two characters, filled by fsPlayEncounter
         "from","to","clothing",
         "token",
         "swap",

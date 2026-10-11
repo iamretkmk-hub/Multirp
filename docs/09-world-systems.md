@@ -271,6 +271,23 @@ moves them (`fsOpMove`: bad evidence ×1.5, anchored), keeps the read (`o.opRead
 night (`o.opHist`) and clears the stretch's evidence. A betrayal, threat, rejection or contempt, or a crossed line, a
 threat to a bond or humiliation, updates that pair at once (`fsMaybeEarlyOpinion`). Off with the feeling system.
 
+### Step 4 (v150.112) — encounters off screen
+
+When a part of the day ends (before the opinion updates) and at the day end, `runOffscreenEncounters` reads where everyone
+was in the stretch that ended (`_fsStretchPositions`: the placement of that part of the day, before the next roll) and
+groups the characters who were away from the player's scene by place. Every pair at a place met: an ordinary meeting is
+noted on both pairs (`o.met`) for the opinion update ("Time you spent with them"). A pair is a candidate when the code's
+gates pass (`fsEncounterKind`): **romance** — attraction (or desire) of 35+ on both sides and 50+ on one, with appeal,
+interest and love behind it, somewhere private (a home, or at most one other person there); **conflict** — hostility of 40+
+(contempt, hate, resentment or anger); **confiding** — trust and closeness of 40+ both ways with one of them shaken. Not
+within a day of their last one (`o.encDay`), and by chance and at most per stretch by the drama setting (Settings →
+Emotions: quiet 15% / one, normal 35% / two, dramatic 60% / three; privacy scales the chance). A candidate is played out in
+one call for both (`x_offscreen_encounter`, `fsPlayEncounter`): what happened (talk, flirt, kiss, intimacy, quarrel, fight,
+confide, nothing — each makes their own choice), and for each their feeling moves, events (release, crossed line with whom
+it wrongs, bond threat, humiliation — through `fsCascade`), opinions, resolution and a first-person memory (`status:
+"secret"` when hidden, `source: "offscreen_encounter"`); anyone else at the place gets a memory of what could be seen
+(`offscreen_witness`), which is how it can reach the player. Runs once per stretch (`chat.fsEncDone`).
+
 **Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
 `temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's

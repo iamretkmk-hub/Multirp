@@ -182,6 +182,58 @@ the `stranger` block when the pair has no history (`relHasContent`). The Story S
 (`openStoryState`) is the inspection UI: every pair's axes, trackers, intents, meetings —
 with manual nudge controls (`nudgeTracker`, `setTrackerVal`).
 
+## The connected feeling system (v150.109 →)
+
+One system replaces the three that described a person's feelings without knowing about each other (the per-reply
+emotion pick, the five-turn body read toward the player, the daily relationship read). It is built in steps; v150.109 is
+step 1, the layers and the code rules. Nothing in it calls a model; the model-facing steps answer in words ("rose
+clearly", "fell a lot") and the code turns them into numbers.
+
+| Layer | Where | Updated | Contents |
+|---|---|---|---|
+| 0 Temperament | the card (`p.temper`, `p.values`, `p.lines`) | written by the card writers, the temperament writer, or by hand | reactivity, recovery, expressiveness, impulsivity, conscience (0–100), resting mood (−50…50) |
+| 1 Relationship | `chat.rel["A>B"]` | end of day (step 5) | love↔hate (`affection`), trust, respect↔contempt, attraction↔repulsion, closeness (`familiarity`), commitment |
+| 2 Opinions | `o.op`, `o.opRead`, `o.res` | each part of the day (step 3) | kind, reliable, respects me, safe, interested, appealing; the read; the resolution |
+| 3 Feelings | `chat.feel[A].list` | every response (step 2) | 22 feelings, each with a target (`p:<id>`, `self`, `sit`), cause, strength, speed class |
+| 4 Ego judgment | step 2 | every response | the case for acting vs holding back, the ladder ceiling |
+
+**Rules (`fsTune()`, Settings → Advanced in step 6):**
+- *Temperament* scales every rise (reactivity: a stoic ×0.44, a hothead ×1.56) and every half-life (recovery ×0.5…×1.5).
+- *Speeds* — half-lives in responses and in parts of the day: very fast 3 / 0.5, fast 14 / 1.5, slow 240 / 8. An
+  unresolved slow feeling (`hold`) keeps 35% of its peak.
+- *Inhibition* (`FS_INHIBIT`) — the higher of two opposed feelings damps the other's rise: desire⟷guilt, desire⟷shame,
+  desire⟷anxiety/fright/disgust (thrill cancels the fear side), anger⟷warmth, shame⟷pride, anxiety⟷comfort, sadness⟷joy.
+- *Cascades* (`fsCascade`) — `release` (desire ×0.15, held down for 6 turns, relief); `crossed_line` (guilt and shame about
+  oneself, scaled by conscience and by commitment and love toward the one wronged; `about`, `with`, `hold`);
+  `bond_threat` (jealousy by love and attraction); `humiliation` (shame, anger at its cause).
+- *Recovery and rationalising* (`fsTick`) — fading toward the floor; self-blame fades up to twice as fast when the
+  one it happened with is seen as kind and safe. *Rebound*: desire held down climbs back to 70% of what thrill or
+  attraction still drive. *Reactivation* (`fsReactivate`): a person walking in brings feelings about them halfway back
+  to 60% of their peak.
+- *Signals* (`FS_SIGNALS`, `fsSignal`) — care, reassurance, attention, respect, generosity, a kept promise, apology,
+  flirting; neglect, dismissal, contempt, pressure, threat, a broken promise, betrayal, rejection. Each moves feelings at
+  once and is kept on the pair as evidence for the next opinion update; ×2 when the receiver is vulnerable
+  (`fsVulnerability`: distress, or a release just behind them).
+- *Opinions* (`fsOpMove`) — bad evidence ×1.5; anchored: a move away from what the relationship says (`fsOpAnchor`) is
+  damped the further it strays.
+- *Relationship* (`fsRelMove`) — gains shrink near the top, losses grow with the height they fall from; a fall of 18+
+  in one move scars the axis for 6 days (regaining at ×0.35).
+- *Ego arithmetic* (`fsEgoCases`) — feelings ×1, opinions ×2, relationship ×3; the case to act scales with impulsivity,
+  the case to hold back with conscience, commitments to people they answer to, and the risk; the escalation ladder
+  (`FS_LADDER`: romance, conflict, confiding) gives each rung a backing threshold (0, 20, 40, 60, 75) and a feeling
+  alone reaches only the first.
+
+**Conversion** (`fsMigrateChat`, once per chat, from `relObj`): the slow axes keep their values; attraction comes from
+the day-scale desire or the tie, commitment from the tie (spouse 70, kin 55, lover 35, friend 25); opinions start at
+their anchors; the body read's live axes become feelings toward that person (desire, comfort, anxiety from unease or fear,
+irritation from agitation) and jealousy of 25+ becomes a jealousy feeling. The older fields stay until the later steps
+stop reading them.
+
+**Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
+`temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
+`writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's
+Temperament section, whose sliders and boxes are saved with the card).
+
 ## Cross-effects
 
 - Renaming a **location** breaks lexical matches used by memory location facets and calendar

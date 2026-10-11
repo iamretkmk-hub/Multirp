@@ -79,6 +79,13 @@ Adding any new persistent value means touching **four places**: `K` (key), `load
   imgPromptBy: { [charKey]: prompt },    // per-character image continuity (doc 10)
   lastImgRuleBy: { [charKey]: label },   // per-character sticky scene type (doc 10)
   lastActive, _rev,                      // persistence bookkeeping
+  // v150.109 — the connected feeling system (doc 09, "The connected feeling system")
+  rel: { "A>B": { trust, affection /*love↔hate*/, respect, familiarity /*closeness*/, attraction, commitment,
+                  op: {kind, reliable, respects, safe, interested, appealing}, opRead, res, scars: {axis:{until, from, at}},
+                  evidence: [{s:signal, x:weight, at, cause}], …the older fields } },
+  feel: { [personaId]: { list: [{k, tgt:"p:<id>"|"self"|"sit", v, peak, cause, about, with, hold, at}],
+                         mood: {v, note, at}, at: {turn, p}, refractory } },
+  fsTurn, fsv,                           // the feelings' clock (responses) and the conversion mark
   // transient (never persisted — any key starting with "_"): _heatBeat, _gmBusy, _heatRanMid…
 }
 ```

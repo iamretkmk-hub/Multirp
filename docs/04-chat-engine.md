@@ -244,7 +244,18 @@ The question is `x_router2` (Payloads → Turn router). If the request fails, or
 (Settings → "Who answers next: ask the Decisions API", `routerDecOn`), the chat router (`routerChar`)
 decides as before. Pinned by `tests/router2-decisions.browser.js`.
 
-## The emotion pick (v150.34)
+## The emotion pick (v150.34) → the feelings request (v150.110)
+
+(!) **v150.110 — replaced by the connected feeling system's request** (doc 09, "The connected feeling system", step 2).
+`emotionEnsure` still runs before each reply and still writes `chat.emo[id]` `{emotion, intensity, tone, ego}`, but the
+emotion is no longer picked: one Decisions request asks how each feeling moved (`x_feel_move`, a choice per feeling and
+target: fell a lot … rose a lot), which signals the one answered gave (`x_feel_signal`), whether a cascade event happened
+(`x_feel_event`) and whom a crossed line wrongs (`x_feel_wronged`), the ego verdict (`x_ego_pick`, against the layered
+cases) and whether it is hidden (`x_feel_masked`). The code applies them (`fsApply`) and the emotion is the leading
+feeling's (`FS_FEEL[k].emo`, matched to Settings → Emotions), the intensity its strength (mild < 25 ≤ clear < 55 ≤ intense),
+plus `masked`, `lead`, `second`, `ceiling`, `cases`. `x_emotion_pick` and `x_emotion_intensity` are retired. The text below
+is the v150.34 history.
+
 
 Before each character reply (solo, multi, Gamemaster reaction, text), `emotionEnsure(chat, p, line)` asks the
 Decisions API two typed questions in one request, started beside the memory search and awaited with it:

@@ -1,4 +1,6 @@
-/* v150.34 — THE EMOTION PICK: before each reply, which base emotion and how strongly.
+/* (!) v150.110 — CHANGED ON PURPOSE: the emotion pick is the connected feeling system's request now (tests/feel-moment has the
+   rest): the emotion is the leading feeling's, the intensity its strength. The checks below that still apply are kept.
+   v150.34 — THE EMOTION PICK: before each reply, which base emotion and how strongly.
    Checked here, with the Decisions endpoint stubbed:
      • one request with two choice questions — the emotions in the editable list (each with its description)
        and mild / clear / intense — and a state of the character and this scene;
@@ -25,15 +27,16 @@ const {chromium}=require('playwright');
   const ok=(n,c,x)=>{ if(c===true){pass++;console.log("  PASS  "+n);} else {fail++;console.log("  FAIL  "+n+"\n        "+String(x||c).slice(0,700));} };
 
   await pg.evaluate(()=>{
-    window.__reqs=[]; window.__mode="ok"; window.__ans={emotion:{type:"choice",choice:"anger",probabilities:{anger:0.7,sadness:0.2}},intensity:{type:"choice",choice:"intense"}};
+    window.__reqs=[]; window.__mode="ok"; window.__ans={f_anger:{type:"choice",choice:"rose_a_lot",probabilities:{rose_a_lot:0.95}},f_irritation:{type:"choice",choice:"rose",probabilities:{rose:0.9}}};
     const realFetch=window.fetch;
     window.fetch=async(url,opts)=>{
       const u=String(url);
       if(u.indexOf("/api/alpha/decisions")>-1){
         const body=JSON.parse(opts.body); window.__reqs.push(body);
         if(window.__mode==="500") return new Response(JSON.stringify({error:{message:"x"}}),{status:500});
-        if(!body.questions.emotion) return new Response(JSON.stringify({answers:{}}),{status:200});
-        return new Response(JSON.stringify({answers:window.__ans}),{status:200});
+        if(!body.questions.ego) return new Response(JSON.stringify({answers:{}}),{status:200});
+        const a={}; Object.keys(body.questions).forEach(k=>{ a[k]=window.__ans[k]||(/^f_|^fo_/.test(k)?{type:"choice",choice:"unchanged",probabilities:{unchanged:0.9}}:/^(s_|e_)|^masked$/.test(k)?{type:"noul",noul:0.05}:k==="wronged"?{type:"choice",choice:"nobody"}:{type:"noul",noul:0.1}); });
+        return new Response(JSON.stringify({answers:a}),{status:200});
       }
       return realFetch(url,opts);
     };
@@ -43,37 +46,36 @@ const {chromium}=require('playwright');
     const chat=curChat(); chat.presentIds=["p_b"]; chat.universeId=uni.id; state.curUniverse=uni.id;
     state.user="Emre"; state.key="sk-test"; state.emoOn=true; state.emoModel=""; state.emotions=null;
     state.memJudgeOn=false; state.replyCheckOn=false; state.trackDecOn=false; state.gateOn=false;
-    chat.emo={}; chat.messages=[{mid:"u1",role:"user",content:"Dün gece neredeydin?",speaker:"Emre"}];
+    chat.emo={}; chat.feel={}; chat.fsTurn=0; chat.messages=[{mid:"u1",role:"user",content:"Dün gece neredeydin?",speaker:"Emre"}];
   });
 
   console.log("\n[the pick]");
   const r=await pg.evaluate(async()=>{ window.__reqs=[]; const out=await emotionEnsure(curChat(),state.personas.find(p=>p.id==="p_b"),"Dün gece neredeydin?");
     return {out,reqs:window.__reqs,stored:(curChat().emo.p_b||{}).tone}; });
   const q=(r.reqs[0]||{}).questions||{};
-  ok("one request, two choice questions", r.reqs.length===1&&q.emotion&&q.emotion.type==="choice"&&q.intensity&&q.intensity.type==="choice", JSON.stringify(Object.keys(q)));
-  ok("the options are the thirteen shipped emotions, each with its description", q.emotion&&Object.keys(q.emotion.criteria).length===13&&/^Anger: something is wrong/.test(q.emotion.criteria.anger), JSON.stringify(q.emotion&&q.emotion.criteria).slice(0,300));
-  ok("intensity is mild / clear / intense", q.intensity&&JSON.stringify(Object.keys(q.intensity.criteria))==='["mild","clear","intense"]', JSON.stringify(q.intensity&&q.intensity.criteria));
+  ok("one request: how each feeling moved (a choice each), with the ego question", r.reqs.length===1&&q.f_anger&&q.f_anger.type==="choice"&&q.ego&&q.ego.type==="choice", JSON.stringify(Object.keys(q)));
   ok("the state is the character and this scene", r.reqs[0]&&r.reqs[0].state.character.name==="Burcu"&&/neredeydin/.test(r.reqs[0].state.scene), JSON.stringify(r.reqs[0]&&r.reqs[0].state));
-  ok("Anger + intense → tone 'furious', stored on chat.emo", r.out&&r.out.emotion==="Anger"&&r.out.intensity==="intense"&&r.out.tone==="furious"&&r.stored==="furious", JSON.stringify(r.out));
+  ok("anger leading and strong → Anger, intense, tone 'furious', stored on chat.emo", r.out&&r.out.emotion==="Anger"&&r.out.intensity==="intense"&&r.out.tone==="furious"&&r.stored==="furious", JSON.stringify(r.out));
   ok("the same moment is not asked twice", await pg.evaluate(async()=>{ window.__reqs=[]; await emotionEnsure(curChat(),state.personas.find(p=>p.id==="p_b"),"Dün gece neredeydin?"); return window.__reqs.length===0 ? true : "asked again"; }));
-  ok("the previous pick in this scene goes along, as history (v150.72: no ego level, it may have moved)", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u2",role:"user",content:"Cevap ver.",speaker:"Emre"}); window.__reqs=[];
+  ok("the feelings carry over: the next request knows the anger running, never the last ego level", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u2",role:"user",content:"Cevap ver.",speaker:"Emre"}); window.__reqs=[];
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"Cevap ver.");
-      return window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene==="Anger (intense) a few lines ago; it may have moved since" ? true : JSON.stringify(window.__reqs[0]&&window.__reqs[0].state.feeling_earlier_in_this_scene); }));
+      const run=window.__reqs[0]&&window.__reqs[0].state.feelings_running_now;
+      return (Array.isArray(run)&&/^Anger about Emre: /.test(run[0])&&!/winning|id_/.test(JSON.stringify(run))) ? true : JSON.stringify(run); }));
   ok("the pick is a payload condition flag (emotion / intensity / tone)", await pg.evaluate(()=>{
       const f=ptCondFlags({emotion:"Anger",intensity:"intense",tone:"furious"});
       return (ptCondTest("emotion = anger and intensity = intense",f)&&!ptCondTest("emotion = sadness",f)) ? true : "flags do not test"; }).catch(e=>"err "+e.message));
 
   console.log("\n[id or superego — v150.35]");
-  ok("the same request asks who is winning, from no conflict to the want winning", q.ego&&q.ego.type==="choice"&&JSON.stringify(Object.keys(q.ego.criteria))==='["no_conflict","superego_firm","superego_ahead","torn","id_ahead","id_winning"]'&&/Do not lean on conscience by default/.test(q.ego.instructions), JSON.stringify(q.ego&&Object.keys(q.ego.criteria)));
-  ok("the state carries the feelings toward the one answered: right now, lasting, the tie, the settled view", await pg.evaluate(async()=>{
+  ok("the same request asks who is winning, from no conflict to the want winning, against the layered cases", q.ego&&q.ego.type==="choice"&&JSON.stringify(Object.keys(q.ego.criteria))==='["no_conflict","superego_firm","superego_ahead","torn","id_ahead","id_winning"]'&&/Do not lean on conscience by default/.test(q.ego.instructions)&&/THE LAYERED CASES/.test(q.ego.instructions), JSON.stringify(q.ego&&Object.keys(q.ego.criteria)));
+  ok("the state carries every layer toward the one answered: the relationship, today's opinions, the tie, the settled view", await pg.evaluate(async()=>{
       const c=curChat(), p=state.personas.find(x=>x.id==="p_b");
       p.relationships={__user__:{tie:"neighbour",relationship:"The neighbour she flirts with when her husband is away."}};
-      const o=relObj(c,"p_b","__user__"); o.st=o.st||{}; o.st.desire=60; o.trust=40; o.affection=55;
+      const o=relObj(c,"p_b","__user__"); o.trust=40; o.affection=55; o.attraction=50; o.desc="You like him more than you should.";
       c.messages.push({mid:"u3",role:"user",content:"Gel bu gece.",speaker:"Emre"}); window.__reqs=[];
       window.__ans.ego={type:"choice",choice:"id_ahead",probabilities:{id_ahead:0.6,torn:0.3}};
       const out=await emotionEnsure(c,p,"Gel bu gece.",{targetId:"__user__",targetName:"Emre"});
-      const f=window.__reqs[0]&&window.__reqs[0].state.toward_the_one_they_answer;
-      return (f&&f.toward==="Emre"&&/neighbour/.test(f.who_they_are_to_them)&&f.feelings_right_now&&!/nothing strong/.test(f.feelings_right_now)&&f.lasting_feelings&&!/nothing settled/.test(f.lasting_feelings)&&out.ego==="id_ahead"&&/Emre/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify({f,ego:out&&out.ego}); }));
+      const f=window.__reqs[0]&&window.__reqs[0].state.toward;
+      return (f&&f.who==="Emre"&&/neighbour/.test(f.who_they_are_to_you)&&f.the_relationship.some(x=>/^Trust: real \(40\)/.test(x))&&f.how_you_see_them_today.length===6&&/like him more/.test(f.settled_view||"")&&out.ego==="id_ahead"&&/Emre/.test(window.__reqs[0].questions.ego.instructions)) ? true : JSON.stringify({f,ego:out&&out.ego}); }));
   ok("the state carries what happened earlier today, the people they answer to and who can see (v150.36)", await pg.evaluate(async()=>{
       const c=curChat(), p=state.personas.find(x=>x.id==="p_b"); c.gameDay=4;
       state.personas=state.personas.filter(x=>x.id!=="p_h"); state.personas.push({id:"p_h",name:"Burak",universeId:state.curUniverse,look:{}});
@@ -104,7 +106,7 @@ const {chromium}=require('playwright');
       const c=curChat(); c.messages=[]; c.emo={}; const order=[];
       const realCC=window.chatCompletion;
       window.chatCompletion=async(msgs,model,opts)=>{ const d=(opts&&opts.dbg)||""; if(/^Roleplay reply/.test(d)){ order.push("reply"); return '"Evdeydim."'; } return "{}"; };
-      const realF=window.fetch; window.fetch=async(u,o)=>{ if(String(u).indexOf("/api/alpha/decisions")>-1&&JSON.parse(o.body).questions.emotion)order.push("emotion"); return realF(u,o); };
+      const realF=window.fetch; window.fetch=async(u,o)=>{ if(String(u).indexOf("/api/alpha/decisions")>-1&&JSON.parse(o.body).questions.ego)order.push("emotion"); return realF(u,o); };
       /* A pending timer keeps this evaluate's promise reachable while the turn runs: without it the browser could
          collect the promise mid-turn ("Resulting promise was garbage collected", about one run in six, on every
          build). A turn that really hangs now fails here, by name, instead of disappearing. */
@@ -124,7 +126,7 @@ const {chromium}=require('playwright');
   ok("off (and spoken limits off): no emotion question — only the path's asked options", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10",role:"user",content:"!",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
       await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!"); state.emoOn=true; state.limitsOn=true;
       const q=(window.__reqs[0]||{}).questions||{};
-      return (window.__reqs.length===1&&!q.emotion&&Object.keys(q).length>0&&Object.keys(q).every(k=>/^q_/.test(k))) ? true : JSON.stringify(Object.keys(q)); }));
+      return (window.__reqs.length===1&&!q.ego&&!q.f_desire&&Object.keys(q).length>0&&Object.keys(q).every(k=>/^q_/.test(k))) ? true : JSON.stringify(Object.keys(q)); }));
   ok("off, and no asked option on the path: nothing sent", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u10b",role:"user",content:"!?",speaker:"Emre"}); state.emoOn=false; state.limitsOn=false; window.__reqs=[];
       const keep=state.fragments; state.fragments=JSON.parse(JSON.stringify(FRAG_DEFAULTS)).map(f=>Object.assign(f,{options:(f.options||[]).map(o=>Object.assign(o,{ask:""}))}));
       try{ await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"!?"); } finally{ state.fragments=keep; state.emoOn=true; state.limitsOn=true; }
@@ -143,14 +145,15 @@ const {chromium}=require('playwright');
       saveSettings(false);
       const l=state.emotions, st=JSON.parse(store.raw(K.emotions,"null")||"null");
       return (l.length===13&&l[1].desc==="glad and light"&&!l.some(e=>e.name==="Pride")&&l[12].name==="Loneliness"&&l[12].tones[2]==="abandoned"&&st&&st.length===13) ? true : JSON.stringify(l.map(e=>e.name)); }));
-  ok("the edited list is what the model is offered", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u12",role:"user",content:"Yalnız mısın?",speaker:"Emre"}); window.__reqs=[];
-      await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"Yalnız mısın?");
-      const cr=window.__reqs[0].questions.emotion.criteria; return (cr.loneliness&&!cr.pride&&/glad and light/.test(cr.joy)) ? true : JSON.stringify(Object.keys(cr)); }));
+  ok("the edited list is what the boxes are chosen from: a feeling whose emotion was taken out chooses no box", await pg.evaluate(async()=>{ const c=curChat(); c.messages.push({mid:"u12",role:"user",content:"Gurur duydun mu?",speaker:"Emre"}); window.__reqs=[];
+      c.feel={}; window.__ans={f_pride:{type:"choice",choice:"rose_a_lot",probabilities:{rose_a_lot:0.95}}};
+      const out=await emotionEnsure(c,state.personas.find(p=>p.id==="p_b"),"Gurur duydun mu?");
+      return (out&&out.lead&&out.lead.k==="pride"&&out.emotion==="") ? true : JSON.stringify(out&&{lead:out.lead,emotion:out.emotion}); }));
   ok("reset puts the shipped list back (saved as no override)", await pg.evaluate(()=>{ emotionEditorReset(); saveSettings(false);
       return (state.emotions.length===13&&state.emotions[12].name==="Pride"&&store.raw(K.emotions,"x")==="") ? true : JSON.stringify([state.emotions.length,store.raw(K.emotions,"x").slice(0,40)]); }));
-  ok("the three prompts are on their Payloads card; a fresh install has it on", await pg.evaluate(()=>{
+  ok("the feeling system's prompts are on their Payloads card; a fresh install has it on", await pg.evaluate(()=>{
       const card=ENGINE_PAYLOAD_DEFS.find(d=>d.key==="emotion_pick");
-      const okCard=card&&["x_emotion_pick","x_emotion_intensity","x_ego_pick"].every(k=>card.blocks.some(x=>x.promptKey===k)&&PROMPT_BY_KEY[k]);
+      const okCard=card&&["x_feel_move","x_feel_signal","x_feel_event","x_feel_wronged","x_feel_masked","x_ego_pick"].every(k=>card.blocks.some(x=>x.promptKey===k)&&PROMPT_BY_KEY[k]);
       localStorage.removeItem(K.emoOn); loadState(); return (okCard&&state.emoOn===true) ? true : "card="+okCard+" on="+state.emoOn; }));
 
   ok("no page errors", errs.length===0, errs.join(" | "));

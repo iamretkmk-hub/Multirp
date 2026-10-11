@@ -229,10 +229,95 @@ their anchors; the body read's live axes become feelings toward that person (des
 irritation from agitation) and jealousy of 25+ becomes a jealousy feeling. The older fields stay until the later steps
 stop reading them.
 
+### Step 2 (v150.110) — the moment, one request per reply
+
+`emotionEnsure` asks, in the request it already sends before each reply (`fsQuestions`): a move per feeling with its
+target (`f_<feeling>`; `fo_…` for a feeling already running about someone else), a yes/no per signal (`s_…`) and per
+event (`e_…`), whom a crossed line wrongs (`wronged`, when they answer to someone), the ego verdict (`ego`) and whether
+it is hidden (`masked`). The state carries every layer in words: temperament, values, lines, the ego styles; toward the
+one answered the relationship, today's opinions, the read, the resolution and the settled view; the feelings running
+with their causes; how exposed they are; the stakes (memories that weigh, people they answer to, plans at risk, who can
+see); what they have said about how far this goes; and the code's `the_case_for_acting`, `the_case_for_holding_back` and
+`the_furthest_the_backing_allows_now`. Before asking, time moves on (`fsBeginTurn`, `fsTick`) and the people here bring
+back what they stirred (`fsReactivate`); a card with no temperament gets one in the background (`fsEnsureTemperament`).
+
+`fsApply` applies events first, then signals (care right after a hard moment lands on someone raw), then the moves
+(probability-weighted, ×1.6 for a very fast feeling, ×0.8 for a slow one); the leading feeling becomes `chat.emo`'s
+emotion; the body read's axes (`o.st`) are mirrored from the feelings (`fsSyncLegacy`) for the older readers. The
+five-turn body read stops (`runShortTermRel` keeps only its presence stamp) while the system is on.
+
+**The reply** (`fsMomentText`, data `moment_raw` in `_mo`): the fragment **What is running in you right now** (new,
+before the compass; `FRAG_SHIPPED_ADDS` v150.110.moment) carries what leads and why, what pulls under it, whether it is
+hidden, and how far they will go with the one answered (the ladder ceiling, "not the next step, not yet"); its second
+option sends `{{call//style_ego}}`, the **ego style** for the verdict. The feeling's own box says "You are feeling X and
+hiding it — this is how it leaks through:" when masked (`emoBoxFor`). "What your body is doing this second" sends nothing
+while the system is on.
+
+**Ego styles** (`p.speech[group].ego[verdict]`, six per group: at ease, holding firm, barely holding back, torn, giving
+in, gone with it) are edited under Speech & behaviour, written by the ego styles writer (`x_ego_style_writer`,
+`writeEgoStyles`) after the speech writer for a new character, and by **Write ego styles with AI**.
+
+### Step 3 (v150.111) — opinions, each part of the day
+
+When a part of the day ends (`onPeriodChanged`, after the memories are reconciled) and before the day's relationship read
+(`runDailyRelationships`), `runOpinionUpdates` makes one call per character (`x_opinion_update`, `memModel`) over every
+person they have something new about (`_fsOpPending`: evidence, a feelings log, time spent together, or flagged). For each
+person it is told what the person did (the signals, with "when you were raw" for the ones that counted double), what the
+character felt about them through the stretch (`fsLogFeel`, kept per pair), what they feel about themselves because of
+something done with them — marked as about the character, never evidence about the other — the relationship, how they
+saw them before, the read and the resolution, and the stretch's memories. It answers in words per opinion; the code
+moves them (`fsOpMove`: bad evidence ×1.5, anchored), keeps the read (`o.opRead`), sets or re-examines the resolution
+(`o.res`: approach, keep_distance, end_it, pursue, forgive, confront, none — passing or firm), keeps a snapshot for the
+night (`o.opHist`) and clears the stretch's evidence. A betrayal, threat, rejection or contempt, or a crossed line, a
+threat to a bond or humiliation, updates that pair at once (`fsMaybeEarlyOpinion`). Off with the feeling system.
+
+### Step 4 (v150.112) — encounters off screen
+
+When a part of the day ends (before the opinion updates) and at the day end, `runOffscreenEncounters` reads where everyone
+was in the stretch that ended (`_fsStretchPositions`: the placement of that part of the day, before the next roll) and
+groups the characters who were away from the player's scene by place. Every pair at a place met: an ordinary meeting is
+noted on both pairs (`o.met`) for the opinion update ("Time you spent with them"). A pair is a candidate when the code's
+gates pass (`fsEncounterKind`): **romance** — attraction (or desire) of 35+ on both sides and 50+ on one, with appeal,
+interest and love behind it, somewhere private (a home, or at most one other person there); **conflict** — hostility of 40+
+(contempt, hate, resentment or anger); **confiding** — trust and closeness of 40+ both ways with one of them shaken. Not
+within a day of their last one (`o.encDay`), and by chance and at most per stretch by the drama setting (Settings →
+Emotions: quiet 15% / one, normal 35% / two, dramatic 60% / three; privacy scales the chance). A candidate is played out in
+one call for both (`x_offscreen_encounter`, `fsPlayEncounter`): what happened (talk, flirt, kiss, intimacy, quarrel, fight,
+confide, nothing — each makes their own choice), and for each their feeling moves, events (release, crossed line with whom
+it wrongs, bond threat, humiliation — through `fsCascade`), opinions, resolution and a first-person memory (`status:
+"secret"` when hidden, `source: "offscreen_encounter"`); anyone else at the place gets a memory of what could be seen
+(`offscreen_witness`), which is how it can reach the player. Runs once per stretch (`chat.fsEncDone`).
+
+### Step 5 (v150.113) — the relationship, at the end of the day
+
+The daily read (`relPrompt`, `DEFAULT_REL` rewritten; stored copies upgraded once — marker "THE CONNECTED SYSTEM") sets the
+six slow axes — affection (love↔hate), trust, respect, attraction, familiarity (closeness), commitment — as a MOVE per axis
+in words (`"moves"`), from how the opinions went through the day (`_fsRelDayBlock`: `o.opHist` part by part, with the
+reads; the resolution; the feelings still running about the person, a feeling about oneself marked as never evidence about
+them) in place of the body read's fleeting notes, the axes as they stand with any scar (`_fsRelCurLine`), the foundation and
+the memories. The batched read says the same (`_fsRelMovesWording`). `fsRelMove` applies them: gains shrink near the top,
+losses grow with the height they fall from, a fall of 18+ scars the axis (regaining at ×0.35 for 6 days). The swing recorded
+(`o.lastSlowDelta`) is what actually moved. An answer with numeric deltas (an edited prompt in the old form) is read the old
+way; the prompt guard accepts either form.
+
 **Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
 `temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's
 Temperament section, whose sliders and boxes are saved with the card).
+
+### Step 6 (v150.114) — seeing and tuning it
+
+**The character card's "Feelings & bonds in this story" section** (`#peFeelBox`, `peFeelRender`, called from `editPersona`)
+shows the open story's state for that character: the mood, every feeling running (strength slider, unresolved mark, cause,
+target; delete; add one by hand — `peFeelSet`, `peFeelHold`, `peFeelDel`, `peFeelAdd`), and toward each person a collapsible
+block with the six relationship axes, the six opinions, the read and the resolution, scars marked ✂ (`pePairSet`). Every
+change is written into the chat at once and saved with the story (`_peFeelSave`). A character not saved yet is asked to be
+saved first.
+
+**Settings → Emotions → Tune the feeling system** (`#fsTuneBox`, `FS_TUNE_UI`, `renderFsTune`, `readFsTune`, `fsTuneReset`)
+lists the code's numbers — half-lives per speed class, the move multipliers per speed, the ego weights, thresholds. Only the
+difference from the shipped values is stored (`sm_fstune`); `fsTune()` deep-merges each half-life group, so one changed
+value never wipes the rest of its group. Reset puts the shipped values back.
 
 ## Cross-effects
 

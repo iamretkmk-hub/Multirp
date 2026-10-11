@@ -109,7 +109,7 @@ const {chromium}=require('playwright');
     return {keys:Object.keys(r.questions),st:r.state.people_they_know_who_are_not_here,nilQ:(Object.entries(r.questions).find(([k,q])=>/Nil/.test(q.instructions))||[])[1],
       rel:out&&out.relAbout,blk:__blk().rel}; });
   ok("one yes/no per absent tie that is not pinned (Nil, Berker), beside the emotion questions",
-     Q.keys.indexOf("emotion")>=0&&Q.keys.filter(k=>/^rel_/.test(k)).sort().join(",")==="rel_p_b,rel_p_n", JSON.stringify(Q.keys));
+     Q.keys.indexOf("ego")>=0&&Q.keys.indexOf("f_desire")>=0&&Q.keys.filter(k=>/^rel_/.test(k)).sort().join(",")==="rel_p_b,rel_p_n", JSON.stringify(Q.keys));
   ok("the state lists the people they know who are not here, with their ties", JSON.stringify(Q.st)==='["Berker — childhood friend","Nil — daughter"]'||JSON.stringify(Q.st)==='["Nil — daughter","Berker — childhood friend"]', JSON.stringify(Q.st));
   ok("the question names the person and the tie", !!Q.nilQ&&Q.nilQ.type==="noul"&&/Nil \(daughter\), who is not here/.test(Q.nilQ.instructions), JSON.stringify(Q.nilQ));
   ok("the answer is kept, and the reply's block carries her", Q.rel&&Q.rel.p_n===0.88&&/teenage girl/.test(Q.blk), JSON.stringify(Q.rel)+" "+Q.blk.slice(0,200));

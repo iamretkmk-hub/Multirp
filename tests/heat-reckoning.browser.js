@@ -151,8 +151,10 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     c.emo.p_b={emotion:"Desire",intensity:"intense",tone:"consumed by desire",ego:"id_winning",sig:"old",scene:_placeSig(c)};
     c.messages.push({mid:"u9",role:"user",content:"Say it again.",speaker:"Emre"}); window.__reqs=[];
     await emotionEnsure(c,state.personas[0],"Say it again.",{targetId:"__user__",targetName:"Emre"});
-    const q=window.__reqs[0]||{}; return {prev:(q.state||{}).feeling_earlier_in_this_scene,ego:((q.questions||{}).ego||{}).instructions||""}; });
-  ok("the previous pick goes as what it was a few lines ago, without the ego level", r5.prev==="Desire (intense) a few lines ago; it may have moved since"&&!/id|winning/.test(r5.prev), JSON.stringify(r5.prev));
+    const q=window.__reqs[0]||{}; return {prev:(q.state||{}).feeling_earlier_in_this_scene,running:(q.state||{}).feelings_running_now,ego:((q.questions||{}).ego||{}).instructions||""}; });
+  /* (!) v150.110 — CHANGED ON PURPOSE: the feeling system carries the feelings themselves (feelings_running_now) and asks how each
+     moved, so there is no "previous pick" to anchor on; the ego level is never carried */
+  ok("the feelings carry over as what is running, never the last pick's label or its ego level", r5.prev===undefined&&Array.isArray(r5.running)&&!/id_|winning/.test(JSON.stringify(r5.running)), JSON.stringify({prev:r5.prev,running:r5.running}));
   ok("the ego question: not free and behind the partner's back, the want rarely silences conscience; the want can still win",
      /Someone who is not free and is doing this behind that partner's back rarely has the want silence conscience completely, even in the middle of it: id_ahead and torn stay live during the act, and Guilt, Shame or Fear can sit beside Desire\. The want can still win\./.test(r5.ego), r5.ego.slice(0,900));
 

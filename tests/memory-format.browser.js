@@ -293,7 +293,7 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
     const third=window.__reqs.filter(r=>Object.keys(r.questions).some(k=>/^status_M/.test(k)));
     const q=first[0]&&first[0].questions; const k1=q&&Object.keys(q).find(k=>/slept with Emre/.test(q[k].instructions));
     return {elig:elig.length, hasOld:elig.indexOf("too_old")>=0, hasSlight:elig.indexOf("too_slight")>=0, firstN, secondN:second.length===2?Object.keys(second[1].questions).length:-1, thirdCount:third.length,
-      emoFirst:!!(window.__reqs[0]&&window.__reqs[0].questions.emotion), q1:k1&&{type:q[k1].type,crit:Object.keys(q[k1].criteria),ins:q[k1].instructions}, ties:first[0]&&first[0].state.their_ties,
+      emoFirst:!!(window.__reqs[0]&&window.__reqs[0].questions.ego), q1:k1&&{type:q[k1].type,crit:Object.keys(q[k1].criteria),ins:q[k1].instructions}, ties:first[0]&&first[0].state.their_ties,
       after1, left:memStatusCandidates(c,p).length, stored:/"_statusChecked":true/.test(store.raw(K.memory,"")||JSON.stringify(state.memory))};
   });
   ok("the candidates: the last 30 days, importance 3 or more, no status (not too old, not too slight)", BF.elig===16&&!BF.hasOld&&!BF.hasSlight, JSON.stringify(BF).slice(0,300));
@@ -325,8 +325,11 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
     // the cap: open and secret first, then the newest
     for(let i=0;i<14;i++)state.memory.push(Object.assign({},window.__M.old,{id:"cap"+i,gameDay:40,gamePeriod:"Midday",date:i,content:"A notable thing "+i+".",importance:0.5}));
     const capped=memWeighNow(c,p).map(x=>x.m.id);
-    return {weigh:r.state.memories_that_weigh_now, earlier:r.state.earlier_today, emo:r.questions.emotion&&r.questions.emotion.instructions, ego:r.questions.ego&&r.questions.ego.instructions,
-      calm:r.questions.emotion&&r.questions.emotion.criteria.calm, guilt:r.questions.emotion&&r.questions.emotion.criteria.guilt, state:JSON.stringify(r.state), capped};
+    /* (!) v150.110 — CHANGED ON PURPOSE: the feeling system asks how each feeling moved (x_feel_move, f_guilt here) in place of
+       the emotion pick, and the emotion list's descriptions are the boxes' own (not choices a model reads) */
+    const el=emotionList();
+    return {weigh:r.state.memories_that_weigh_now, earlier:r.state.earlier_today, emo:r.questions.f_guilt&&r.questions.f_guilt.instructions, ego:r.questions.ego&&r.questions.ego.instructions,
+      calm:(el.find(e=>e.name==="Calm")||{}).desc&&"Calm: "+el.find(e=>e.name==="Calm").desc, guilt:(el.find(e=>e.name==="Guilt")||{}).desc, state:JSON.stringify(r.state), capped};
   });
   const wl=(E.weigh||[]).join("\n");
   ok("memories_that_weigh_now carries yesterday's hidden affair, marked secret, in the reader's format",
@@ -337,7 +340,7 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
   ok("…oldest to newest", wl.indexOf("My mother")<wl.indexOf("lost the job")&&wl.indexOf("lost the job")<wl.indexOf("father left")&&wl.indexOf("father left")<wl.indexOf("decided not to have")&&wl.indexOf("decided not to have")<wl.indexOf("slept with Emre")&&wl.indexOf("slept with Emre")<wl.indexOf("argued about the rent"), wl);
   ok("no memory is sent twice: today's are in the list, so earlier_today is not sent with them again", (E.state.match(/argued about the rent/g)||[]).length===1&&E.earlier===undefined, JSON.stringify({earlier:E.earlier}));
   ok("capped at ten: the open and secret ones are kept, then the newest", E.capped.length===10&&E.capped.indexOf("m_aff")>=0&&E.capped.indexOf("m_fight")>=0&&E.capped.indexOf("x_open_old")>=0&&E.capped.indexOf("cap13")>=0&&E.capped.indexOf("x_four_60d")<0, JSON.stringify(E.capped));
-  ok("the emotion question carries the fading rules, and says a hidden affair from yesterday is not Calm",
+  ok("the feeling questions carry the fading rules, and say a hidden affair from yesterday is not Calm",
     /memories_that_weigh_now/.test(E.emo||"")&&/HOW A PAST FEELING LASTS: hours to a day, it is raw/.test(E.emo||"")&&/Importance 1–2 fades in a day or two, 3 over days to weeks, 4–5 never fully fades/.test(E.emo||"")
       &&/An open or secret matter does not fade with time alone/.test(E.emo||"")&&/Acting calm is not being calm/.test(E.emo||"")&&/cheated on their spouse yesterday and is hiding it is not Calm today/.test(E.emo||""), E.emo);
   ok("the ego question carries them too, in short", /HOW A PAST FEELING LASTS: raw for hours to a day/.test(E.ego||"")&&/does not fade until a later memory resolves it/.test(E.ego||"")&&/Do not lean on conscience by default/.test(E.ego||""), E.ego);
@@ -346,7 +349,6 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
   console.log("\n[stored old defaults are upgraded]");
   await pg.evaluate(()=>{
     const old67E="The state is the scene as {{char}} took it in, ending on the line {{char}} is about to answer, and who {{char}} is. Which emotion is {{char}} mainly feeling right now, as they answer it? Judge from what just happened to {{char}} and who they are, not from the mood of the room or how anyone else feels.";
-    store.setRaw(K.x_emotion_pick,old67E);
     store.setRaw(K.x_ego_pick,X_ENGINE_PROMPTS.x_ego_pick.def.split("\nThe past weighs too")[0]);
     const l=JSON.parse(JSON.stringify(EMOTIONS_DEFAULT)); l.find(e=>e.name==="Calm").desc="settled; nothing much is pulling at them"; l.find(e=>e.name==="Guilt").desc="knows they did wrong to someone; their conscience is at them";
     l.push({name:"Boredom",desc:"nothing to do",tones:["idle","bored","restless"]}); store.setRaw(K.emotions,JSON.stringify(l));
@@ -357,7 +359,7 @@ You can hide what you feel. If you act calm, let the feeling show in small ways:
   });
   const oldMB=await pg.evaluate(()=>window.__mbOld);
   await pg.evaluate(()=>localStorage.removeItem("sm_pipesdone")); await pg.reload(); await pg.waitForTimeout(2600);
-  const U=await pg.evaluate(()=>({emo:state.x_emotion_pick===X_ENGINE_PROMPTS.x_emotion_pick.def, ego:state.x_ego_pick===X_ENGINE_PROMPTS.x_ego_pick.def,
+  const U=await pg.evaluate(()=>({emo:true /* v150.110 — the emotion pick's prompt is retired */, ego:state.x_ego_pick===X_ENGINE_PROMPTS.x_ego_pick.def,
     calm:(state.emotions||[]).find(e=>e.name==="Calm").desc, guilt:(state.emotions||[]).find(e=>e.name==="Guilt").desc, boredom:!!(state.emotions||[]).find(e=>e.name==="Boredom"),
     mb:state.memBuild, off:state.offstageEvent, stale:(window.__stalePipes||[]).slice()}));
   ok("the emotion and ego questions: a stored old default becomes the new one", U.emo&&U.ego, JSON.stringify({emo:U.emo,ego:U.ego}));

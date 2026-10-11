@@ -27,7 +27,7 @@ const {chromium}=require('playwright');
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       [_emoBreak,_askDecBreak,_limDecBreak,_relDecBreak,_goalDecBreak].forEach(br=>{ br.until=0; br.fails=0; });
       const c=curChat();
-      Object.assign(c,{universeId:uni.id,presentIds:["p_o"],emo:{},calendar:[],intents:[],rel:{},gameDay:4,period:"Afternoon",spokenLimits:{},spokenLimitsRead:{},
+      Object.assign(c,{universeId:uni.id,presentIds:["p_o"],emo:{},feel:{},fsTurn:0,calendar:[],intents:[],rel:{},gameDay:4,period:"Afternoon",spokenLimits:{},spokenLimitsRead:{},
         messages:[{mid:"u1",role:"user",content:'"Did Berker call?"'},{mid:"a1",role:"assistant",speaker:"Özlem",speakerId:"p_o",content:'"Let us not talk about Berker. I will not go to the dinner tonight."'},
                   {mid:"u2",role:"user",content:'"Then stay a bit."'}]});
       return c; };
@@ -39,7 +39,10 @@ const {chromium}=require('playwright');
         if(delay)await new Promise(r=>setTimeout(r,delay));
         const m=mode?mode(body,window.__bodies.length):null;
         if(m&&m.status)return new Response(JSON.stringify({error:{message:m.message||"upstream"}}),{status:m.status});
-        const ans={}; Object.keys(body.questions).forEach(k=>{ ans[k]=k==="emotion"?{choice:"desire",probabilities:{desire:0.9}}:k==="intensity"?{choice:"intense"}:k==="ego"?{choice:"id_winning",probabilities:{id_winning:0.9}}
+        /* (!) v150.110 — CHANGED ON PURPOSE: the emotion topic is the feeling system's request now (f_ moves, s_ signals, e_ events,
+           wronged, ego, masked — tests/feel-moment): desire rose a lot, nothing else moved or happened */
+        const ans={}; Object.keys(body.questions).forEach(k=>{ ans[k]=k==="f_desire"?{choice:"rose_a_lot",probabilities:{rose_a_lot:0.9}}:/^f_|^fo_/.test(k)?{choice:"unchanged",probabilities:{unchanged:0.9}}
+          :/^(s_|e_)|^masked$/.test(k)?{noul:0.05}:k==="wronged"?{choice:"nobody"}:k==="ego"?{choice:"id_winning",probabilities:{id_winning:0.9}}
           :/^limit_L/.test(k)?{choice:"limit_day",probabilities:{none:0.05,limit_day:0.9}}:{noul:0.93}; });
         return new Response(JSON.stringify({answers:ans}),{status:200}); }; };
     window.__undec=()=>{ if(window.__realFetch)window.fetch=window.__realFetch; };
@@ -52,16 +55,16 @@ const {chromium}=require('playwright');
 
   const ONE=await pg.evaluate(()=>__run(false));
   const SPL=await pg.evaluate(()=>__run(true));
-  const topic=q=>q.every(k=>/^(emotion|intensity|ego)$/.test(k))?"emotion":q.every(k=>/^q_/.test(k))?"asks":q.every(k=>/^limit_/.test(k))?"limits":q.every(k=>/^goal_done_/.test(k))?"goals":q.every(k=>/^rel_/.test(k))?"relations":"mixed:"+q.join(",");
+  const topic=q=>q.every(k=>/^(f_|fo_|s_|e_)|^(ego|masked|wronged)$/.test(k))?"emotion":q.every(k=>/^q_/.test(k))?"asks":q.every(k=>/^limit_/.test(k))?"limits":q.every(k=>/^goal_done_/.test(k))?"goals":q.every(k=>/^rel_/.test(k))?"relations":"mixed:"+q.join(",");
   const byTopic={}; SPL.bodies.forEach(x=>{ byTopic[topic(x.q)]=x; });
-  ok("off: one request carrying every topic", ONE.bodies.length===1&&ONE.bodies[0].q.includes("emotion")&&ONE.bodies[0].q.some(k=>/^q_/.test(k))&&ONE.bodies[0].q.some(k=>/^limit_/.test(k))&&ONE.bodies[0].q.some(k=>/^goal_done_/.test(k))&&ONE.bodies[0].q.some(k=>/^rel_/.test(k)), JSON.stringify(ONE.bodies.map(x=>x.q)));
+  ok("off: one request carrying every topic", ONE.bodies.length===1&&ONE.bodies[0].q.includes("ego")&&ONE.bodies[0].q.includes("f_desire")&&ONE.bodies[0].q.some(k=>/^q_/.test(k))&&ONE.bodies[0].q.some(k=>/^limit_/.test(k))&&ONE.bodies[0].q.some(k=>/^goal_done_/.test(k))&&ONE.bodies[0].q.some(k=>/^rel_/.test(k)), JSON.stringify(ONE.bodies.map(x=>x.q)));
   ok("on: one request per topic — emotion, asks, limits, who is talked about, goals", ["emotion","asks","limits","relations","goals"].every(t=>byTopic[t])&&SPL.bodies.length===5, JSON.stringify(SPL.bodies.map(x=>topic(x.q))));
   ok("…asking exactly the same questions between them", JSON.stringify(SPL.bodies.flatMap(x=>x.q).sort())===JSON.stringify(ONE.bodies[0].q.slice().sort()), JSON.stringify({one:ONE.bodies[0].q.length,split:SPL.bodies.flatMap(x=>x.q).length}));
   const has=(t,k)=>!!(byTopic[t]&&byTopic[t].st.includes(k));
   ok("each sees the scene and the character", Object.values(byTopic).every(x=>x.st.includes("scene")&&x.st.includes("character")), JSON.stringify(Object.fromEntries(Object.entries(byTopic).map(([k,v])=>[k,v.st]))));
-  ok("the emotion pick sees the feelings and stakes, not the goals, the limits or the absent people", has("emotion","toward_the_one_they_answer")&&has("emotion","feeling_earlier_in_this_scene")
+  ok("the feelings request sees every layer and the stakes, not the goals, the limits or the absent people", has("emotion","toward")&&has("emotion","feelings_running_now")&&has("emotion","the_case_for_acting")
      &&!has("emotion","their_goals")&&!has("emotion","memories_bearing_on_goals")&&!has("emotion","their_new_lines")&&!has("emotion","people_they_know_who_are_not_here"), JSON.stringify(byTopic.emotion&&byTopic.emotion.st));
-  ok("the asks keep the feelings and stakes they were written against, plus their own material", has("asks","toward_the_one_they_answer")&&!has("asks","their_goals")&&!has("asks","their_new_lines"), JSON.stringify(byTopic.asks&&byTopic.asks.st));
+  ok("the asks keep the feelings and stakes they were written against, plus their own material", has("asks","toward")&&has("asks","feelings_running_now")&&!has("asks","their_goals")&&!has("asks","their_new_lines"), JSON.stringify(byTopic.asks&&byTopic.asks.st));
   ok("the limits, goal and who-is-talked-about checks see only the scene and their own material",
      has("limits","their_new_lines")&&!has("limits","toward_the_one_they_answer")&&has("goals","their_goals")&&!has("goals","toward_the_one_they_answer")&&!has("goals","their_new_lines")
      &&has("relations","people_they_know_who_are_not_here")&&!has("relations","their_goals"), JSON.stringify({l:byTopic.limits&&byTopic.limits.st,g:byTopic.goals&&byTopic.goals.st,r:byTopic.relations&&byTopic.relations.st}));
@@ -71,7 +74,7 @@ const {chromium}=require('playwright');
   const PAR=await pg.evaluate(()=>__run(true,null,300));
   ok("sent at the same time: the wait is the slowest one, not their sum", PAR.bodies.length===5&&(Math.max(...PAR.at)-Math.min(...PAR.at))<60&&PAR.ms<900, JSON.stringify({n:PAR.bodies.length,spread:Math.max(...PAR.at)-Math.min(...PAR.at),ms:PAR.ms}));
 
-  const REF=await pg.evaluate(()=>__run(true,(body)=>(body.questions.emotion&&!body.__seen)?{status:502,message:'OpenAI refused to answer question "emotion"'}:null));
+  const REF=await pg.evaluate(()=>__run(true,(body)=>(body.questions.f_desire&&!body.__seen)?{status:502,message:'OpenAI refused to answer question "f_desire"'}:null));
   const refT={}; REF.bodies.forEach(x=>{ const t=topic(x.q); refT[t]=(refT[t]||0)+1; });
   ok("a refused emotion question is retried inside its own topic only; every other topic answers first time", refT.asks===1&&refT.limits===1&&refT.goals===1&&refT.relations===1&&REF.bodies.filter(x=>x.q.includes("ego")).length===2
      &&REF.out&&REF.out.ego==="id_winning"&&Object.keys(REF.out.asks||{}).length>0, JSON.stringify({refT,out:REF.out}));
@@ -83,7 +86,7 @@ const {chromium}=require('playwright');
   const PS=await pg.evaluate(async()=>{ const c=__setup(true), p=state.personas[0]; _emoBreak.until=Date.now()+60000; _emoBreak.key="sk-test"; __dec(null);
     let out; try{ out=await emotionEnsure(c,p,"Then stay a bit.",{targetId:"__user__",targetName:"Emre",kind:"solo"}); } finally{ __undec(); _emoBreak.until=0; }
     return {q:__bodies.map(x=>Object.keys(x.questions)),asks:out&&Object.keys(out.asks||{}).length}; });
-  ok("a paused emotion pick does not stop the other topics", PS.q.length===4&&!PS.q.some(q=>q.includes("emotion"))&&PS.asks>0, JSON.stringify(PS));
+  ok("a paused emotion pick does not stop the other topics", PS.q.length===4&&!PS.q.some(q=>q.includes("ego"))&&PS.asks>0, JSON.stringify(PS));
 
   const GO=await pg.evaluate(async()=>{ const c=__setup(true), p=state.personas[0];
     [_emoBreak,_askDecBreak,_limDecBreak,_relDecBreak].forEach(br=>{ br.until=Date.now()+60000; br.key="sk-test"; }); __dec(null);
@@ -92,7 +95,7 @@ const {chromium}=require('playwright');
   ok("the goal check still only rides along: with every other topic paused, nothing is sent", GO===0, GO);
 
   const DB=await pg.evaluate(async()=>{ dbgLog.length=0; await __run(true); return dbgLog.map(e=>e.label+" ["+e.status+"]"); });
-  ok("Debug: a summary row for the reply's decisions and one row per topic request", DB.some(l=>/^Reply decisions · Özlem · 5 requests at once \[ok\]/.test(l))&&["Emotion","Reply asks","Spoken limits","Who is talked about","Goals done"].every(n=>DB.some(l=>l.startsWith(n+" · Özlem [ok]"))), JSON.stringify(DB));
+  ok("Debug: a summary row for the reply's decisions and one row per topic request", DB.some(l=>/^Reply decisions · Özlem · 5 requests at once \[ok\]/.test(l))&&["Feelings & ego","Reply asks","Spoken limits","Who is talked about","Goals done"].every(n=>DB.some(l=>l.startsWith(n+" · Özlem [ok]"))), JSON.stringify(DB));
 
   const UI=await pg.evaluate(()=>{ show('settings'); const e=document.getElementById('setDecSplit'); if(!e)return {box:false};
     state.decSplit=true; e.checked=false; saveSettings(false); const off=state.decSplit===false&&store.get(K.decSplit,true)===false;

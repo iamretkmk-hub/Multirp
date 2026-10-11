@@ -22388,13 +22388,13 @@ async function fsOpinionUpdate(chat,p,ids,opts){
   const mems=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&m.gameDay===day&&(!opts.period||m.gamePeriod===per)&&_memOfChat(m,chat)).slice(-8).map(m=>"- "+memPayloadText(memText(m),260));
   const card=[`You are ${p.name}.`, p.personality?memPayloadText(p.personality,400):"", "How feelings run in you: "+_fsTemperWords(p),
     p.values?"What matters most to you: "+memPayloadText(p.values,240):"", p.lines?"Your lines: "+memPayloadText(p.lines,240):""].filter(Boolean).join("\n");
-  const data=[`THE CHARACTER\n${card}`,`THE STRETCH: day ${day}, ${per}${opts.early?" (updated early: something big just happened)":""}`,
-    "WHAT YOU REMEMBER OF IT\n"+(mems.length?mems.join("\n"):"- (nothing written down yet)"),
-    "THE PEOPLE\n"+ids.map(id=>_fsOpPersonBlock(chat,p,id)).join("\n\n")].join("\n\n———\n\n");
+  const data={card,stretch:`day ${day}, ${per}${opts.early?" (updated early: something big just happened)":""}`,
+    memories:mems.length?mems.join("\n"):"- (nothing written down yet)",
+    people:ids.map(id=>_fsOpPersonBlock(chat,p,id)).join("\n\n")};
   const names=ids.map(id=>_fsWho(chat,"p:"+id));
   const sys=fillTpl(up("x_opinion_update",chat.universeId),{char:p.name,user:chatUserName(chat)||"the player"});
   let out;
-  try{ out=await chatCompletion(epSend("x_opinion_update",sys,{data}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",1400),dbg:"Opinions · "+p.name+" · "+names.join(", ")}); }catch(e){ return null; }
+  try{ out=await chatCompletion(epSend("x_opinion_update",sys,data),state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",1400),dbg:"Opinions · "+p.name+" · "+names.join(", ")}); }catch(e){ return null; }
   const j=parseJSON(out); const rows=j&&Array.isArray(j.people)?j.people:null; if(!rows)return null;
   const applied=[];
   rows.forEach(r=>{
@@ -22485,10 +22485,10 @@ function _fsEncCard(chat,p,other){
     owed.length?"People they answer to: "+owed.join(", "):"People they answer to: none on record"].filter(Boolean).join("\n");
 }
 async function fsPlayEncounter(chat,a,b,kind,place,others,day,period){
-  const data=[`THE PLACE: ${place||"somewhere"} — day ${day}, ${period}. ${others.length?"Also there: "+others.map(x=>x.name).join(", ")+".":"Nobody else is there."}`,
-    `WHAT THE BOND COULD CARRY: ${kind}`, _fsEncCard(chat,a,b), _fsEncCard(chat,b,a)].join("\n\n———\n\n");
+  const data={place:`${place||"somewhere"} — day ${day}, ${period}. ${others.length?"Also there: "+others.map(x=>x.name).join(", ")+".":"Nobody else is there."}`,
+    bond:kind, a:_fsEncCard(chat,a,b), b:_fsEncCard(chat,b,a)};
   const sys=fillTpl(up("x_offscreen_encounter",chat.universeId),{a:a.name,b:b.name,user:chatUserName(chat)||"the player"});
-  let out; try{ out=await chatCompletion(epSend("x_offscreen_encounter",sys,{data}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.6),max:fnTok("mem",1400),dbg:`Off-screen · ${a.name} & ${b.name} · ${kind}`}); }catch(e){ return null; }
+  let out; try{ out=await chatCompletion(epSend("x_offscreen_encounter",sys,data),state.memModel,{fn:"mem",temp:fnTemp("mem",0.6),max:fnTok("mem",1400),dbg:`Off-screen · ${a.name} & ${b.name} · ${kind}`}); }catch(e){ return null; }
   const j=parseJSON(out); if(!j||typeof j!=="object")return null;
   const what=String(j.what||"nothing").toLowerCase();
   const res={what,summary:String(j.summary||"").trim().slice(0,500),secret:!!j.secret,people:[]};
@@ -29528,13 +29528,10 @@ async function writeEgoStyles(card,opts){
       ["Values",card.values],["Lines",card.lines],["How they speak (spoken)",sp.spoken.main],["How they text",sp.text.main],["In the heat of the moment",sp.heat.main]]
       .filter(x=>String(x[1]||"").trim()).map(x=>`${x[0]}: ${String(x[1]).trim()}`).join("\n");
     const emoTxt=SPEECH_GROUPS.map(g=>{ const em=sp[g].emo||{}; const ks=Object.keys(em).slice(0,6); return ks.length?`${g} — under a feeling:\n`+ks.map(k=>`- ${k}: ${String(em[k]).replace(/^#+[^\n]*\n/,"").slice(0,220)}`).join("\n"):""; }).filter(Boolean).join("\n\n");
-    const parts=[];
-    if(uni)parts.push(`WORLD: ${uni.name||""}\n${String(uni.setting||"").slice(0,600)}`);
-    parts.push("THE CHARACTER:\n"+(cardTxt||"(no card yet)"));
-    if(emoTxt)parts.push("HOW THEY ACT UNDER A FEELING (keep the ego styles consistent with it):\n"+emoTxt);
-    if(opts.instr&&String(opts.instr).trim())parts.push("THE USER'S REQUEST (follow it closely; still valid JSON):\n"+String(opts.instr).trim());
+    const parts={world:uni?`${uni.name||""}\n${String(uni.setting||"").slice(0,600)}`:"", card:cardTxt||"(no card yet)", feelings:emoTxt||"",
+      request:opts.instr&&String(opts.instr).trim()?String(opts.instr).trim():""};
     const sys=fillTpl(up("x_ego_style_writer",uni&&uni.id),{char:card.name||"the character",story_language:storyLangName()});
-    const out=await chatCompletion(epSend("x_ego_style_writer",sys,{data:parts.join("\n\n———\n\n")}),authoringModel(),
+    const out=await chatCompletion(epSend("x_ego_style_writer",sys,parts),authoringModel(),
       {fn:"unigen",temp:fnTemp("unigen",0.8),prov:authoringProv(),max:Math.max(fnTok("unigen",0)||0,6000),foreground:!!opts.foreground,dbg:"Ego styles writer · "+(card.name||"?")});
     const j=parseJSON(out); if(!j||typeof j!=="object")return null;
     const set=speechBlank();
@@ -33322,9 +33319,9 @@ epDefine("voiceCheckPrompt","Voice check","voiceCheckPrompt",[{name:"profile",la
 epDefine("x_appearance_generator","Appearance generator","x_appearance_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_style_writer","Speaking styles writer","x_style_writer",[{name:"data",label:"The character's card, the emotion list, and your request"}]);
 epDefine("x_temper_writer","Temperament writer","x_temper_writer",[{name:"data",label:"The character's card"}]);
-epDefine("x_ego_style_writer","Ego styles writer","x_ego_style_writer",[{name:"data",label:"The character's card and speech & behaviour"}]);
-epDefine("x_opinion_update","Opinions","x_opinion_update",[{name:"data",label:"The character, the stretch, and each person they dealt with"}]);
-epDefine("x_offscreen_encounter","Encounters off screen","x_offscreen_encounter",[{name:"data",label:"The place and the two characters"}]);
+epDefine("x_ego_style_writer","Ego styles writer","x_ego_style_writer",[{name:"world",label:"The world",sep:"WORLD: "},{name:"card",label:"The character's card",sep:"THE CHARACTER:\n"},{name:"feelings",label:"How they act under a feeling",sep:"HOW THEY ACT UNDER A FEELING (keep the ego styles consistent with it):\n"},{name:"request",label:"Your request",sep:"THE USER'S REQUEST (follow it closely; still valid JSON):\n"}]);
+epDefine("x_opinion_update","Opinions","x_opinion_update",[{name:"card",label:"The character",sep:"THE CHARACTER\n"},{name:"stretch",label:"The part of the day",sep:"THE STRETCH: "},{name:"memories",label:"What they remember of it",sep:"WHAT YOU REMEMBER OF IT\n"},{name:"people",label:"Each person they dealt with",sep:"THE PEOPLE\n"}]);
+epDefine("x_offscreen_encounter","Encounters off screen","x_offscreen_encounter",[{name:"place",label:"The place, the time, who else is there",sep:"THE PLACE: "},{name:"bond",label:"What the bond could carry",sep:"WHAT THE BOND COULD CARRY: "},{name:"a",label:"The first character"},{name:"b",label:"The second character"}]);
 epDefine("x_outfits_generator","Outfit generator","x_outfits_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_wearing_tracker","Wearing tracker","x_wearing_tracker",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_arrival","Arrival \u2014","x_arrival",[{name:"ask",label:"The instruction that closes the message",fixed:"Narrate the arrival."}]);

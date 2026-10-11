@@ -288,6 +288,18 @@ it wrongs, bond threat, humiliation — through `fsCascade`), opinions, resoluti
 "secret"` when hidden, `source: "offscreen_encounter"`); anyone else at the place gets a memory of what could be seen
 (`offscreen_witness`), which is how it can reach the player. Runs once per stretch (`chat.fsEncDone`).
 
+### Step 5 (v150.113) — the relationship, at the end of the day
+
+The daily read (`relPrompt`, `DEFAULT_REL` rewritten; stored copies upgraded once — marker "THE CONNECTED SYSTEM") sets the
+six slow axes — affection (love↔hate), trust, respect, attraction, familiarity (closeness), commitment — as a MOVE per axis
+in words (`"moves"`), from how the opinions went through the day (`_fsRelDayBlock`: `o.opHist` part by part, with the
+reads; the resolution; the feelings still running about the person, a feeling about oneself marked as never evidence about
+them) in place of the body read's fleeting notes, the axes as they stand with any scar (`_fsRelCurLine`), the foundation and
+the memories. The batched read says the same (`_fsRelMovesWording`). `fsRelMove` applies them: gains shrink near the top,
+losses grow with the height they fall from, a fall of 18+ scars the axis (regaining at ×0.35 for 6 days). The swing recorded
+(`o.lastSlowDelta`) is what actually moved. An answer with numeric deltas (an edited prompt in the old form) is read the old
+way; the prompt guard accepts either form.
+
 **Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
 `temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's

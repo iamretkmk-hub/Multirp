@@ -222,7 +222,8 @@ const {chromium}=require('playwright');
   ok("the fast read is capped at ±40", rel.fast>0&&rel.fast<=40, String(rel.fast));
   ok("the day's read stays on the chat, the authored foundation is untouched", rel.sheet==="AUTHORED FOUNDATION"&&/warier|same|x/.test(rel.desc), JSON.stringify({sheet:rel.sheet,desc:rel.desc}));
   ok("the prompts state the caps and the change-not-level rule", await pg.evaluate(()=>
-    /NEVER THE NEW LEVEL/.test(DEFAULT_REL)&&/±25/.test(DEFAULT_REL)&&!/±30 to ±50/.test(DEFAULT_REL)&&/never the new level/.test(DEFAULT_REL_SHORT)&&/±40 is the ceiling/.test(DEFAULT_REL_SHORT)));
+    /* v150.113 — CHANGED ON PURPOSE: the daily read answers in words (the code caps and scales the moves), never the level */
+    /NEVER THE NEW LEVEL/.test(DEFAULT_REL)&&/"moves"/.test(DEFAULT_REL)&&!/±30 to ±50/.test(DEFAULT_REL)&&/never the new level/.test(DEFAULT_REL_SHORT)&&/±40 is the ceiling/.test(DEFAULT_REL_SHORT)));
 
   console.log("\n[the relationship generator merges, it does not replace]");
   const gen=await pg.evaluate(async()=>{

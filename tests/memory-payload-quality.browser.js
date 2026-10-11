@@ -363,7 +363,7 @@ const fs=require('fs'), path=require('path');
     await runDailyRelationships(chat,2,day);
     const labels=window.__calls.filter(x=>/Daily relationship/.test(x.dbg)).map(x=>x.dbg);
     const sys=(window.__calls.find(x=>/Sam → Deniz, Bert/.test(x.dbg))||{}).text||"";
-    const once=(sys.match(/THE NINE AXES/g)||[]).length;
+    const once=(sys.match(/THE SIX AXES/g)||[]).length;   // v150.113 — the six-axis daily read
     return {labels,once,contract:/\\"targets\\"/.test(sys),
       v:{sd:relObj(chat,"p_sa","__user__").trust,sb:relObj(chat,"p_sa","p_be").trust,bd:relObj(chat,"p_be","__user__").trust,bs:relObj(chat,"p_be","p_sa").trust},
       stamped:relObj(chat,"p_sa","p_be").dayEvalFor};

@@ -305,6 +305,20 @@ way; the prompt guard accepts either form.
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's
 Temperament section, whose sliders and boxes are saved with the card).
 
+### Step 6 (v150.114) — seeing and tuning it
+
+**The character card's "Feelings & bonds in this story" section** (`#peFeelBox`, `peFeelRender`, called from `editPersona`)
+shows the open story's state for that character: the mood, every feeling running (strength slider, unresolved mark, cause,
+target; delete; add one by hand — `peFeelSet`, `peFeelHold`, `peFeelDel`, `peFeelAdd`), and toward each person a collapsible
+block with the six relationship axes, the six opinions, the read and the resolution, scars marked ✂ (`pePairSet`). Every
+change is written into the chat at once and saved with the story (`_peFeelSave`). A character not saved yet is asked to be
+saved first.
+
+**Settings → Emotions → Tune the feeling system** (`#fsTuneBox`, `FS_TUNE_UI`, `renderFsTune`, `readFsTune`, `fsTuneReset`)
+lists the code's numbers — half-lives per speed class, the move multipliers per speed, the ego weights, thresholds. Only the
+difference from the shipped values is stored (`sm_fstune`); `fsTune()` deep-merges each half-life group, so one changed
+value never wipes the rest of its group. Reset puts the shipped values back.
+
 ## Cross-effects
 
 - Renaming a **location** breaks lexical matches used by memory location facets and calendar

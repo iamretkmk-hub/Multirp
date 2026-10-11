@@ -1430,7 +1430,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.113</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.114</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -1997,6 +1997,10 @@
           <div style="margin:8px 0"><label for="setFsDrama"><b>How dramatic the world is off screen</b></label>
             <select class="fld" id="setFsDrama" style="width:auto;margin-left:6px"><option value="quiet">Quiet</option><option value="normal">Normal</option><option value="dramatic">Dramatic</option></select>
             <div class="desc">When characters are at the same place while you are elsewhere, and what they feel about each other carries it, something can happen between them — a flirtation, a quarrel, a confidence, more. Quiet: rarely, at most one a part of the day. Dramatic: often, up to three.</div></div>
+          <details class="acc" id="fsTuneAcc" style="margin:8px 0"><summary><b>Tune the feeling system</b> <span class="desc" style="display:inline">— speeds, weights and the rules between feelings</span></summary>
+            <div class="desc" style="margin:6px 0">The numbers the code uses between the model's answers. Leave them unless something feels off in play: feelings that fade too fast or too slowly, a want that wins too easily. <b>Reset</b> puts the shipped values back.</div>
+            <div id="fsTuneBox"></div>
+            <button type="button" class="btn sec small" style="width:auto;margin-top:6px" onclick="fsTuneReset()">Reset to the shipped values</button></details>
           <div id="emoList"></div>
           <div style="display:flex;gap:8px;margin-top:6px">
             <button type="button" class="btn sec small" onclick="emotionEditorAdd()">+ Add emotion</button>
@@ -2841,6 +2845,9 @@
       <div class="desc" style="margin-top:6px"><b>Lines</b> — what they would never do, and which line they could still be tempted across</div>
       <textarea class="fld" id="peLines" placeholder="You would never… — though…" style="min-height:44px"></textarea>
       <button type="button" class="btn sec small" id="peTemperAi" style="width:auto;margin-top:6px" onclick="peTemperWrite()"><svg class="ic"><use href="#i-sparkle"/></svg> Write with AI from the card</button></div>
+    <div id="peFeelBox"><label><svg class="ic"><use href="#i-heart"/></svg> Feelings &amp; bonds in this story <span class="desc" style="font-weight:400">— where they stand now</span></label>
+      <div class="desc">What is running in them right now, and toward each person: the relationship (slow, counts most), how they see them today, what they have resolved. Change any value and it is saved at once; the story goes on from there.</div>
+      <div id="peFeel" style="margin-top:6px"></div></div>
     <div id="peSpeech"><label><svg class="ic"><use href="#i-message"/></svg> Speech &amp; behaviour <span class="desc" style="font-weight:400">— how they talk and what they do</span></label>
       <div class="desc" style="margin:2px 0 6px"><b>Spoken</b> is used for solo, group and gamemaster replies, <b>Text</b> for text messages, <b>Heat</b> for the heat of the moment. Each has a main box, sent on every reply of that kind, and one box per emotion (Settings → Emotions), sent when the emotion pick says that is what they mainly feel. What a box shows is exactly what is sent; a blank box sends nothing.</div>
       <div class="seg" id="peSpeechSeg">
@@ -21801,7 +21808,8 @@ const FS_TUNE_DEFAULT={
   ladder:[0,20,40,60,75]   // backing a rung of the escalation ladder needs (0..100)
 };
 function fsTune(){ const t=state.fsTune; if(!t||typeof t!=="object")return FS_TUNE_DEFAULT;
-  return Object.assign({},FS_TUNE_DEFAULT,t,{hl:Object.assign({},FS_TUNE_DEFAULT.hl,t.hl||{}),weights:Object.assign({},FS_TUNE_DEFAULT.weights,t.weights||{}),moveSpeedX:Object.assign({},FS_TUNE_DEFAULT.moveSpeedX,t.moveSpeedX||{})}); }
+  const hl={}; Object.keys(FS_TUNE_DEFAULT.hl).forEach(k=>{ hl[k]=Object.assign({},FS_TUNE_DEFAULT.hl[k],((t.hl||{})[k])||{}); });   // v150.114 — one value of a speed class, not the class
+  return Object.assign({},FS_TUNE_DEFAULT,t,{hl,weights:Object.assign({},FS_TUNE_DEFAULT.weights,t.weights||{}),moveSpeedX:Object.assign({},FS_TUNE_DEFAULT.moveSpeedX,t.moveSpeedX||{})}); }
 // Pairs whose higher side damps the other's rise. [a, b, strength×]
 const FS_INHIBIT=[["desire","guilt",1],["desire","shame",0.8],["desire","anxiety",1],["desire","fright",1],["desire","disgust",1],
   ["anger","warmth",1],["irritation","warmth",0.6],["shame","pride",1],["anxiety","comfort",1],["fright","comfort",1],
@@ -27382,6 +27390,7 @@ function editPersona(id){
   {const e=document.getElementById('peLikes'); if(e)e.value=(id?(charSpeech(p),p.likes):"")||"";}   // v150.61
   {const e=document.getElementById('peGoals'); if(e)e.value=p.goals||"";}
   try{ peTemperRender(p); }catch(e){}   // v150.109
+  try{ peFeelRender(p); }catch(e){}     // v150.114
   // The maintained want-list, read-only: this is what the character's payload actually carries, and
   // seeing it is the only way to tell whether the curator is doing its job.
   {const box=document.getElementById('peGoalsLive');
@@ -30033,6 +30042,95 @@ function peTemperRender(p){
   const v=document.getElementById('peValues'), l=document.getElementById('peLines');
   if(v)v.value=(p&&p.values)||""; if(l)l.value=(p&&p.lines)||"";
 }
+/* ===== v150.114 — THE FEELINGS PANEL. The connected feeling system's state for the open story, on the character's card: the mood,
+   the feelings running (strength, cause, unresolved; delete, add), and toward each person the six relationship axes, the six
+   opinions, the read and the resolution, with any scar. Every change is written to the chat at once. */
+function _peFeelChat(p){ const c=curChat(); return (c&&p&&p.id&&c.universeId===p.universeId)?c:null; }
+function peFeelRender(p){
+  const host=document.getElementById('peFeel'); if(!host)return;
+  p=p||editingPersona; const c=_peFeelChat(p);
+  if(!p||!p.id){ host.innerHTML=`<div class="desc">Save the character first.</div>`; return; }
+  if(!c){ host.innerHTML=`<div class="desc">Open a story in this character's world to see their feelings in it.</div>`; return; }
+  try{ fsTick(c,p); }catch(e){}
+  const s=fsState(c,p.id), who=t=>_fsWho(c,t).replace(/^yourself$/,"themselves");
+  const bar=(v,lo,hi)=>`<span style="display:inline-block;width:70px;height:6px;border-radius:3px;background:var(--border);vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:${lo<0?50:0}%;${(lo<0&&v<0)?`right:50%;width:${Math.abs(v)/2}%`:`width:${lo<0?Math.max(0,v)/2:Math.max(0,v)}%`};top:0;bottom:0;background:var(--accent)"></span></span>`;
+  const feelRows=s.list.slice().sort((a,b)=>b.v-a.v).map((f,i)=>{ const idx=s.list.indexOf(f);
+    return `<div class="peFeelRow" style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px"><b style="width:96px">${esc((FS_FEEL[f.k]||{}).label||f.k)}</b><span class="desc" style="width:90px;font-size:11px">${esc(who(f.tgt))}</span>
+      <input type="range" min="0" max="100" value="${Math.round(f.v)}" style="flex:1" oninput="peFeelSet(${idx},this.value)"><b style="width:26px">${Math.round(f.v)}</b>
+      <label class="desc" style="font-size:11px" title="Its cause is not settled: it keeps a floor"><input type="checkbox" ${f.hold?"checked":""} onchange="peFeelHold(${idx},this.checked)"> unresolved</label>
+      <button type="button" class="btn sec small" style="width:auto;padding:2px 7px" title="Remove" onclick="peFeelDel(${idx})">×</button></div>${f.cause?`<div class="desc" style="margin:-2px 0 4px 102px;font-size:11px">${esc(f.cause)}</div>`:""}`; }).join("");
+  const targets=[["__user__",chatUserName(c)||"the player"]].concat((state.personas||[]).filter(x=>x&&x.id!==p.id&&x.universeId===p.universeId&&!x.removed).map(x=>[x.id,x.name]));
+  const add=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><select class="fld" id="peFeelAddK" style="width:auto">${FS_FEEL_KEYS.map(k=>`<option value="${k}">${FS_FEEL[k].label}</option>`).join("")}</select>
+    <select class="fld" id="peFeelAddT" style="width:auto"><option value="self">about themselves</option><option value="sit">about the situation</option>${targets.map(t=>`<option value="p:${esc(t[0])}">toward ${esc(t[1])}</option>`).join("")}</select>
+    <button type="button" class="btn sec small" style="width:auto" onclick="peFeelAdd()">+ Add a feeling</button></div>`;
+  const pairs=Object.keys(c.rel||{}).filter(k=>k.split(">")[0]===p.id).map(k=>k.split(">")[1]);
+  const pairHtml=pairs.map(id=>{ const o=fsEnsurePair(c,c.rel[relDirKey(p.id,id)],p.id,id), name=who("p:"+id), day=c.gameDay||1;
+    const rel=FS_REL.map(a=>{ const v=Math.round(+o[a.key]||0), sc=o.scars&&o.scars[a.key]&&o.scars[a.key].until>=day;
+      return `<div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:96px">${a.label}${sc?' <span title="Scarred: it regains slowly">✂</span>':""}</span><span class="desc" style="width:66px;text-align:right;font-size:11px">${a.two?a.neg:""}</span>
+        <input type="range" min="${a.two?-100:0}" max="100" value="${v}" style="flex:1" oninput="pePairSet('${escJs(id)}','rel','${a.key}',this.value)"><span class="desc" style="width:66px;font-size:11px">${a.pos}</span><b style="width:30px">${v}</b></div>`; }).join("");
+    const op=FS_OPN.map(a=>{ const v=Math.round(+o.op[a.key]||0);
+      return `<div style="display:flex;align-items:center;gap:6px;font-size:12px"><span style="width:96px">${a.label}</span><span class="desc" style="width:66px;text-align:right;font-size:11px">${a.neg}</span>
+        <input type="range" min="-100" max="100" value="${v}" style="flex:1" oninput="pePairSet('${escJs(id)}','op','${a.key}',this.value)"><span class="desc" style="width:66px;font-size:11px">${a.pos}</span><b style="width:30px">${v}</b></div>`; }).join("");
+    const res=o.res||{};
+    return `<details class="acc" style="margin-top:6px"><summary><b>${esc(name)}</b> <span class="desc" style="display:inline">— love ${Math.round(+o.affection||0)}, trust ${Math.round(+o.trust||0)}${res.text?" · "+esc(res.kind):""}</span></summary>
+      <div class="desc" style="margin:6px 0 2px"><b>The relationship</b> — slow, counts most</div>${rel}
+      <div class="desc" style="margin:8px 0 2px"><b>How they see ${esc(name)} today</b></div>${op}
+      <div class="desc" style="margin:8px 0 2px"><b>What they make of ${esc(name)}</b></div>
+      <input class="fld" value="${esc(o.opRead||"")}" placeholder="one sentence, in the second person" onchange="pePairSet('${escJs(id)}','read','',this.value)">
+      <div class="desc" style="margin:8px 0 2px"><b>What they have resolved</b></div>
+      <div style="display:flex;gap:6px"><select class="fld" style="width:auto" onchange="pePairSet('${escJs(id)}','resKind','',this.value)">${FS_RES_KINDS.map(k=>`<option value="${k}" ${(res.kind||"none")===k?"selected":""}>${k.replace("_"," ")}</option>`).join("")}</select>
+        <input class="fld" value="${esc(res.text||"")}" placeholder="e.g. You have decided it cannot happen again." style="flex:1" onchange="pePairSet('${escJs(id)}','resText','',this.value)"></div></details>`; }).join("");
+  host.innerHTML=`<div style="font-size:12px;margin-bottom:4px">Mood: <b>${Math.round(s.mood.v)}</b> ${bar(Math.round(s.mood.v)*2,-100,100)}</div>`
+    +`<div class="desc" style="margin:6px 0 2px"><b>Running now</b>${s.list.length?"":" — nothing strong"}</div>${feelRows}${add}`
+    +(pairs.length?`<div class="desc" style="margin:10px 0 0"><b>Toward each person</b></div>${pairHtml}`:`<div class="desc" style="margin-top:8px">No bonds in this story yet.</div>`);
+}
+function _peFeelSave(c){ try{ markChatDirty(c); persistChats(c); }catch(e){} }
+function peFeelSet(i,v){ const p=editingPersona, c=_peFeelChat(p); if(!c)return; const f=fsState(c,p.id).list[i]; if(!f)return;
+  f.v=Math.max(0,Math.min(100,+v||0)); if(f.v>f.peak)f.peak=f.v; _peFeelSave(c);
+  try{ const row=document.querySelectorAll('#peFeel .peFeelRow'); }catch(e){} }
+function peFeelHold(i,on){ const p=editingPersona, c=_peFeelChat(p); if(!c)return; const f=fsState(c,p.id).list[i]; if(!f)return; f.hold=!!on; _peFeelSave(c); }
+function peFeelDel(i){ const p=editingPersona, c=_peFeelChat(p); if(!c)return; const s=fsState(c,p.id); s.list.splice(i,1); _peFeelSave(c); peFeelRender(p); }
+function peFeelAdd(){ const p=editingPersona, c=_peFeelChat(p); if(!c)return;
+  const k=(document.getElementById('peFeelAddK')||{}).value, t=(document.getElementById('peFeelAddT')||{}).value; if(!FS_FEEL[k])return;
+  const s=fsState(c,p.id); let f=fsFeelFind(s,k,t); if(!f){ f={k,tgt:t,v:40,peak:40,cause:"set by hand",at:fsNow(c)}; s.list.push(f); } else { f.v=Math.max(f.v,40); }
+  _peFeelSave(c); peFeelRender(p); }
+function pePairSet(id,what,key,v){ const p=editingPersona, c=_peFeelChat(p); if(!c)return; const o=fsEnsurePair(c,relObj(c,p.id,id),p.id,id);
+  if(what==="rel"){ const a=FS_REL.find(x=>x.key===key); if(a)o[key]=Math.max(a.two?-100:0,Math.min(100,Math.round(+v||0))); }
+  else if(what==="op"){ if(FS_OPN.some(x=>x.key===key))o.op[key]=Math.max(-100,Math.min(100,Math.round(+v||0))); }
+  else if(what==="read"){ o.opRead=String(v||"").trim().slice(0,300); }
+  else if(what==="resKind"){ o.res=Object.assign({},o.res||{},{kind:v,day:c.gameDay||1}); if(v==="none")o.res.text=""; }
+  else if(what==="resText"){ o.res=Object.assign({kind:"approach"},o.res||{},{text:String(v||"").trim().slice(0,240),day:c.gameDay||1}); }
+  _peFeelSave(c); }
+/* v150.114 — the tuning table (Settings → Emotions): each fsTune value, saved as the difference from the shipped ones. */
+const FS_TUNE_UI=[
+  ["hl.vfast.turns","Very fast feelings (desire, anger flare…): half-life in replies"],["hl.vfast.periods","…and in parts of the day"],
+  ["hl.fast.turns","Fast feelings (warmth, anxiety…): half-life in replies"],["hl.fast.periods","…and in parts of the day"],
+  ["hl.slow.turns","Slow feelings (guilt, hurt, jealousy…): half-life in replies"],["hl.slow.periods","…and in parts of the day"],
+  ["floorShare","An unresolved slow feeling keeps this share of its peak (0–1)"],
+  ["inhibit","How strongly an opposed feeling holds another down (0–1)"],
+  ["releaseKeep","Desire left after a release (0–1)"],["refractoryTurns","Replies desire stays held down after a release"],
+  ["rationalize","How much faster self-blame fades when the other is seen well"],["reactivate","How much of a faded feeling a cue brings back (0–1)"],
+  ["vulnerableX","How much more a signal counts when they are raw (×)"],
+  ["moveSpeedX.vfast","A judged move on a very fast feeling (×)"],["moveSpeedX.fast","…on a fast feeling (×)"],["moveSpeedX.slow","…on a slow feeling (×)"],
+  ["opNegBias","Bad evidence against good, for opinions (×)"],["opAnchor","How strongly opinions are held to the relationship (0–1)"],
+  ["relScale","How far a relationship moves for a judged move (×)"],["scarAt","A fall this large scars a relationship axis"],
+  ["scarDays","Days a scar lasts"],["scarGain","How fast a scarred axis regains (×)"],
+  ["weights.feel","Ego judgment weight: feelings"],["weights.op","…opinions"],["weights.rel","…the relationship"]];
+function _fsTuneGet(o,path){ return path.split(".").reduce((a,k)=>a&&a[k],o); }
+function _fsTuneSet(o,path,v){ const ks=path.split("."); let x=o; ks.slice(0,-1).forEach(k=>{ x[k]=x[k]&&typeof x[k]==="object"?x[k]:{}; x=x[k]; }); x[ks[ks.length-1]]=v; }
+function renderFsTune(){
+  const host=document.getElementById('fsTuneBox'); if(!host)return; const T=fsTune();
+  host.innerHTML=FS_TUNE_UI.map(([k,label])=>{ const v=_fsTuneGet(T,k), d=_fsTuneGet(FS_TUNE_DEFAULT,k);
+    return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px"><span style="flex:1">${esc(label)}</span>
+      <input type="number" class="fld fsTuneIn" data-k="${esc(k)}" step="any" value="${v}" style="width:84px"><span class="desc" style="width:70px;font-size:11px">shipped ${d}</span></div>`; }).join("");
+}
+function readFsTune(){
+  const ins=document.querySelectorAll('#fsTuneBox .fsTuneIn'); if(!ins.length)return state.fsTune||null;
+  const out={}; let n=0;
+  ins.forEach(i=>{ const k=i.dataset.k, v=parseFloat(i.value), d=_fsTuneGet(FS_TUNE_DEFAULT,k); if(isFinite(v)&&v!==d){ _fsTuneSet(out,k,v); n++; } });
+  return n?out:null;
+}
+function fsTuneReset(){ state.fsTune=null; store.set(K.fsTune,null); renderFsTune(); toast("Feeling system: shipped values back"); }
 function peTemperRead(){
   const ins=document.querySelectorAll('#peTemper .peTemperIn');
   if(!ins.length||!_peTemperSet)return (editingPersona&&editingPersona.temper)||undefined;
@@ -67353,6 +67451,7 @@ function syncSettingsUI(){
   {const e=document.getElementById('setDecModel'); if(e)e.value=state.decModel||"";}   // v150.64
   {const e=document.getElementById('setEmoOn'); if(e)e.checked=!!state.emoOn;}
   {const e=document.getElementById('setFsDrama'); if(e)e.value=fsDrama();}   // v150.112
+  try{ renderFsTune(); }catch(e){}   // v150.114
   {const e=document.getElementById('setEmoModel'); if(e)e.value=state.emoModel||"";}
   try{ renderEmotionEditor(); }catch(e){}
   {const e=document.getElementById('setGateOn'); if(e)e.checked=!!state.gateOn;}
@@ -67617,6 +67716,7 @@ function saveSettings(notify){
   {const e=document.getElementById('setDecModel'); if(e)state.decModel=e.value.trim();}   // v150.64
   {const e=document.getElementById('setEmoOn'); if(e)state.emoOn=e.checked;}
   {const e=document.getElementById('setFsDrama'); if(e&&FS_DRAMA[e.value]){ state.fsDrama=e.value; store.setRaw(K.fsDrama,e.value); }}   // v150.112
+  try{ const t=readFsTune(); state.fsTune=t; store.set(K.fsTune,t); }catch(e){}   // v150.114
   {const e=document.getElementById('setEmoModel'); if(e)state.emoModel=e.value.trim();}
   try{ const l=readEmotionEditor(); if(l)state.emotions=l; }catch(e){}
   {const e=document.getElementById('setGateOn'); if(e)state.gateOn=e.checked;}

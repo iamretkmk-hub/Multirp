@@ -1430,7 +1430,7 @@
 
 <!-- ===== SETTINGS ===== -->
 <div class="screen" id="screen-settings">
-  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.110</div></header>
+  <header><div>Settings</div><div style="font-size:11px;opacity:.6;font-weight:400;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" id="buildStamp" title="Check for a newer build" onclick="updCheckNow()">v150.111</div></header>
   <div class="pad">
     <!-- ============ 1 · API KEYS ============ -->
     <details class="sgroup" open>
@@ -4695,6 +4695,23 @@ NO: it did not, or it is only coming.`},
   x_feel_wronged:{label:"Feelings — whom a crossed line wrongs",json:false,
     hint:"Asked before each character reply when the character answers to someone (a spouse, partner, lover or family): if a line was crossed, whom it wrongs. Guilt is scaled by the commitment to that person. Placeholders: {{char}}, {{target}}.",
     def:`If {{char}} has just crossed one of their own lines or betrayed someone, whom does it wrong most? Choose nobody when no line was crossed.`},
+  /* v150.111 — OPINIONS, EACH PART OF THE DAY (runOpinionUpdates): how a character sees each person they dealt with, from what
+     that person DID — never from how the character feels about themselves — and the resolution re-examined. */
+  x_opinion_update:{label:"Opinions — how they see the people they dealt with (each part of the day)",json:true,
+    hint:"When a part of the day ends (and at once after a big event), one call per character over the people they dealt with: each opinion rose or fell (kind, reliable, respects me, safe, interested, appealing), a one-line read, and the resolution toward them re-examined. Placeholders: {{char}}, {{user}}.",
+    def:`You update how {{char}} sees the people {{char}} dealt with in the stretch of the day that just ended. The message has {{char}}'s card, what {{char}} remembers of the stretch, and for each person: the relationship (slow — it counts most and is not yours to change here), how {{char}} saw them before, what {{char}} had resolved toward them, what they DID (each signal — "when you were raw" means it came at a hard moment and counted more), the time spent with them, and what {{char}} felt about them through it.
+
+HOW AN OPINION MOVES
+- An opinion is about what the PERSON did and what it says about them: kind or cruel to {{char}}, reliable or not, respecting {{char}} or using them, safe or dangerous, interested in {{char}} or indifferent, appealing or not.
+- What {{char}} feels about THEMSELVES is never evidence about the other person. Guilt or shame over something done with someone does not make that person worse: if they were kind and reassuring through it, {{char}} sees them as kinder and safer, however guilty {{char}} feels.
+- Bad evidence weighs more than good. One good stretch does not undo a long bad history; one bad act can undo a lot.
+- Most opinions are unchanged in most stretches. Move only what the evidence moves.
+
+THE RESOLUTION
+What {{char}} has decided toward them: approach, keep_distance, end_it, pursue, forgive, confront. Re-examine it every time: a resolution made in a raw moment ("this can't happen again") softens when they keep being kind and attentive, and hardens when they hurt {{char}}; replace it when {{char}} has decided something new; drop it (kind "none") when it no longer holds. Leave it out when nothing about it changes.
+
+Return ONLY JSON, every person in the message by their exact name:
+{"people":[{"name":"…","opinions":{"kind":"rose_a_lot|rose|rose_a_little|unchanged|fell_a_little|fell|fell_a_lot","reliable":"…","respects":"…","safe":"…","interested":"…","appealing":"…"},"read":"one sentence IN THE SECOND PERSON: what you make of them now","resolution":{"kind":"approach|keep_distance|end_it|pursue|forgive|confront|none","text":"one sentence IN THE SECOND PERSON","strength":"passing|firm"}}]}`},
   x_feel_masked:{label:"Feelings — is it hidden",json:false,
     hint:"Asked before each character reply: is the character hiding what they feel. A yes makes their feeling's style box say it leaks through instead of showing. Placeholders: {{char}}, {{target}}. YES: and NO: lines.",
     def:`Is {{char}} hiding what they feel from the people here right now? Weigh how much shows in {{char}} by nature (how_feelings_run_in_you), who can see or hear, and what {{char}} would lose if it showed.
@@ -22307,6 +22324,7 @@ function fsApply(chat,p,meta,answers,line){
   const moveAll=(map)=>Object.keys(map).forEach(key=>{ const m=_fsMoveOf(answers[key]); if(Math.abs(m)<3)return;
     const f=map[key], sx=(T.moveSpeedX||{})[(FS_FEEL[f.k]||{}).speed]||1;
     const d=fsFeelMove(chat,p,{k:f.k,tgt:f.tgt,size:Math.abs(m)*sx,dir:m<0?-1:1,cause:m>0?cause:undefined});
+    if(/^p:/.test(f.tgt||""))fsLogFeel(chat,p.id,f.tgt.slice(2),f.k,d,cause);   // v150.111 — kept for this stretch's opinion update
     if(Math.abs(d)>=1)out.moves[FS_FEEL[f.k].label+" ("+_fsWho(chat,f.tgt)+")"]=Math.round(d); });
   moveAll(meta.feel||{}); moveAll(meta.other||{});
   const lead=fsLeading(chat,p,tid);
@@ -22357,6 +22375,106 @@ function fsMomentText(chat,p,targetId,rec){
     L.push(`With ${tn}, the furthest you will go right now: ${rec.ceiling}${nxt?` — not ${nxt}, not yet`:""}.`);
   }
   return L.join("\n");
+}
+/* ===== v150.111 — THE CONNECTED FEELING SYSTEM, STEP 3: OPINIONS, EACH PART OF THE DAY ======================================
+   How a character sees each person they dealt with is updated when a part of the day ends (and at once after a big event —
+   a betrayal, a threat, a rejection, a crossed line, a threat to a bond, humiliation), from what that person DID: the signals
+   kept as evidence (with their weight — doubled when the character was raw), what the character felt about them and about
+   themselves because of them through the stretch, and what they remember of it. One call per character per stretch, over
+   everyone they dealt with. The answer is in words — each opinion rose or fell, a little or a lot — and the code moves the
+   numbers (bad evidence ×1.5, anchored to the relationship). Each update also re-examines the RESOLUTION: what the character
+   decided toward that person ("never again", "pursue him") softens, hardens, changes or is dropped as the days go on. */
+const FS_OP_MOVES={rose_a_lot:["strong",1],rose:["clear",1],rose_a_little:["slight",1],unchanged:null,fell_a_little:["slight",-1],fell:["clear",-1],fell_a_lot:["strong",-1]};
+const FS_RES_KINDS=["approach","keep_distance","end_it","pursue","forgive","confront","none"];
+const FS_BIG_SIGNALS=["betrayal","threat","rejection","contempt"], FS_BIG_EVENTS=["crossed_line","bond_threat","humiliation"];
+// What the character felt about someone during a stretch, kept on the pair for that stretch's opinion update.
+function fsLogFeel(chat,fromId,toId,k,d,cause){
+  if(!toId||!d)return;
+  try{ const o=fsEnsurePair(chat,relObj(chat,fromId,toId),fromId,toId), now=fsNow(chat);
+    o.feelLog=(Array.isArray(o.feelLog)?o.feelLog:[]).concat([{k,d:Math.round(d),at:{day:now.day,p:now.p},cause:String(cause||"").slice(0,120)}]).slice(-40);
+    o.metAt={day:now.day,p:now.p}; }catch(e){}
+}
+/* Who a character has something to update about: the pairs with evidence, a feelings log, or a meeting in this stretch. */
+function _fsOpPending(chat,p){
+  const out=[]; const rel=chat.rel||{};
+  Object.keys(rel).forEach(k=>{ const [a,b2]=k.split(">"); if(a!==p.id||!b2)return; const o=rel[k]; if(!o||typeof o!=="object")return;
+    if((o.evidence&&o.evidence.length)||(o.feelLog&&o.feelLog.length)||(o.met&&o.met.length)||o.opDue)out.push(b2); });
+  return out;
+}
+function _fsOpPersonBlock(chat,p,id){
+  const o=fsEnsurePair(chat,relObj(chat,p.id,id),p.id,id), name=_fsWho(chat,"p:"+id);
+  const tie=((p.relationships||{})[id]||{}).tie||"";
+  const L=[`## ${name}${tie?" — "+tie:""}`];
+  L.push("The relationship (slow, counts most): "+FS_REL.map(a=>`${a.label} ${fsBand(+o[a.key]||0)} (${Math.round(+o[a.key]||0)})`).join("; ")+".");
+  L.push("How you saw them before this stretch: "+FS_OPN.map(a=>`${a.pos}↔${a.neg} ${Math.round(+o.op[a.key]||0)}`).join("; ")+".");
+  if(o.opRead)L.push("What you made of them: "+o.opRead);
+  if(o.res&&o.res.text)L.push(`What you had resolved toward them (${o.res.kind}, ${o.res.strength||"firm"}${o.res.day?", day "+o.res.day:""}): ${o.res.text}`);
+  const ev=(o.evidence||[]).map(e=>`- ${(FS_SIGNALS[e.s]||{}).label||e.s}${e.x>1.15?" (when you were raw — it counted more)":""}${e.cause?": "+e.cause:""}`);
+  if(o.met&&o.met.length)L.push("Time you spent with them away from anyone else's eyes: "+o.met.map(m=>`${m.period}${m.place?" at "+m.place:""}`).join("; ")+".");
+  L.push("What they did:\n"+(ev.length?ev.join("\n"):"- (nothing that stood out)"));
+  const agg={}; (o.feelLog||[]).forEach(f=>{ const a=agg[f.k]||(agg[f.k]={up:0,down:0,cause:""}); if(f.d>0)a.up+=f.d; else a.down-=f.d; if(f.cause)a.cause=f.cause; });
+  const fl=Object.keys(agg).map(k=>`- ${FS_FEEL[k]?FS_FEEL[k].label:k}: ${agg[k].up?"rose "+Math.round(agg[k].up):""}${agg[k].up&&agg[k].down?", ":""}${agg[k].down?"fell "+Math.round(agg[k].down):""}${agg[k].cause?" — "+agg[k].cause:""}`);
+  // what they feel about themselves because of this person (guilt or shame that happened WITH them)
+  const s=chat.feel&&chat.feel[p.id];
+  (s?s.list:[]).filter(f=>f.tgt==="self"&&f.with===id&&f.v>=10).forEach(f=>fl.push(`- ${FS_FEEL[f.k].label} about yourself, because of what happened with them${f.about?" (it wrongs "+_fsWho(chat,"p:"+f.about)+")":""}: ${fsBand(f.v)} — this is about YOU, not evidence about them`));
+  L.push("What you felt about them through it:\n"+(fl.length?fl.join("\n"):"- (nothing strong)"));
+  return L.join("\n");
+}
+async function fsOpinionUpdate(chat,p,ids,opts){
+  opts=opts||{};
+  if(!chat||!p||!ids||!ids.length||!state.key)return null;
+  ids=ids.filter((x,i,a)=>x&&a.indexOf(x)===i).slice(0,8);
+  const day=opts.day||chat.gameDay||1, per=opts.period||chatPeriod(chat);
+  const mems=(state.memory||[]).filter(m=>m&&m.ownerId===p.id&&m.gameDay===day&&(!opts.period||m.gamePeriod===per)&&_memOfChat(m,chat)).slice(-8).map(m=>"- "+memPayloadText(memText(m),260));
+  const card=[`You are ${p.name}.`, p.personality?memPayloadText(p.personality,400):"", "How feelings run in you: "+_fsTemperWords(p),
+    p.values?"What matters most to you: "+memPayloadText(p.values,240):"", p.lines?"Your lines: "+memPayloadText(p.lines,240):""].filter(Boolean).join("\n");
+  const data=[`THE CHARACTER\n${card}`,`THE STRETCH: day ${day}, ${per}${opts.early?" (updated early: something big just happened)":""}`,
+    "WHAT YOU REMEMBER OF IT\n"+(mems.length?mems.join("\n"):"- (nothing written down yet)"),
+    "THE PEOPLE\n"+ids.map(id=>_fsOpPersonBlock(chat,p,id)).join("\n\n")].join("\n\n———\n\n");
+  const names=ids.map(id=>_fsWho(chat,"p:"+id));
+  const sys=fillTpl(up("x_opinion_update",chat.universeId),{char:p.name,user:chatUserName(chat)||"the player"});
+  let out;
+  try{ out=await chatCompletion(epSend("x_opinion_update",sys,{data}),state.memModel,{fn:"mem",temp:fnTemp("mem",0.3),max:fnTok("mem",1400),dbg:"Opinions · "+p.name+" · "+names.join(", ")}); }catch(e){ return null; }
+  const j=parseJSON(out); const rows=j&&Array.isArray(j.people)?j.people:null; if(!rows)return null;
+  const applied=[];
+  rows.forEach(r=>{
+    if(!r||typeof r!=="object")return;
+    const nm=String(r.name||"").trim().toLowerCase(); const i=names.findIndex(n=>String(n).toLowerCase()===nm); if(i<0)return;
+    const id=ids[i], o=fsEnsurePair(chat,relObj(chat,p.id,id),p.id,id), mv={};
+    const ops=(r.opinions&&typeof r.opinions==="object")?r.opinions:{};
+    FS_OPN.forEach(a=>{ const w=FS_OP_MOVES[String(ops[a.key]||"").toLowerCase().replace(/\s+/g,"_")]; if(w){ const d=fsOpMove(chat,p.id,id,a.key,w[0],w[1]); if(d)mv[a.key]=d; } });
+    if(typeof r.read==="string"&&r.read.trim())o.opRead=memPayloadText(r.read.trim(),300);
+    const rs=r.resolution;
+    if(rs&&typeof rs==="object"){
+      const kind=FS_RES_KINDS.includes(String(rs.kind||"").toLowerCase())?String(rs.kind).toLowerCase():"";
+      if(kind==="none"||rs.drop===true){ if(o.res)o.res={kind:"none",text:"",strength:"",day,per,was:o.res.text||""}; }
+      else if(kind&&String(rs.text||"").trim())o.res={kind,text:memPayloadText(String(rs.text).trim(),240),strength:/firm/i.test(rs.strength)?"firm":"passing",day,per};
+    }
+    o.opHist=(Array.isArray(o.opHist)?o.opHist:[]).concat([{day,per,op:Object.assign({},o.op),read:o.opRead||""}]).slice(-15);
+    o.evidence=[]; o.feelLog=[]; o.met=[]; o.opDue=false; o.opAt={day,per};
+    applied.push({who:names[i],moved:mv,read:o.opRead||"",resolution:o.res&&o.res.text?o.res.kind+": "+o.res.text:""});
+  });
+  try{ markChatDirty(chat); }catch(e){}
+  return applied;
+}
+// Every character with something to update, when a part of the day ends. One call each, in turn.
+async function runOpinionUpdates(chat,day,period){
+  if(!chat||!fsOn())return;
+  const ids=new Set(); Object.keys(chat.rel||{}).forEach(k=>{ const a=k.split(">")[0]; if(a&&a!=="__user__")ids.add(a); });
+  for(const id of ids){
+    const p=(state.personas||[]).find(x=>x&&x.id===id); if(!p)continue;
+    const who=_fsOpPending(chat,p); if(!who.length)continue;
+    try{ await fsOpinionUpdate(chat,p,who,{day,period}); }catch(e){}
+  }
+}
+// After a big event the opinion of that person is updated now, not at the end of the stretch (once per pair per turn).
+const _fsEarlyRan=new Set();
+function fsMaybeEarlyOpinion(chat,p,toId,rec){
+  if(!chat||!p||!toId||!rec)return;
+  const big=(rec.signals||[]).some(s=>FS_BIG_SIGNALS.includes(s))||(rec.events||[]).some(e=>FS_BIG_EVENTS.includes(e));
+  if(!big)return;
+  const key=chat.id+"|"+p.id+"|"+toId+"|"+(chat.fsTurn||0); if(_fsEarlyRan.has(key))return; _fsEarlyRan.add(key);
+  setTimeout(()=>{ fsOpinionUpdate(chat,p,[toId],{early:true}).catch(()=>{}); },50);
 }
 
 /* ===== (!) v148.4 — A BOND STARTS WHERE THE RELATIONSHIP SHEET SAYS IT DOES ======================
@@ -23419,6 +23537,8 @@ function runNeglectDrift(chat,day,period){
   }catch(e){/* best-effort, like every other day-end pass */}
 }
 async function runDailyRelationships(chat,day,dayMsgsSnapshot){
+  // v150.111 — the day's last stretch updates the opinions first: the relationship reads how they went
+  if(fsOn()){ try{ await runOpinionUpdates(chat,day,null); }catch(e){} }
   const dayMsgs=Array.isArray(dayMsgsSnapshot)?dayMsgsSnapshot:messagesForCurrentDay(chat);
   if(!dayMsgs.length)return;
   // Characters who actually SPOKE today (a silent bystander forms no new opinions worth scoring).
@@ -25197,6 +25317,7 @@ async function emotionEnsure(chat,p,line,tgt){
         try{ const r=fsApply(chat,p,fsq.meta,res.answers,line);
           Object.assign(out,{emotion:r.emotion||"",intensity:r.intensity||"",tone:r.tone||"",ego:r.ego||(prev&&prev.ego)||"",egoP:r.egoP,masked:!!r.masked,
             lead:r.lead,second:r.second,ceiling:r.ceiling||"",ladder:r.ladder||"",cases:r.cases||null,moves:r.moves,signals:r.signals,events:r.events,fs:true});
+          fsMaybeEarlyOpinion(chat,p,tgt.targetId||"__user__",r);   // v150.111 — a big event updates the opinion now
         }catch(err){ try{ console.warn("[feelings] apply",err); }catch(_){} }
       }else if(wantEmo&&list.length){
         const ek=pick(res.answers.emotion,list.map(x=>_emoKey(x.name))), lk=pick(res.answers.intensity,EMO_LEVELS.map(x=>x.k))||"clear";
@@ -32978,6 +33099,7 @@ epDefine("x_appearance_generator","Appearance generator","x_appearance_generator
 epDefine("x_style_writer","Speaking styles writer","x_style_writer",[{name:"data",label:"The character's card, the emotion list, and your request"}]);
 epDefine("x_temper_writer","Temperament writer","x_temper_writer",[{name:"data",label:"The character's card"}]);
 epDefine("x_ego_style_writer","Ego styles writer","x_ego_style_writer",[{name:"data",label:"The character's card and speech & behaviour"}]);
+epDefine("x_opinion_update","Opinions","x_opinion_update",[{name:"data",label:"The character, the stretch, and each person they dealt with"}]);
 epDefine("x_outfits_generator","Outfit generator","x_outfits_generator",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_wearing_tracker","Wearing tracker","x_wearing_tracker",[{name:"data",label:"Everything this engine sends about your story"}]);
 epDefine("x_arrival","Arrival \u2014","x_arrival",[{name:"ask",label:"The instruction that closes the message",fixed:"Narrate the arrival."}]);
@@ -33258,6 +33380,8 @@ function epSend(key,systemText,parts,vars){
 /* v38.5 — the engine prompts that used to live in code get real homes here rather than being
    swept into "Other prompts" by _enginePayloadCoverage. Grouped by the job they belong to. */
 const X_PROMPT_CARDS=[
+  {key:"opinions",label:"Opinions and encounters (the feeling system)",desc:"When a part of the day ends, how each character sees the people they dealt with \u2014 from what those people did, never from how the character feels about themselves \u2014 and what they have resolved toward them, re-examined each time.",
+   keys:["x_opinion_update"]},
   {key:"world_builder",label:"World builder",desc:"The jobs that furnish a world: where people live, where the story happens, and who a sketched-in character turns out to be.",
    keys:["x_location_homes","x_location_quest","x_location_pois","x_location_request","x_reveal_npc","x_schedule_generator"]},
   {key:"appearance",label:"Appearance",desc:"How a character looks and what they are wearing \u2014 structured fields the image generator and the reply payload both read.",
@@ -63466,6 +63590,8 @@ function onPeriodChanged(chat,prevDay,prevPeriod){
         const p=state.personas.find(x=>x&&x.id===id);
         if(p) await reconcilePeriodFor(p,prevDay,prevPeriod,chat);
       }
+      // v150.111 — how each character sees the people they dealt with in the stretch that just ended (the feeling system)
+      try{ await runOpinionUpdates(chat,prevDay,prevPeriod); }catch(e){}
       /* (!) v144.1 — REMOVED: "relationships settle at every time change" (v41.9). The call never did
          anything: it regenerated the factual sheet only for characters whose slow axes moved TODAY,
          and slow axes only move in evalRelationship at End Day — so on every mid-day period change

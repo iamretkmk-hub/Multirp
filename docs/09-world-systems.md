@@ -257,6 +257,20 @@ while the system is on.
 in, gone with it) are edited under Speech & behaviour, written by the ego styles writer (`x_ego_style_writer`,
 `writeEgoStyles`) after the speech writer for a new character, and by **Write ego styles with AI**.
 
+### Step 3 (v150.111) — opinions, each part of the day
+
+When a part of the day ends (`onPeriodChanged`, after the memories are reconciled) and before the day's relationship read
+(`runDailyRelationships`), `runOpinionUpdates` makes one call per character (`x_opinion_update`, `memModel`) over every
+person they have something new about (`_fsOpPending`: evidence, a feelings log, time spent together, or flagged). For each
+person it is told what the person did (the signals, with "when you were raw" for the ones that counted double), what the
+character felt about them through the stretch (`fsLogFeel`, kept per pair), what they feel about themselves because of
+something done with them — marked as about the character, never evidence about the other — the relationship, how they
+saw them before, the read and the resolution, and the stretch's memories. It answers in words per opinion; the code
+moves them (`fsOpMove`: bad evidence ×1.5, anchored), keeps the read (`o.opRead`), sets or re-examines the resolution
+(`o.res`: approach, keep_distance, end_it, pursue, forgive, confront, none — passing or firm), keeps a snapshot for the
+night (`o.opHist`) and clears the stretch's evidence. A betrayal, threat, rejection or contempt, or a crossed line, a
+threat to a bond or humiliation, updates that pair at once (`fsMaybeEarlyOpinion`). Off with the feeling system.
+
 **Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
 `temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's

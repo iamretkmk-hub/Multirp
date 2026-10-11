@@ -229,6 +229,34 @@ their anchors; the body read's live axes become feelings toward that person (des
 irritation from agitation) and jealousy of 25+ becomes a jealousy feeling. The older fields stay until the later steps
 stop reading them.
 
+### Step 2 (v150.110) — the moment, one request per reply
+
+`emotionEnsure` asks, in the request it already sends before each reply (`fsQuestions`): a move per feeling with its
+target (`f_<feeling>`; `fo_…` for a feeling already running about someone else), a yes/no per signal (`s_…`) and per
+event (`e_…`), whom a crossed line wrongs (`wronged`, when they answer to someone), the ego verdict (`ego`) and whether
+it is hidden (`masked`). The state carries every layer in words: temperament, values, lines, the ego styles; toward the
+one answered the relationship, today's opinions, the read, the resolution and the settled view; the feelings running
+with their causes; how exposed they are; the stakes (memories that weigh, people they answer to, plans at risk, who can
+see); what they have said about how far this goes; and the code's `the_case_for_acting`, `the_case_for_holding_back` and
+`the_furthest_the_backing_allows_now`. Before asking, time moves on (`fsBeginTurn`, `fsTick`) and the people here bring
+back what they stirred (`fsReactivate`); a card with no temperament gets one in the background (`fsEnsureTemperament`).
+
+`fsApply` applies events first, then signals (care right after a hard moment lands on someone raw), then the moves
+(probability-weighted, ×1.6 for a very fast feeling, ×0.8 for a slow one); the leading feeling becomes `chat.emo`'s
+emotion; the body read's axes (`o.st`) are mirrored from the feelings (`fsSyncLegacy`) for the older readers. The
+five-turn body read stops (`runShortTermRel` keeps only its presence stamp) while the system is on.
+
+**The reply** (`fsMomentText`, data `moment_raw` in `_mo`): the fragment **What is running in you right now** (new,
+before the compass; `FRAG_SHIPPED_ADDS` v150.110.moment) carries what leads and why, what pulls under it, whether it is
+hidden, and how far they will go with the one answered (the ladder ceiling, "not the next step, not yet"); its second
+option sends `{{call//style_ego}}`, the **ego style** for the verdict. The feeling's own box says "You are feeling X and
+hiding it — this is how it leaks through:" when masked (`emoBoxFor`). "What your body is doing this second" sends nothing
+while the system is on.
+
+**Ego styles** (`p.speech[group].ego[verdict]`, six per group: at ease, holding firm, barely holding back, torn, giving
+in, gone with it) are edited under Speech & behaviour, written by the ego styles writer (`x_ego_style_writer`,
+`writeEgoStyles`) after the speech writer for a new character, and by **Write ego styles with AI**.
+
 **Temperament on the card:** both card writers (`bioPrompt`, `batchBioPrompt`, `CARD_TEMPER_RULE`, upgraded once) write
 `temperament`, `values` and `lines`; a card without them gets them from the temperament writer (`x_temper_writer`,
 `writeTemperament`, once in the background via `fsEnsureTemperament`, or **Write with AI from the card** in the editor's

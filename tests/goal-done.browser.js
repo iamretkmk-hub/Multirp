@@ -40,7 +40,7 @@ const {chromium}=require('playwright');
     const q=__reqs[0]||{questions:{},state:{}};
     return {keys:Object.keys(q.questions),g1:q.questions.goal_done_G1,st:q.state.their_goals,live:liveGoalsLines(p),raw:liveGoalsLines(p,{raw:true}),txt:liveGoalsText(p)}; });
   ok("each live goal is a yes/no in the reply's own request, with the goals in the state",
-     R.keys.indexOf("emotion")>-1&&R.keys.indexOf("goal_done_G1")>-1&&R.keys.indexOf("goal_done_G2")>-1&&R.g1.type==="noul"
+     R.keys.indexOf("ego")>-1&&R.keys.indexOf("f_desire")>-1&&R.keys.indexOf("goal_done_G1")>-1&&R.keys.indexOf("goal_done_G2")>-1&&R.g1.type==="noul"
      &&/make that call to Ayça/.test(R.g1.instructions)&&/already done, settled or moot/.test(R.g1.instructions)&&/the call was made/.test(R.g1.criteria.true)
      &&JSON.stringify(R.st)==='["[G1] Get Emre to actually make that call to Ayça","[G2] Keep the beach day light"]', JSON.stringify(R));
   ok("a yes at 0.92 hides that goal from what the character carries; a no keeps the other",
@@ -53,7 +53,7 @@ const {chromium}=require('playwright');
       state.emoOn=false; await emotionEnsure(c,p,"x",{targetId:"__user__"}); state.emoOn=true; return __reqs.length===0?true:"sent "+__reqs.length; }));
   ok("switched off: no goal questions", await pg.evaluate(async()=>{ const c=__setup(); const p=state.personas[0]; state.goalCheckOn=false;
       await emotionEnsure(c,p,"x",{targetId:"__user__"}); state.goalCheckOn=true; const q=(__reqs[0]||{questions:{}}).questions;
-      return (q.emotion&&!q.goal_done_G1)?true:JSON.stringify(Object.keys(q)); }));
+      return (q.ego&&!q.goal_done_G1)?true:JSON.stringify(Object.keys(q)); }));   // v150.110 — the feelings request (ego) still goes
   ok("the switch round-trips through Settings, and the question is on the Emotion card", await pg.evaluate(()=>{ state.goalCheckOn=false; syncSettingsUI(); const box=document.getElementById('setGoalCheckOn');
       const a=box&&box.checked===false; box.checked=true; saveSettings(); const b=state.goalCheckOn===true&&store.raw(K.goalCheckOn,"")==="1";
       const card=X_PROMPT_CARDS.find(c=>c.keys.indexOf("x_goal_done")>-1); return (a&&b&&!!card)?true:JSON.stringify({a,b,card:!!card}); }));

@@ -104,7 +104,7 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     const pm=ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre",fragments:one("{{call//limits//full}}")},()=>B)||[];
     const piece=((ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre",fragments:one("{{call//drives//full}}")},()=>B)||[])[0]||{}).content||"";
     const frag=(ptBuildMessages("solo",B,[],{chat:c,npc:D,targetName:"Emre"},()=>B)||[]).map(m=>m.content).join("\n");   // v150.48 — the shipped fragments
-    return {req:req&&{qk:Object.keys(req.questions),crit:Object.keys(req.questions.limit_L1.criteria),state:req.state,emo:!!req.questions.emotion,ins:req.questions.limit_L1.instructions},
+    return {req:req&&{qk:Object.keys(req.questions),crit:Object.keys(req.questions.limit_L1.criteria),state:req.state,emo:!!req.questions.ego,ins:req.questions.limit_L1.instructions},
       rep:p.length?p[0].t:"",lim,saidMid:said&&said.mid,read:(c.spokenLimitsRead||{}).p_d||null,
       limitsBlk:String(B.limits||""),drives:String(B.drives||""),resist:String(B.resistance||""),tplCall:pm.map(m=>m.content).join("\n"),piece,frag};
   });
@@ -130,8 +130,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     __stub.dec=null;
     const t=await __turn('"Just to the lake then?"');
     const req=t.decs.find(d=>d.questions.limit_release_K1)||null;
+    /* (!) v150.110 — the short-term (body) read runs with the feeling system OFF; with it on, the feelings request carries the
+       limits itself (checked just below) */
+    const fq=t.decs.find(d=>d.questions&&d.questions.ego)||null;
+    const keepEmo=state.emoOn; state.emoOn=false;
     state.relOn=true; state.stInterval=1; c._stCount=0; const n0=__calls.length;
     try{ await runShortTermRel(c); }catch(e){}
+    state.emoOn=keepEmo;
     const st=__calls.slice(n0).filter(x=>/^Short-term/.test(x.dbg)).map(x=>x.t).join("\n");
     state.relOn=false;
     const n1=__calls.length;
@@ -140,12 +145,13 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     const n2=__calls.length;
     try{ await runConfrontJudge(c,{kind:"confrontation",accuserId:"p_d",accuserName:"Duygu",intent:"x",conviction:0.5},"no"); }catch(e){}
     const cf=__calls.slice(n2).filter(x=>x.dbg==="Confrontation judge").map(x=>x.t).join("\n");
-    return {req:req&&{q:req.questions.limit_release_K1,state:req.state},st,ov,cf,n:activeLimits(c,"p_d").length};
+    return {req:req&&{q:req.questions.limit_release_K1,state:req.state},st,ov,cf,n:activeLimits(c,"p_d").length,fs:fq?JSON.stringify(fq.state.what_you_have_said_about_how_far_this_goes||null):"no feelings request"};
   });
   ok("her next request asks whether she took it back, with it on record in the state",
      !!r6.req&&r6.req.q.type==="noul"&&/banka kadar/.test(r6.req.q.instructions)&&/banka kadar/.test(JSON.stringify(r6.req.state.limits_already_on_record)), JSON.stringify(r6.req));
   ok("a 'no' keeps it", r6.n===1, String(r6.n));
-  ok("the intimacy read (short-term) is told the line she drew", /HAS SAID OUT LOUD ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r6.st), r6.st.slice(-700));
+  ok("the feelings request (ego judgment) is told the line she drew (v150.110)", /banka kadar/.test(r6.fs), r6.fs);
+  ok("the intimacy read (short-term, feeling system off) is told the line she drew", /HAS SAID OUT LOUD ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r6.st), r6.st.slice(-700));
   ok("the overture judge is told it", /HAS SAID OUT LOUD ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r6.ov), r6.ov.slice(-500));
   ok("the confrontation judge is told it", /HAS SAID OUT LOUD ABOUT HOW FAR THIS GOES[\s\S]*banka kadar/.test(r6.cf), r6.cf.slice(-500));
 

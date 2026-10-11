@@ -48,7 +48,9 @@ const BIN=process.env.SM_CHROME||process.env.CHROME||'/opt/pw-browsers/chromium-
     const mk=(id,name,x)=>Object.assign({id,name,universeId:uni.id,instructions:"",personality:"You are "+name+".",backstory:"b",style:"s",goals:"",look:{raw:name+" is tall"},relationships:{}},x||{});
     state.personas=[mk("p_b","Buket Ozucak",{relationships:{p_s:{tie:"husband",relationship:"She loves him."}}}),
                     mk("p_s","Sami Ozucak",{relationships:{p_b:{tie:"wife",relationship:"He adores her."}}})];
-    Object.assign(state,{key:"k",user:"Emre",mem:false,relOn:true,intentOn:true,trackOn:false,calOn:false,promiseOn:false,gossipOn:false,
+    /* (!) v150.110 — CHANGED ON PURPOSE: the body read's live charge and its playable note are the path with the feeling system
+       OFF (Settings → Emotions); with it on, the moment comes from the feelings (tests/feel-moment). This file checks the old path. */
+    Object.assign(state,{emoOn:false,key:"k",user:"Emre",mem:false,relOn:true,intentOn:true,trackOn:false,calOn:false,promiseOn:false,gossipOn:false,
       heatOn:false,autoSpeak:false,narrMode:false,streamReveal:false,storyLang:"en",presenceOff:true});
     const c=curChat();
     Object.assign(c,{universeId:uni.id,locationId:"l_f",location:"The flat",subId:"s_l",subPos:{p_b:"s_l",p_s:"s_l"},presentIds:["p_b","p_s"],

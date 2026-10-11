@@ -39,7 +39,7 @@ const fs=require('fs'), path=require('path');
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       [_emoBreak,_replyCheckBreak,_gateBreak].forEach(br=>{ br.until=0; br.fails=0; });
       const c=curChat();
-      Object.assign(c,{universeId:uni.id,presentIds:["p_o"],emo:{},calendar:[],intents:[],rel:{},gameDay:4,period:"Afternoon",spokenLimits:{},spokenLimitsRead:{},
+      Object.assign(c,{universeId:uni.id,presentIds:["p_o"],emo:{},feel:{},fsTurn:0,calendar:[],intents:[],rel:{},gameDay:4,period:"Afternoon",spokenLimits:{},spokenLimitsRead:{},
         messages:[{mid:"u1",role:"user",content:'*I pull her closer.* "Stay with me."'},{mid:"a1",role:"assistant",speaker:"Özlem",speakerId:"p_o",content:'*She laughs.* "Not tonight, di mi?"'},
                   {mid:"u2",role:"user",content:'*I kiss her neck.* "Aceleye gerek yok."'}]});
       return c; };
@@ -48,7 +48,8 @@ const fs=require('fs'), path=require('path');
       window.fetch=async(u,o)=>{ if(String(u).indexOf("/api/alpha/decisions")<0)return rf(u,o);
         const body=JSON.parse(o.body); window.__bodies.push(body); const m=typeof mode==="function"?mode(body,window.__bodies.length):mode;
         if(m&&m.status)return new Response(JSON.stringify(m.body||{error:{message:m.message||"upstream"}}),{status:m.status});
-        const ans={}; Object.keys(body.questions).forEach(k=>{ ans[k]=k==="emotion"?{choice:"desire",probabilities:{desire:0.9}}:k==="intensity"?{choice:"intense"}:k==="ego"?{choice:"id_winning",probabilities:{id_winning:0.9}}
+        /* (!) v150.110 — the feeling system's request: desire rose a lot, nothing else moved or happened */
+        const ans={}; Object.keys(body.questions).forEach(k=>{ ans[k]=k==="f_desire"?{choice:"rose_a_lot",probabilities:{rose_a_lot:0.9}}:/^f_|^fo_/.test(k)?{choice:"unchanged",probabilities:{unchanged:0.9}}:/^(s_|e_)|^masked$/.test(k)?{noul:0.05}:k==="wronged"?{choice:"nobody"}:k==="ego"?{choice:"id_winning",probabilities:{id_winning:0.9}}
           :/^limit_L/.test(k)?{choice:"none",probabilities:{none:0.95}}:{noul:0.93}; });
         return new Response(JSON.stringify({answers:ans}),{status:200}); }; };
     window.__undec=()=>{ if(window.__realFetch)window.fetch=window.__realFetch; };
@@ -96,11 +97,11 @@ const fs=require('fs'), path=require('path');
   console.log("\n[a refused question]");
   const RF=await pg.evaluate(async()=>{
     const c=__setup(), p=state.personas[0];
-    __dec((body,n)=>n===1?{status:502,body:{error:{message:'OpenAI refused to answer question "emotion"',code:502}}}:null);
+    __dec((body,n)=>n===1?{status:502,body:{error:{message:'OpenAI refused to answer question "f_desire"',code:502}}}:null);
     let out; try{ out=await emotionEnsure(c,p,"Aceleye gerek yok.",{targetId:"__user__",targetName:"Emre",kind:"solo"}); } finally{ __undec(); }
-    const e=dbgLog.filter(x=>/^Emotion/.test(x.label)).slice(-1)[0];
+    const e=dbgLog.filter(x=>/^(Emotion|Feelings)/.test(x.label)).slice(-1)[0];
     const b1=__bodies[0], b2=__bodies[1];
-    return {n:__bodies.length,first:!!(b1&&b1.questions.emotion),second:!!(b2&&!b2.questions.emotion&&b2.questions.ego&&b2.questions.q_talk_into__ask),
+    return {n:__bodies.length,first:!!(b1&&b1.questions.f_desire),second:!!(b2&&!b2.questions.f_desire&&b2.questions.ego&&b2.questions.q_talk_into__ask),
       scene1:b1&&b1.state.scene,scene2:b2&&b2.state.scene,ego:out&&out.ego,asks:out&&Object.keys(out.asks||{}).length,goals:!!(b2&&Object.keys(b2.questions).some(k=>/^goal_done_/.test(k))),
       limits:!!(b2&&Object.keys(b2.questions).some(k=>/^limit_L/.test(k))),fails:_emoBreak.fails,paused:_emoBreak.until>Date.now(),
       status:e&&e.status,retry:e&&e.retry,result:e&&JSON.stringify(e.result)}; });
@@ -108,13 +109,13 @@ const fs=require('fs'), path=require('path');
   ok("the second time the scene is dialogue only: no *actions*, the words kept", /\*/.test(RF.scene1)&&!/\*/.test(RF.scene2)&&/Aceleye gerek yok/.test(RF.scene2)&&/Not tonight, di mi\?/.test(RF.scene2), JSON.stringify([RF.scene1,RF.scene2]));
   ok("the rest of the bundle arrives: the ego answer and the asks are this line's", RF.ego==="id_winning"&&RF.asks>0, JSON.stringify(RF));
   ok("a refusal never counts toward the pause", RF.fails===0&&RF.paused===false, JSON.stringify({fails:RF.fails,paused:RF.paused}));
-  ok("the Debug row says what happened: refused, sent again without it, dialogue only — and it answered", RF.status==="ok"&&RF.retry&&RF.retry.refused==="emotion"&&RF.retry.sceneDialogueOnly===true&&RF.retry.result==="answered"&&/Sent again once without it/.test(RF.retry.note)&&/\\"emotion\\" was refused and dropped on a retry/.test(RF.result), JSON.stringify({retry:RF.retry,result:RF.result}));
+  ok("the Debug row says what happened: refused, sent again without it, dialogue only — and it answered", RF.status==="ok"&&RF.retry&&RF.retry.refused==="f_desire"&&RF.retry.sceneDialogueOnly===true&&RF.retry.result==="answered"&&/Sent again once without it/.test(RF.retry.note)&&/\\"f_desire\\" was refused and dropped on a retry/.test(RF.result), JSON.stringify({retry:RF.retry,result:RF.result}));
   const RF2=await pg.evaluate(async()=>{
     const c=__setup(), p=state.personas[0];
-    __dec(()=>({status:502,body:{error:{message:'OpenAI refused to answer question "emotion"'}}}));
+    __dec(()=>({status:502,body:{error:{message:'OpenAI refused to answer question "f_desire"'}}}));
     let out; for(let i=0;i<4;i++){ c.messages.push({mid:"ux"+i,role:"user",content:'"Again '+i+'."'}); try{ out=await emotionEnsure(c,p,"Again "+i,{targetId:"__user__",targetName:"Emre",kind:"solo"}); }catch(e){} }
     __undec();
-    const e=dbgLog.filter(x=>/^Emotion/.test(x.label)).slice(-1)[0];
+    const e=dbgLog.filter(x=>/^(Emotion|Feelings)/.test(x.label)).slice(-1)[0];
     const r={out:out===null,n:__bodies.length,fails:_emoBreak.fails,paused:_emoBreak.until>Date.now(),res:e&&String(e.result)};
     __dec(()=>({status:502,message:"Bad gateway"}));
     for(let i=0;i<3;i++){ c.messages.push({mid:"uy"+i,role:"user",content:'"More '+i+'."'}); await emotionEnsure(c,p,"More "+i,{targetId:"__user__",targetName:"Emre",kind:"solo"}); }
@@ -142,7 +143,7 @@ const fs=require('fs'), path=require('path');
     __dec(()=>({status:500,message:"upstream"})); const out=await emotionEnsure(c,p,"Gel buraya.",{targetId:"__user__",targetName:"Emre",kind:"solo"}); __undec(); _emoBreak.fails=0;
     r.failed=out===null; r.kept=[c.emo.p_o.emotion,c.emo.p_o.ego]; r.asks=Object.keys(c.emo.p_o.asks||{}).length; r.rel=Object.keys(c.emo.p_o.relAbout||{}).length;
     const t=build(); r.second=/YOU CAN SAY NO|it has not happened for you|Being warm is not agreeing/.test(t); r.compass=/Right now your want has won/.test(t);
-    r.note=(dbgLog.filter(x=>/^Emotion/.test(x.label)).slice(-1)[0].notes||[]).join(" ");
+    r.note=(dbgLog.filter(x=>/^(Emotion|Feelings)/.test(x.label)).slice(-1)[0].notes||[]).join(" ");
     // a paused feature: no request, and still not the last line's asks
     __dec(null); c.messages.push({mid:"u4",role:"user",content:'"Şimdi."'}); await emotionEnsure(c,p,"Şimdi.",{targetId:"__user__",targetName:"Emre",kind:"solo"}); __undec();
     r.third=Object.keys(c.emo.p_o.asks||{}).length;

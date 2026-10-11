@@ -63,7 +63,9 @@ const {chromium}=require('playwright');
         U("u2","Mert","OTHER UNIVERSE SPACESHIP",[{id:"l_liman",name:"Liman Kalesi",description:"s",residents:[],sublocations:[]}])];
       const mk=(id,n,u)=>({id,name:n,universeId:u,personality:"x",instructions:"x",backstory:"x",style:"x",goals:"x",interject:"x",look:{},relationships:{}});
       state.personas=[mk("p_a","Ayla Demir","u1"),mk("p_b","Berk Kaya","u1"),mk("p_c","Cem Aras","u1"),mk("p2_ayla","Ayla","u2"),mk("p2_x","Xan","u2")];
-      Object.assign(state,{key:"k",routerDecOn:false,moveDecOn:false,textGateOn:false,mem:false,sceneOn:false,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,
+      /* (!) v150.110 — this file checks the post-turn engines and the retry rollback of the short-term (body) read, which runs with
+         the feeling system off (Settings → Emotions); with it on, the feelings request replaces it (tests/feel-moment) */
+      Object.assign(state,{emoOn:false,key:"k",routerDecOn:false,moveDecOn:false,textGateOn:false,mem:false,sceneOn:false,gmOn:false,autoRpOn:false,heatOn:false,suggestOn:false,autoSpeak:false,narrMode:false,
         relOn:false,trackOn:false,calOn:false,promiseOn:false,gossipOn:false,intentOn:false,pulseOn:false,roundOn:false,charQuestsOn:false,
         goalPursuitOn:false,textsOn:false,autoImg:false,imgMode:"off",streamReveal:false,fallbackModel:"",storyLang:"en",travelTime:0,mcChainCap:4,stInterval:3,voiceCheckOn:false});
       state.chats={

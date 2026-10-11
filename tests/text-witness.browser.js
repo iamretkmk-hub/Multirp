@@ -75,7 +75,7 @@ NO: It is still open: only talked about, promised, half done or not touched in t
   console.log("\n[the player's text is read by the one it was sent to]");
   const E=await pg.evaluate(async()=>{ const c=__setup(); const p=state.personas[0];
     const pl=await buildTextPayload(c,p);
-    const emo=__dec.find(x=>x.questions&&x.questions.emotion);
+    const emo=__dec.find(x=>x.questions&&x.questions.ego);
     const judge=__dec.find(x=>x.questions&&x.questions.m0);
     const q=__sent["Memory query generator"]||"";
     return {emo:!!emo,scene:emo&&emo.state.scene,judge:judge&&judge.state,q,line:_newestPlayerText(c,p),
@@ -113,7 +113,7 @@ NO: It is still open: only talked about, promised, half done or not touched in t
     const p=state.personas.find(x=>x.id==="p_b");
     __dec=[]; __sent={};
     await buildTextPayload(c,p);
-    const emo=__dec.find(x=>x.questions&&x.questions.emotion)||{state:{}};
+    const emo=__dec.find(x=>x.questions&&x.questions.ego)||{state:{}};
     const judge=__dec.find(x=>x.questions&&x.questions.m0);
     const hist=JSON.stringify(castHistory(c,p,{textReply:true}));
     const rex=JSON.stringify(recentExchangeFor(c,p,6));

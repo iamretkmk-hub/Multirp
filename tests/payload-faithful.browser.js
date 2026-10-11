@@ -87,6 +87,9 @@ const linesOf=t=>[...new Set(String(t).split("\n").map(norm).filter(Boolean))];
       state.user="Emre"; state.userBio="Emre is a carpenter."; state.userLook="Tall, grey eyes.";
       state.payloadTplOn=false; state.fragments=window.__frags||null; state.autoSpeak=false; state.narrMode=false; state.narrOn=false; state.gossip=[];
       state.trackOn=false; state.memory=[]; state.mem=true; state.relOn=false; state.intentOn=true; state.promiseOn=true; state.formatRules=undefined;
+      /* (!) v150.110 — the fixtures are what the payload sent before the feeling system: the body read's live charge is sent with it
+         OFF (Settings → Emotions); with it on, "What is running in you right now" replaces it (tests/feel-moment) */
+      state.emoOn=false;
       store.setRaw(K.fragAdds,FRAG_SHIPPED_ADDS.map(a=>a.key).join(","));
       state.blockTpls={};
       uni.setting="A rainy port town where everyone owes someone.";

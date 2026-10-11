@@ -20,6 +20,7 @@ const {chromium}=require('playwright');
     state.personas=state.personas.filter(p=>!["p_ay","p_bu","p_ce","p_de"].includes(p.id));
     state.personas.push(mk("p_ay","Ayla"),mk("p_bu","Burcu"),mk("p_ce","Cem"),mk("p_de","Deniz",{latent:true}));
     state.user="Emre"; state.key="sk-test"; state.mem=true; state.memMinImp=0; state.condenseOn=false;
+    state.emoOn=false;   // v150.110 — the fast (body) read checked here runs with the feeling system off (tests/feel-moment covers it on)
     state.autoCharOn=false; state.relOn=true; state.embedOn=false; state.narrPrivacy=true;
     const chat=curChat(); chat.universeId=uni.id; chat.gameDay=4; chat.period="Afternoon"; chat.timeOfDay="Afternoon";
     chat.presentIds=["p_ay","p_bu","p_ce"]; chat.rel={}; chat.memEvent=null; chat.memDoneIdx=-1;
